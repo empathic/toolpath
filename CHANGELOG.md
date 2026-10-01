@@ -2,6 +2,41 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-otel 0.1.4 — 2026-10-01
+
+- **`toolpath-otel`** (0.1.4): records files an agent writes through its
+  shell tool as `file.write` changes: heredoc writes (`cat <<'EOF' > file`,
+  `cat > file <<EOF`, `tee [-a] file <<EOF`, `>>` appends, `<<-`, several
+  heredocs chained in one script, literal `cd`s) and `apply_patch <<'EOF'`
+  patches (Codex running its patch tool through `exec_command` or `shell`),
+  read by `toolpath-convo`'s `shell_writes` module. They are inferred from
+  the command text, so every execution is recorded whatever its outcome,
+  and each change carries `extra.otel.source` (`"shell-heredoc"` or
+  `"shell-apply-patch"`), a summary `outcome` and an `executions` list with
+  each run's `outcome` (`success`/`failure`/`unknown`), its basis and exit
+  code. Exit statuses are read only for Codex `exec_command` and `shell`;
+  other shell tools are read by their error flag. Appends diff against
+  content known along the turn's ancestry and are structural-only
+  otherwise; content counts as known only when the call's success implies
+  the write ran (`implied_by_success`). Paths resolve only when certain:
+  the working directory is taken from the turn's ancestry, never from a
+  later generation. Claude Code `Bash` may keep its directory between
+  calls, so it is tracked along the turn's ancestry; whether a `cd`
+  persisted is invisible in a trace, so later relative targets resolve only
+  while it is the working directory, and elsewhere they are unresolved
+  with a `likely_path`. A directory change it cannot follow, `..` above a
+  tracked directory, a worktree tool, or a change on another branch in an
+  earlier generation leaves it unknown. A write whose target cannot be
+  resolved is recorded as an attempt in the step's
+  `extra.otel.unresolved_shell_writes`, with its reason and outcome, never
+  as a change. `apply_patch` text, from the tool or a shell, is read by
+  `toolpath_convo::shell_writes::parse_patch`; the crate's own V4A parser
+  is gone, and a file header with an empty path is no longer a change.
+  `derive_jsonl` keeps every sent step final: a turn also waits for an
+  unanswered call from an earlier generation that may move a persistent
+  shell. Sessions without shell writes derive as before. Requires
+  `toolpath-convo` 0.11.2.
+
 ## toolpath-convo 0.11.2 — 2026-10-01
 
 - **`toolpath-convo`** (0.11.2): new `shell_writes` module, a pure,

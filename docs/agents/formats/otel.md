@@ -569,17 +569,249 @@ needs `file_write`).
 
 File changes come from tool calls the classifier names `file_write`: edit/write calls (`Write`, `Edit`,
 `MultiEdit`, `NotebookEdit`, `write`, `edit`, `write_file`; opencode and pi
-key spellings are canonicalized onto Claude's) and `apply_patch`/`patch`
+key spellings are canonicalized onto Claude's), `apply_patch`/`patch`
 text (one change per file, `operation` `add`/`update`/`delete`,
-`rename_to`, `after` for an added file). `NotebookEdit` names its file in
-`notebook_path`, and its `new_source` is the change's `after`. opencode's
-`delete` gives `operation` `delete`, as `toolpath-opencode` does. A MultiEdit-shaped call (an `edits` array) that `toolpath-convo`'s
-own fallback reads the same way (Claude key names) is left to that
-fallback, which also records the `edits` array in `structural`; other
-spellings (pi's `oldText`/`newText`, opencode's `filePath`) are
-canonicalized and carry the diff without `edits`. Files a harness writes through its
-shell tool (e.g. Codex `exec_command` running `cat <<'EOF' > file`) are not
-recorded here.
+`rename_to`, `after` for an added file; read by
+`toolpath_convo::shell_writes::parse_patch`, which skips a file header with
+an empty path), and two kinds of heredoc in shell tool calls (Claude Code
+`Bash`, Codex `exec_command`, `shell` and `shell_command`, opencode and pi
+`bash`, Gemini CLI `run_shell_command`): writes
+(`cat <<'EOF' > file`) and patches (`apply_patch <<'EOF'`, the way Codex runs
+its patch tool through a shell). A shell change is read from the command
+text, not observed, so it is recorded for every execution whatever its
+outcome and marked as inferred. The script reader is
+`toolpath_convo::shell_writes`, shared with the other providers.
+
+`NotebookEdit` names its file in `notebook_path`, and its `new_source` is
+the change's `after`. opencode's `delete` gives `operation` `delete`,
+as `toolpath-opencode` does. A MultiEdit-shaped call (an `edits`
+array) that `toolpath-convo`'s own fallback reads the same way (Claude key
+names) is left to that fallback, which also records the `edits` array in
+`structural`; other spellings (pi's `oldText`/`newText`, opencode's
+`filePath`) are canonicalized and carry the diff without `edits`.
+
+The script and working directory come from the call's input: Claude Code
+`Bash`, opencode and pi `bash`, and Codex `shell_command` send
+`{command: "<script>"}`; Codex `exec_command` sends `{cmd, workdir}`; Codex
+`shell` sends `{command: ["bash", "-lc", "<script>"], workdir}`; Gemini CLI
+`run_shell_command` sends `{command: "<script>", dir_path, is_background}`
+(older releases: `directory`), its `dir_path` relative to the project root
+and read the same as Codex's `workdir`; `cwd` is read the same way. An input
+with any other key naming a directory (a key containing `dir`, `cwd`,
+`path`, `folder` or `location`), or two directory keys that disagree, leaves
+every relative target of the call unresolved (`unknown_workdir`). A `shell`
+argv is read as a script only when its program is a shell (`sh`, `bash`,
+`zsh`, `dash`, `ksh`) given flags up to one with `c` (`-c`, `-lc`); an argv
+`["apply_patch", "<patch>"]` is a patch with no tag; any other argv
+(`python3 -c …`) is an ordinary command whose words, joined with spaces, are
+only checked for file mentions. Any other call the harness's tool table
+classifies as a shell (Codex `write_stdin`, `unified_exec`, `js_repl`)
+names no script this reader reads: it records nothing and forgets every
+tracked file's content.
+
+Recognized, per simple command of the script: `cat <<TAG > path`,
+`cat > path <<TAG`, `tee path <<TAG`, their appending forms (`>>`,
+`tee -a`/`--append`), and `apply_patch <<TAG` / `applypatch <<TAG`; `>|` and
+`1>` count as `>`, `tee` may send its stdout to `/dev/null`, `<<-` strips
+leading tabs, and several heredocs may share one script joined by `&&`,
+`||`, `;`, `|`, `&` or newlines. Under an unquoted tag, a body line ending in
+an odd number of `\` continues onto the next line before the terminator test,
+as in bash (the body keeps the lines as written); under `<<-` such a
+continuation makes the script unread. `\r` is an ordinary character, as in
+bash: a CRLF script's tag is `EOF\r`, and its terminator line matches it.
+
+Paths. An absolute target is recorded as written (normalized). A relative
+one resolves against the directory the shell was in, only when that is
+certain:
+
+- A literal `cd DIR` in the script moves later relative paths (a write's
+  target, or the paths inside a patch) only while an unbroken `&&` chain
+  follows it (`cd sub && cat > f <<EOF`): if the `cd` failed, nothing after
+  it in the chain ran. After a `cd` followed by `;`, a newline, `||`, `|` or
+  `&`, or reached through `||` or `|`, the directory is uncertain (the `cd`
+  may have failed and the script gone on). So is it after any other
+  directory change: `cd -`, `cd $X`, a non-literal target, `pushd`/`popd`,
+  `source`, `.`, `eval`, `builtin`, `command`, `trap`, `alias`, a command
+  word that is not literal (`"$CD" sub`), or a `cd` behind an env
+  assignment. A later absolute `cd` in a `&&` chain makes it certain again.
+- A call's `workdir` joins onto relative paths when it differs from the
+  working directory named along the turn's ancestry: the parent turn's, else
+  the first cwd marker (table above) in the prompt of the first generation
+  carrying the turn. With none named, any `workdir` is joined, so a step's
+  paths never change when a later generation first names the cwd. Otherwise
+  a relative path stays relative to `path.base` (the session's first cwd
+  marker, as for every other mutation).
+- Claude Code's `Bash` may keep its working directory from one call to the
+  next. Each call is a fresh shell, and Claude Code records its `pwd -P`
+  for the next only when the whole command exits 0, on the main thread (a
+  subagent's shell, or a pinned one, never keeps a `cd`), and without
+  `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`, which resets the shell after
+  every call with no note. Neither the thread nor the setting shows in a
+  trace, so a relative target in a later call resolves only while the
+  tracked directory is the turn's working directory: the shell is there
+  whether or not a `cd` persisted. While it is another known directory, the
+  target is unresolved (`shell_dir_moved`) with a `likely_path`, the path
+  if the `cd`s persisted; while unknown, with none. A `cd` in the write's
+  own call (`cd sub && cat > f <<EOF`) resolves as above.
+
+  The directory is tracked along the turn's ancestry, starting at the
+  turn's working directory (unknown when none is named). A `Bash` call
+  that changes directory moves it to a known place only when certain: the
+  call succeeded and runs none of `grep`, `rg`, `egrep`, `fgrep`, `find`,
+  `diff`, `test`, `[`, `git grep`, `git diff` (Claude Code reports their
+  exit 1 as no error, silently); every `cd` in it is a literal `cd DIR` in
+  an `&&` chain from the script's start (`cd sub`, `make && cd sub`); a
+  relative `cd` from a directory other than the working directory does not
+  climb above it (the shell keeps the physical path, and `..` out of a
+  symlinked directory leaves the link's target); and the result lies under
+  the working directory. Within one call `..` is folded lexically, as bash
+  and zsh do by default (a snapshot's `set -o physical` or `setopt
+  chase_links` would break that). Any other change (`;`, `||`, `|`, `&`, a
+  failed or unanswered call, `cd`, `cd -`, zsh's `cd +N`, `pushd`, …; see
+  below) leaves it unknown, and only such a certain `cd /abs` makes it
+  known again. A call whose every `cd` names the directory the shell is
+  already in, the usual `cd <project> && …` prefix, leaves it there
+  whatever the outcome. Two calls of one turn that change directory leave
+  it unknown, since calls of one turn may run concurrently.
+
+  A main-thread shell that leaves the project (and every `--add-dir`
+  directory) is moved back to Claude Code's original directory, and the
+  result's last line says `Shell cwd was reset to <dir>`. On any `Bash`
+  result, that note sets the directory to the working directory when it
+  names it, and to unknown otherwise; so does the phrase anywhere else in
+  a result. `EnterWorktree` and `ExitWorktree` move the shell and the
+  directory a reset returns it to: after either (unless its result is an
+  error) the directory is unknown, and a `cd` to the working directory
+  does not make it known again until a reset note names it.
+
+  The shell belongs to the Claude Code process, not to a branch of the
+  conversation: a call on a branch that a compaction, a retry or a rewind
+  (an edited message) later abandoned may have run. So a turn's directory
+  is also unknown when a call off its ancestry, in a generation that sorts
+  before the generation first carrying the turn, may have left the shell
+  anywhere but where the turn's ancestry has it. Generation order is start
+  order; a call on a branch running concurrently with the turn's (issued
+  after its generation started) is not seen. Absolute targets always
+  count.
+
+  A call may have moved when a command in the shell's own process (not in
+  a subshell: `( … )`, `$( … )`, backquotes, `<( … )`, `>( … )`; not in
+  quoted text or a heredoc body) has `cd`, `pushd`, `popd`, `source`, `.`,
+  `eval`, `builtin`, `command`, `trap` or `alias` as its command word
+  (behind env assignments and keywords too, and in a function body even
+  if the function never runs), or a command word that is not literal
+  (`$CD`, `$(…)`, a leading `~`, a glob); when the script uses `case`,
+  `function` or bash 5.3's `${ cmd; }`, or anything the scan cannot match;
+  or when the call's input cannot be read. Shell functions and aliases the
+  shell already has, such as a `cd` wrapper from the user's shell snapshot
+  or zoxide's `z`, are invisible: a call to one is not seen as a directory
+  change, and neither is a `cd sub` that `CDPATH` sends elsewhere. Codex,
+  opencode and pi shells start every call afresh.
+
+A recognized write whose target cannot be resolved — non-literal (`$`, a
+leading `~`, a glob `*`/`?`/`[`, or a brace `{`, all outside quotes) or
+relative in an uncertain directory — is never a file change and never a
+guessed path. It is recorded as an attempt on the step's conversation change,
+in `structural.extra.otel.unresolved_shell_writes[]`, and so is each file of a
+shell patch whose path cannot be resolved:
+
+| Key | Value |
+|---|---|
+| `tool_id`, `tool` | the shell call |
+| `path_as_written` | the target as the script names it (quotes removed; for a patch, the path inside it) |
+| `reason` | `not_literal`, `unknown_dir` (a directory change in the script), `unknown_workdir` (the call names a directory this reader does not read), or `shell_dir_moved` (earlier `Bash` calls may have left the shell elsewhere) |
+| `likely_path` | for `shell_dir_moved` with a tracked directory other than the working directory: the target under it, relative to the working directory (`sub/f.txt`); where the file is if the `cd`s persisted, which the trace cannot confirm. Absent when the target climbs above that directory |
+| `via` | `cat`/`tee`, or the patch command |
+| `outcome`, `outcome_basis`, `exit_code`, `success_may_hide_exit_1` | as for executions below |
+| `sole_command`, `implied_by_success` | as for executions below |
+| `redirect`, `body` | a heredoc write's `write`/`append` and body as written |
+| `operation` | a patch file's `add`/`update`/`delete` |
+
+After a non-literal target every tracked file's content is forgotten; after
+an unresolved literal one, the files it names.
+
+A script using a subshell, command substitution, backquotes, a group or a
+compound command (`if`, `for`, `{ …; }`) records nothing, and neither does
+any other command (`echo > f`, `sed -i`, `python - <<EOF`, an env-prefixed
+`cat`, an extra redirect such as `2>/dev/null`). So Claude Code's
+`git commit -m "$(cat <<'EOF' … EOF)"` writes no file. The body is recorded
+as written: an unquoted tag's `$`, backquote and `\` are not expanded.
+
+An inferred change is a `file.write` change like any other, plus
+`structural.extra.otel`. A heredoc write carries a `raw` diff,
+`before`/`after` and `tool`/`tool_id`; a shell `apply_patch` carries exactly
+what the same patch sent to the `apply_patch` tool records (`operation`
+`add`/`update`/`delete`, `rename_to`, `after` for an added file).
+
+| Key | Value |
+|---|---|
+| `source` | `"shell-heredoc"` or `"shell-apply-patch"` (the last shell source to touch the path in the turn); absent when a later observed write in the same turn took the change over |
+| `outcome` | `failure` if any execution failed, else `unknown` if any is unknown, else `success` |
+| `executions[]` | one per shell write or patch of this path in this turn, in order |
+
+Each execution: `tool_id`, `tool`, `via` (`cat`/`tee`, or the patch command
+`apply_patch`/`applypatch`), `outcome`, `outcome_basis`, `exit_code` (when
+the result carries one), `sole_command` (the command is the whole script and
+not backgrounded, so the outcome is its own), `implied_by_success` (the
+call's success means this command ran and succeeded: it is sole, or it is
+not backgrounded, not in a pipeline, not right after `||`, and every list
+operator after it is `&&`), `tag` and `tag_quoted` (absent for an argv
+patch), `strip_tabs` and `may_expand` (only when true; `may_expand` =
+unquoted tag and a body with `$`, `` ` `` or `\`). A heredoc write adds
+`redirect` (`write`/`append`), `body` (the heredoc body as written, on every
+execution, so a change that folds several executions keeps each one's
+content) and, for appends, `append_base`: `tracked` (content known along the
+ancestry or earlier in the turn), `script` (an earlier write in the same
+script, which may not have run) or `unknown`. A patch adds the file's
+`operation`. `success_may_hide_exit_1` (only when true):
+the success was read from no error being reported, and the call runs a
+command whose exit 1 Claude Code reports as no error (`grep`, `rg`,
+`egrep`, `fgrep`, `find`, `diff`, `test`, `[`, `git grep`, `git diff`), so
+the success does not make the content known.
+
+When several shell writes to one path fold into one change, the change's
+`after` is the content the last one intended; within one call, a later
+append builds on the call's own earlier writes whatever the outcome (they
+run in order in one script). Calls of one turn are not chained that way:
+they may run in parallel.
+
+The outcome is the whole tool call's:
+
+| `outcome_basis` | Read from | `outcome` |
+|---|---|---|
+| `is_error` | the result's error flag | `failure` |
+| `exit_code` | Codex `exec_command`: `Process exited with code N` in the header before `Output:`; Codex `shell`: a result that is the JSON envelope `{"output", "metadata": {"exit_code": N}}` | `success` for 0, else `failure` |
+| `still_running` | Codex `exec_command`: `Process running with session ID …` (the exit arrives with a later `write_stdin` call, which is not joined back) | `unknown` |
+| `background` | the call ran the command in the background (Gemini CLI `is_background`, Claude Code `run_in_background`): its result reports the launch, not the command | `unknown` |
+| `no_result` | no result carried in the capture | `unknown` |
+| `no_error_reported` | a result with none of the above | `success` |
+
+Exit statuses are read only where the repo's fixtures and format notes show
+them (Codex unified exec, with exits 0, 1, 2 and 128 in the fixtures; the
+Codex JSON function-output envelope in `codex.md`). Claude Code `Bash`,
+Codex `shell_command` and pi `bash` results are read by their error flag
+alone: no fixture here shows the exit-status text they print, so a failure
+they do not flag reads as `no_error_reported`. opencode `bash` reports no
+exit status and no error on a non-zero exit, so a failed opencode command
+also reads as `no_error_reported`. Consumers wanting certainty filter on
+`outcome_basis == "exit_code"`. GenAI semconv log-record tool responses and
+OpenInference `tool` messages carry no error flag, so a failed shell write
+from those inputs reads `no_error_reported` unless its output text carries
+an exit code the parser reads, or an `execute_tool` span in the same trace
+reports the error.
+
+Appends build on content known along the turn's ancestry (never a sibling
+branch): the last whole-file write to that file known to have happened (a
+heredoc write, a `Write`, or a file added by `apply_patch`, through the tool
+or a shell). A shell write counts as known only when its call succeeded and
+`implied_by_success` holds; `cat > f <<EOF || true`, a backgrounded write,
+or a write followed by `;`/newline and more commands is recorded but not
+known. An append onto known content carries `before`, `after` and a diff;
+onto unknown content it carries no diff and `operation: "append"`. Content
+is forgotten after an edit, a patch update, delete or move, a write not
+known to have happened, and any other shell command whose text names the
+file. A write's diff is taken from the known content, else from empty (as
+for `Write`).
 
 ## Profile `semconv` (OpenTelemetry GenAI semantic conventions)
 
@@ -1407,7 +1639,10 @@ every turn and is passed once the session is over.
   before `Settle::Final` nothing past the first generation's prompt is sent.
 - **Unanswered calls.** A call no prompt ever answers holds its turn, and
   that turn's subtree, back until `Settle::Final`; an abandoned retry holds back
-  only its own branch.
+  only its own branch, unless one of its calls may move a persistent shell
+  (a Claude Code `Bash` `cd`, a worktree tool): then every turn from a
+  later generation waits too, since its shell-write stamps read where that
+  call left the shell (File changes).
 - **`path.base` is fixed at the first send.** `PathOpen` carries it and a
   `PathMeta` patch cannot change it, so when a later generation is the
   first to reveal the working directory the stored path has no base where a
@@ -1423,8 +1658,15 @@ every turn and is passed once the session is over.
   requests that never share history: 22 ms per call).
 - **Soundness.** The whole session is derived and the unsettled steps
   dropped. That equals deriving only the settled turns, because a step
-  depends only on its own turn, its parent's id and the generations that
-  supply its payload, and every kept step's ancestors are kept and settled.
+  depends only on its own turn, its parent's id, the generations that
+  supply its payload and, for a shell write, its ancestors' calls and
+  results, the working directory named by the first generation carrying
+  it or an ancestor, and where a call from an earlier generation off its
+  ancestry that may move a persistent shell (a Claude Code `Bash` `cd`, a
+  worktree tool) left it; every kept step's ancestors are kept and
+  settled, and a turn waits for every such call to be answered. The
+  session-wide working directory reaches only `path.base` (above), never a
+  step.
   Appending a generation to the feed order leaves every settled turn's
   payload, marks and parents as they were (Marks and holds). One-shot
   `derive_path` of the session in the final feed order gives the same
