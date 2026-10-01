@@ -6,7 +6,7 @@ Read by `toolpath-otel`. The OpenRouter Broadcast profile was observed in M0
 instrumentations against local mock servers (see Pinned instrumentation
 behavior; the event-mode captures, with content on log records, are
 described under Event-mode captures). Keep in sync with
-`crates/toolpath-otel/src/{lib,input,protojson,otlp,walk,session,stitch,branch,provider,derive,hash,jsonl,record,generation}.rs`,
+`crates/toolpath-otel/src/{lib,input,protojson,otlp,walk,session,group,stitch,branch,provider,derive,hash,jsonl,record,generation}.rs`,
 `crates/toolpath-otel/src/stitch/frontier.rs`,
 `crates/toolpath-otel/src/walk/logs.rs`,
 `crates/toolpath-otel/src/harness/` and
@@ -14,8 +14,10 @@ described under Event-mode captures). Keep in sync with
 
 There is no local store: a collector (or OpenRouter Broadcast) delivers
 OTLP/HTTP request bodies, and the caller hands the bodies of one session to
-`toolpath_otel::derive_path`, or reads each body once into generation
-records (`read_generations`) and derives from those.
+`toolpath_otel::derive_path`, or a mixed batch to `group_sessions` first
+(see Sessions and ids), or reads each body once into generation records
+(`read_generations`) and derives from those. `path p import otel` reads
+files (see Import).
 
 ## Input
 
@@ -25,6 +27,11 @@ pub fn derive_graph(sessions: &[&[serde_json::Value]], config: &DeriveConfig) ->
 pub fn derive(sessions: &[&[serde_json::Value]], config: &DeriveConfig) -> Result<Derived<Graph>>
 
 pub struct Derived<T> { pub output: T, pub skipped: SkipCounts }
+
+pub fn group_sessions(requests: &[serde_json::Value], profile: ProfileSelection) -> Result<Derived<Vec<SessionRequests>>>
+pub fn derive_session(session: &SessionRequests, config: &DeriveConfig) -> Result<Derived<Path>>
+pub struct SessionRequests { pub key: String, pub session_id: Option<String>, pub requests: Vec<serde_json::Value> }
+pub fn derived_session_id(session_key: &str) -> String
 ```
 
 Each request is one parsed OTLP/HTTP JSON body: a JSON object holding at
@@ -813,8 +820,34 @@ this.
 
 ## Sessions and ids
 
-- **Sessions** are the caller's: every generation read from one call's
-  requests belongs to one path, in `(start time, generation id)` order.
+- **Grouping** (`group_sessions`), for a batch that mixes sessions or
+  carries no session id, in layer order 1 → C → 2 → T, first match wins
+  in `(start time, generation id)` order. Layer 1: generations with a
+  client session id (`session.id`; for `semconv` also
+  `gen_ai.conversation.id`) group by it. Layer C: a request that continues
+  an already grouped generation joins its session (see Continuations).
+  Layer 2: a full-history request without a session id (older pi
+  releases) joins the session, of the same client key, whose latest prompt
+  its prompt extends (longest match), else starts one keyed
+  `otel-cluster:<16 hex>`. Layer T: a delta request with nothing else to
+  go by groups by client key and trace, key `otel-trace:<16 hex>`. The
+  same task run twice gets two keys, since the cluster key hashes the
+  first generation's id. A derived key equal to a client id of the batch
+  takes a `-<n>` suffix (`n` from 2), and a client id never joins a
+  derived-key session. Each session's
+  `requests` are the batch's bodies cut down to its own spans and log
+  records: a candidate span, the spans the ancestor rule absorbs into it
+  and the records correlated to them travel with its generation (a
+  skipped one with the generation or session id its skip names); every
+  other span and record of a trace goes to each session with a generation
+  in that trace; what touches no session is left out. Unreadable list
+  elements are dropped and empty containers removed. `derive_path` over a
+  session's `requests` gives the document `derive_session` gives, except
+  for a suffixed key, which only `derive_session` keeps. The skip counts
+  are the whole batch's.
+- **Sessions** passed to `derive_path` are the caller's: every generation
+  read from one call's requests belongs to one path, in
+  `(start time, generation id)` order.
   Every generation that carries a client session id (`session.id`; for
   `semconv` also `gen_ai.conversation.id`) must carry the same one, else
   the call is `OtelError::MixedSessions`; generations without one belong
@@ -1483,3 +1516,54 @@ cross-profile comparison set (`tests/common/equivalence.rs`; the two
 differ only in step timestamps, which the set leaves out;
 `crates/toolpath-otel/src/tests/captures_event.rs`). The `openinference`
 capture has no event mode.
+
+## Import
+
+```bash
+path p import otel --input <file|dir> [--profile auto|openrouter|semconv|openinference] [-s|--session <id>]
+```
+
+The global import flags `--no-cache`, `--force` and `--pretty` apply. The
+CLI decodes each file with `decode_input`, groups everything read with
+`group_sessions` under `--profile` (default `auto`), and derives each
+session with `derive_session`: one cached document per session, cache id
+`otel-<derived session id>`. It records no sync-manifest provenance (OTLP
+files are no artifact type), and prefixes every decode error with the
+file it came from.
+
+- **Directory.** Files whose final extension is exactly `.json`,
+  `.ndjson`, `.jsonl`, `.body`, `.gz`, `.pb`, `.binpb`, `.protobuf` or
+  `.zst` (lower case; `body.json.gz` counts as `.gz`; `--help` lists
+  them) are read in file-name order; subdirectories are not entered
+  (import a nested capture one leaf directory at a time). The content, not
+  the extension, decides the decoding (see Framing and zstd). Files with
+  any other extension are skipped silently and not counted. A directory
+  may hold the same data in both encodings (a capture's `traces.json` and
+  `traces.binpb`): each log record is read once, and each generation's
+  second copy is counted as `duplicate`. A read file that is not OTLP at
+  all (`is_not_otlp()`) is skipped without a per-file note and counted as
+  `not-otlp` in the summary; any other decode error fails the import as
+  `<file>: <error>`. A single `--input` file is never skipped: one that is
+  not OTLP is the error `<path>: <error>`.
+- **Summary.** One stderr line per import, e.g.
+  `otel: 5 sessions; error-status=1 connection-test=1 unclaimed=0 not-otlp=1`:
+  the non-zero `SkipCounts` (`error-status`, `connection-test`,
+  `duplicate`, `truncated`, `missing-payload`), `unclaimed` always, and
+  `not-otlp` in directory mode. When the input yields no session and no
+  `--session` is given, the summary line is followed by the error
+  `no otel generations in <input>`, with
+  ` (<n> unclaimed by the auto profiles; try --profile openinference)`
+  appended under `auto` when spans went unclaimed.
+- **`--session`** matches the client session id, the derived id, or the
+  session key (`otel-cluster:…`, `otel-trace:…`). No match is the error
+  `no otel session matches <id> in <input>`; several matches are the error
+  `--session <id> matches <n> sessions: <key>, <key>, …`. Both follow the
+  summary line. Without it every session is imported (`--no-cache`: one
+  JSON document per stdout line, or pretty-printed with `--pretty`).
+- **Re-import.** Re-importing a capture, or a grown one, stops with the
+  cache-exists error at the first session already cached; pass `--force`
+  to refresh.
+- **Resume.** `path resume` of an otel document pre-selects the harness
+  recorded in `meta.otel.harness` (`claude-code`, `codex`, `opencode`,
+  `pi`); any other value, or none, opens the harness picker. Actors are
+  `agent:<model>`, so actor sniffing is not used for otel documents.
