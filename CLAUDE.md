@@ -22,7 +22,7 @@ crates/
   toolpath-opencode/            # derive from opencode SQLite databases
   toolpath-cursor/              # derive from Cursor (IDE) state.vscdb bubble store
   toolpath-pi/                  # derive from Pi (pi.dev) agent session logs
-  toolpath-otel/                # derive from OpenTelemetry LLM traces and logs (OTLP/HTTP JSON bodies of one session; openrouter, semconv, openinference profiles)
+  toolpath-otel/                # derive from OpenTelemetry LLM traces and logs (OTLP JSON/protobuf; session grouping; openrouter, semconv, openinference profiles)
   toolpath-dot/                 # Graphviz DOT rendering
   toolpath-md/                  # Markdown rendering for LLM consumption
   path-cli/                     # unified CLI (binary: path)
@@ -34,6 +34,7 @@ crates/
 plugins/
   claude-code/                  # Claude Code plugin "path": /path:share + /path:query, bundles the CLI
 docs/agents/formats/            # format references for the agent on-disk formats we derive from
+scripts/otel-fixtures/          # maintainer-only OTel GenAI capture harness (mocks → test-fixtures/otel/)
 schema/toolpath.schema.json     # JSON Schema for the toolpath format
 examples/*.json                 # example documents (step, path, graph)
 RFC.md                          # full format specification
@@ -55,10 +56,9 @@ path-cli (binary: path)
  ├── toolpath-opencode → toolpath, toolpath-convo
  ├── toolpath-cursor  → toolpath, toolpath-convo
  ├── toolpath-pi      → toolpath, toolpath-convo
+ ├── toolpath-otel    → toolpath, toolpath-convo
  ├── toolpath-dot     → toolpath
  └── toolpath-md      → toolpath
-
-toolpath-otel        → toolpath, toolpath-convo  (library only; no CLI wiring yet)
 
 pathbase-client      (no toolpath deps; built from crates/pathbase-client/openapi.json)
 
@@ -91,11 +91,13 @@ The top-level surface is the porcelain (`show`, `share`, `resume`, `query`, `kin
 ```bash
 # Plumbing: import from external formats into the local toolpath cache
 # (~/.toolpath/documents/). claude/gemini/pi are project-keyed (--project),
-# codex/opencode/cursor are session-keyed (--session).
+# codex/opencode/cursor are session-keyed (--session), and otel reads
+# OTLP trace and log files (--input; a file or a directory, one document per session).
 cargo run -p path-cli -- p import git --repo . --branch main
 cargo run -p path-cli -- p import github https://github.com/owner/repo/pull/42
 cargo run -p path-cli -- p import claude --project /path/to/project
 cargo run -p path-cli -- p import codex --session <uuid>
+cargo run -p path-cli -- p import otel --input test-fixtures/otel/openrouter/
 cargo run -p path-cli -- p import pathbase <pathbase-url-or-owner/repo/slug>
 cargo run -p path-cli -- p import claude --project . --no-cache | path p render md --input -
 
@@ -160,6 +162,7 @@ Tests live alongside the code (`#[cfg(test)] mod tests`); provider crates also h
 
 - `toolpath-claude` has a `watcher` feature (default: on) gating `notify`/`tokio` dependencies for filesystem watching
 - `toolpath-gemini` has a `watcher` feature (default: on) gating the polling-based `ConversationWatcher` module
+- `toolpath-otel` has `compression` (gzip via `flate2`, zstd via `ruzstd`) and `protobuf` (OTLP protobuf bodies and Collector frames over prost types vendored in `crates/toolpath-otel/src/proto/`, regenerated only by `scripts/otel-proto-gen.sh`), both off by default and both on in `path-cli`'s native and emscripten dependency tables. Test the crate with `cargo test -p toolpath-otel --all-features` and with no features.
 - `path-cli` has `embedded-picker` (default: on; the skim picker) and `resume-remote` (default: off) gating the `p export claude` flags `--content-addressed-session-id` and `--cwd`, `path resume --remote`, `--dry-run`, and `--no-attach`, `p import claude --remote`, and the code behind them (`crates/path-cli/src/claude_session.rs`, `crates/path-cli/src/cmd_export/remote_session.rs`, `crates/path-cli/src/ssh.rs`, `crates/path-cli/src/cmd_resume/remote.rs` and `crates/path-cli/src/cmd_import/remote.rs` and their `.sh` scripts); the `russh` and `shlex` dependencies are optional on it; `scripts/resume-remote.sh` builds with it. Every gate pairs the feature with the targets the code builds on, and none of them includes emscripten: the feature has no effect on the wasm build. Test both states: `cargo test -p path-cli` and `cargo test -p path-cli --features resume-remote`.
 
 ## Desktop app
@@ -216,7 +219,7 @@ Format references for the agent on-disk formats live at `docs/agents/formats/` �
 
 ### Providers
 
-- Data locations: claude `~/.claude/projects/` (JSONL); gemini `~/.gemini/tmp/<project>/chats/` (project slot is a friendly name or a path SHA-256; sub-agents in sibling UUID dirs); codex `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (date-bucketed, not project-keyed); copilot `~/.copilot/session-state/<id>/events.jsonl` (`COPILOT_HOME` overrides; global, not project-keyed); opencode `~/.local/share/opencode/opencode.db` (read-only SQLite); cursor `state.vscdb` global SQLite under the Cursor app-support dir; pi `~/.pi/agent/sessions/` (tree in a single file, preserved as a DAG).
+- Data locations: claude `~/.claude/projects/` (JSONL); gemini `~/.gemini/tmp/<project>/chats/` (project slot is a friendly name or a path SHA-256; sub-agents in sibling UUID dirs); codex `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (date-bucketed, not project-keyed); copilot `~/.copilot/session-state/<id>/events.jsonl` (`COPILOT_HOME` overrides; global, not project-keyed); opencode `~/.local/share/opencode/opencode.db` (read-only SQLite); cursor `state.vscdb` global SQLite under the Cursor app-support dir; pi `~/.pi/agent/sessions/` (tree in a single file, preserved as a DAG); otel: no local store — OTLP files passed with `p import otel --input`.
 - `toolpath-claude` follows session chains by default — Claude Code rotates JSONL files on continuation while the chain keeps its oldest segment's id. `read_conversation` merges segments, `list_conversations` returns chain heads, `session_chain` resolves a chain oldest-first; `read_segment`/`list_segments` for single-file access; `ChainIndex` makes it incremental.
 - `toolpath-gemini` folds sibling sub-agent files into `DelegatedWork` with populated `turns`; `toolpath-claude` sub-agent turns live in separate session files and stay empty.
 - `toolpath-copilot` is a **preview** provider over a reverse-engineered `events.jsonl` schema; the reader is deliberately tolerant of shape variations and preserves unknown events. It is wired both directions: forward (`p import/list/show copilot`, `share`) and reverse via `CopilotProjector` (`p export copilot`, `resume` — writes `session-state/<id>/` plus a `session-store.db` row, only ever INSERTing a fresh id). The real `copilot --resume` loader is strict; its writer contract is documented in `docs/agents/formats/copilot-cli/writing-compatible.md` — follow it exactly.

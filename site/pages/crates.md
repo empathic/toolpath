@@ -22,10 +22,9 @@ path-cli (binary: path)
  +-- toolpath-opencode -> toolpath, toolpath-convo
  +-- toolpath-pi      -> toolpath, toolpath-convo
  +-- toolpath-cursor  -> toolpath, toolpath-convo
+ +-- toolpath-otel    -> toolpath, toolpath-convo
  +-- toolpath-dot     -> toolpath
  +-- toolpath-md      -> toolpath
-
-toolpath-otel        -> toolpath, toolpath-convo (library only; no CLI wiring yet)
 
 pathbase-client      (no toolpath deps; built from crates/pathbase-client/openapi.json)
 
