@@ -28,14 +28,23 @@ mod index {
     use std::path::Path;
     use toolpath::v1::Graph;
 
-    pub(crate) fn record_written(_: &Path, _: &CacheEntry, _: &Graph) -> Result<()> {
-        Ok(())
+    pub(crate) struct IndexWriter;
+
+    impl IndexWriter {
+        pub(crate) fn new(_: &Path) -> Self {
+            Self
+        }
+
+        pub(crate) fn record(&mut self, _: &CacheEntry, _: &Graph) -> Result<()> {
+            Ok(())
+        }
     }
 
     pub(crate) fn forget_removed(_: &Path, _: &str) -> Result<()> {
         Ok(())
     }
 }
+pub(crate) use index::IndexWriter;
 #[cfg(not(target_os = "emscripten"))]
 mod summary;
 #[cfg(not(target_os = "emscripten"))]
@@ -99,6 +108,18 @@ pub(crate) fn cache_path(id: &str) -> Result<PathBuf> {
 /// exists-check and the write are atomic — two concurrent `path import`
 /// invocations racing the same id can't silently stomp each other.
 pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<CacheWrite> {
+    write_cached_with_index(&mut IndexWriter::new(&config_dir()?), id, doc, force)
+}
+
+/// Does what [`write_cached`] does, and records the document through
+/// `index`. A caller that writes many documents keeps one
+/// [`IndexWriter`] for all of them, so the index opens once.
+pub(crate) fn write_cached_with_index(
+    index: &mut IndexWriter,
+    id: &str,
+    doc: &Graph,
+    force: bool,
+) -> Result<CacheWrite> {
     use std::io::Write;
 
     let dir = cache_dir()?;
@@ -148,9 +169,7 @@ pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<CacheWr
         .metadata()
         .with_context(|| format!("stat {}", path.display()))?;
     let written = CacheEntry::new(id.to_string(), path.clone(), &meta);
-    let index_error = config_dir()
-        .and_then(|dir| index::record_written(&dir, &written, doc))
-        .err();
+    let index_error = index.record(&written, doc).err();
     Ok(CacheWrite { path, index_error })
 }
 

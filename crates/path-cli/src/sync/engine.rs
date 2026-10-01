@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::sources::{self, ArtifactSource};
 use crate::artifact::{ArtifactRef, ArtifactType};
-use crate::cache::write_cached;
+use crate::cache::write_cached_with_index;
 use crate::config::{Config, MANIFEST_FILE_NAME, MANIFEST_LOCK_FILE_NAME};
 use crate::harness::HarnessBundle;
 
@@ -202,6 +202,7 @@ fn sync_artifacts(
     observer.begin(artifact_type, pending_total);
     let mut writes: BTreeMap<&'static str, BTreeMap<String, SyncRecord>> = BTreeMap::new();
     let mut unflushed = 0usize;
+    let mut index = crate::cache::IndexWriter::new(config_dir);
     for (artifact, unchanged) in order {
         if unchanged {
             outcome.unchanged += 1;
@@ -267,7 +268,8 @@ fn sync_artifacts(
                 // force: sync owns refresh semantics — a re-sync or a
                 // prior manual `p import` of the same session must not
                 // error on the existing cache entry.
-                let written = write_cached(&derived.cache_id, &derived.doc, true)?;
+                let written =
+                    write_cached_with_index(&mut index, &derived.cache_id, &derived.doc, true)?;
                 if let Some(index_error) = &written.index_error {
                     observer.index_failed(&derived.cache_id, index_error);
                 }
@@ -789,6 +791,25 @@ mod tests {
                 .clone()
                 .unwrap();
             assert_eq!(observer.0, [cache_id]);
+        });
+    }
+
+    #[cfg(feature = "cache-index")]
+    #[test]
+    fn a_sync_records_each_document_it_writes_in_the_index() {
+        with_cfg(|home, config_dir| {
+            write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
+            write_claude_session(home, "-test-project", "sess-bbb", "Fix a bug");
+            let bundle = claude_bundle(home);
+            sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
+
+            let manifest = load_manifest(config_dir).unwrap();
+            let cache_ids: std::collections::HashSet<&str> = manifest["claude"]
+                .values()
+                .filter_map(|record| record.cache_id.as_deref())
+                .collect();
+            let index = crate::cache::index::Index::open(config_dir).unwrap();
+            assert_eq!(index.read_sessions(&cache_ids).unwrap().len(), 2);
         });
     }
 
