@@ -2,6 +2,24 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-claude 0.13.5, toolpath-codex 0.6.2, toolpath-copilot 0.1.1, toolpath-pi 0.6.2 — unreleased
+
+- **`toolpath-claude`** (0.13.5): `meta.producer.name` is `claude-code` on
+  every derived path; a session with no recorded CLI version used to
+  get no producer at all.
+- **`toolpath-codex`** (0.6.2): `meta.producer.name` is the harness id
+  `codex` (was Codex's `originator`, e.g. `codex-tui`), so consumers
+  keying on the harness see every Codex session. `producer.version`
+  stays `cli_version`; the originator moves to
+  `meta.extra["codex"]["originator"]`. A rollout with no
+  `session_meta` still gets `producer.name = "codex"`.
+- **`toolpath-copilot`** (0.1.1): `meta.producer.name` is `copilot`
+  (was `copilot-cli`), matching `meta.source`. The projector writes
+  Copilot's own `producer: "copilot-agent"` on `session.start` instead
+  of copying the view's producer name.
+- **`toolpath-pi`** (0.6.2): derived paths carry
+  `meta.producer.name = "pi"` (previously no producer).
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

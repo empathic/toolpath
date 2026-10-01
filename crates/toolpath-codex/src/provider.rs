@@ -46,6 +46,9 @@ use toolpath_convo::{
     ToolInvocation, ToolResult, Turn,
 };
 
+/// Harness id: `meta.source` and `meta.producer.name` on derived paths.
+pub(crate) const PROVIDER_ID: &str = "codex";
+
 /// Provider for Codex sessions.
 #[derive(Debug, Clone, Default)]
 pub struct CodexConvo {
@@ -301,15 +304,16 @@ impl<'a> Builder<'a> {
             }
         };
 
-        // Producer (originator + cli_version) lifts onto the typed view
-        // field. `model_provider` already lives on each assistant
+        // Producer names the harness, versioned by `cli_version`; the
+        // originator rides under `meta.extra["codex"]` (see `derive_path`).
+        // `model_provider` already lives on each assistant
         // `ActorDefinition.provider`. Codex's `source` and `forked_from_id`
         // are wire-level fields with no cross-harness analog — the codex
         // projector hard-codes defaults on the return path, so we let them
         // drop on this side.
-        let producer = meta.as_ref().map(|m| ProducerInfo {
-            name: m.originator.clone(),
-            version: Some(m.cli_version.clone()),
+        let producer = Some(ProducerInfo {
+            name: PROVIDER_ID.into(),
+            version: meta.as_ref().map(|m| m.cli_version.clone()),
         });
 
         // Filter empty carrier turns (no text, no thinking, no tool calls).
@@ -362,7 +366,7 @@ impl<'a> Builder<'a> {
             } else {
                 None
             },
-            provider_id: Some("codex".into()),
+            provider_id: Some(PROVIDER_ID.into()),
             files_changed: self.files_changed_order,
             session_ids: vec![],
             events: self.events,

@@ -42,7 +42,14 @@ pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
         title: Some(format!("Codex session: {}", prefix)),
         ..Default::default()
     };
-    toolpath_convo::derive_path(&view, &cfg)
+    let mut path = toolpath_convo::derive_path(&view, &cfg);
+    if let (Some(meta), Some(session_meta)) = (path.meta.as_mut(), session.meta()) {
+        meta.extra.insert(
+            crate::provider::PROVIDER_ID.to_string(),
+            serde_json::json!({ "originator": session_meta.originator }),
+        );
+    }
+    path
 }
 
 /// Derive a [`Path`] from multiple sessions. Used for bulk exports.
@@ -111,26 +118,37 @@ mod tests {
     }
 
     #[test]
+    fn derive_path_producer_without_session_meta() {
+        let body: Vec<_> = minimal_body().lines().skip(1).map(str::to_string).collect();
+        let (_t, mgr, id) = fixture_session(&body.join("\n"));
+        let session = mgr.read_session(&id).unwrap();
+        let path = derive_path(&session, &DeriveConfig::default());
+        let meta_extra = &path.meta.as_ref().unwrap().extra;
+        assert_eq!(meta_extra["producer"], serde_json::json!({"name": "codex"}));
+        assert!(!meta_extra.contains_key("codex"));
+    }
+
+    #[test]
     fn derive_path_producer_in_canonical_slot() {
         let (_t, mgr, id) = fixture_session(&minimal_body());
         let session = mgr.read_session(&id).unwrap();
         let path = derive_path(&session, &DeriveConfig::default());
         let meta_extra = &path.meta.as_ref().unwrap().extra;
-        // Producer (originator + cli_version) lives in its canonical slot.
+        // Producer names the harness; the version is Codex's cli_version.
         let producer = meta_extra
             .get("producer")
             .and_then(|v| v.as_object())
             .expect("meta.extra.producer object");
-        assert_eq!(
-            producer.get("name").and_then(|v| v.as_str()),
-            Some("codex-tui")
-        );
+        assert_eq!(producer.get("name").and_then(|v| v.as_str()), Some("codex"));
         assert_eq!(
             producer.get("version").and_then(|v| v.as_str()),
             Some("0.118.0")
         );
-        // Nothing else codex-specific is smuggled through meta.extra.
-        assert!(!meta_extra.contains_key("codex"));
+        // The originator (who launched Codex) rides under the provider key.
+        assert_eq!(
+            meta_extra["codex"],
+            serde_json::json!({"originator": "codex-tui"})
+        );
     }
 
     #[test]
