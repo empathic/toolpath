@@ -22,3 +22,4 @@ pub mod provider;
 pub use provider::{CodexConvo, to_turn, to_view, tool_category};
 
 pub mod derive;
+mod shell_writes;

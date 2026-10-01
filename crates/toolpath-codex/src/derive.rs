@@ -3,11 +3,12 @@
 //! Thin wrapper around the shared [`toolpath_convo::derive_path`]: convert
 //! the session to a provider-agnostic [`toolpath_convo::ConversationView`]
 //! via [`crate::provider::to_view`] and hand off. All Codex-specific data
-//! (cwd, git, file diffs from `patch_apply_end`, codex meta aggregates) is
-//! captured during `to_view`; this module only sets the title and any
-//! CLI overrides.
+//! (cwd, git, file diffs from `patch_apply_end` and shell writes, codex
+//! meta aggregates) is captured during `to_view`; this module sets the
+//! title and any CLI overrides and stamps shell-inferred file changes.
 
-use crate::provider::to_view;
+use crate::provider::to_view_with_stamps;
+use crate::shell_writes::apply_stamps;
 use crate::types::Session;
 use toolpath::v1::Path;
 
@@ -28,7 +29,7 @@ pub struct DeriveConfig {
 
 /// Derive a [`Path`] from a Codex [`Session`].
 pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
-    let view = to_view(session);
+    let (view, stamps) = to_view_with_stamps(session);
     let prefix: String = view.id.chars().take(8).collect();
     let base_uri = config.project_path.as_ref().map(|p| {
         if p.starts_with('/') {
@@ -42,7 +43,9 @@ pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
         title: Some(format!("Codex session: {}", prefix)),
         ..Default::default()
     };
-    toolpath_convo::derive_path(&view, &cfg)
+    let mut path = toolpath_convo::derive_path(&view, &cfg);
+    apply_stamps(&mut path, &format!("codex://{}", view.id), &stamps);
+    path
 }
 
 /// Derive a [`Path`] from multiple sessions. Used for bulk exports.
