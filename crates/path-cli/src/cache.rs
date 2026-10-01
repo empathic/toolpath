@@ -5,6 +5,11 @@
 //! documents by a short id (filename without `.json`) instead of full
 //! paths. The `p cache ls | rm` subcommands make the directory legible.
 
+#![deny(
+    clippy::print_stderr,
+    reason = "the cache sync reaches this module, and the sync writes nothing to stderr"
+)]
+
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::PathBuf;
 use toolpath::v1::Graph;

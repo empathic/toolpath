@@ -4,6 +4,11 @@
 //! `derive_*_session` helpers and the Pathbase fetch used by
 //! `p import pathbase` and `resume`.
 
+#![deny(
+    clippy::print_stderr,
+    reason = "the cache sync reaches this module, and the sync writes nothing to stderr"
+)]
+
 use anyhow::Result;
 use std::path::PathBuf;
 use toolpath::v1::Graph;

@@ -3,6 +3,11 @@
 //! and stat-level fingerprint — and the stamp helpers that produce
 //! those fingerprints for sync and import provenance.
 
+#![deny(
+    clippy::print_stderr,
+    reason = "the cache sync reaches this module, and the sync writes nothing to stderr"
+)]
+
 /// The kind of artifact an operation ranges over. One enum, used
 /// everywhere a command names artifact sources (`p cache sync` types,
 /// `share`/`resume` `--harness` via the

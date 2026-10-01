@@ -1016,6 +1016,46 @@ fn cache_sync_default_run_with_no_sessions_reports_nothing() {
     assert!(!cfg.path().join("manifest.json").exists());
 }
 
+/// A `$HOME` where the Claude projects directory is a regular file, so
+/// the project listing fails with an error that is not "not found".
+fn unlistable_claude_home() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+    std::fs::write(home.path().join(".claude/projects"), "").unwrap();
+    home
+}
+
+#[test]
+fn cache_sync_warns_when_a_listing_fails() {
+    let home = unlistable_claude_home();
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("HOME", home.path())
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "sync", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: claude enumeration failed: ",
+        ));
+}
+
+#[test]
+fn query_auto_sync_warns_when_a_listing_fails() {
+    let home = unlistable_claude_home();
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("HOME", home.path())
+        .env_remove("XDG_DATA_HOME")
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["query", "--source", "claude", "length"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "warning: claude enumeration failed: ",
+        ));
+}
+
 #[test]
 fn import_records_manifest_so_sync_skips() {
     let (home, _session_file) = claude_home_fixture();

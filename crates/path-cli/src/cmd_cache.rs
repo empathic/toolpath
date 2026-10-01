@@ -165,6 +165,10 @@ impl Progress {
 
 #[cfg(not(target_os = "emscripten"))]
 impl SyncObserver for Progress {
+    fn enumeration_failed(&mut self, error: &anyhow::Error) {
+        eprintln!("warning: {error}");
+    }
+
     fn begin(&mut self, artifact_type: ArtifactType, pending: usize) {
         self.label = artifact_type.padded_name();
         self.total = pending;

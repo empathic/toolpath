@@ -71,11 +71,12 @@ impl SyncOutcome {
 /// How the engine reports progress; rendering is the caller's
 /// concern. `p cache sync` draws a live stderr line, callers that
 /// sync logically with no UI pass `&mut ()`. Per artifact type:
-/// one `begin` once the stat pass has sized the pending work, one
-/// `failed` per derive error (before its `tick`), one `tick` per
-/// finished derive or scope skip, one `end` when the type's loop
-/// is done.
+/// one `enumeration_failed` per listing that failed, one `begin`
+/// once the stat pass has sized the pending work, one `failed` per
+/// derive error (before its `tick`), one `tick` per finished derive
+/// or scope skip, one `end` when the type's loop is done.
 pub(crate) trait SyncObserver {
+    fn enumeration_failed(&mut self, _error: &anyhow::Error) {}
     fn begin(&mut self, _artifact_type: ArtifactType, _pending: usize) {}
     fn tick(&mut self) {}
     fn failed(&mut self, _artifact: &ArtifactRef, _error: &anyhow::Error) {}
@@ -110,7 +111,10 @@ pub(crate) fn sync_bundle(
             out.push((artifact_type, SyncOutcome::default()));
             continue;
         };
-        let artifacts = source.enumerate(project_under);
+        let enumeration = source.enumerate(project_under);
+        for failure in &enumeration.failures {
+            observer.enumeration_failed(failure);
+        }
         let records = manifest
             .get(artifact_type.name())
             .cloned()
@@ -119,7 +123,7 @@ pub(crate) fn sync_bundle(
             config_dir,
             source.as_ref(),
             artifact_type,
-            &artifacts,
+            &enumeration.artifacts,
             &records,
             project_under,
             observer,
@@ -590,7 +594,7 @@ mod tests {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
-            let artifacts = source.enumerate(None);
+            let artifacts = source.enumerate(None).artifacts;
             assert_eq!(artifacts.len(), 1);
             assert_eq!(artifacts[0].id, "sess-aaa");
             assert_eq!(artifacts[0].path.as_deref(), Some("/test/project"));
@@ -703,6 +707,40 @@ mod tests {
     }
 
     #[test]
+    fn enumeration_failure_goes_to_the_observer() {
+        struct EnumerationFailures(Vec<String>);
+        impl SyncObserver for EnumerationFailures {
+            fn enumeration_failed(&mut self, error: &anyhow::Error) {
+                self.0.push(error.to_string());
+            }
+        }
+
+        with_cfg(|home, config_dir| {
+            // A regular file in the place of the projects directory:
+            // the listing fails, and not with "not found".
+            std::fs::create_dir_all(home.join(".claude")).unwrap();
+            std::fs::write(home.join(".claude/projects"), "").unwrap();
+            let bundle = claude_bundle(home);
+            let mut observer = EnumerationFailures(Vec::new());
+            let outcomes = sync_bundle(
+                config_dir,
+                &bundle,
+                &[ArtifactType::Claude],
+                None,
+                &mut observer,
+            )
+            .unwrap();
+            assert_eq!(outcomes[0].1, SyncOutcome::default());
+            assert_eq!(observer.0.len(), 1);
+            assert!(
+                observer.0[0].starts_with("claude enumeration failed: "),
+                "{}",
+                observer.0[0]
+            );
+        });
+    }
+
+    #[test]
     fn sync_overwrites_cache_entry_it_does_not_remember() {
         with_cfg(|home, config_dir| {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
@@ -726,7 +764,7 @@ mod tests {
             write_claude_session(home, "-test-project", "sess-aaa", "Add a feature");
             let bundle = claude_bundle(home);
             let source = sources::source_for(&bundle, ArtifactType::Claude).unwrap();
-            let mut artifacts = source.enumerate(None);
+            let mut artifacts = source.enumerate(None).artifacts;
             artifacts.push(make_ref(ArtifactType::Claude, "does-not-exist"));
 
             let outcome = sync_artifacts(

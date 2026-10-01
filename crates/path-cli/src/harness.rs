@@ -3,6 +3,11 @@
 //! `HarnessBundle` carries one provider manager per installed harness
 //! for commands that aggregate across them.
 
+#![deny(
+    clippy::print_stderr,
+    reason = "the cache sync reaches this module, and the sync writes nothing to stderr"
+)]
+
 use crate::artifact::ArtifactType;
 
 /// An installed agent harness — a runtime sessions can be shared from
