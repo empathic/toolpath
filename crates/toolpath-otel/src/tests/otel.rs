@@ -36,22 +36,7 @@ pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
     crate::derive::derive_session(session, config)
 }
 
-/// One session per client session id, in first-seen start order; every
-/// sessionless generation forms one more session.
-pub fn group_sessions(mut gens: Vec<Generation>) -> Vec<Session> {
-    gens.sort_by(|a, b| (a.start_ns, &a.id).cmp(&(b.start_ns, &b.id)));
-    let mut groups: Vec<(Option<String>, Vec<Generation>)> = Vec::new();
-    for g in gens {
-        match groups.iter_mut().find(|(id, _)| *id == g.session_id) {
-            Some((_, list)) => list.push(g),
-            None => groups.push((g.session_id.clone(), vec![g])),
-        }
-    }
-    groups
-        .into_iter()
-        .filter_map(|(_, list)| Session::from_generations(list))
-        .collect()
-}
+pub(crate) use crate::group::group_generations as group_sessions;
 
 /// [`group_sessions`] over a read batch, each session derived, with the
 /// truncated mark the public `derive_path` applies.

@@ -193,6 +193,10 @@ fn responses_capture_reflects_the_pinned_instrumentation() {
         g.iter()
             .all(|g| g.usage.reasoning_tokens.is_none() && g.completion.reasoning.is_none())
     );
+    assert_eq!(
+        group_sessions(g).len() as u64,
+        exp["sessions_without_continuation"].as_u64().unwrap()
+    );
 }
 
 #[test]
