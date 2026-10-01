@@ -27,7 +27,9 @@
 //!    it follows (`Turn.attributed_token_usage`); `finalize_usage` then
 //!    sets each group's total `Turn.token_usage` to the sum of its
 //!    attributions, on the group's final turn — one source of truth, so
-//!    `Σ token_usage == Σ attributed ==` session total.
+//!    `Σ token_usage == Σ attributed ==` session total. Codex's
+//!    `input_tokens` includes `cached_input_tokens`; the derived
+//!    `input_tokens` excludes it (classes are additive).
 //! 8. Everything else (`task_started`, `task_complete`, `turn_context`,
 //!    `user_message`/`agent_message` duplicates, unknown events) lands
 //!    in `ConversationView.events` as a typed [`ConversationEvent`].
@@ -935,7 +937,13 @@ fn usage_delta(current: &TokenUsage, prev: &TokenUsage) -> TokenUsage {
 
 fn apply_token_count(total: &mut TokenUsage, info: &TokenCountInfo) {
     if let Some(t) = info.total_token_usage.as_ref() {
-        total.input_tokens = t.input_tokens.or(total.input_tokens);
+        // Codex's `input_tokens` includes `cached_input_tokens`; derived
+        // classes are additive, so the cached share is counted only under
+        // `cache_read_tokens`.
+        let uncached = t
+            .input_tokens
+            .map(|i| i.saturating_sub(t.cached_input_tokens.unwrap_or(0)));
+        total.input_tokens = uncached.or(total.input_tokens);
         total.output_tokens = t.output_tokens.or(total.output_tokens);
         total.cache_read_tokens = t.cached_input_tokens.or(total.cache_read_tokens);
         // `reasoning_output_tokens` ⊆ `output_tokens` (informational); carry the
@@ -1128,18 +1136,18 @@ mod tests {
         let view = to_view(&mgr.read_session(&id).unwrap());
 
         let first = view.turns[1].token_usage.as_ref().unwrap();
-        assert_eq!(first.input_tokens, Some(100));
+        assert_eq!(first.input_tokens, Some(90));
         assert_eq!(first.output_tokens, Some(20));
         assert_eq!(first.cache_read_tokens, Some(10));
 
         let second = view.turns[3].token_usage.as_ref().unwrap();
-        assert_eq!(second.input_tokens, Some(200));
+        assert_eq!(second.input_tokens, Some(170));
         assert_eq!(second.output_tokens, Some(30));
         assert_eq!(second.cache_read_tokens, Some(30));
 
         // Session total stays the final cumulative counter.
         let total = view.total_usage.as_ref().unwrap();
-        assert_eq!(total.input_tokens, Some(300));
+        assert_eq!(total.input_tokens, Some(260));
         assert_eq!(total.output_tokens, Some(50));
     }
 
@@ -1324,7 +1332,22 @@ mod tests {
         );
         let total = view.turns[2].token_usage.as_ref().unwrap();
         assert_eq!(total.output_tokens, Some(20));
-        assert_eq!(total.input_tokens, Some(100));
+        assert_eq!(total.input_tokens, Some(90));
+    }
+
+    #[test]
+    fn input_tokens_exclude_cached_input() {
+        // Codex's `input_tokens` includes `cached_input_tokens` (OpenAI
+        // semantics); the derived classes are additive, so cached input is
+        // counted once, under `cache_read_tokens`.
+        let (_t, mgr, id) = setup_session_fixture(&two_round_session(true));
+        let view = to_view(&mgr.read_session(&id).unwrap());
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(total.input_tokens, Some(300 - 40));
+        assert_eq!(total.cache_read_tokens, Some(40));
+        let first = view.turns[1].token_usage.as_ref().unwrap();
+        assert_eq!(first.input_tokens, Some(100 - 10));
+        assert_eq!(first.cache_read_tokens, Some(10));
     }
 
     #[test]
@@ -1335,7 +1358,7 @@ mod tests {
         let view = to_view(&mgr.read_session(&id).unwrap());
 
         let second = view.turns[3].token_usage.as_ref().unwrap();
-        assert_eq!(second.input_tokens, Some(200));
+        assert_eq!(second.input_tokens, Some(170));
         assert_eq!(second.output_tokens, Some(30));
         assert_eq!(second.cache_read_tokens, Some(30));
     }
@@ -1456,7 +1479,7 @@ mod tests {
         let (_t, mgr, id) = setup_session_fixture(&minimal_session());
         let view = to_view(&mgr.read_session(&id).unwrap());
         let u = view.total_usage.as_ref().unwrap();
-        assert_eq!(u.input_tokens, Some(100));
+        assert_eq!(u.input_tokens, Some(90));
         assert_eq!(u.output_tokens, Some(20));
         assert_eq!(u.cache_read_tokens, Some(10));
     }

@@ -13,6 +13,10 @@ All notable changes to the Toolpath workspace are documented here.
   stays `cli_version`; the originator moves to
   `meta.extra["codex"]["originator"]`. A rollout with no
   `session_meta` still gets `producer.name = "codex"`.
+  Token classes are now additive: `input_tokens` excludes
+  `cached_input_tokens` (Codex's wire `input_tokens` includes it, so
+  cached input was counted twice by consumers summing the classes);
+  `CodexProjector` folds the cached count back into the wire value.
 - **`toolpath-copilot`** (0.1.1): `meta.producer.name` is `copilot`
   (was `copilot-cli`), matching `meta.source`. The projector writes
   Copilot's own `producer: "copilot-agent"` on `session.start` instead
