@@ -55,6 +55,15 @@ pub struct Branches {
     pub merges: Vec<(usize, usize)>,
     /// The main line's last turn.
     pub head: Option<usize>,
+    /// Per node: held back from a non-final incremental send whatever its
+    /// own state, because a later generation could still change its marks
+    /// or parents (`docs/agents/formats/otel.md`, "Incremental JSONL").
+    pub held: Vec<bool>,
+    /// Merged sub-agent answers, by node, with the generation (feed order)
+    /// by which the merge is seen. The answer settles there: an echo that
+    /// only a later generation carries (a resumed sub-agent) is not part of
+    /// its step.
+    pub answers: BTreeMap<usize, usize>,
 }
 
 impl Branches {
@@ -148,15 +157,12 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         .collect();
     produced.sort_unstable();
     let mut counts: HashMap<usize, usize> = HashMap::new();
-    let main_root = produced
-        .iter()
-        .find(|(_, r)| {
-            let c = counts.entry(*r).or_default();
-            *c += 1;
-            *c == 2
-        })
-        .or(produced.first())
-        .map(|(_, r)| *r);
+    let decided = produced.iter().find(|(_, r)| {
+        let c = counts.entry(*r).or_default();
+        *c += 1;
+        *c == 2
+    });
+    let main_root = decided.or(produced.first()).map(|(_, r)| *r);
 
     let mut kind: Vec<Option<BranchKind>> = (0..n)
         .map(|i| match delegated_of(i) {
@@ -208,12 +214,11 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         .map(|x| content_text(&x.message.content))
         .collect();
     let mut merges = Vec::new();
+    let mut answers = BTreeMap::new();
+    let mut returned_calls = BTreeSet::new();
     for (&a, &ci) in &delegated {
         let from = calls[ci].node;
-        let result = nodes[from]
-            .results
-            .get(&calls[ci].id)
-            .map(|r| r.content.as_str());
+        let result = nodes[from].results.get(&calls[ci].id);
         let in_thread = |j: usize, last: usize| {
             j > from.max(last)
                 && thread(j) == thread(from)
@@ -231,27 +236,62 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
                 && nodes[i].message.tool_calls.is_empty()
                 && !texts[i].trim().is_empty()
         });
+        // `(receiving turn, answer, generation by which the merge is seen)`.
         let join = finals.filter_map(|last| {
             let answer = texts[last].trim();
-            let carried = (from + 1..n).find(|&j| in_thread(j, last) && texts[j].contains(answer));
-            let returned = result
-                .is_some_and(|r| r.contains(answer))
-                .then(|| {
-                    (from + 1..n).find(|&j| {
-                        in_thread(j, last) && nodes[j].first_generation > generation(last)
-                    })
-                })
-                .flatten();
+            let carried = (from + 1..n)
+                .find(|&j| in_thread(j, last) && texts[j].contains(answer))
+                .map(|j| (j, nodes[j].first_generation));
+            let returned = result.filter(|r| r.content.contains(answer)).and_then(|r| {
+                (from + 1..n)
+                    .find(|&j| in_thread(j, last) && nodes[j].first_generation > generation(last))
+                    .map(|j| (j, nodes[j].first_generation.max(r.generation)))
+            });
             [carried, returned]
                 .into_iter()
                 .flatten()
                 .min()
-                .map(|j| (j, last))
+                .map(|(j, seen)| (j, last, seen.max(generation(last))))
         });
-        merges.extend(join.min());
+        if let Some((j, last, seen)) = join.min() {
+            merges.push((j, last));
+            answers.insert(last, seen);
+            returned_calls.insert(ci);
+        }
     }
     merges.sort_unstable();
 
+    // Until the main line is decided every turn may still change kind; a
+    // side request waits for `final_`; a system turn above sub-agent
+    // threads takes its first thread's call, so it waits for that one.
+    let mut held = vec![decided.is_none(); n];
+    for i in 0..n {
+        let first_child = || (i + 1..n).find(|&j| parent[j] == Some(i));
+        held[i] |= match &kind[i] {
+            Some(BranchKind::Side) => true,
+            Some(BranchKind::Subagent(_)) if anchor[i].is_none() => {
+                first_child().is_none_or(|j| !matches!(kind[j], Some(BranchKind::Subagent(_))))
+            }
+            _ => false,
+        };
+    }
+    // A call whose sub-agent has not answered yet may still give any later
+    // turn of its thread an extra parent.
+    for (ci, c) in calls.iter().enumerate() {
+        if returned_calls.contains(&ci) {
+            continue;
+        }
+        let from = c.node;
+        // Parents come before their children in graph order.
+        let mut below = vec![false; n];
+        below[from] = true;
+        for j in from + 1..n {
+            below[j] = parent[j].is_some_and(|p| below[p]);
+            if below[j] && thread(j) == thread(from) && kind[j] == kind[from] {
+                held[j] = true;
+            }
+        }
+    }
     let head = (0..n)
         .rev()
         .find(|&i| kind[i].is_none())
@@ -261,6 +301,8 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         delegations,
         merges,
         head,
+        held,
+        answers,
     }
 }
 
@@ -320,7 +362,7 @@ mod tests {
             id: id.into(),
             start_ns: start,
             end_ns: start + 1,
-            messages,
+            messages: messages.into(),
             completion,
             cost: Cost {
                 total: Some(1.0),
@@ -468,7 +510,7 @@ mod tests {
     #[test]
     fn a_background_sub_agent_joins_where_its_answer_arrives() {
         let mut s = fan_out();
-        let resumed = &mut s.generations[4].messages;
+        let mut resumed = s.generations[4].messages.to_vec();
         for t in resumed.iter_mut().filter(|t| t.role == "tool") {
             t.content = json!("launched");
         }
@@ -476,6 +518,7 @@ mod tests {
         resumed.push(m(
             json!({"role": "user", "content": "<task-notification>B done</task-notification>"}),
         ));
+        s.generations[4].messages = resumed.into();
         let g = stitch(&s);
         let b = classify(&g, SourceHarness::Unknown);
         let note = g
@@ -655,6 +698,22 @@ mod tests {
         let noted = produced_by(&g, 2);
         assert_eq!(b.merges, [(noted, produced_by(&g, 1))]);
         assert_prefixes_agree(&s);
+    }
+
+    /// The answer settles at the generation that shows its merge (m1
+    /// returns it); the resumed sub-agent's request a2 echoes it later.
+    #[test]
+    fn a_merged_answer_settles_at_the_generation_that_shows_its_merge() {
+        let s = answering_twice();
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        let answer = produced_by(&g, 1);
+        assert_eq!(b.answers.get(&answer), Some(&2), "m1 carries the result");
+        assert_eq!(
+            g.nodes[answer].echoed_by,
+            Some(3),
+            "a2 resumes the sub-agent"
+        );
     }
 
     fn answering_twice() -> Session {

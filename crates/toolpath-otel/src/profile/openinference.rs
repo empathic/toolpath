@@ -221,7 +221,7 @@ fn extract_span(id: String, resource: &Resource, scope: &Scope, span: &Span) -> 
         session_id: string(&span.attributes, "session.id"),
         user_id: string(&span.attributes, "user.id"),
         client_key: string(&resource.attributes, "service.name"),
-        messages,
+        messages: messages.into(),
         completion,
         usage: usage(span),
         request_model: string(&span.attributes, "llm.request.model_name").or_else(|| model.clone()),

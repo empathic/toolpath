@@ -1,13 +1,17 @@
 //! The memoized prompt read against a whole-prompt parse: same messages
-//! and same failures, for fresh and memo-hit messages alike.
+//! and same failures, for fresh and memo-hit messages alike; prompts
+//! shared across generations equal their own parse; and the records read
+//! hashes and stores prompts exactly as the record format defines.
 
 use crate::generation::Message;
 use crate::profile::ProfileSelection;
 use crate::profile::openrouter::{completion_members, completion_whole, prompt_messages};
+use crate::record::store_prompt;
 use crate::tests::otlp_oracle::fixture_values;
-use crate::walk::{ReadCx, read_deliveries};
+use crate::walk::{ReadCx, read_deliveries, read_records};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap};
 
 /// What reading the prompt did before the memo: one parse of the whole text.
 fn whole(raw: &str) -> Option<Vec<Message>> {
@@ -300,5 +304,71 @@ fn member_by_member_completions_read_as_the_whole_text_does() {
             completion_members(&c, &mut ReadCx::default()).is_some(),
             "{c:.200}"
         );
+    }
+}
+
+/// Every OpenRouter generation in the fixtures, read together (prompts
+/// shared across generations), holds what its own `gen_ai.prompt` parses
+/// to.
+#[test]
+fn shared_prompts_equal_each_prompts_whole_parse() {
+    let mut by_id: HashMap<String, Option<Vec<Message>>> = HashMap::new();
+    for v in fixture_values() {
+        let d = crate::otlp::Delivery::read(&v);
+        for s in d
+            .resource_spans
+            .iter()
+            .flat_map(|rs| &rs.scope_spans)
+            .flat_map(|ss| &ss.spans)
+        {
+            let a = crate::otlp::Attrs(&s.attributes);
+            if let (Some(id), Some(p)) = (a.str("gen_ai.response.id"), a.str("gen_ai.prompt")) {
+                by_id.insert(id.to_string(), whole(p));
+            }
+        }
+    }
+    let values = fixture_values();
+    let values: Vec<&Value> = values.iter().filter(|v| crate::otlp::is_otlp(v)).collect();
+    let out = read_deliveries(values.iter().copied(), ProfileSelection::OpenRouter).unwrap();
+    let mut checked = 0;
+    for g in &out.generations {
+        if let Some(Some(want)) = by_id.get(&g.id) {
+            assert_eq!(g.messages.to_vec(), *want, "{}", g.id);
+            checked += 1;
+        }
+    }
+    assert!(checked > 20, "{checked}");
+}
+
+/// The records read names each prompt by the hash `store_prompt` gives the
+/// messages `read_deliveries` reads, and stores exactly those messages.
+#[test]
+fn read_records_hashes_and_stores_as_store_prompt_does() {
+    let values = fixture_values();
+    let values: Vec<&Value> = values.iter().filter(|v| crate::otlp::is_otlp(v)).collect();
+    for sel in [
+        ProfileSelection::Auto,
+        ProfileSelection::OpenRouter,
+        ProfileSelection::Semconv,
+        ProfileSelection::OpenInference,
+    ] {
+        let read = read_deliveries(values.iter().copied(), sel).unwrap();
+        let records = read_records(values.iter().copied(), sel).unwrap();
+        assert_eq!(records.generations.len(), read.generations.len());
+        assert_eq!(records.prompts.len(), read.generations.len());
+        let mut store = BTreeMap::new();
+        for (i, g) in read.generations.iter().enumerate() {
+            assert_eq!(
+                records.prompts[i],
+                store_prompt(&g.messages, &mut store),
+                "{sel:?} {}",
+                g.id
+            );
+            assert!(records.generations[i].messages.is_empty());
+            let mut bare = g.clone();
+            bare.messages = Vec::new().into();
+            assert_eq!(records.generations[i], bare, "{sel:?} {}", g.id);
+        }
+        assert_eq!(records.messages, store, "{sel:?}");
     }
 }

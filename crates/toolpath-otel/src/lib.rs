@@ -6,10 +6,12 @@ mod error;
 mod generation;
 mod harness;
 mod hash;
+mod jsonl;
 mod normalize;
 mod otlp;
 mod profile;
 mod provider;
+mod record;
 mod session;
 mod stitch;
 mod walk;
@@ -18,12 +20,16 @@ mod walk;
 mod tests;
 
 pub use error::{OtelError, Result};
+pub use jsonl::{Remote, Settle, derive_jsonl};
 pub use profile::ProfileSelection;
+pub use record::{GenerationBatch, GenerationRecord, MessageHash, StoredMessage, read_generations};
+/// The `toolpath` types [`derive_jsonl`] takes and returns, so a caller
+/// needs no `toolpath` dependency of its own to use it.
+pub use toolpath::v1::jsonl::{BatchLimits, Body, DeltaError};
 
 use walk::SkipReason;
 
 use serde_json::Value;
-use std::collections::BTreeSet;
 use toolpath::v1::{Graph, GraphIdentity, GraphMeta, Path, PathOrRef};
 
 /// Configuration for deriving Toolpath documents from OTLP telemetry.
@@ -138,30 +144,67 @@ pub fn derive(sessions: &[&[Value]], config: &DeriveConfig) -> Result<Derived<Gr
 /// [`OtelError::MixedSessions`] when generations carry more than one
 /// session id; [`OtelError::NoGenerations`] when no generation can be read.
 pub fn derive_path(requests: &[Value], config: &DeriveConfig) -> Result<Derived<Path>> {
-    let out = walk::read_deliveries(requests, config.profile)?;
-    let skipped = SkipCounts::from_outcome(&out);
-    let ids: BTreeSet<&str> = out
-        .generations
-        .iter()
-        .filter_map(|g| g.session_id.as_deref())
-        .collect();
-    if ids.len() > 1 {
-        return Err(OtelError::MixedSessions(
-            ids.into_iter().map(str::to_string).collect(),
-        ));
-    }
-    let truncated = ids.first().is_some_and(|id| {
-        out.skipped
-            .iter()
-            .any(|s| s.reason == SkipReason::Truncated && s.session_id.as_deref() == Some(id))
-    });
-    let mut session = session::Session::from_generations(out.generations)
-        .ok_or(OtelError::NoGenerations { skipped })?;
-    session.truncated = truncated;
+    let (session, skipped) = read_session(requests, config)?;
     Ok(Derived {
         output: derive::derive_session(&session, &config.convo),
         skipped,
     })
+}
+
+/// Derive a Toolpath [`Path`] from the [`GenerationRecord`]s of one
+/// session, as [`derive_path`] does from the request bodies they were read
+/// from, with `messages` looking up the prompt messages they name. The
+/// skip counts are only the duplicate generation ids among `records`; the
+/// rest were counted by [`read_generations`].
+///
+/// Of several records with one generation id the better-ranked profile's
+/// is derived, else the first, as [`derive_path`] does, whatever the order
+/// of `records`. `messages` must return the message stored under exactly
+/// the hash asked for ([`StoredMessage::hash`]); it is not checked, and a
+/// wrong message derives wrong content under the right ids.
+///
+/// # Errors
+///
+/// [`OtelError::MessageMissing`] when `messages` lacks a named message;
+/// [`OtelError::MixedSessions`] and [`OtelError::NoGenerations`] as for
+/// [`derive_path`].
+pub fn derive_path_from_records<'m>(
+    records: &[GenerationRecord],
+    messages: impl Fn(&MessageHash) -> Option<&'m StoredMessage>,
+    config: &DeriveConfig,
+) -> Result<Derived<Path>> {
+    let (session, skipped) = session_from_records(records, messages, config, record::Pick::Rank)?;
+    Ok(Derived {
+        output: derive::derive_session(&session, &config.convo),
+        skipped,
+    })
+}
+
+/// The one session `requests` hold, in start order, and what was skipped.
+fn read_session(
+    requests: &[Value],
+    config: &DeriveConfig,
+) -> Result<(session::Session, SkipCounts)> {
+    let out = walk::read_deliveries(requests, config.profile)?;
+    let skipped = SkipCounts::from_outcome(&out);
+    record::session_of(
+        record::entries(out).collect(),
+        config.profile,
+        record::Pick::Rank,
+        skipped,
+    )
+}
+
+/// The one session `records` hold, in start order, one copy of each
+/// generation id as `pick` says, and the duplicates among them.
+fn session_from_records<'m>(
+    records: &[GenerationRecord],
+    messages: impl Fn(&MessageHash) -> Option<&'m StoredMessage>,
+    config: &DeriveConfig,
+    pick: record::Pick,
+) -> Result<(session::Session, SkipCounts)> {
+    let entries = record::rebuild(records, messages)?;
+    record::session_of(entries, config.profile, pick, SkipCounts::default())
 }
 
 /// Derive a Toolpath [`Graph`] with one path per session; the skip counts

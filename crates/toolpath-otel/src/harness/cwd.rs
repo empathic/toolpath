@@ -92,7 +92,8 @@ mod tests {
                     "user",
                     "<environment_context><cwd>/home/user/proj</cwd></environment_context>",
                 ),
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         assert_eq!(find_cwd(&[g]).as_deref(), Some("/home/user/proj"));

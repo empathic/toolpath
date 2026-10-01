@@ -11,14 +11,22 @@ use crate::error::{OtelError, Result};
 use crate::generation::Generation;
 use crate::otlp::Delivery;
 use crate::profile::{self, Ident, Profile, ProfileSelection, SpanRef, TraceView, Unit};
+use crate::record::{self, MessageHash, StoredMessage};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// What reading a batch produced.
 #[derive(Debug, Clone, Default)]
 pub struct ReadOutcome {
+    /// With their prompts, except from [`read_records`], whose generations
+    /// name theirs in `prompts`.
     pub generations: Vec<Generation>,
+    /// [`read_records`] only: per generation, the [`MessageHash`] of its
+    /// prompt's last message (`None`: no messages).
+    pub prompts: Vec<Option<MessageHash>>,
+    /// [`read_records`] only: every message `prompts` name.
+    pub messages: BTreeMap<MessageHash, StoredMessage>,
     pub skipped: Vec<Skipped>,
     /// Spans no consulted profile claimed or absorbed, plus distinct orphan
     /// log records no profile claims. Counted, never listed.
@@ -27,12 +35,10 @@ pub struct ReadOutcome {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Skipped {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub generation_id: Option<String>,
     pub session_id: Option<String>,
     /// Name of the profile that produced the skip; `None` for walker
     /// skips (`ErrorStatus`, `Duplicate`).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub profile: Option<String>,
     pub reason: SkipReason,
 }
@@ -61,19 +67,47 @@ enum Role {
     Unclaimed,
 }
 
+/// What a read hands out for each generation's prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Prompts {
+    /// The messages, prompts sharing their storage.
+    Messages,
+    /// Message hashes and the stored messages they name.
+    Hashes,
+}
+
 /// Read a batch of OTLP/JSON deliveries; content problems are reported in
 /// the outcome, not as errors.
 pub fn read_deliveries<'a>(
     deliveries: impl IntoIterator<Item = &'a Value>,
     sel: ProfileSelection,
 ) -> Result<ReadOutcome> {
-    read_with(deliveries, profile::consulted(sel))
+    read_as(deliveries, profile::consulted(sel), Prompts::Messages)
+}
+
+/// [`read_deliveries`] with each prompt as the [`MessageHash`] of its last
+/// message (`prompts`) and the messages in `messages`; the generations'
+/// own prompts are left empty.
+pub fn read_records<'a>(
+    deliveries: impl IntoIterator<Item = &'a Value>,
+    sel: ProfileSelection,
+) -> Result<ReadOutcome> {
+    read_as(deliveries, profile::consulted(sel), Prompts::Hashes)
 }
 
 /// [`read_deliveries`] over an explicit profile list (rank = index).
+#[cfg(test)]
 pub(crate) fn read_with<'a>(
     deliveries: impl IntoIterator<Item = &'a Value>,
     profiles: &[&dyn Profile],
+) -> Result<ReadOutcome> {
+    read_as(deliveries, profiles, Prompts::Messages)
+}
+
+fn read_as<'a>(
+    deliveries: impl IntoIterator<Item = &'a Value>,
+    profiles: &[&dyn Profile],
+    prompts: Prompts,
 ) -> Result<ReadOutcome> {
     let mut parsed: Vec<Delivery> = Vec::new();
     for value in deliveries {
@@ -205,7 +239,34 @@ pub(crate) fn read_with<'a>(
             &mut out,
         );
     }
-    out.generations = dedupe.kept.into_iter().flatten().collect();
+    let (mut generations, tails): (Vec<Generation>, Vec<Option<Option<usize>>>) =
+        dedupe.kept.into_iter().flatten().unzip();
+    // Memo-read prompts are handed out only now, so prompts share storage.
+    let memo: Vec<usize> = (0..tails.len()).filter(|&i| tails[i].is_some()).collect();
+    let memo_tails: Vec<Option<usize>> = memo.iter().map(|&i| tails[i].flatten()).collect();
+    match prompts {
+        Prompts::Messages => {
+            for (i, p) in memo.into_iter().zip(cx.share(&memo_tails)) {
+                generations[i].messages = p;
+            }
+        }
+        Prompts::Hashes => {
+            out.prompts = vec![None; generations.len()];
+            for (i, h) in memo
+                .into_iter()
+                .zip(cx.hashes(&memo_tails, &mut out.messages))
+            {
+                out.prompts[i] = h;
+            }
+            for (i, g) in generations.iter_mut().enumerate() {
+                let messages = std::mem::take(&mut g.messages);
+                if tails[i].is_none() {
+                    out.prompts[i] = record::store_prompt(&messages, &mut out.messages);
+                }
+            }
+        }
+    }
+    out.generations = generations;
     Ok(out)
 }
 
@@ -213,7 +274,9 @@ pub(crate) fn read_with<'a>(
 struct Dedupe {
     /// id -> (rank, slot in `kept`, the kept unit's ident).
     seen: HashMap<String, (usize, usize, Ident)>,
-    kept: Vec<Option<Generation>>,
+    /// Each kept generation, and its prompt's memo tail when the profile
+    /// read the prompt through [`ReadCx::prompt`].
+    kept: Vec<Option<(Generation, Option<Option<usize>>)>>,
 }
 
 fn slice_of<'m, T>(m: &'m HashMap<String, Vec<T>>, key: &str) -> &'m [T] {
@@ -258,8 +321,10 @@ fn run_unit<'a>(
         out.skipped.push(skip(SkipReason::Duplicate, &ident, false));
         return;
     }
+    cx.tail = None;
     match p.extract_with(unit, trace, cx) {
         Ok(mut g) => {
+            let tail = cx.tail.take();
             g.profile = p.name().to_string();
             // Only after a successful extract, so a truncated first
             // copy never suppresses a good redelivery.
@@ -282,7 +347,7 @@ fn run_unit<'a>(
             dedupe
                 .seen
                 .insert(g.id.clone(), (rank, dedupe.kept.len(), ident));
-            dedupe.kept.push(Some(g));
+            dedupe.kept.push(Some((g, tail)));
         }
         Err(reason) => out.skipped.push(skip(reason, &ident, true)),
     }
