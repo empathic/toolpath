@@ -4,14 +4,17 @@ use crate::branch::Branches;
 use crate::generation::{Generation, Usage};
 use crate::harness::SourceHarness;
 use crate::harness::cwd::find_cwd;
-use crate::harness::mutations::file_mutations;
+use crate::harness::shell_writes::{ShellState, Stamps, TurnWrites, turn_writes};
 use crate::harness::tools::tool_category;
 use crate::hash::derived_session_id;
 use crate::normalize::{content_text, is_system_like};
 use crate::session::Session;
 use crate::stitch::{Node, TurnGraph};
 use chrono::{DateTime, SecondsFormat, Utc};
-use std::collections::BTreeMap;
+use serde_json::Value;
+use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
+use toolpath_convo::shell_writes::{ScriptDir, normalize_path};
 use toolpath_convo::{
     ConversationView, DelegatedWork, ProducerInfo, Role, SessionBase, TokenUsage, ToolInvocation,
     ToolResult, Turn,
@@ -25,34 +28,116 @@ pub const PROVIDER: &str = "otel";
 pub fn session_to_view(session: &Session) -> ConversationView {
     let graph = crate::stitch::stitch(session);
     let harness = crate::stitch::settled_harness(session, true);
-    view_from_graph(
+    view_and_stamps(
         session,
         &graph,
         &crate::branch::classify(&graph, harness),
         harness,
     )
+    .0
 }
 
-pub fn view_from_graph(
+/// `extra.otel` from shell calls, by turn id.
+#[derive(Debug, Default)]
+pub(crate) struct ShellStamps {
+    /// For shell-derived file changes, by change key.
+    pub files: BTreeMap<String, Stamps>,
+    /// `unresolved_shell_writes` of the turn's own step.
+    pub unresolved: BTreeMap<String, Vec<Value>>,
+}
+
+/// The view, and the stamps of its shell calls. Each turn starts from its
+/// parent's [`ShellState`] and working directory (the parent's, else the
+/// first one its own first generation's prompt names). A persistent shell
+/// belongs to the process, not the branch, so a turn's shell directory is
+/// also unknown when a generation sorting before its first one, off the
+/// turn's ancestry, issued a call that may have left the shell anywhere
+/// but there, and its start directory moved when such a call left it
+/// moved. Nothing depends on a later generation.
+pub(crate) fn view_and_stamps(
     session: &Session,
     graph: &TurnGraph,
     branches: &Branches,
     harness: SourceHarness,
-) -> ConversationView {
+) -> (ConversationView, ShellStamps) {
     let gens = &session.generations;
-    let turns: Vec<Turn> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(ni, n)| to_turn(n, gens, harness, delegations(n, ni, branches)))
-        .collect();
+    let base = find_cwd(gens);
+    let mut prompt_cwd: HashMap<usize, Option<Rc<str>>> = HashMap::new();
+    // A turn's cwd, shell state, and the indices of its ancestry's
+    // `shell_dirs` records.
+    type Carried = (Option<Rc<str>>, Rc<ShellState>, Rc<Vec<usize>>);
+    let mut carried: HashMap<&str, Carried> = HashMap::new();
+    // (issuing generation, directory a persistent shell was left in, `None`
+    // when unknown, whether the start directory was left moved) for each
+    // turn whose calls touched it.
+    let mut shell_dirs: Vec<(usize, Option<String>, bool)> = Vec::new();
+    let mut stamps = ShellStamps::default();
+    let mut turns: Vec<Turn> = Vec::with_capacity(graph.nodes.len());
+    for (ni, n) in graph.nodes.iter().enumerate() {
+        let (inherited, mut state, mut ancestry) = n
+            .parent
+            .as_deref()
+            .and_then(|p| carried.get(p))
+            .cloned()
+            .unwrap_or_default();
+        let cwd = inherited.or_else(|| {
+            prompt_cwd
+                .entry(n.first_generation)
+                .or_insert_with(|| {
+                    find_cwd(std::slice::from_ref(&gens[n.first_generation])).map(Rc::from)
+                })
+                .clone()
+        });
+        let here = state.shell_dir(cwd.as_deref()).map(normalize_path);
+        let off_ancestry = shell_dirs
+            .iter()
+            .enumerate()
+            .filter(|(i, (g, _, _))| *g < n.first_generation && !ancestry.contains(i))
+            .map(|(_, r)| r);
+        let (mut elsewhere, mut start_moved) = (false, false);
+        for (_, dir, moved) in off_ancestry {
+            elsewhere |= dir.is_none() || *dir != here;
+            start_moved |= *moved;
+        }
+        if elsewhere && state.dir != ScriptDir::Unknown {
+            Rc::make_mut(&mut state).dir = ScriptDir::Unknown;
+        }
+        if start_moved && !state.start_moved {
+            Rc::make_mut(&mut state).start_moved = true;
+        }
+        let (turn, writes) = to_turn(
+            n,
+            gens,
+            harness,
+            delegations(n, ni, branches),
+            cwd.as_deref(),
+            &mut state,
+        );
+        if writes.shell_dir_touched {
+            let left = state.shell_dir(cwd.as_deref()).map(normalize_path);
+            Rc::make_mut(&mut ancestry).push(shell_dirs.len());
+            shell_dirs.push((
+                n.producer.unwrap_or(n.first_generation),
+                left,
+                state.start_moved,
+            ));
+        }
+        if !writes.stamps.is_empty() {
+            stamps.files.insert(n.id.clone(), writes.stamps);
+        }
+        if !writes.unresolved.is_empty() {
+            stamps.unresolved.insert(n.id.clone(), writes.unresolved);
+        }
+        carried.insert(n.id.as_str(), (cwd, state, ancestry));
+        turns.push(turn);
+    }
     let mut files_changed: Vec<String> = Vec::new();
     for m in turns.iter().flat_map(|t| &t.file_mutations) {
         if !files_changed.contains(&m.path) {
             files_changed.push(m.path.clone());
         }
     }
-    ConversationView {
+    let view = ConversationView {
         id: derived_session_id(&session.key),
         started_at: gens.first().map(|g| datetime(g.start_ns)),
         last_activity: gens.iter().map(|g| g.end_ns).max().map(datetime),
@@ -61,7 +146,7 @@ pub fn view_from_graph(
         provider_id: Some(PROVIDER.to_string()),
         files_changed,
         session_ids: session.session_id.iter().cloned().collect(),
-        base: find_cwd(gens).map(|wd| SessionBase {
+        base: base.map(|wd| SessionBase {
             working_dir: Some(wd),
             ..Default::default()
         }),
@@ -70,7 +155,8 @@ pub fn view_from_graph(
             version: None,
         }),
         ..Default::default()
-    }
+    };
+    (view, stamps)
 }
 
 /// The harness's name as its own deriver writes `producer.name`, else
@@ -104,7 +190,9 @@ fn to_turn(
     gens: &[Generation],
     harness: SourceHarness,
     delegations: Vec<DelegatedWork>,
-) -> Turn {
+    cwd: Option<&str>,
+    state: &mut Rc<ShellState>,
+) -> (Turn, TurnWrites) {
     let produced = n.producer.map(|i| &gens[i]);
     let ts = match produced {
         Some(g) => g.end_ns,
@@ -125,8 +213,14 @@ fn to_turn(
             category: tool_category(harness, &c.function.name),
         })
         .collect();
-    let file_mutations = tool_uses.iter().flat_map(file_mutations).collect();
-    Turn {
+    // Copy-on-write: a turn without calls shares its parent's state.
+    let mut writes = if tool_uses.is_empty() {
+        TurnWrites::default()
+    } else {
+        turn_writes(&tool_uses, cwd, Rc::make_mut(state))
+    };
+    let file_mutations = std::mem::take(&mut writes.mutations);
+    let turn = Turn {
         id: n.id.clone(),
         parent_id: n.parent.clone(),
         group_id: None,
@@ -144,7 +238,8 @@ fn to_turn(
         environment: None,
         delegations,
         file_mutations,
-    }
+    };
+    (turn, writes)
 }
 
 fn role_of(role: &str) -> Role {
@@ -336,5 +431,41 @@ mod tests {
         assert_eq!(view.base.and_then(|b| b.working_dir).as_deref(), Some("/w"));
         assert_eq!(view.id, derived_session_id(&s.key));
         assert_eq!(view.provider_id.as_deref(), Some("otel"));
+    }
+
+    #[test]
+    fn heredoc_writes_join_files_changed() {
+        let cmd = "cat <<'EOF' > wc.py\nprint(1)\nEOF";
+        let g = Generation {
+            id: "g1".into(),
+            start_ns: 1,
+            end_ns: 2,
+            messages: vec![Message {
+                role: "user".into(),
+                content: json!("<environment_context><cwd>/w</cwd></environment_context>"),
+                ..Default::default()
+            }]
+            .into(),
+            completion: Completion {
+                tool_calls: vec![ToolCall {
+                    id: "c1".into(),
+                    function: FunctionCall {
+                        name: "exec_command".into(),
+                        arguments: Value::String(json!({"cmd": cmd, "workdir": "/w"}).to_string()),
+                    },
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = Session::new("otel-cluster:0000000000000000".into(), None, vec![g]);
+        let graph = crate::stitch::stitch(&s);
+        let harness = crate::stitch::settled_harness(&s, true);
+        let branches = crate::branch::classify(&graph, harness);
+        let (view, stamps) = view_and_stamps(&s, &graph, &branches, harness);
+        assert_eq!(view.files_changed, vec!["wc.py".to_string()]);
+        let turn = view.turns.last().unwrap();
+        assert_eq!(turn.file_mutations[0].tool_id.as_deref(), Some("c1"));
+        assert_eq!(stamps.files[&turn.id]["wc.py"]["outcome"], "unknown");
     }
 }

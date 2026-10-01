@@ -1,11 +1,12 @@
 //! Session → Toolpath `Path` via `toolpath_convo::derive_path`, plus the
-//! otel path meta and per-step retention extras.
+//! otel path meta, per-step retention extras and shell-write file extras.
 
 use crate::branch::{BranchKind, Branches, classify};
 use crate::generation::{Cost, Generation};
 use crate::harness::SourceHarness;
+use crate::harness::shell_writes::Stamps;
 use crate::profile;
-use crate::provider::{PROVIDER, view_from_graph};
+use crate::provider::{PROVIDER, view_and_stamps};
 use crate::session::Session;
 use crate::stitch::settled_harness;
 use crate::stitch::{Node, TurnGraph, stitch};
@@ -54,8 +55,9 @@ pub fn derive_steps(
     harness: SourceHarness,
 ) -> (Path, String, BTreeSet<usize>, Homes, Branches) {
     let branches = classify(graph, harness);
-    let view = view_from_graph(session, graph, &branches, harness);
+    let (view, shell_stamps) = view_and_stamps(session, graph, &branches, harness);
     let mut path = toolpath_convo::derive_path(&view, config);
+    stamp_file_changes(&mut path, &shell_stamps.files);
     link_branches(&mut path, graph, &branches);
     let placed: BTreeSet<usize> = graph.nodes.iter().filter_map(|n| n.producer).collect();
     let homes = dropped_homes(graph, &placed);
@@ -66,6 +68,7 @@ pub fn derive_steps(
         graph,
         &branches,
         &homes,
+        &shell_stamps.unresolved,
     );
     (path, view.id, placed, homes, branches)
 }
@@ -131,6 +134,7 @@ fn stamp_steps(
     graph: &TurnGraph,
     branches: &Branches,
     homes: &Homes,
+    unresolved: &BTreeMap<String, Vec<Value>>,
 ) {
     let nodes: HashMap<&str, usize> = graph
         .nodes
@@ -162,9 +166,33 @@ fn stamp_steps(
         if let Some(BranchKind::Subagent(call)) = &branches.kind[ni] {
             extra.insert("delegation".into(), json!(call));
         }
+        if let Some(attempts) = unresolved.get(&step.step.id) {
+            extra.insert("unresolved_shell_writes".into(), json!(attempts));
+        }
         structural
             .extra
             .insert(EXTRA_KEY.to_string(), Value::Object(extra));
+    }
+}
+
+/// `extra.otel` onto each shell-derived `file.write` change; relies on convo
+/// keying a turn's change by file path and its step id by turn id.
+fn stamp_file_changes(path: &mut Path, stamps: &BTreeMap<String, Stamps>) {
+    for step in &mut path.steps {
+        let Some(by_file) = stamps.get(&step.step.id) else {
+            continue;
+        };
+        for (file, value) in by_file {
+            if let Some(structural) = step
+                .change
+                .get_mut(file)
+                .and_then(|c| c.structural.as_mut())
+            {
+                structural
+                    .extra
+                    .insert(EXTRA_KEY.to_string(), value.clone());
+            }
+        }
     }
 }
 
