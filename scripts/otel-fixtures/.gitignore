@@ -1,0 +1,4 @@
+.venv/
+.venv-openai-v2/
+.venv-lock/
+__pycache__/
