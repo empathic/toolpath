@@ -17,8 +17,8 @@ use toolpath_convo::{
 
 /// Provider identity used for `path-<provider>-…` ids and dispatch.
 pub const PROVIDER_ID: &str = "copilot";
-/// Producer name recorded on the derived `Path`.
-pub const PRODUCER_NAME: &str = "copilot-cli";
+/// `producer.name` on the derived `Path`: the harness id, same as `meta.source`.
+pub const PRODUCER_NAME: &str = PROVIDER_ID;
 
 /// Classify a Copilot tool name into toolpath's [`ToolCategory`] ontology.
 ///
@@ -881,7 +881,7 @@ mod tests {
             Some("/tmp/proj")
         );
         let p = view.producer.as_ref().unwrap();
-        assert_eq!(p.name, "copilot-cli");
+        assert_eq!(p.name, "copilot");
         assert_eq!(p.version.as_deref(), Some("1.0.66"));
     }
 

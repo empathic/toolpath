@@ -152,6 +152,17 @@ mod tests {
     }
 
     #[test]
+    fn derive_path_producer_without_version() {
+        let mut convo = make_convo();
+        for e in &mut convo.entries {
+            e.version = None;
+        }
+        let path = derive_path(&convo, &DeriveConfig::default());
+        let producer = path.meta.as_ref().unwrap().extra.get("producer").unwrap();
+        assert_eq!(producer, &serde_json::json!({"name": "claude-code"}));
+    }
+
+    #[test]
     fn derive_path_actors_populated() {
         let convo = make_convo();
         let path = derive_path(&convo, &DeriveConfig::default());

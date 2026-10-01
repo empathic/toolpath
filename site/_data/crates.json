@@ -33,7 +33,7 @@
   },
   {
     "name": "toolpath-claude",
-    "version": "0.13.4",
+    "version": "0.13.5",
     "description": "Derive from Claude conversation logs",
     "docs": "https://docs.rs/toolpath-claude",
     "crate": "https://crates.io/crates/toolpath-claude",
@@ -49,7 +49,7 @@
   },
   {
     "name": "toolpath-codex",
-    "version": "0.6.1",
+    "version": "0.6.2",
     "description": "Derive from Codex CLI rollout files",
     "docs": "https://docs.rs/toolpath-codex",
     "crate": "https://crates.io/crates/toolpath-codex",
@@ -57,7 +57,7 @@
   },
   {
     "name": "toolpath-copilot",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Derive from GitHub Copilot CLI session logs (preview)",
     "docs": "https://docs.rs/toolpath-copilot",
     "crate": "https://crates.io/crates/toolpath-copilot",
@@ -73,7 +73,7 @@
   },
   {
     "name": "toolpath-pi",
-    "version": "0.6.1",
+    "version": "0.6.2",
     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
     "docs": "https://docs.rs/toolpath-pi",
     "crate": "https://crates.io/crates/toolpath-pi",

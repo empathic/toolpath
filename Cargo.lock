@@ -5321,7 +5321,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-claude"
-version = "0.13.4"
+version = "0.13.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5338,7 +5338,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-codex"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5365,7 +5365,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-copilot"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5467,7 +5467,7 @@ dependencies = [
 
 [[package]]
 name = "toolpath-pi"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "chrono",

@@ -433,9 +433,9 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     } else {
         None
     };
-    let producer = producer_version.map(|v| toolpath_convo::ProducerInfo {
+    let producer = Some(toolpath_convo::ProducerInfo {
         name: "claude-code".into(),
-        version: Some(v),
+        version: producer_version,
     });
 
     ConversationView {

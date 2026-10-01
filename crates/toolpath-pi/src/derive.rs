@@ -114,6 +114,13 @@ mod tests {
     }
 
     #[test]
+    fn test_derive_path_producer_names_harness() {
+        let path = derive_path(&make_session("abcd1234"), &DeriveConfig::default());
+        let producer = path.meta.as_ref().unwrap().extra.get("producer").unwrap();
+        assert_eq!(producer, &serde_json::json!({"name": "pi"}));
+    }
+
+    #[test]
     fn test_derive_path_respects_config_overrides() {
         let session = make_session("abcd1234");
         let cfg = DeriveConfig {
