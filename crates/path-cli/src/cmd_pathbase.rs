@@ -681,10 +681,10 @@ enum BatchFailure {
     Interrupted,
 }
 
-/// Ctrl-C during a streamed upload. The listener runs on the shared
-/// runtime for the upload's lifetime, so a signal that lands between
-/// batches is still seen by the next one instead of killing the process
-/// and leaving a partial graph behind.
+/// Ctrl-C or SIGTERM during a streamed upload. The listener runs on the
+/// shared runtime for the upload's lifetime, so a signal that lands
+/// between batches is still seen by the next one instead of killing the
+/// process and leaving a partial graph behind.
 struct Interrupt {
     hit: std::sync::Arc<std::sync::atomic::AtomicBool>,
     notify: std::sync::Arc<tokio::sync::Notify>,
@@ -697,7 +697,11 @@ impl Interrupt {
         let notify = this.notify.clone();
         block_on(async {
             tokio::spawn(async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
+                let interrupted = tokio::select! {
+                    r = tokio::signal::ctrl_c() => r.is_ok(),
+                    r = sigterm() => r,
+                };
+                if interrupted {
                     hit.store(true, std::sync::atomic::Ordering::SeqCst);
                     notify.notify_one();
                 }
@@ -722,6 +726,20 @@ impl Interrupt {
             self.notify.notified().await;
         }
     }
+}
+
+/// Resolve to `true` on SIGTERM, which `kill` and `timeout` send by
+/// default. Pends forever where the signal does not exist or cannot be
+/// listened for.
+async fn sigterm() -> bool {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            return term.recv().await.is_some();
+        }
+    }
+    std::future::pending().await
 }
 
 impl BatchFailure {
@@ -771,7 +789,7 @@ impl BatchFailure {
 
 /// Run one batch request, retrying transport errors and 5xx responses.
 /// Both batch routes are idempotent for a replayed body, so a retry after
-/// a lost response is safe. A Ctrl-C cancels the in-flight request.
+/// a lost response is safe. Ctrl-C or SIGTERM cancels the in-flight request.
 fn post_batch<T, Fut>(
     interrupt: &Interrupt,
     send: impl Fn() -> Fut,
@@ -817,11 +835,12 @@ where
 /// `budget` bytes. The first batch of a path opens it (`open_graph_path`);
 /// the rest append to it (`append_graph_path_steps`).
 ///
-/// If any batch fails, or Ctrl-C arrives, the partly uploaded graph is
-/// deleted (best effort) before the error is returned. A `404` or `405` on a path's first batch
-/// means the server lacks the batch routes; the whole document is then
-/// sent with [`graphs_post`] instead. `$ref` path entries are skipped;
-/// callers route documents containing them to [`graphs_post`].
+/// If any batch fails, or Ctrl-C or SIGTERM arrives, the partly uploaded
+/// graph is deleted (best effort) before the error is returned. A `404` or
+/// `405` on a path's first batch means the server lacks the batch routes;
+/// the whole document is then sent with [`graphs_post`] instead. `$ref`
+/// path entries are skipped; callers route documents containing them to
+/// [`graphs_post`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn graphs_post_streamed(
     base_url: &str,
