@@ -2085,11 +2085,11 @@ mod tests {
             ("HTTP/1.1 201 Created", graph_document_json()),
             (
                 "HTTP/1.1 201 Created",
-                r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":2,"head":"step-002","generation":1}"#.to_string(),
+                r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":2,"head":"step-002"}"#.to_string(),
             ),
             (
                 "HTTP/1.1 200 OK",
-                r#"{"inserted":1,"head":"step-002","generation":2}"#.to_string(),
+                r#"{"inserted":1,"head":"step-002"}"#.to_string(),
             ),
         ]);
         authed_upload(server.base(), &doc).unwrap();
