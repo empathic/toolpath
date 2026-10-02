@@ -9,12 +9,12 @@
 //! are then the rows of the files as they are.
 //!
 //! The cache module also records a document when it writes one
-//! ([`record_written`]) and deletes the rows when it removes one
+//! ([`IndexWriter`]) and deletes the rows when it removes one
 //! ([`forget_removed`]). That saves the parse; a reader does not
 //! depend on it.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path as FsPath;
+use std::path::{Path as FsPath, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -255,20 +255,36 @@ impl Index {
     }
 }
 
-/// Records `doc`, the document that `cache::write_cached` wrote to the
-/// file `document` lists, in the index under `config_dir`. Replaces
-/// the rows the document had.
-pub(crate) fn record_written(
-    config_dir: &FsPath,
-    document: &CacheEntry,
-    doc: &Graph,
-) -> Result<()> {
-    let rows = extract_rows(&document.id, doc);
-    let mut index = Index::open(config_dir)?;
-    let tx = index.conn.transaction()?;
-    write_rows(&tx, &document.id, FileStamp::of(document), &rows)?;
-    tx.commit()?;
-    Ok(())
+/// Records the documents that the cache module writes, over one
+/// connection. The connection opens at the first record, so a caller
+/// that writes no document does not open the index.
+pub(crate) struct IndexWriter {
+    config_dir: PathBuf,
+    index: Option<Index>,
+}
+
+impl IndexWriter {
+    /// A writer to the index under `config_dir`.
+    pub(crate) fn new(config_dir: &FsPath) -> Self {
+        Self {
+            config_dir: config_dir.to_path_buf(),
+            index: None,
+        }
+    }
+
+    /// Records `doc`, the document written to the file `document`
+    /// lists. Replaces the rows the document had.
+    pub(crate) fn record(&mut self, document: &CacheEntry, doc: &Graph) -> Result<()> {
+        let rows = extract_rows(&document.id, doc);
+        let index = match &mut self.index {
+            Some(index) => index,
+            None => self.index.insert(Index::open(&self.config_dir)?),
+        };
+        let tx = index.conn.transaction()?;
+        write_rows(&tx, &document.id, FileStamp::of(document), &rows)?;
+        tx.commit()?;
+        Ok(())
+    }
 }
 
 /// Deletes the rows of `cache_id`, the document that
@@ -550,7 +566,9 @@ mod tests {
             &session_document("second title"),
         )];
         // A writer whose file was replaced records its rows last.
-        record_written(dir.path(), &first, &first_doc).unwrap();
+        IndexWriter::new(dir.path())
+            .record(&first, &first_doc)
+            .unwrap();
 
         let mut index = Index::open(dir.path()).unwrap();
         assert_eq!(
@@ -562,6 +580,27 @@ mod tests {
             titles(&index.read_sessions(&ids(&second)).unwrap()),
             ["second title"]
         );
+    }
+
+    #[test]
+    fn an_index_writer_opens_the_index_at_its_first_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = session_document("t");
+        let documents = [
+            write_document(dir.path(), "claude-a", &doc),
+            write_document(dir.path(), "claude-b", &doc),
+        ];
+        let mut writer = IndexWriter::new(dir.path());
+        assert!(writer.index.is_none());
+        assert!(!dir.path().join(INDEX_FILE_NAME).exists());
+
+        for document in &documents {
+            writer.record(document, &doc).unwrap();
+        }
+        assert!(writer.index.is_some());
+        drop(writer);
+        let index = Index::open(dir.path()).unwrap();
+        assert_eq!(index.read_stamps().unwrap().len(), 2);
     }
 
     #[test]
