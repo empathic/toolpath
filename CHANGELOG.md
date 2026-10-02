@@ -20,11 +20,10 @@ All notable changes to the Toolpath workspace are documented here.
   request. A step's signatures travel with the step, a step larger than
   the budget is sent alone, and steps are sent parents-first. A batch
   that fails with a transport error or a 5xx is retried up to 3 times;
-  on any other failure, or on Ctrl-C or SIGTERM, the partly uploaded graph
-  is deleted and the error is reported (a 413 names the step and its
-  size). Documents at or under 4 MiB, documents containing a `$ref` path
-  entry or a path with no steps, and anonymous uploads still use the
-  single request. When
+  on any other failure the partly uploaded graph is deleted and the
+  error is reported (a 413 names the step and its size). Documents at or
+  under 4 MiB, documents containing a `$ref` path entry or a path with
+  no steps, and anonymous uploads still use the single request. When
   the server answers `404` or `405` to a path's first batch it does not
   implement the batch routes: the CLI deletes the empty graph, prints a
   note, and sends the whole document in one request as before.
