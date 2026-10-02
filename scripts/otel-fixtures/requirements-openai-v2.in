@@ -1,0 +1,17 @@
+# Pins for the openai_chat scenario's own venv (.venv-openai-v2), maintainers only.
+# opentelemetry-instrumentation-openai-v2 2.4b0 imports opentelemetry.util.genai.instruments,
+# which util-genai 1.2b0 removed, while every other util-genai instrumentation in
+# requirements.in needs util-genai>=1.2b0 -- so openai-v2 cannot share the main lock.
+# Regenerate requirements-openai-v2.txt, with hashes for every transitive package, via ./lock.sh.
+opentelemetry-api==1.45.0
+opentelemetry-sdk==1.45.0
+opentelemetry-proto==1.45.0
+opentelemetry-exporter-otlp-proto-common==1.45.0
+opentelemetry-exporter-otlp-proto-http==1.45.0
+opentelemetry-instrumentation==0.66b0
+opentelemetry-semantic-conventions==0.66b0
+opentelemetry-util-genai==1.1b0
+opentelemetry-instrumentation-openai-v2==2.4b0
+openai==3.20.0
+# Undeclared dependency: openai-v2 2.4b0 imports httpx, but openai 3.x depends on httpx2.
+httpx==0.28.1

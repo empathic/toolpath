@@ -23,6 +23,24 @@ fn root(trace: &str, id: &str, start: u64, session: Option<&str>, prompt: Option
 }
 
 #[test]
+fn sessionless_privacy_mode_requests_form_their_own_trace_sessions() {
+    let d = [
+        root("t1", "gen-a", 1, None, None),
+        root("t2", "gen-b", 2, None, None),
+    ];
+    let out = read_deliveries(&d, ProfileSelection::Auto).unwrap();
+    let sessions = group_sessions(out.generations);
+    let keys: Vec<&str> = sessions.iter().map(|s| s.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            crate::session::trace_key(Some("k"), "t1").as_str(),
+            crate::session::trace_key(Some("k"), "t2").as_str(),
+        ]
+    );
+}
+
+#[test]
 fn privacy_mode_with_session_id_chains_from_the_previous_generation() {
     let full = "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}";
     let d = [

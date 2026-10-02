@@ -65,7 +65,7 @@ gate_shellcheck() {
         echo "shellcheck not found on PATH; install it (e.g. \`brew install shellcheck\`)" >&2
         return 1
     fi
-    shellcheck "${_root}"/scripts/*.sh "${_root}"/plugins/*/scripts/*.sh 2>&1
+    shellcheck "${_root}"/scripts/*.sh "${_root}"/scripts/otel-fixtures/*.sh "${_root}"/plugins/*/scripts/*.sh 2>&1
 }
 
 # shellcheck disable=SC2329

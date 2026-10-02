@@ -81,11 +81,11 @@
   },
   {
     "name": "toolpath-otel",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Derive Toolpath provenance documents from OpenTelemetry LLM traces (OTLP)",
     "docs": "https://docs.rs/toolpath-otel",
     "crate": "https://crates.io/crates/toolpath-otel",
-    "role": "Takes the OTLP/HTTP JSON request bodies (traces and logs) of one agent session and walks every span and its correlated log records through profiles: `openrouter` (OpenRouter Broadcast), `semconv` (the OpenTelemetry GenAI semantic conventions, as emitted by the official instrumentations) and a minimal explicit-only `openinference`. Stitches the requests into a turn DAG with chained content ids and derives a Toolpath `Path` via `toolpath-convo`'s shared `derive_path`, keeping per-step usage, cost and routing under `extra[\"otel\"]`; write, edit and `apply_patch` tool calls become file changes. `derive_jsonl` turns a growing session into stateless incremental JSONL appends for Pathbase's streaming routes. Decodes the transport too: JSON lines, OTLP protobuf bodies, Collector file-exporter frames, gzip and zstd (features `protobuf` and `compression`), under one decompressed-size budget. Pure functions over bytes and parsed JSON, so Pathbase can call it server-side."
+    "role": "Takes the OTLP/HTTP JSON request bodies (traces and logs) of one agent session and walks every span and its correlated log records through profiles: `openrouter` (OpenRouter Broadcast), `semconv` (the OpenTelemetry GenAI semantic conventions, as emitted by the official instrumentations) and a minimal explicit-only `openinference`. Stitches the requests into a turn DAG with chained content ids and derives a Toolpath `Path` via `toolpath-convo`'s shared `derive_path`, keeping per-step usage, cost and routing under `extra[\"otel\"]`; write, edit and `apply_patch` tool calls become file changes. `derive_jsonl` turns a growing session into stateless incremental JSONL appends for Pathbase's streaming routes. Decodes the transport too: JSON lines, OTLP protobuf bodies, Collector file-exporter frames, gzip and zstd (features `protobuf` and `compression`), under one decompressed-size budget, and groups a mixed or id-less batch into per-session request sets (`group_sessions`). Pure functions over bytes and parsed JSON, so Pathbase can call it server-side."
   },
   {
     "name": "toolpath-cursor",
@@ -121,15 +121,15 @@
   },
   {
     "name": "path-cli",
-    "version": "0.29.0",
+    "version": "0.30.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
-    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p \u2026` (import, export, cache, list, render, merge, validate). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default \u2192 secret pathstash; anon fallback when not logged in)."
+    "role": "One binary called `path` that ties everything together. Porcelain at the top level (share, resume, query, show, track, auth); plumbing under `path p \u2026` (import, export, cache, list, render, merge, validate). Pathbase round-trip via `p import pathbase` / `p export pathbase` (authed default \u2192 secret pathstash; anon fallback when not logged in). `p import otel` reads OTLP captures, one document per session."
   },
   {
     "name": "toolpath-cli",
-    "version": "0.29.0",
+    "version": "0.30.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

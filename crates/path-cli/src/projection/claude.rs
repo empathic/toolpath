@@ -196,4 +196,103 @@ mod tests {
             "existing session file must be untouched"
         );
     }
+
+    fn otel_claude_path() -> toolpath::v1::Path {
+        let file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/otel/openrouter/claude-code.ndjson");
+        let bytes = std::fs::read(&file).unwrap();
+        let values = toolpath_otel::decode_input(&bytes, Some("claude-code.ndjson")).unwrap();
+        toolpath_otel::derive_path(&values, &toolpath_otel::DeriveConfig::default())
+            .unwrap()
+            .output
+    }
+
+    const CLAUDE_HARNESS_SESSION: &str = "177b923f-8cf6-42fc-9f30-9a7b86236265";
+    const OTEL_DERIVED_SESSION: &str = "218c08e0-b5d5-8a6a-8b60-a48793ec6a2b";
+
+    #[test]
+    fn otel_projection_coexists_with_the_harness_session() {
+        let path = otel_claude_path();
+        assert_eq!(
+            path.meta.as_ref().unwrap().extra["otel"]["derived_session_id"],
+            OTEL_DERIVED_SESSION
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        // Claude Code's own session for the same conversation already exists.
+        let canonical = std::fs::canonicalize(&cwd).unwrap();
+        let project_dir = toolpath_claude::PathResolver::new()
+            .project_dir(&canonical.to_string_lossy())
+            .unwrap();
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let harness_file = project_dir.join(format!("{CLAUDE_HARNESS_SESSION}.jsonl"));
+        std::fs::write(&harness_file, "{}\n").unwrap();
+
+        let result = project_claude(&path, &cwd);
+        let derived_file = claude_session_file(OTEL_DERIVED_SESSION, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        match result.expect("project_claude should succeed") {
+            ClaudeProjection::Written { session_id } => {
+                assert_eq!(session_id, OTEL_DERIVED_SESSION)
+            }
+            ClaudeProjection::AlreadyLocal { .. } => {
+                panic!("the harness session must not count as the otel session")
+            }
+        }
+        assert_eq!(std::fs::read_to_string(&harness_file).unwrap(), "{}\n");
+        assert!(
+            derived_file.unwrap().is_some(),
+            "{OTEL_DERIVED_SESSION}.jsonl must be written next to the harness session"
+        );
+    }
+
+    #[test]
+    fn otel_projection_reads_back_as_the_same_conversation() {
+        let path = otel_claude_path();
+        let conv = build_claude_conversation(&path).unwrap();
+        assert_eq!(conv.session_id, OTEL_DERIVED_SESSION);
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join(format!("{OTEL_DERIVED_SESSION}.jsonl"));
+        std::fs::write(&file, serialize_jsonl(&conv).unwrap()).unwrap();
+
+        let back = toolpath_claude::ConversationReader::read_conversation(&file).unwrap();
+        let view = toolpath_claude::provider::to_view(&back);
+        let tool_ids: Vec<&str> = view
+            .turns
+            .iter()
+            .flat_map(|t| t.tool_uses.iter().map(|u| u.id.as_str()))
+            .collect();
+        assert_eq!(
+            tool_ids,
+            [
+                "toolu_bdrk_012ruqQFviGtwFzzYTxLJrcg",
+                "toolu_bdrk_01FaCGaFbEgZF1okWoetqbp6",
+                "toolu_bdrk_01LvKrjwGsieqaKxMDHw42j8",
+                "toolu_bdrk_01RJ5YAprPSPoVfqQVNnddT2",
+            ]
+        );
+        let assistants = view
+            .turns
+            .iter()
+            .filter(|t| t.role == toolpath_convo::Role::Assistant)
+            .count();
+        assert_eq!(assistants, 5);
+    }
 }

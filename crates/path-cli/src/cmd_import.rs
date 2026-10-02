@@ -186,6 +186,32 @@ pub enum ImportSource {
         #[arg(long)]
         base: Option<PathBuf>,
     },
+    /// Import OpenTelemetry LLM traces and logs (OTLP/HTTP JSON or protobuf,
+    /// JSON lines, Collector file output, gzip, zstd).
+    /// One document per session. Re-importing a capture stops at the first
+    /// session already cached; pass --force to refresh.
+    Otel {
+        /// OTLP input: one file, or a directory read non-recursively. From a
+        /// directory, files ending `.json`, `.ndjson`, `.jsonl`, `.body`, `.gz`,
+        /// `.pb`, `.binpb`, `.protobuf` or `.zst` are read in file-name order.
+        /// Protobuf bodies, OpenTelemetry Collector file-exporter output
+        /// (`format: proto`, zstd) and gzip are recognized by content. Files
+        /// that are not OTLP at all (no OTLP JSON value, or bytes that are no
+        /// OTLP request) are skipped and counted as not-otlp; OTLP that
+        /// is malformed, badly framed or corrupt fails the import. A file
+        /// named directly always fails when it cannot be read.
+        #[arg(long)]
+        input: PathBuf,
+
+        /// Which trace profile reads the spans
+        #[arg(long, value_enum, default_value_t = ProfileArg::Auto)]
+        profile: ProfileArg,
+
+        /// Only this session: its client session id, session key
+        /// (`otel-cluster:…`) or derived session id
+        #[arg(short, long)]
+        session: Option<String>,
+    },
     /// Import from Pathbase (download a previously uploaded path)
     Pathbase {
         /// Full Pathbase URL or bare `<owner>/<repo>/<slug>` triple
@@ -196,6 +222,33 @@ pub enum ImportSource {
         #[arg(long)]
         url: Option<String>,
     },
+}
+
+/// `--profile` for `p import otel`.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileArg {
+    /// The auto list, in order: openrouter, then semconv
+    Auto,
+    /// OpenRouter Broadcast
+    Openrouter,
+    /// OpenTelemetry GenAI semantic conventions (the official instrumentations)
+    #[value(name = "semconv")]
+    Semconv,
+    /// OpenInference spans; never consulted under auto
+    #[value(name = "openinference")]
+    Openinference,
+}
+
+impl ProfileArg {
+    fn selection(self) -> toolpath_otel::ProfileSelection {
+        use toolpath_otel::ProfileSelection;
+        match self {
+            ProfileArg::Auto => ProfileSelection::Auto,
+            ProfileArg::Openrouter => ProfileSelection::OpenRouter,
+            ProfileArg::Semconv => ProfileSelection::Semconv,
+            ProfileArg::Openinference => ProfileSelection::OpenInference,
+        }
+    }
 }
 
 #[derive(clap::Args, Debug)]
@@ -338,6 +391,11 @@ fn derive(source: ImportSource, config: &Config) -> Result<Vec<DerivedDoc>> {
             all,
             base,
         } => derive_pi(project, session, all, base, config),
+        ImportSource::Otel {
+            input,
+            profile,
+            session,
+        } => crate::derive::derive_otel(&input, profile.selection(), session.as_deref()),
         ImportSource::Pathbase { target, url } => derive_pathbase(target, url),
     }
 }
@@ -1647,5 +1705,29 @@ mod tests {
         for d in &out {
             assert!(d.cache_id.starts_with("claude-"));
         }
+    }
+
+    #[test]
+    fn every_profile_arg_names_its_profile() {
+        use clap::ValueEnum;
+        use toolpath_otel::ProfileSelection;
+        let got: Vec<(String, ProfileSelection)> = ProfileArg::value_variants()
+            .iter()
+            .map(|p| {
+                (
+                    p.to_possible_value().unwrap().get_name().to_string(),
+                    p.selection(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("auto".to_string(), ProfileSelection::Auto),
+                ("openrouter".to_string(), ProfileSelection::OpenRouter),
+                ("semconv".to_string(), ProfileSelection::Semconv),
+                ("openinference".to_string(), ProfileSelection::OpenInference),
+            ]
+        );
     }
 }

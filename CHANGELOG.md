@@ -2,6 +2,33 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.30.0 — 2026-10-01
+
+- **`path-cli`** (0.30.0): `path p import otel --input <file|dir>
+  [--profile auto|openrouter|semconv|openinference] [-s|--session <id>]`
+  imports OpenTelemetry LLM traces and logs, one cached document per
+  session (`otel-<derived session id>`). A directory is read
+  non-recursively by extension (`.json`, `.ndjson`, `.jsonl`, `.body`,
+  `.gz`, `.pb`, `.binpb`, `.protobuf`, `.zst`); files that are not OTLP
+  are skipped and counted, and one stderr summary line reports the
+  sessions, the non-zero skip counts, `unclaimed` and `not-otlp`.
+  `--session` takes the client session id, the session key or the derived
+  id. `path resume` of an otel document pre-selects the harness recorded
+  in `meta.otel.harness`.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
+## toolpath-otel 0.1.3 — 2026-10-01
+
+- **`toolpath-otel`** (0.1.3): session grouping for traffic that mixes
+  sessions or carries no session id. `group_sessions(requests, profile)`
+  groups generations in layer order (client session id, continuation,
+  prompt-prefix clustering per client key, trace for delta requests) and
+  returns each session's `SessionRequests`: its key, client session id and
+  the request bodies cut down to its own spans and log records, with the
+  batch's `SkipCounts`. `derive_session` derives one under its key;
+  `derive_path` over its `requests` gives the same document unless the key
+  took a `-<n>` collision suffix. `derived_session_id` is public.
+
 ## toolpath-otel 0.1.2 — 2026-10-01
 
 - **`toolpath-otel`** (0.1.2): OTLP transport decoding, bytes to the

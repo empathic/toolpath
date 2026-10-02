@@ -4,7 +4,7 @@
 //! `derive_*_session` helpers and the Pathbase fetch used by
 //! `p import pathbase` and `resume`.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use toolpath::v1::Graph;
 
@@ -363,6 +363,165 @@ pub(crate) fn derive_pi_session_with(
     })
 }
 
+/// Extensions read from a capture directory. Final extension only
+/// (`body.json.gz` is `gz`), compared case-sensitively.
+const OTEL_EXTENSIONS: [&str; 9] = [
+    "json", "ndjson", "jsonl", "body", "gz", "pb", "binpb", "protobuf", "zst",
+];
+
+/// Profiles `ProfileSelection::Auto` leaves out.
+const OTEL_EXPLICIT_ONLY_PROFILES: [&str; 1] = ["openinference"];
+
+/// Decoded OTLP values of `input` and how many directory files were not
+/// OTLP. Not-OTLP directory files are skipped and counted; any other decode
+/// error fails.
+fn read_otel_input(input: &std::path::Path) -> Result<(Vec<serde_json::Value>, usize)> {
+    if !input.is_dir() {
+        let bytes = std::fs::read(input).with_context(|| format!("read {}", input.display()))?;
+        let name = input.file_name().and_then(|n| n.to_str());
+        let values = toolpath_otel::decode_input(&bytes, name)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
+        return Ok((values, 0));
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(input)
+        .with_context(|| format!("read {}", input.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| OTEL_EXTENSIONS.contains(&e))
+        })
+        .collect();
+    files.sort();
+    let (mut values, mut not_otlp) = (Vec::new(), 0);
+    for file in files {
+        let bytes = std::fs::read(&file).with_context(|| format!("read {}", file.display()))?;
+        match toolpath_otel::decode_input(&bytes, file.file_name().and_then(|n| n.to_str())) {
+            Ok(v) => values.extend(v),
+            Err(e) if e.is_not_otlp() => not_otlp += 1,
+            Err(e) => anyhow::bail!("{}: {e}", file.display()),
+        }
+    }
+    Ok((values, not_otlp))
+}
+
+/// `p import otel`: one document per session of the capture at `input`
+/// (a file or a directory), optionally only the session `session` names.
+pub(crate) fn derive_otel(
+    input: &std::path::Path,
+    profile: toolpath_otel::ProfileSelection,
+    session: Option<&str>,
+) -> Result<Vec<DerivedDoc>> {
+    let (values, not_otlp) = read_otel_input(input)?;
+    let grouped = toolpath_otel::group_sessions(&values, profile)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
+    let sessions = grouped.output;
+    eprintln!(
+        "{}",
+        otel_summary(
+            sessions.len(),
+            &grouped.skipped,
+            input.is_dir().then_some(not_otlp)
+        )
+    );
+    let chosen: Vec<&toolpath_otel::SessionRequests> = match session {
+        None => sessions.iter().collect(),
+        Some(want) => {
+            let m: Vec<_> = sessions
+                .iter()
+                .filter(|s| otel_session_matches(s, want))
+                .collect();
+            match m.len() {
+                0 => anyhow::bail!("no otel session matches {want} in {}", input.display()),
+                1 => m,
+                n => anyhow::bail!(
+                    "--session {want} matches {n} sessions: {}",
+                    m.iter()
+                        .map(|s| s.key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        }
+    };
+    if chosen.is_empty() {
+        let unclaimed = grouped.skipped.unclaimed;
+        let hint = if profile == toolpath_otel::ProfileSelection::Auto && unclaimed > 0 {
+            otel_unclaimed_hint(unclaimed)
+        } else {
+            String::new()
+        };
+        anyhow::bail!("no otel generations in {}{hint}", input.display());
+    }
+    let config = toolpath_otel::DeriveConfig {
+        profile,
+        ..Default::default()
+    };
+    chosen
+        .into_iter()
+        .map(|s| {
+            let path = toolpath_otel::derive_session(s, &config)
+                .map_err(|e| anyhow::anyhow!("{}: session {}: {e}", input.display(), s.key))?
+                .output;
+            Ok(DerivedDoc {
+                cache_id: make_id("otel", &s.derived_session_id()),
+                doc: Graph::from_path(path),
+                provenance: None,
+            })
+        })
+        .collect()
+}
+
+/// ` (N unclaimed by the auto profiles; try --profile a or --profile b)`.
+fn otel_unclaimed_hint(unclaimed: usize) -> String {
+    let explicit: Vec<String> = OTEL_EXPLICIT_ONLY_PROFILES
+        .iter()
+        .map(|n| format!("--profile {n}"))
+        .collect();
+    format!(
+        " ({unclaimed} unclaimed by the auto profiles; try {})",
+        explicit.join(" or ")
+    )
+}
+
+/// `--session` accepts the client session id, the session key or the
+/// derived session id.
+fn otel_session_matches(s: &toolpath_otel::SessionRequests, want: &str) -> bool {
+    s.session_id.as_deref() == Some(want) || s.key == want || s.derived_session_id() == want
+}
+
+/// The one stderr summary line, e.g.
+/// `otel: 5 sessions; error-status=1 connection-test=1 unclaimed=0 not-otlp=1`:
+/// the non-zero skip counts, then `unclaimed` always, then `not-otlp` for a
+/// directory input.
+fn otel_summary(
+    sessions: usize,
+    skipped: &toolpath_otel::SkipCounts,
+    not_otlp: Option<usize>,
+) -> String {
+    let mut parts: Vec<String> = [
+        ("error-status", skipped.error_status),
+        ("connection-test", skipped.connection_test),
+        ("duplicate", skipped.duplicate),
+        ("truncated", skipped.truncated),
+        ("missing-payload", skipped.missing_payload),
+    ]
+    .into_iter()
+    .filter(|(_, n)| *n > 0)
+    .map(|(name, n)| format!("{name}={n}"))
+    .collect();
+    parts.push(format!("unclaimed={}", skipped.unclaimed));
+    if let Some(n) = not_otlp {
+        parts.push(format!("not-otlp={n}"));
+    }
+    format!(
+        "otel: {sessions} session{}; {}",
+        if sessions == 1 { "" } else { "s" },
+        parts.join(" ")
+    )
+}
+
 /// Fetch a Pathbase ref (`https://host/u/owner/repos/repo/graphs/<uuid>`
 /// URL or bare `owner/repo/<uuid>` triple) and parse it as a toolpath
 /// document. Used by `path import pathbase` and `path resume <url>`.
@@ -491,6 +650,29 @@ fn extract_triple(segs: &[&str]) -> Option<PathRef> {
 #[cfg(all(test, not(target_os = "emscripten")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn otel_unclaimed_hint_names_only_explicit_only_profiles() {
+        assert_eq!(
+            otel_unclaimed_hint(3),
+            " (3 unclaimed by the auto profiles; try --profile openinference)"
+        );
+    }
+
+    #[test]
+    fn otel_summary_lists_non_zero_skips_then_unclaimed_then_not_otlp() {
+        let mut skipped = toolpath_otel::SkipCounts::default();
+        skipped.error_status = 1;
+        skipped.connection_test = 2;
+        assert_eq!(
+            otel_summary(1, &skipped, Some(0)),
+            "otel: 1 session; error-status=1 connection-test=2 unclaimed=0 not-otlp=0"
+        );
+        assert_eq!(
+            otel_summary(2, &Default::default(), None),
+            "otel: 2 sessions; unclaimed=0"
+        );
+    }
 
     const UUID: &str = "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
 
