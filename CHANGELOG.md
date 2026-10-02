@@ -2,6 +2,15 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.32.0 — 2026-10-01
+
+- **`path-cli`** (0.32.0): `path resume` with no input opens its page
+  as soon as the cache sync ends. A thread reads the cached documents,
+  the newest first, and the sessions appear as they are read; the keys
+  line shows how many documents are read. A cache with documents and
+  no agent session says so on the page.
+- **`toolpath-cli`** (0.32.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.31.0 — 2026-09-30
 
 - **`path-cli`** (0.31.0): the detail pane of `path resume` shows the

@@ -30,6 +30,9 @@ pub struct Page {
     /// The session under the cursor.
     pub detail: Option<Detail>,
     pub keys: String,
+    /// How many cached documents are read, while some are still to be
+    /// read.
+    pub status: Option<String>,
 }
 
 /// A session in the detail pane.
@@ -275,7 +278,8 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 /// The session page: a section per project with a session on the page
 /// ([`Model::shows`]), `here` first, then newest first. A section is
 /// the project heading, its newest sessions, and a line for the rest.
-/// An expanded project and an open filter show every session.
+/// An expanded project and an open filter show every session. A page
+/// with no session says why, once every cached document is read.
 pub fn page(m: &Model) -> Page {
     let sessions = m.sessions();
     let filtering = m.filter().is_some_and(|text| !text.is_empty());
@@ -312,13 +316,17 @@ pub fn page(m: &Model) -> Page {
     let window = m.window();
     if sections.is_empty() {
         let text = if filtering {
-            "no session matches the filter".to_string()
+            Some("no session matches the filter".to_string())
+        } else if m.reading().is_some() {
+            None
+        } else if sessions.is_empty() {
+            Some("no cached document holds an agent session to resume".to_string())
         } else {
-            format!("nothing {} · t widens the window", window.phrase())
+            Some(format!("nothing {} · t widens the window", window.phrase()))
         };
-        sections.push(Section {
+        sections.extend(text.map(|text| Section {
             lines: vec![dim_line(0, text, None)],
-        });
+        }));
     } else if !filtering {
         let mut all: Vec<&str> = sessions.iter().map(|s| s.dir.as_str()).collect();
         all.sort_unstable();
@@ -378,6 +386,9 @@ pub fn page(m: &Model) -> Page {
         } else {
             "enter resume   t time   / filter   q quit".to_string()
         },
+        status: m
+            .reading()
+            .map(|(read, all)| format!("reading {read} of {all}")),
     }
 }
 
@@ -499,6 +510,22 @@ mod tests {
             [vec!["nothing since yesterday · t widens the window"]]
         );
         assert!(m.page().items.is_empty());
+    }
+
+    #[test]
+    fn a_page_with_no_session_says_why_once_the_documents_are_read() {
+        let mut m = model(vec![]).with_documents_to_read(2);
+        let page = m.page();
+        assert!(page.sections.is_empty());
+        assert_eq!(page.status.as_deref(), Some("reading 0 of 2"));
+
+        m.load(vec![], 2);
+        let page = m.page();
+        assert_eq!(
+            texts(&page),
+            [vec!["no cached document holds an agent session to resume"]]
+        );
+        assert_eq!(page.status, None);
     }
 
     #[test]

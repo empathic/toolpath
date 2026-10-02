@@ -121,6 +121,10 @@ impl Window {
 #[derive(Debug, Clone)]
 pub struct Model {
     sessions: Vec<SessionSummary>,
+    /// Cached documents [`Model::load`] has taken, and how many it
+    /// takes in all.
+    documents_read: usize,
+    documents: usize,
     /// The directory `path resume` runs from (`-C`, else the shell cwd).
     here: String,
     /// `-C` was given: `here` is the resume directory, not the session's.
@@ -152,6 +156,8 @@ impl Model {
     ) -> Self {
         Self {
             sessions,
+            documents_read: 0,
+            documents: 0,
             here,
             here_pinned: false,
             home,
@@ -175,8 +181,20 @@ impl Model {
         self
     }
 
+    /// The page opens before the cached documents are read:
+    /// [`Model::load`] takes the sessions of `documents` documents.
+    pub fn with_documents_to_read(mut self, documents: usize) -> Self {
+        self.documents = documents;
+        self
+    }
+
     pub fn sessions(&self) -> &[SessionSummary] {
         &self.sessions
+    }
+    /// The documents read and the documents in all, while some are
+    /// still to be read.
+    pub fn reading(&self) -> Option<(usize, usize)> {
+        (self.documents_read < self.documents).then_some((self.documents_read, self.documents))
     }
     pub fn here(&self) -> &str {
         &self.here
@@ -236,6 +254,28 @@ impl Model {
             cache_id: session.cache_id.clone(),
             dir,
         }
+    }
+
+    /// Adds the sessions read from `documents` more cached documents.
+    /// The cursor stays on its line. When that line is a session the
+    /// page folds away, the cursor goes to the project's "more" line.
+    pub fn load(&mut self, sessions: Vec<SessionSummary>, documents: usize) {
+        let under_cursor = self.page().items.get(self.cursor).cloned();
+        self.sessions.extend(sessions);
+        self.documents_read += documents;
+        let Some(under_cursor) = under_cursor else {
+            return;
+        };
+        let items = self.page().items;
+        let folded = match &under_cursor {
+            Action::Session(i) => Some(Action::More(self.sessions[*i].dir.clone())),
+            Action::More(_) => None,
+        };
+        self.cursor = items
+            .iter()
+            .position(|item| *item == under_cursor)
+            .or_else(|| items.iter().position(|item| Some(item) == folded.as_ref()))
+            .unwrap_or(self.cursor.min(items.len().saturating_sub(1)));
     }
 
     pub fn update(&mut self, key: Key) -> Option<Effect> {
@@ -359,6 +399,34 @@ pub(crate) mod tests {
         };
         assert_eq!(selection.cache_id, "claude-b");
         assert_eq!(selection.dir, "/p");
+    }
+
+    #[test]
+    fn a_load_adds_its_sessions_and_keeps_the_cursor_on_its_session() {
+        let mut m = model(vec![]).with_documents_to_read(4);
+        assert_eq!(m.reading(), Some((0, 4)));
+        m.load(vec![session("/p", "b", 2)], 2);
+        assert_eq!(m.reading(), Some((2, 4)));
+        assert_eq!(m.cursor(), 0);
+
+        m.load(vec![session("/p", "a", 1), session("/p", "c", 3)], 2);
+        assert_eq!(m.reading(), None);
+        assert_eq!(m.cursor(), 1);
+        let Some(Effect::Resume(selection)) = m.update(Key::Enter) else {
+            panic!("enter on a session resumes it");
+        };
+        assert_eq!(selection.cache_id, "claude-b");
+    }
+
+    #[test]
+    fn the_cursor_goes_to_the_more_line_when_a_load_folds_its_session() {
+        let rows = (2..=6).map(|n| session("/p", &format!("s{n}"), n));
+        let mut m = model(rows.collect());
+        m.update(Key::End);
+        assert_eq!(m.page().items[m.cursor()], Action::Session(4));
+
+        m.load(vec![session("/p", "s1", 1)], 1);
+        assert_eq!(m.page().items[m.cursor()], Action::More("/p".to_string()));
     }
 
     #[test]

@@ -463,7 +463,19 @@ pub fn draw(frame: &mut Frame<'_>, screen: &Screen, state: &mut ListState) {
         ]);
         frame.render_widget(Paragraph::new(line), filter_area);
     }
-    frame.render_widget(Paragraph::new(key_hints(&page.keys)), keys_area);
+    let status = page.status.as_deref().unwrap_or_default();
+    let status_width = match status.chars().count() {
+        0 => 0,
+        width => width as u16 + 1,
+    };
+    let [hints_area, status_area] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(status_width)])
+            .areas(keys_area);
+    frame.render_widget(Paragraph::new(key_hints(&page.keys)), hints_area);
+    frame.render_widget(
+        Paragraph::new(Span::styled(status, Style::new().fg(DIM))),
+        status_area,
+    );
 }
 
 #[cfg(test)]
@@ -512,6 +524,15 @@ mod tests {
         assert!(rows[14].ends_with("1h ago      1h00"), "{:?}", rows[14]);
         assert!(rows[17].starts_with("   write the docs"), "{:?}", rows[17]);
         assert_eq!(rows[39], " enter resume  t time  / filter  q quit");
+    }
+
+    #[test]
+    fn the_keys_line_ends_with_the_count_of_documents_read() {
+        let mut m = model(vec![]).with_documents_to_read(723);
+        m.load(vec![session("/home/u/toolpath", "fix the parser", 1)], 32);
+        let rows = paint(&m, 80, 40);
+        assert!(rows[39].starts_with(" enter resume"), "{:?}", rows[39]);
+        assert!(rows[39].ends_with("reading 32 of 723"), "{:?}", rows[39]);
     }
 
     #[test]
