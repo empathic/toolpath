@@ -40,6 +40,11 @@ impl SourceHarness {
             .into_iter()
             .find(|h| h.as_str() == hint)
     }
+
+    /// Exact inverse of [`SourceHarness::as_str`], `unknown` included.
+    pub fn from_name(name: &str) -> Option<SourceHarness> {
+        Self::from_hint(name).or((name == Self::Unknown.as_str()).then_some(Self::Unknown))
+    }
 }
 
 /// What harness inference looks at.
@@ -241,7 +246,8 @@ mod tests {
                     content: json!("hi"),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         let s = Session::new("otel-cluster:0000000000000000".into(), None, vec![g]);

@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::hash::Hash;
 use std::rc::Rc;
 
+mod frontier;
+pub use frontier::{emitted_turns, first_settle, held_harness, settled_harness};
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Node {
@@ -29,9 +32,10 @@ pub struct Node {
     pub results: BTreeMap<String, ToolOutcome>,
     /// How history first echoed this produced turn, when it differs.
     pub echo: Option<Echo>,
-    /// A later generation's prompt has carried this produced turn, so its
-    /// echo is final (its tool results may still be missing or fallbacks).
-    pub echoed: bool,
+    /// The first later generation whose prompt carried this produced turn:
+    /// its echo is final from then on (its tool results may still be
+    /// missing or fallbacks).
+    pub echoed_by: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +43,9 @@ pub struct Node {
 pub struct ToolOutcome {
     pub content: String,
     pub is_error: bool,
+    /// Generation whose prompt first carried this result; the node's
+    /// producer for a `tool_results` fallback.
+    pub generation: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -367,10 +374,17 @@ impl<'h, H: Eq + Hash> Trie<'h, H> {
 
 /// Stitch a session's generations into one turn DAG.
 pub fn stitch(session: &Session) -> TurnGraph {
-    stitch_hashed::<()>(session, &|_| None)
+    stitch_with_prefix(session, None).0
 }
 
-/// [`stitch`] given, for each generation, one hash per prompt
+/// [`stitch`], plus, for `Some(at)`, the graph of the first `at`
+/// generations: stitching only appends in generation order, so that is
+/// `stitch` of the prefix.
+pub fn stitch_with_prefix(session: &Session, at: Option<usize>) -> (TurnGraph, Option<TurnGraph>) {
+    stitch_hashed(session, at, &|g| session.prompt_hashes(g))
+}
+
+/// [`stitch_with_prefix`] given, for each generation, one hash per prompt
 /// message that identifies the prompt up to and including that message: a
 /// chained hash such as the record format's `MessageHash`. A shared prompt
 /// prefix is then found by hash lookups, without reading the messages, so
@@ -384,16 +398,18 @@ pub fn stitch(session: &Session) -> TurnGraph {
 /// prefixes are compared by content.
 pub(crate) fn stitch_hashed<'h, H: Eq + Hash>(
     session: &Session,
+    at: Option<usize>,
     hashes: &dyn Fn(&Generation) -> Option<&'h [H]>,
-) -> TurnGraph {
-    stitch_impl(session, true, hashes)
+) -> (TurnGraph, Option<TurnGraph>) {
+    stitch_impl(session, at, true, hashes)
 }
 
 fn stitch_impl<'h, H: Eq + Hash>(
     session: &Session,
+    at: Option<usize>,
     replay: bool,
     hashes: &dyn Fn(&Generation) -> Option<&'h [H]>,
-) -> TurnGraph {
+) -> (TurnGraph, Option<TurnGraph>) {
     let root = root_id(&session.key);
     let mut graph = TurnGraph {
         nodes: Vec::new(),
@@ -417,7 +433,11 @@ fn stitch_impl<'h, H: Eq + Hash>(
         roots: HashMap::new(),
         hashed: HashMap::new(),
     };
+    let mut prefix = None;
     for (gi, generation) in session.generations.iter().enumerate() {
+        if at == Some(gi) {
+            prefix = Some(graph.clone());
+        }
         let prompt_hashes = hashes.as_ref().map(|h| h[gi]);
         let target = continuation_target(&session.generations, gi, &first_index);
         let tip_node = match target {
@@ -527,6 +547,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
                     graph.nodes[ni].results.entry(key).or_insert(ToolOutcome {
                         content: norm.text.clone(),
                         is_error: norm.is_error,
+                        generation: gi,
                     });
                 }
                 if cur != NONE {
@@ -543,9 +564,10 @@ fn stitch_impl<'h, H: Eq + Hash>(
             let ni = match index.get(&id) {
                 Some(&ni) => {
                     let node = &mut graph.nodes[ni];
-                    if node.producer.is_some() && !node.echoed && m.role == "assistant" {
+                    if node.producer.is_some() && node.echoed_by.is_none() && m.role == "assistant"
+                    {
                         node.echo = echo_of(&node.message, m);
-                        node.echoed = true;
+                        node.echoed_by = Some(gi);
                     }
                     ni
                 }
@@ -561,7 +583,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
                         producer: None,
                         results: BTreeMap::new(),
                         echo: None,
-                        echoed: false,
+                        echoed_by: None,
                     });
                     index.insert(id.clone(), graph.nodes.len() - 1);
                     graph.nodes.len() - 1
@@ -599,7 +621,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
                 producer: Some(gi),
                 results: BTreeMap::new(),
                 echo: None,
-                echoed: false,
+                echoed_by: None,
             });
             index.insert(id.clone(), graph.nodes.len() - 1);
         }
@@ -609,11 +631,18 @@ fn stitch_impl<'h, H: Eq + Hash>(
             dropped,
         });
     }
+    if at == Some(session.generations.len()) {
+        prefix = Some(graph.clone());
+    }
     add_fallback_results(&mut graph, session);
-    graph
+    if let Some(p) = prefix.as_mut() {
+        add_fallback_results(p, session);
+    }
+    (graph, prefix)
 }
 
-/// Fallback results only for calls no prompt answered.
+/// Fallback results only for calls no prompt answered; a fallback's
+/// `generation` is the producer, which is how `emitted_turns` tells it apart.
 fn add_fallback_results(graph: &mut TurnGraph, session: &Session) {
     for node in graph.nodes.iter_mut() {
         let Some(p) = node.producer else { continue };
@@ -628,6 +657,7 @@ fn add_fallback_results(graph: &mut TurnGraph, session: &Session) {
                     ToolOutcome {
                         content: out.content.clone(),
                         is_error: out.is_error,
+                        generation: p,
                     },
                 );
             }
@@ -636,14 +666,15 @@ fn add_fallback_results(graph: &mut TurnGraph, session: &Session) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::generation::{Completion, FunctionCall, Generation, ToolCall, ToolOutput};
+    use crate::record::MessageHash;
     use serde_json::json;
 
     /// Every session of the committed conversation fixtures, in start
     /// order and reversed.
-    fn fixture_sessions() -> Vec<Session> {
+    pub(crate) fn fixture_sessions() -> Vec<Session> {
         use crate::tests::otel::{decode_input, group_sessions, read_deliveries};
         let root =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures/otel");
@@ -671,27 +702,23 @@ mod tests {
     }
 
     fn plain(s: &Session) -> TurnGraph {
-        stitch_impl::<()>(s, false, &|_| None)
+        stitch_impl::<()>(s, None, false, &|_| None).0
     }
 
-    /// A chained hash per prompt message, by generation id: sha256 of the
-    /// previous message's hash and this message's canonical JSON. A
-    /// stand-in for the record format's `MessageHash`; any hash that
-    /// identifies the prompt up to the message serves.
-    fn message_hashes(s: &Session) -> HashMap<String, Vec<String>> {
-        use crate::hash::{canonical_json, sha256_hex};
+    /// The record format's `MessageHash` of each prompt message, by
+    /// generation id.
+    fn message_hashes(s: &Session) -> HashMap<String, Vec<MessageHash>> {
         s.generations
             .iter()
             .map(|g| {
-                let mut parent = String::new();
+                let mut parent: Option<MessageHash> = None;
                 let h = g
                     .messages
                     .iter()
                     .map(|m| {
-                        let v = serde_json::to_value(m).unwrap();
-                        parent =
-                            sha256_hex(&[parent.as_bytes(), b"\0", canonical_json(&v).as_bytes()]);
-                        parent.clone()
+                        let h = crate::record::chain_hash(parent.as_ref(), m);
+                        parent = Some(h.clone());
+                        h
                     })
                     .collect();
                 (g.id.clone(), h)
@@ -699,8 +726,12 @@ mod tests {
             .collect()
     }
 
-    fn hashed(s: &Session, hashes: &HashMap<String, Vec<String>>) -> TurnGraph {
-        stitch_hashed(s, &|g| hashes.get(&g.id).map(Vec::as_slice))
+    fn hashed<H: Eq + Hash>(
+        s: &Session,
+        at: Option<usize>,
+        hashes: &HashMap<String, Vec<H>>,
+    ) -> (TurnGraph, Option<TurnGraph>) {
+        stitch_hashed(s, at, &|g| hashes.get(&g.id).map(Vec::as_slice))
     }
 
     /// [`super::stitch`], checked against stitching without prompt replay
@@ -709,23 +740,37 @@ mod tests {
         let g = super::stitch(s);
         let want = format!("{:?}", plain(s));
         assert_eq!(format!("{g:?}"), want);
-        let h = hashed(s, &message_hashes(s));
+        let h = hashed(s, None, &message_hashes(s)).0;
         assert_eq!(format!("{h:?}"), want);
         g
     }
 
+    fn prefix(s: &Session, k: usize) -> Session {
+        Session {
+            generations: s.generations[..k].to_vec(),
+            ..s.clone()
+        }
+    }
+
     #[test]
-    fn prompt_replay_matches_plain_stitching() {
+    fn prompt_replay_and_the_prefix_graph_match_plain_stitching() {
         for s in fixture_sessions() {
+            let plain_full = format!("{:?}", plain(&s));
+            let hashes = message_hashes(&s);
+            assert_eq!(format!("{:?}", super::stitch(&s)), plain_full, "{}", s.key);
             for k in 0..=s.generations.len() {
-                let s = Session {
-                    generations: s.generations[..k].to_vec(),
-                    ..s.clone()
-                };
-                let want = format!("{:?}", plain(&s));
-                let hashes = message_hashes(&s);
-                for got in [super::stitch(&s), hashed(&s, &hashes)] {
-                    assert_eq!(format!("{got:?}"), want, "{} prefix {k}", s.key);
+                let plain_prefix = format!("{:?}", plain(&prefix(&s, k)));
+                for (full, held) in [
+                    stitch_with_prefix(&s, Some(k)),
+                    hashed(&s, Some(k), &hashes),
+                ] {
+                    assert_eq!(format!("{full:?}"), plain_full);
+                    assert_eq!(
+                        format!("{:?}", held.unwrap()),
+                        plain_prefix,
+                        "{} prefix {k}",
+                        s.key
+                    );
                 }
             }
         }
@@ -749,7 +794,7 @@ mod tests {
             let mut misaligned = colliding;
             misaligned.get_mut(first).unwrap().push("h".into());
             for hashes in [missing, misaligned] {
-                let got = format!("{:?}", hashed(&s, &hashes));
+                let got = format!("{:?}", hashed(&s, None, &hashes).0);
                 assert_eq!(got, want, "{}", s.key);
             }
         }
@@ -759,13 +804,19 @@ mod tests {
     fn unequal_hashes_only_skip_replay() {
         for s in fixture_sessions() {
             let want = format!("{:?}", plain(&s));
-            let mut hashes = message_hashes(&s);
-            for (i, g) in s.generations.iter().enumerate() {
-                for h in hashes.get_mut(&g.id).unwrap() {
-                    h.push_str(&i.to_string());
-                }
-            }
-            assert_eq!(format!("{:?}", hashed(&s, &hashes)), want, "{}", s.key);
+            let hashes: HashMap<String, Vec<String>> = message_hashes(&s)
+                .into_iter()
+                .map(|(id, hs)| {
+                    let i = s.generations.iter().position(|g| g.id == id).unwrap();
+                    (id, hs.iter().map(|h| format!("{h}{i}")).collect())
+                })
+                .collect();
+            assert_eq!(
+                format!("{:?}", hashed(&s, None, &hashes).0),
+                want,
+                "{}",
+                s.key
+            );
         }
     }
 
@@ -798,7 +849,7 @@ mod tests {
             ("g2".into(), vec!["h".into()]),
         ]
         .into();
-        hashed(&s, &hashes);
+        hashed(&s, None, &hashes);
     }
 
     #[test]
@@ -852,7 +903,7 @@ mod tests {
             request_session_id: None,
             user_id: None,
             client_key: None,
-            messages,
+            messages: messages.into(),
             completion,
             usage: Default::default(),
             cost: Default::default(),
@@ -913,12 +964,14 @@ mod tests {
             session_id: Some("s".into()),
             generations: vec![g1, g2],
             truncated: false,
+            prompt_hashes: None,
         };
         let g = stitch(&session);
         assert_eq!(g.nodes.len(), 4); // system, user, assistant(t1), assistant(done)
         let a1 = &g.nodes[2];
         assert_eq!(a1.producer, Some(0));
         assert_eq!(a1.results["t1"].content, "a.txt");
+        assert_eq!(a1.results["t1"].generation, 1);
         assert!(a1.echo.is_none(), "spacing-only difference is not an echo");
         assert_eq!(g.nodes[3].parent.as_deref(), Some(a1.id.as_str()));
         assert_ne!(
@@ -957,12 +1010,14 @@ mod tests {
             session_id: None,
             generations: vec![g1.clone()],
             truncated: false,
+            prompt_hashes: None,
         };
         let two = Session {
             key: "s".into(),
             session_id: None,
             generations: vec![g1, g2],
             truncated: false,
+            prompt_hashes: None,
         };
         let (a, b) = (stitch(&one), stitch(&two));
         assert_eq!(
@@ -1073,7 +1128,7 @@ mod tests {
             id: id.into(),
             start_ns: start,
             end_ns: start + 1,
-            messages,
+            messages: messages.into(),
             completion: Completion {
                 text: text.into(),
                 ..Default::default()
@@ -1360,6 +1415,7 @@ mod tests {
         let g = stitch(&Session::new("s".into(), None, vec![g1, g2]));
         let a1 = g.nodes.iter().find(|n| n.producer == Some(0)).unwrap();
         assert_eq!(a1.results["c1"].content, "ok");
+        assert_eq!(a1.results["c1"].generation, 1);
     }
 
     #[test]
@@ -1658,7 +1714,8 @@ mod tests {
         let g3 = gen_("g3", 3, vec![user, asst, env, t1, zz, t2], "b");
         let g = stitch(&Session::new("s".into(), None, vec![g1, g2, g3]));
         let produced = g.nodes.iter().find(|n| n.producer == Some(0)).unwrap();
-        assert_eq!(produced.results["t1"].content, "one");
+        assert_eq!(produced.results["t1"].generation, 1);
+        assert_eq!(produced.results["t2"].generation, 2);
         assert_eq!(produced.results["t2"].content, "two");
         assert!(g.nodes.iter().all(|n| !n.results.contains_key("zz")));
         let dropped: Vec<usize> = g.links[2].dropped.iter().map(|d| d.index).collect();
@@ -1712,7 +1769,10 @@ mod tests {
         g1.tool_results.insert("c1".into(), fallback("fb"));
         let g = stitch(&Session::new("s".into(), None, vec![g1]));
         let r = &g.nodes[1].results["c1"];
-        assert_eq!((r.content.as_str(), r.is_error), ("fb", true));
+        assert_eq!(
+            (r.content.as_str(), r.is_error, r.generation),
+            ("fb", true, 0)
+        );
     }
 
     #[test]
@@ -1740,8 +1800,14 @@ mod tests {
         );
         let g = stitch(&Session::new("s".into(), None, vec![g1, g2]));
         let a = &g.nodes[1];
-        assert_eq!(a.results["c1"].content.as_str(), "real");
-        assert_eq!(a.results["c2"].content.as_str(), "fb2");
+        assert_eq!(
+            (a.results["c1"].content.as_str(), a.results["c1"].generation),
+            ("real", 1)
+        );
+        assert_eq!(
+            (a.results["c2"].content.as_str(), a.results["c2"].generation),
+            ("fb2", 0)
+        );
         assert!(!a.results["c1"].is_error);
     }
 
@@ -1768,6 +1834,7 @@ mod tests {
         let pos = positional_call_id(&a1.id, 0);
         assert_eq!(a1.message.tool_calls[0].id, pos);
         assert_eq!(a1.results[&pos].content, "ok");
+        assert_eq!(a1.results[&pos].generation, 1);
     }
 
     #[test]

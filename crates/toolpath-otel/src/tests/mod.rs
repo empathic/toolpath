@@ -2,7 +2,7 @@
 
 mod captures;
 mod captures_event;
-mod common;
+pub(crate) mod common;
 mod derive;
 mod derived_keys;
 mod equivalence;

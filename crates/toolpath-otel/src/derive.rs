@@ -3,10 +3,11 @@
 
 use crate::branch::{BranchKind, Branches, classify};
 use crate::generation::{Cost, Generation};
-use crate::harness::{SourceHarness, infer_harness, signals};
+use crate::harness::SourceHarness;
 use crate::profile;
 use crate::provider::{PROVIDER, view_from_graph};
 use crate::session::Session;
+use crate::stitch::settled_harness;
 use crate::stitch::{Node, TurnGraph, stitch};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -17,26 +18,56 @@ use toolpath_convo::DeriveConfig;
 pub const EXTRA_KEY: &str = PROVIDER;
 
 /// Dropped texts by the generation index that stores them.
-type Homes = BTreeMap<usize, BTreeMap<String, String>>;
+pub type Homes = BTreeMap<usize, BTreeMap<String, String>>;
 
+/// The harness is the one the generations that settle the first turn show
+/// ([`settled_harness`]), so a later generation never changes it.
 pub fn derive_session(session: &Session, config: &DeriveConfig) -> Path {
-    let graph = stitch(session);
-    let branches = classify(&graph, infer_harness(&signals(session)));
-    let view = view_from_graph(session, &graph, &branches);
+    let harness = settled_harness(session, true);
+    derive_stitched(session, &stitch(session), config, harness).0
+}
+
+/// [`derive_session`] of `session`, stitched as `graph`, with `harness`,
+/// and the classification of `graph`.
+pub fn derive_stitched(
+    session: &Session,
+    graph: &TurnGraph,
+    config: &DeriveConfig,
+    harness: SourceHarness,
+) -> (Path, Branches) {
+    let (mut path, view_id, placed, homes, branches) =
+        derive_steps(session, graph, config, harness);
+    stamp_meta(
+        &mut path, session, graph, &view_id, &placed, &homes, harness,
+    );
+    (path, branches)
+}
+
+/// The path of the first `graph.links.len()` generations of `session`,
+/// stitched as `graph`, without the otel path meta: its steps are exactly
+/// those of [`derive_session`] of that prefix when `harness` is its
+/// harness.
+pub fn derive_steps(
+    session: &Session,
+    graph: &TurnGraph,
+    config: &DeriveConfig,
+    harness: SourceHarness,
+) -> (Path, String, BTreeSet<usize>, Homes, Branches) {
+    let branches = classify(graph, harness);
+    let view = view_from_graph(session, graph, &branches, harness);
     let mut path = toolpath_convo::derive_path(&view, config);
-    link_branches(&mut path, &graph, &branches);
+    link_branches(&mut path, graph, &branches);
     let placed: BTreeSet<usize> = graph.nodes.iter().filter_map(|n| n.producer).collect();
-    let homes = dropped_homes(&graph, &placed);
+    let homes = dropped_homes(graph, &placed);
     stamp_steps(
         &mut path,
         &conversation_key(&view.id),
         session,
-        &graph,
+        graph,
         &branches,
         &homes,
     );
-    stamp_meta(&mut path, session, &graph, &view.id, &placed, &homes);
-    path
+    (path, view.id, placed, homes, branches)
 }
 
 /// The conversation artifact key convo gives a view: `otel://<derived>`.
@@ -116,6 +147,13 @@ fn stamp_steps(
             continue;
         };
         let mut extra = step_extra(node, &session.generations, graph, homes);
+        // A merged answer settles when its merge is seen; an echo only a
+        // later generation carries (a resumed sub-agent) is not part of it.
+        if let (Some(&at), Some(by)) = (branches.answers.get(&ni), node.echoed_by)
+            && by > at
+        {
+            extra.remove("echo");
+        }
         // Intrinsic: the turn comes from a metadata-only generation.
         let skeleton = extra.contains_key("absent");
         if let Some(name) = branches.branch_name(ni).or(skeleton.then_some("skeleton")) {
@@ -236,15 +274,13 @@ fn stamp_meta(
     derived_id: &str,
     placed: &BTreeSet<usize>,
     homes: &Homes,
+    harness: SourceHarness,
 ) {
     let gens = &session.generations;
     let mut m = Map::new();
     let profiles: BTreeSet<&str> = gens.iter().map(Generation::profile_name).collect();
     stamp_profiles(&mut m, &profiles);
-    m.insert(
-        "harness".into(),
-        json!(infer_harness(&signals(session)).as_str()),
-    );
+    m.insert("harness".into(), json!(harness.as_str()));
     stamp_hint_and_missing_continuations(&mut m, gens, graph);
     put(&mut m, "session_id", session.session_id.as_deref());
     m.insert("derived_session_id".into(), json!(derived_id));
