@@ -47,6 +47,37 @@ fn derive(values: &[Value]) -> Vec<Path> {
     .0
 }
 
+#[cfg(feature = "protobuf")]
+fn canonical(paths: &[Path]) -> Value {
+    serde_json::to_value(paths).unwrap()
+}
+
+#[cfg(feature = "protobuf")]
+#[test]
+fn binpb_bodies_derive_the_same_paths_as_the_json() {
+    for p in SEMCONV {
+        for mode in ["span", "event"] {
+            let dir = capture(p, mode);
+            let json = canonical(&derive(&values(&dir, &["json"])));
+            let binpb = canonical(&derive(&values(&dir, &["binpb"])));
+            assert_eq!(json, binpb, "{p}/{mode}");
+        }
+    }
+}
+
+#[cfg(feature = "protobuf")]
+#[test]
+fn both_encodings_in_one_directory_read_each_record_once() {
+    for p in SEMCONV {
+        for mode in ["span", "event"] {
+            let dir = capture(p, mode);
+            let json = canonical(&derive(&values(&dir, &["json"])));
+            let both = canonical(&derive(&values(&dir, &["json", "binpb"])));
+            assert_eq!(json, both, "{p}/{mode}");
+        }
+    }
+}
+
 #[test]
 fn event_captures_carry_content_on_log_records_only() {
     for p in SEMCONV {

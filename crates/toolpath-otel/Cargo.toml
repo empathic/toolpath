@@ -1,6 +1,6 @@
 [package]
 name = "toolpath-otel"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -17,3 +17,15 @@ serde_json = { workspace = true }
 serde_json_canonicalizer = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+flate2 = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+ruzstd = { workspace = true, optional = true }
+
+[features]
+default = []
+# gzip (OTLP/HTTP `Content-Encoding: gzip`) and zstd (Collector `compression:
+# zstd`) input, both pure Rust.
+compression = ["dep:flate2", "dep:ruzstd"]
+# OTLP/HTTP protobuf bodies and the Collector file exporter's proto framing
+# (vendored prost types in src/proto; pure Rust, so the wasm build compiles it).
+protobuf = ["dep:prost"]
