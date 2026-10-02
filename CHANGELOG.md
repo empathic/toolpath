@@ -2,6 +2,14 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.34.0 — 2026-10-01
+
+- **`path-cli`** (0.34.0): with the `cache-index` feature,
+  `path p cache reindex` deletes the document index and builds it
+  again from the cached documents. The error for an index file that
+  SQLite cannot read names the command.
+- **`toolpath-cli`** (0.34.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.33.0 — 2026-10-01
 
 - **`path-cli`** (0.33.0): with the `cache-index` feature, a write to

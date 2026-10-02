@@ -296,6 +296,26 @@ pub(crate) fn forget_removed(config_dir: &FsPath, cache_id: &str) -> Result<()> 
     Ok(())
 }
 
+/// Deletes the index under `config_dir` and builds it again from
+/// `documents`. Returns the documents it could not read.
+///
+/// This is the one place that deletes the index file. A file that
+/// [`Index::open`] cannot read is replaced here.
+pub(crate) fn rebuild(
+    config_dir: &FsPath,
+    documents: &[CacheEntry],
+) -> Result<Vec<UnreadableDocument>> {
+    for suffix in ["", "-wal", "-shm"] {
+        let path = config_dir.join(format!("{INDEX_FILE_NAME}{suffix}"));
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("remove {}", path.display())),
+        }
+    }
+    Index::open(config_dir)?.reindex_stale(documents)
+}
+
 /// Reads and parses the file of `document` and extracts its rows.
 fn read_rows(document: &CacheEntry) -> Result<DocumentRows> {
     let json = std::fs::read_to_string(&document.path)
@@ -407,8 +427,8 @@ fn set_wal_journal_mode(conn: &Connection) -> Result<()> {
 }
 
 /// Describes a failure to open the index at `path`. When SQLite
-/// cannot read the file, the message says that the file is safe to
-/// delete.
+/// cannot read the file, the message names the command that builds
+/// the index again.
 fn describe_open_error(path: &FsPath, error: anyhow::Error) -> anyhow::Error {
     let unreadable = matches!(
         error
@@ -419,7 +439,7 @@ fn describe_open_error(path: &FsPath, error: anyhow::Error) -> anyhow::Error {
     if unreadable {
         error.context(format!(
             "the document index {} is not a SQLite database that this build can read. \
-             It holds only derived data: delete the file and run the command again",
+             It holds only derived data: run `path p cache reindex` to build it again",
             path.display()
         ))
     } else {
@@ -862,8 +882,49 @@ mod tests {
         let error = Index::open(dir.path()).err().unwrap();
         let message = format!("{error:#}");
         assert!(message.contains(&path.display().to_string()), "{message}");
-        assert!(message.contains("delete the file"), "{message}");
+        assert!(message.contains("path p cache reindex"), "{message}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[test]
+    fn rebuild_replaces_a_file_that_is_no_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let documents = [write_document(
+            dir.path(),
+            "claude-x",
+            &session_document("t"),
+        )];
+        std::fs::write(
+            dir.path().join(INDEX_FILE_NAME),
+            "not a database. ".repeat(16),
+        )
+        .unwrap();
+
+        let unreadable = rebuild(dir.path(), &documents).unwrap();
+        assert!(unreadable.is_empty());
+        let index = Index::open(dir.path()).unwrap();
+        assert_eq!(
+            titles(&index.read_sessions(&ids(&documents)).unwrap()),
+            ["t"]
+        );
+    }
+
+    #[test]
+    fn rebuild_drops_the_rows_of_a_document_that_is_not_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let documents = [
+            write_document(dir.path(), "claude-a", &session_document("a")),
+            write_document(dir.path(), "claude-b", &session_document("b")),
+        ];
+        Index::open(dir.path())
+            .unwrap()
+            .reindex_stale(&documents)
+            .unwrap();
+
+        rebuild(dir.path(), &documents[..1]).unwrap();
+        let index = Index::open(dir.path()).unwrap();
+        let recorded: Vec<String> = index.read_stamps().unwrap().into_keys().collect();
+        assert_eq!(recorded, ["claude-a"]);
     }
 
     #[test]

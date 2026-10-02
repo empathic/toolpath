@@ -1,4 +1,4 @@
-//! `path p cache ls | rm | sync` — make the document cache legible.
+//! `path p cache ls | rm | sync | reindex` — make the document cache legible.
 //! The store itself lives in [`crate::cache`]; the sync engine in
 //! [`crate::sync`]. Sync UI (the live progress line, the summary)
 //! lives here: the engine reports through [`SyncObserver`], the
@@ -42,6 +42,10 @@ pub enum CacheOp {
         #[arg(long)]
         project_under: Option<PathBuf>,
     },
+    /// Delete the document index (`$CONFIG_DIR/index.sqlite`) and build
+    /// it again from the cached documents
+    #[cfg(all(feature = "cache-index", not(target_os = "emscripten")))]
+    Reindex,
 }
 
 pub fn run(op: CacheOp, config: &Config) -> Result<()> {
@@ -53,6 +57,8 @@ pub fn run(op: CacheOp, config: &Config) -> Result<()> {
             types,
             project_under,
         } => run_sync(types, project_under, config),
+        #[cfg(all(feature = "cache-index", not(target_os = "emscripten")))]
+        CacheOp::Reindex => run_reindex(config),
     }
 }
 
@@ -104,6 +110,25 @@ fn run_sync(
         &mut Progress::new(),
     )?;
     eprint!("{}", render_summary(&outcomes, explicit));
+    Ok(())
+}
+
+#[cfg(all(feature = "cache-index", not(target_os = "emscripten")))]
+fn run_reindex(config: &Config) -> Result<()> {
+    let config_dir = config.config_dir()?;
+    let documents = list_cached()?;
+    let unreadable = crate::cache::index::rebuild(&config_dir, &documents)?;
+    for document in &unreadable {
+        eprintln!(
+            "warning: cache entry {} left out: {:#}",
+            document.cache_id, document.error
+        );
+    }
+    eprintln!(
+        "Indexed {} of {} cached documents",
+        documents.len() - unreadable.len(),
+        documents.len()
+    );
     Ok(())
 }
 

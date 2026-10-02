@@ -925,6 +925,33 @@ fn cache_ls_after_import_lists_entry() {
         .stdout(predicate::str::contains("git-"));
 }
 
+#[cfg(feature = "cache-index")]
+#[test]
+fn cache_reindex_replaces_an_unreadable_index() {
+    let (dir, branch) = git_fixture();
+    let cfg = tempfile::tempdir().unwrap();
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "import", "git", "--branch"])
+        .arg(&branch)
+        .arg("--repo")
+        .arg(dir.path())
+        .assert()
+        .success();
+    std::fs::write(
+        cfg.path().join("index.sqlite"),
+        "not a database. ".repeat(16),
+    )
+    .unwrap();
+
+    cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args(["p", "cache", "reindex"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Indexed 1 of 1 cached documents"));
+}
+
 /// A `$HOME` with one Claude session. Returns (home-tempdir, session file).
 fn claude_home_fixture() -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
