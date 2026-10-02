@@ -128,9 +128,21 @@ pub fn run(args: QueryArgs, pretty: bool, config: &Config) -> Result<()> {
     )
 }
 
+/// The sync observer for a query: one warning per listing that
+/// failed, and no progress.
+#[cfg(not(target_os = "emscripten"))]
+struct SyncWarnings;
+
+#[cfg(not(target_os = "emscripten"))]
+impl crate::sync::SyncObserver for SyncWarnings {
+    fn enumeration_failed(&mut self, error: &anyhow::Error) {
+        eprintln!("warning: {error}");
+    }
+}
+
 /// Freshen the slice of the cache this query will read, before reading
-/// it. Quiet unless something was actually ingested; a sync failure
-/// degrades to querying the cache as-is.
+/// it. Quiet unless something was actually ingested or a listing
+/// failed; a sync failure degrades to querying the cache as-is.
 #[cfg(not(target_os = "emscripten"))]
 fn sync_query_scope(args: &QueryArgs, config: &Config) {
     let types = sync_types_for(args.source.as_deref(), &args.ids, &args.input);
@@ -150,7 +162,7 @@ fn sync_query_scope(args: &QueryArgs, config: &Config) {
         &bundle,
         &types,
         args.project_under.as_deref(),
-        &mut (),
+        &mut SyncWarnings,
     ) {
         Ok(outcomes) => {
             for (t, o) in outcomes {

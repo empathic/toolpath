@@ -10,6 +10,11 @@
 //! never reads session bodies. Artifacts deleted upstream keep both
 //! their cache document and their manifest record.
 
+#![deny(
+    clippy::print_stderr,
+    reason = "a sync warning goes to the caller's SyncObserver, and the caller decides what to print"
+)]
+
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) use engine::*;
 

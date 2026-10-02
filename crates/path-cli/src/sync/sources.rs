@@ -23,13 +23,22 @@ use crate::harness::{
 /// `None` when unavailable.
 pub(crate) type Stamp = (Option<DateTime<Utc>>, Option<u64>);
 
+/// What one [`ArtifactSource::enumerate`] call found: the artifacts it
+/// listed, and the listings that failed.
+#[derive(Debug, Default)]
+pub(crate) struct Enumeration {
+    pub(crate) artifacts: Vec<ArtifactRef>,
+    pub(crate) failures: Vec<anyhow::Error>,
+}
+
 /// One provider, as the sync engine sees it.
 pub(crate) trait ArtifactSource {
     /// Enumerate this provider's artifacts with stat-level
     /// fingerprints, pruning to `project_under` when the provider's
-    /// listing is path-keyed. Never reads session bodies. Listing
-    /// errors warn and skip so one broken provider can't block a run.
-    fn enumerate(&self, project_under: Option<&Path>) -> Vec<ArtifactRef>;
+    /// listing is path-keyed. Never reads session bodies. A listing
+    /// error goes into [`Enumeration::failures`] and the enumeration
+    /// continues, so one broken provider can't block a run.
+    fn enumerate(&self, project_under: Option<&Path>) -> Enumeration;
 
     /// Stat-level fingerprint for a single artifact, resolved
     /// directly — the same stat targets as [`Self::enumerate`], so the
@@ -108,14 +117,16 @@ impl ArtifactSource for ClaudeSource<'_> {
     /// segment and its id is rotation-stable; the fingerprint covers
     /// the whole chain (see `claude_chain_stamp`) because appends land
     /// in the newest segment, not the head file.
-    fn enumerate(&self, project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
+    fn enumerate(&self, project_under: Option<&Path>) -> Enumeration {
+        let mut found = Enumeration::default();
         let projects = match self.0.list_projects() {
             Ok(ps) => ps,
-            Err(e) if is_not_found_claude(&e) => return out,
+            Err(e) if is_not_found_claude(&e) => return found,
             Err(e) => {
-                eprintln!("warning: claude enumeration failed: {e}");
-                return out;
+                found
+                    .failures
+                    .push(anyhow!("claude enumeration failed: {e}"));
+                return found;
             }
         };
         for project in projects {
@@ -127,13 +138,15 @@ impl ArtifactSource for ClaudeSource<'_> {
             let heads = match self.0.list_conversations(&project) {
                 Ok(h) => h,
                 Err(e) => {
-                    eprintln!("warning: claude project {project} failed: {e}");
+                    found
+                        .failures
+                        .push(anyhow!("claude project {project} failed: {e}"));
                     continue;
                 }
             };
             for head in heads {
                 let (modified, size) = claude_chain_stamp(self.0, &project, &head);
-                out.push(ArtifactRef {
+                found.artifacts.push(ArtifactRef {
                     artifact_type: ArtifactType::Claude,
                     id: head,
                     path: Some(project.clone()),
@@ -142,7 +155,7 @@ impl ArtifactSource for ClaudeSource<'_> {
                 });
             }
         }
-        out
+        found
     }
 
     fn stamp(&self, project: Option<&str>, id: &str) -> Option<Stamp> {
@@ -183,14 +196,16 @@ impl ArtifactSource for GeminiSource<'_> {
     /// Session entries via a bounded identity peek (`toolpath-gemini`
     /// reads at most the first 4 KiB of a main file); the fingerprint
     /// stats the main file (or the orphan sub-agent directory).
-    fn enumerate(&self, project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
+    fn enumerate(&self, project_under: Option<&Path>) -> Enumeration {
+        let mut found = Enumeration::default();
         let projects = match self.0.list_projects() {
             Ok(ps) => ps,
-            Err(e) if is_not_found_gemini(&e) => return out,
+            Err(e) if is_not_found_gemini(&e) => return found,
             Err(e) => {
-                eprintln!("warning: gemini enumeration failed: {e}");
-                return out;
+                found
+                    .failures
+                    .push(anyhow!("gemini enumeration failed: {e}"));
+                return found;
             }
         };
         for project in projects {
@@ -202,13 +217,15 @@ impl ArtifactSource for GeminiSource<'_> {
             let entries = match self.0.resolver().list_session_entries(&project) {
                 Ok(entries) => entries,
                 Err(e) => {
-                    eprintln!("warning: gemini project {project} failed: {e}");
+                    found
+                        .failures
+                        .push(anyhow!("gemini project {project} failed: {e}"));
                     continue;
                 }
             };
             for entry in entries {
                 let (modified, size) = stat_stamp(&entry.path);
-                out.push(ArtifactRef {
+                found.artifacts.push(ArtifactRef {
                     artifact_type: ArtifactType::Gemini,
                     id: entry.session_uuid.unwrap_or(entry.id),
                     path: Some(project.clone()),
@@ -217,7 +234,7 @@ impl ArtifactSource for GeminiSource<'_> {
                 });
             }
         }
-        out
+        found
     }
 
     fn stamp(&self, project: Option<&str>, id: &str) -> Option<Stamp> {
@@ -241,14 +258,16 @@ impl ArtifactSource for CodexSource<'_> {
     /// Rollout files, stat-only. The artifact id is the trailing UUID of
     /// the filename stem (`rollout-<timestamp>-<uuid>`); `read_session`
     /// accepts either the UUID or the full stem, so the fallback is safe.
-    fn enumerate(&self, _project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
+    fn enumerate(&self, _project_under: Option<&Path>) -> Enumeration {
+        let mut found = Enumeration::default();
         let files = match self.0.io().list_rollout_files() {
             Ok(f) => f,
-            Err(e) if is_not_found_codex(&e) => return out,
+            Err(e) if is_not_found_codex(&e) => return found,
             Err(e) => {
-                eprintln!("warning: codex enumeration failed: {e}");
-                return out;
+                found
+                    .failures
+                    .push(anyhow!("codex enumeration failed: {e}"));
+                return found;
             }
         };
         for file in files {
@@ -257,7 +276,7 @@ impl ArtifactSource for CodexSource<'_> {
             };
             let id = toolpath_codex::session_id_from_stem(stem).to_string();
             let (modified, size) = stat_stamp(&file);
-            out.push(ArtifactRef {
+            found.artifacts.push(ArtifactRef {
                 artifact_type: ArtifactType::Codex,
                 id,
                 path: None,
@@ -265,7 +284,7 @@ impl ArtifactSource for CodexSource<'_> {
                 size,
             });
         }
-        out
+        found
     }
 
     fn stamp(&self, _project: Option<&str>, id: &str) -> Option<Stamp> {
@@ -297,18 +316,20 @@ struct OpencodeSource<'a>(&'a toolpath_opencode::OpencodeConvo);
 impl ArtifactSource for OpencodeSource<'_> {
     /// One header-only `SELECT` — `time_updated` is the fingerprint; no
     /// message bodies are loaded.
-    fn enumerate(&self, _project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
+    fn enumerate(&self, _project_under: Option<&Path>) -> Enumeration {
+        let mut found = Enumeration::default();
         let sessions = match self.0.io().list_sessions(None) {
             Ok(s) => s,
-            Err(e) if is_not_found_opencode(&e) => return out,
+            Err(e) if is_not_found_opencode(&e) => return found,
             Err(e) => {
-                eprintln!("warning: opencode enumeration failed: {e}");
-                return out;
+                found
+                    .failures
+                    .push(anyhow!("opencode enumeration failed: {e}"));
+                return found;
             }
         };
         for s in sessions {
-            out.push(ArtifactRef {
+            found.artifacts.push(ArtifactRef {
                 artifact_type: ArtifactType::Opencode,
                 modified: s.last_activity(),
                 path: Some(s.directory.to_string_lossy().into_owned()),
@@ -316,7 +337,7 @@ impl ArtifactSource for OpencodeSource<'_> {
                 size: None,
             });
         }
-        out
+        found
     }
 
     fn stamp(&self, _project: Option<&str>, id: &str) -> Option<Stamp> {
@@ -339,18 +360,20 @@ impl ArtifactSource for CursorSource<'_> {
     /// check) — `lastUpdatedAt` is the fingerprint. Bubble-less drafts
     /// are skipped; unlike `share`, composers without a workspace are
     /// included, since sync doesn't need to rank them by project.
-    fn enumerate(&self, _project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
+    fn enumerate(&self, _project_under: Option<&Path>) -> Enumeration {
+        let mut found = Enumeration::default();
         let listings = match self.0.io().list_composers() {
             Ok(l) => l,
-            Err(e) if is_not_found_cursor(&e) => return out,
+            Err(e) if is_not_found_cursor(&e) => return found,
             Err(e) => {
-                eprintln!("warning: cursor enumeration failed: {e}");
-                return out;
+                found
+                    .failures
+                    .push(anyhow!("cursor enumeration failed: {e}"));
+                return found;
             }
         };
         for l in listings.into_iter().filter(|l| l.has_bubbles) {
-            out.push(ArtifactRef {
+            found.artifacts.push(ArtifactRef {
                 artifact_type: ArtifactType::Cursor,
                 modified: l.head.last_updated_at_utc(),
                 path: l
@@ -361,7 +384,7 @@ impl ArtifactSource for CursorSource<'_> {
                 size: None,
             });
         }
-        out
+        found
     }
 
     fn stamp(&self, _project: Option<&str>, id: &str) -> Option<Stamp> {
@@ -386,14 +409,14 @@ impl ArtifactSource for PiSource<'_> {
     /// Session files stat-only; the id comes from a one-line header
     /// peek, falling back to the filename stem's `<timestamp>_<id>`
     /// shape — the same resolution `read_session` accepts.
-    fn enumerate(&self, project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
+    fn enumerate(&self, project_under: Option<&Path>) -> Enumeration {
+        let mut found = Enumeration::default();
         let projects = match self.0.list_projects() {
             Ok(ps) => ps,
-            Err(e) if is_not_found_pi(&e) => return out,
+            Err(e) if is_not_found_pi(&e) => return found,
             Err(e) => {
-                eprintln!("warning: pi enumeration failed: {e}");
-                return out;
+                found.failures.push(anyhow!("pi enumeration failed: {e}"));
+                return found;
             }
         };
         for project in projects {
@@ -405,7 +428,9 @@ impl ArtifactSource for PiSource<'_> {
             let files = match toolpath_pi::reader::list_session_files(self.0.resolver(), &project) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("warning: pi project {project} failed: {e}");
+                    found
+                        .failures
+                        .push(anyhow!("pi project {project} failed: {e}"));
                     continue;
                 }
             };
@@ -423,7 +448,7 @@ impl ArtifactSource for PiSource<'_> {
                     continue;
                 };
                 let (modified, size) = stat_stamp(&file);
-                out.push(ArtifactRef {
+                found.artifacts.push(ArtifactRef {
                     artifact_type: ArtifactType::Pi,
                     id,
                     path: Some(project.clone()),
@@ -432,7 +457,7 @@ impl ArtifactSource for PiSource<'_> {
                 });
             }
         }
-        out
+        found
     }
 
     fn stamp(&self, project: Option<&str>, id: &str) -> Option<Stamp> {
@@ -482,8 +507,8 @@ impl ArtifactSource for CopilotSource<'_> {
     /// `<id>/events.jsonl` under `session-state/` (or its legacy
     /// sibling); the directory name is the id and the events file is
     /// the fingerprint target.
-    fn enumerate(&self, _project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
+    fn enumerate(&self, _project_under: Option<&Path>) -> Enumeration {
+        let mut found = Enumeration::default();
         let mut seen = std::collections::HashSet::new();
         let dirs = [
             self.0.resolver().session_state_dir(),
@@ -502,7 +527,7 @@ impl ArtifactSource for CopilotSource<'_> {
                     continue;
                 }
                 let (modified, size) = stat_stamp(&events);
-                out.push(ArtifactRef {
+                found.artifacts.push(ArtifactRef {
                     artifact_type: ArtifactType::Copilot,
                     id,
                     path: None,
@@ -511,7 +536,7 @@ impl ArtifactSource for CopilotSource<'_> {
                 });
             }
         }
-        out
+        found
     }
 
     fn stamp(&self, _project: Option<&str>, id: &str) -> Option<Stamp> {
