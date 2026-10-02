@@ -1396,8 +1396,7 @@ pub(crate) mod tests {
                 "path_count": 0,
                 "url": "https://pathbase.dev/u/alex/repos/pathstash/graphs/{TEST_UUID}",
                 "visibility": "unlisted",
-                "state": "mutable",
-                "generation": 0,
+                "mutability": "mutable",
                 "created_at": "2024-01-01T00:00:00Z",
                 "updated_at": "2024-01-01T00:00:00Z"
             }}"#
@@ -1921,8 +1920,9 @@ pub(crate) mod tests {
         text.split_once("\r\n\r\n").unwrap().1.to_string()
     }
 
-    const PATH_OPENED: &str = r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":1,"head":"s0","generation":1}"#;
-    const STEPS_APPENDED: &str = r#"{"inserted":1,"head":"s1","generation":2}"#;
+    const PATH_OPENED: &str =
+        r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":1,"head":"s0"}"#;
+    const STEPS_APPENDED: &str = r#"{"inserted":1,"head":"s1"}"#;
     const GRAPH_ROUTE: &str =
         "/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
 
