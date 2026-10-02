@@ -252,8 +252,11 @@ fn emit(
                 );
                 continue;
             }
-            let path = write_cached(&d.cache_id, &d.doc, force)?;
-            println!("{}", path.display());
+            let written = write_cached(&d.cache_id, &d.doc, force)?;
+            println!("{}", written.path.display());
+            if let Some(index_error) = &written.index_error {
+                eprintln!("warning: document index not updated: {index_error:#}");
+            }
             #[cfg(not(target_os = "emscripten"))]
             if let Some(stub) = &d.provenance
                 && let Err(e) = crate::sync::record_artifact(config, stub, &d.cache_id)

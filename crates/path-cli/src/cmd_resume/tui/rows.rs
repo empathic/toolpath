@@ -114,7 +114,7 @@ mod tests {
     /// `cache_id` and names it in the manifest.
     fn cache_session(config_dir: &Path, cache_id: &str, title: &str) {
         let doc = Graph::from_path(derive(Some(title), &TURNS));
-        crate::cache::write_cached(cache_id, &doc, true).unwrap();
+        let _ = crate::cache::write_cached(cache_id, &doc, true).unwrap();
         let config = Config {
             toolpath_config_dir: Some(config_dir.to_path_buf()),
             ..Default::default()

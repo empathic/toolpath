@@ -7,6 +7,11 @@
 //! row carries the stamp of the file it was read from. A reader calls
 //! [`Index::reindex_stale`] before it reads rows. The rows it reads
 //! are then the rows of the files as they are.
+//!
+//! The cache module also records a document when it writes one
+//! ([`record_written`]) and deletes the rows when it removes one
+//! ([`forget_removed`]). That saves the parse; a reader does not
+//! depend on it.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path as FsPath;
@@ -15,7 +20,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rayon::prelude::*;
-use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 use toolpath::v1::Graph;
 
 use super::{CacheEntry, SessionSummary};
@@ -250,6 +255,31 @@ impl Index {
     }
 }
 
+/// Records `doc`, the document that `cache::write_cached` wrote to the
+/// file `document` lists, in the index under `config_dir`. Replaces
+/// the rows the document had.
+pub(crate) fn record_written(
+    config_dir: &FsPath,
+    document: &CacheEntry,
+    doc: &Graph,
+) -> Result<()> {
+    let rows = extract_rows(&document.id, doc);
+    let mut index = Index::open(config_dir)?;
+    let tx = index.conn.transaction()?;
+    write_rows(&tx, &document.id, FileStamp::of(document), &rows)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Deletes the rows of `cache_id`, the document that
+/// `cache::remove_cached` removed, from the index under `config_dir`.
+/// A document the index does not hold is not an error.
+pub(crate) fn forget_removed(config_dir: &FsPath, cache_id: &str) -> Result<()> {
+    let index = Index::open(config_dir)?;
+    delete_rows(&index.conn, cache_id)?;
+    Ok(())
+}
+
 /// Reads and parses the file of `document` and extracts its rows.
 fn read_rows(document: &CacheEntry) -> Result<DocumentRows> {
     let json = std::fs::read_to_string(&document.path)
@@ -261,13 +291,13 @@ fn read_rows(document: &CacheEntry) -> Result<DocumentRows> {
 
 /// Replaces every row of `cache_id` with `rows`, recorded at `stamp`.
 fn write_rows(
-    tx: &Transaction,
+    conn: &Connection,
     cache_id: &str,
     stamp: FileStamp,
     rows: &DocumentRows,
 ) -> rusqlite::Result<()> {
-    delete_rows(tx, cache_id)?;
-    tx.execute(
+    delete_rows(conn, cache_id)?;
+    conn.execute(
         "INSERT INTO documents (cache_id, source, file_mtime, file_size, indexed_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
@@ -279,7 +309,7 @@ fn write_rows(
         ],
     )?;
     if let Some(session) = &rows.session {
-        tx.execute(
+        conn.execute(
             "INSERT INTO sessions (cache_id, dir, title, started_at, last_activity)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
@@ -296,8 +326,8 @@ fn write_rows(
 
 /// Deletes every row of `cache_id`. The `sessions` row goes with the
 /// `documents` row by the foreign key.
-fn delete_rows(tx: &Transaction, cache_id: &str) -> rusqlite::Result<()> {
-    tx.execute(
+fn delete_rows(conn: &Connection, cache_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
         "DELETE FROM documents WHERE cache_id = ?1",
         params![cache_id],
     )?;
@@ -443,6 +473,101 @@ mod tests {
             .iter()
             .map(|document| document.id.as_str())
             .collect()
+    }
+
+    /// Runs `f` with the config directory pinned to a fresh temporary
+    /// directory, which `f` receives. For a test of the cache
+    /// functions, which read the config directory from the
+    /// environment.
+    fn with_config_dir<F: FnOnce(&FsPath) -> R, R>(f: F) -> R {
+        use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
+        let temp = tempfile::tempdir().unwrap();
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::set_var(CONFIG_DIR_ENV, temp.path());
+        }
+        let result = f(temp.path());
+        unsafe {
+            std::env::remove_var(CONFIG_DIR_ENV);
+        }
+        result
+    }
+
+    #[test]
+    fn write_cached_records_the_document_at_the_stamp_of_its_file() {
+        with_config_dir(|dir| {
+            let written =
+                crate::cache::write_cached("claude-x", &session_document("t"), false).unwrap();
+            assert!(written.index_error.is_none());
+
+            let documents = crate::cache::list_cached().unwrap();
+            let index = Index::open(dir).unwrap();
+            assert_eq!(
+                index.read_stamps().unwrap().get("claude-x"),
+                Some(&FileStamp::of(&documents[0]))
+            );
+            assert_eq!(
+                titles(&index.read_sessions(&ids(&documents)).unwrap()),
+                ["t"]
+            );
+        });
+    }
+
+    #[test]
+    fn remove_cached_deletes_the_rows() {
+        with_config_dir(|dir| {
+            let _ = crate::cache::write_cached("claude-x", &session_document("t"), false).unwrap();
+            let index_error = crate::cache::remove_cached("claude-x").unwrap();
+            assert!(index_error.is_none());
+            assert!(Index::open(dir).unwrap().read_stamps().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_write_and_a_remove_succeed_and_return_the_failure_of_an_unreadable_index() {
+        with_config_dir(|dir| {
+            std::fs::write(dir.join(INDEX_FILE_NAME), "not a database. ".repeat(16)).unwrap();
+
+            let written =
+                crate::cache::write_cached("claude-x", &session_document("t"), false).unwrap();
+            assert!(written.index_error.is_some());
+            assert!(written.path.exists());
+
+            let index_error = crate::cache::remove_cached("claude-x").unwrap();
+            assert!(index_error.is_some());
+            assert!(!written.path.exists());
+        });
+    }
+
+    #[test]
+    fn reindex_stale_replaces_rows_recorded_under_the_stamp_of_another_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let first_doc = session_document("first");
+        let first = write_document(dir.path(), "claude-x", &first_doc);
+        let second = [write_document(
+            dir.path(),
+            "claude-x",
+            &session_document("second title"),
+        )];
+        // A writer whose file was replaced records its rows last.
+        record_written(dir.path(), &first, &first_doc).unwrap();
+
+        let mut index = Index::open(dir.path()).unwrap();
+        assert_eq!(
+            titles(&index.read_sessions(&ids(&second)).unwrap()),
+            ["first"]
+        );
+        index.reindex_stale(&second).unwrap();
+        assert_eq!(
+            titles(&index.read_sessions(&ids(&second)).unwrap()),
+            ["second title"]
+        );
+    }
+
+    #[test]
+    fn forget_removed_accepts_a_document_the_index_does_not_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        forget_removed(dir.path(), "claude-never").unwrap();
     }
 
     #[test]

@@ -6,7 +6,8 @@
 //! paths. The `p cache ls | rm` subcommands make the directory legible.
 //!
 //! With the `cache-index` feature, the document index (the `index`
-//! module) holds the facts of each document that a listing reads.
+//! module) holds the facts of each document that a listing reads, and
+//! this module records each document it writes or removes.
 
 use anyhow::{Context, Result, anyhow, bail};
 use std::path::PathBuf;
@@ -18,18 +19,61 @@ use crate::config::config_dir;
 pub(crate) mod fixtures;
 #[cfg(all(feature = "cache-index", not(target_os = "emscripten")))]
 pub(crate) mod index;
+/// The build has no document index. A write to the cache has nothing
+/// to record.
+#[cfg(not(all(feature = "cache-index", not(target_os = "emscripten"))))]
+mod index {
+    use super::CacheEntry;
+    use anyhow::Result;
+    use std::path::Path;
+    use toolpath::v1::Graph;
+
+    pub(crate) fn record_written(_: &Path, _: &CacheEntry, _: &Graph) -> Result<()> {
+        Ok(())
+    }
+
+    pub(crate) fn forget_removed(_: &Path, _: &str) -> Result<()> {
+        Ok(())
+    }
+}
 #[cfg(not(target_os = "emscripten"))]
 mod summary;
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) use summary::SessionSummary;
 
-/// An entry surfaced by `list_cached`.
+/// A document file in the cache: an entry of `list_cached`, or the
+/// file `write_cached` wrote.
 #[derive(Debug, Clone)]
 pub(crate) struct CacheEntry {
     pub id: String,
     pub path: PathBuf,
     pub bytes: u64,
     pub modified: std::time::SystemTime,
+}
+
+impl CacheEntry {
+    /// The entry of the document `id` at `path`, with the size and
+    /// mtime that `meta` holds.
+    fn new(id: String, path: PathBuf, meta: &std::fs::Metadata) -> Self {
+        Self {
+            id,
+            path,
+            bytes: meta.len(),
+            modified: meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+        }
+    }
+}
+
+/// What [`write_cached`] did.
+#[derive(Debug)]
+#[must_use = "`index_error` says whether the document index holds the document"]
+pub(crate) struct CacheWrite {
+    /// The document file.
+    pub path: PathBuf,
+    /// The failure to record the document in the document index. The
+    /// document is in the cache either way, and the next reader of
+    /// the index parses it.
+    pub index_error: Option<anyhow::Error>,
 }
 
 /// The cache directory: `$CONFIG_DIR/documents/`.
@@ -45,13 +89,16 @@ pub(crate) fn cache_path(id: &str) -> Result<PathBuf> {
     Ok(cache_dir()?.join(format!("{id}.json")))
 }
 
-/// Write a toolpath document to the cache under `id`. Errors if the
-/// file already exists unless `force` is true.
+/// Write a toolpath document to the cache under `id`, and record it
+/// in the document index. Errors if the file already exists unless
+/// `force` is true. A failure of the index is not an error of the
+/// write: it comes back in [`CacheWrite::index_error`], and the caller
+/// decides what to report.
 ///
 /// Uses `O_CREAT | O_EXCL` (`create_new`) when `force == false` so the
 /// exists-check and the write are atomic — two concurrent `path import`
 /// invocations racing the same id can't silently stomp each other.
-pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf> {
+pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<CacheWrite> {
     use std::io::Write;
 
     let dir = cache_dir()?;
@@ -93,7 +140,18 @@ pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("chmod 0600 {}", path.display()))?;
     }
-    Ok(path)
+
+    // Another writer of the same id can rewrite the file between the
+    // write above and this stat. The index then holds the rows of this
+    // document under the stamp of the other one, until the file changes.
+    let meta = file
+        .metadata()
+        .with_context(|| format!("stat {}", path.display()))?;
+    let written = CacheEntry::new(id.to_string(), path.clone(), &meta);
+    let index_error = config_dir()
+        .and_then(|dir| index::record_written(&dir, &written, doc))
+        .err();
+    Ok(CacheWrite { path, index_error })
 }
 
 /// Resolve a `<ref>` string to a filesystem path. A ref is either a
@@ -136,25 +194,25 @@ pub(crate) fn list_cached() -> Result<Vec<CacheEntry>> {
             Some(s) => s.to_string(),
             None => continue,
         };
-        let meta = entry.metadata()?;
-        out.push(CacheEntry {
-            id,
-            path,
-            bytes: meta.len(),
-            modified: meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-        });
+        out.push(CacheEntry::new(id, path, &entry.metadata()?));
     }
     out.sort_by_key(|e| std::cmp::Reverse(e.modified));
     Ok(out)
 }
 
-pub(crate) fn remove_cached(id: &str) -> Result<()> {
+/// Removes the document `id` from the cache, and its rows from the
+/// document index. Returns the failure to update the index, if any:
+/// the document is removed either way, and the caller decides what to
+/// report.
+pub(crate) fn remove_cached(id: &str) -> Result<Option<anyhow::Error>> {
     let path = cache_path(id)?;
     if !path.exists() {
         return Err(anyhow!("cache entry {id} not found"));
     }
     std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
-    Ok(())
+    Ok(config_dir()
+        .and_then(|dir| index::forget_removed(&dir, id))
+        .err())
 }
 
 /// Build a cache id for a given source + inner id.
@@ -208,7 +266,7 @@ mod tests {
     fn write_and_read_cache_entry() {
         with_cfg(|_| {
             let doc = sample_doc();
-            let p = write_cached("claude-abc", &doc, false).unwrap();
+            let p = write_cached("claude-abc", &doc, false).unwrap().path;
             assert!(p.exists());
             assert_eq!(p.file_name().unwrap(), "claude-abc.json");
         });
@@ -218,7 +276,7 @@ mod tests {
     fn write_errors_if_exists_without_force() {
         with_cfg(|_| {
             let doc = sample_doc();
-            write_cached("claude-abc", &doc, false).unwrap();
+            let _ = write_cached("claude-abc", &doc, false).unwrap();
             let err = write_cached("claude-abc", &doc, false).unwrap_err();
             assert!(err.to_string().contains("already exists"));
         });
@@ -228,8 +286,8 @@ mod tests {
     fn write_force_overwrites() {
         with_cfg(|_| {
             let doc = sample_doc();
-            write_cached("claude-abc", &doc, false).unwrap();
-            write_cached("claude-abc", &doc, true).unwrap();
+            let _ = write_cached("claude-abc", &doc, false).unwrap();
+            let _ = write_cached("claude-abc", &doc, true).unwrap();
         });
     }
 
@@ -237,7 +295,7 @@ mod tests {
     fn cache_ref_finds_existing_cache_entry() {
         with_cfg(|_| {
             let doc = sample_doc();
-            let p = write_cached("claude-abc", &doc, false).unwrap();
+            let p = write_cached("claude-abc", &doc, false).unwrap().path;
             let resolved = cache_ref("claude-abc").unwrap();
             assert_eq!(resolved, p);
         });
@@ -277,8 +335,8 @@ mod tests {
     fn list_and_remove_roundtrip() {
         with_cfg(|_| {
             let doc = sample_doc();
-            write_cached("a", &doc, false).unwrap();
-            write_cached("b", &doc, false).unwrap();
+            let _ = write_cached("a", &doc, false).unwrap();
+            let _ = write_cached("b", &doc, false).unwrap();
             let entries = list_cached().unwrap();
             assert_eq!(entries.len(), 2);
 
@@ -296,7 +354,9 @@ mod tests {
     fn writes_file_with_0600() {
         use std::os::unix::fs::PermissionsExt;
         with_cfg(|_| {
-            let p = write_cached("claude-abc", &sample_doc(), false).unwrap();
+            let p = write_cached("claude-abc", &sample_doc(), false)
+                .unwrap()
+                .path;
             let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         });

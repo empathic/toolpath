@@ -358,7 +358,11 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
                     // force=true here: we either short-circuited above
                     // (cache miss) or the user explicitly passed --force,
                     // and either way we want the new bytes to land.
-                    crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+                    let written =
+                        crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+                    if let Some(index_error) = &written.index_error {
+                        eprintln!("warning: document index not updated: {index_error:#}");
+                    }
                     eprintln!("Resolved {} → {}", raw, derived.cache_id);
                 }
                 let json = derived

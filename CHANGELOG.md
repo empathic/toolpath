@@ -2,6 +2,16 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.33.0 — 2026-10-01
+
+- **`path-cli`** (0.33.0): with the `cache-index` feature, a write to
+  the document cache records the document in the index, and
+  `p cache rm` deletes its rows. `path resume` then does not parse a
+  document that sync just wrote. A failure of the index does not fail
+  the write or the remove: the command prints a warning, and the next
+  reader of the index parses the document.
+- **`toolpath-cli`** (0.33.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.32.0 — 2026-10-01
 
 - **`path-cli`** (0.32.0): the `cache-index` feature (default: off)
