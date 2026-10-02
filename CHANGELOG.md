@@ -31,16 +31,18 @@ All notable changes to the Toolpath workspace are documented here.
   that adds streamed upload. New operations `open_graph_path`
   (`POST …/graphs/{id}/paths`) and `append_graph_path_steps`
   (`POST …/graphs/{id}/paths/{path_id}/steps`, replacing the old
-  bare-steps body and full-path response), plus `freeze_graph`,
-  `get_graph_path_stats`, `Graph.state`/`Graph.generation` (required),
-  `User.kind`/`User.auth_methods`, and `409` on path update/delete.
+  bare-steps body and full-path response), plus `get_graph_path_stats`,
+  `Graph.mutability` (required: `mutable` or `frozen`),
+  `User.kind`/`User.auth_methods`, `Repo.associated_url`, the
+  `write_to_frozen` and `invalid_document` error codes, and `409` on
+  path update/delete.
   The committed spec keeps the server's `application/x-ndjson` bodies
   and doc links; `build.rs` maps `x-ndjson` to `text/plain` (progenitor
   cannot name `x-ndjson`; the batch handlers read the raw body without
   checking the header) and strips rustdoc link brackets from
   descriptions. `scripts/refresh-pathbase-openapi.sh` no longer drops
-  `x-ndjson` operations. Because `state` and `generation` are required,
-  this release targets a server with Pathbase #468 deployed.
+  `x-ndjson` operations. Because `mutability` is required, this release
+  targets a server with Pathbase #486 deployed.
 
 ## path-cli 0.28.0 — 2026-09-16
 

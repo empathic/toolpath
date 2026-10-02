@@ -1037,6 +1037,7 @@ pub(crate) fn repos_post(base_url: &str, token: &str, owner: &str, name: &str) -
     let body = pathbase_client::types::CreateRepoBody {
         name: name.to_string(),
         description: None,
+        associated_url: None,
         visibility: None,
     };
     let client = pathbase_client(base_url, Some(token))?;
