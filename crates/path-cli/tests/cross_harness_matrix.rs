@@ -240,8 +240,13 @@ impl Harness for GeminiHarness {
             if v.get("type").is_none() {
                 continue;
             }
+            // Gemini rewrites a message by appending it again under the same
+            // id; the last copy is the message.
             if let Ok(msg) = serde_json::from_value::<toolpath_gemini::types::GeminiMessage>(v) {
-                chat_file.messages.push(msg);
+                match chat_file.messages.iter().position(|m| m.id == msg.id) {
+                    Some(i) => chat_file.messages[i] = msg,
+                    None => chat_file.messages.push(msg),
+                }
             }
         }
         let session_uuid = chat_file.session_id.clone();
@@ -478,6 +483,12 @@ fn parse_opencode_export(json: &str) -> toolpath_opencode::Session {
         time_archived: i64_at(&["time", "archived"]),
         messages,
     }
+}
+
+/// The path derived from `view`, as a document `path p validate` reads.
+fn derived_document(view: &ConversationView) -> Value {
+    let graph = Graph::from_path(derive_path(view, &DeriveConfig::default()));
+    serde_json::from_str(&graph.to_json().expect("serialize Graph")).expect("parse Graph JSON")
 }
 
 fn ir_roundtrip(view: &ConversationView) -> ConversationView {
@@ -966,6 +977,14 @@ mod invariants {
         }
     }
 
+    /// The derived path satisfies its kind: the schema plus the accounting
+    /// rules `path p validate` checks.
+    pub fn kind_conforms(view: &ConversationView, failures: &mut Vec<String>) {
+        if let Err(e) = path_cli::schema::validate(&derived_document(view)) {
+            failures.push(format!("derived path breaks its kind: {e}"));
+        }
+    }
+
     pub fn files_changed(
         original: &ConversationView,
         final_: &ConversationView,
@@ -1018,6 +1037,7 @@ fn run_cell(
     invariants::delegations(&view_first, &view_second, &mut failures);
     invariants::delegations_survive(&view_after_source, &view_first, &mut failures);
     invariants::files_changed(&view_first, &view_second, &mut failures);
+    invariants::kind_conforms(&view_first, &mut failures);
     failures
 }
 
@@ -1140,4 +1160,195 @@ fn matrix_schema_validation() {
             failures.len()
         );
     }
+}
+
+#[test]
+fn matrix_kind_validation() {
+    // Each harness's real fixture derives to a path that passes
+    // `path p validate`: base schema, kind schema, and the kind's
+    // accounting rules.
+    let mut failures: Vec<String> = Vec::new();
+    for h in &all_harnesses() {
+        let view = h.load_fixture().expect("fixture on disk");
+        let mut cell = Vec::new();
+        invariants::kind_conforms(&view, &mut cell);
+        match cell.as_slice() {
+            [] => eprintln!("✓ {}", h.name()),
+            fs => {
+                for f in fs {
+                    eprintln!("✗ {}: {}", h.name(), f);
+                    failures.push(format!("{}: {}", h.name(), f));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "kind validation failed: {failures:#?}");
+}
+
+// ── Additive token classes ───────────────────────────────────────────
+//
+// The kind's classes are additive: `input_tokens` excludes cached prompt
+// tokens, so `input + cache_read + cache_write` summed over a derived path
+// is the session's prompt. Each oracle reads that prompt total straight
+// from the fixture's wire JSON, in the source's own units, independently
+// of the provider crate. Only fixtures that record cached input are here:
+// pi and cursor fixtures carry zero cache counters, so they cannot tell
+// additive classes from inclusive ones.
+
+fn fixture_lines(rel: &str) -> Vec<Value> {
+    std::fs::read_to_string(fixtures_dir().join(rel))
+        .expect("fixture read")
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("fixture line parses"))
+        .collect()
+}
+
+fn u64_at(v: &Value, pointer: &str) -> u64 {
+    v.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// Claude's `input_tokens` already excludes cache; one message spans several
+/// lines whose `usage` is a streaming snapshot, so each field takes its
+/// largest value across the message's lines.
+fn claude_prompt_total() -> u64 {
+    let mut per_message: BTreeMap<String, [u64; 3]> = BTreeMap::new();
+    for line in fixture_lines("claude/convo.jsonl") {
+        let (Some(id), Some(_)) = (
+            line.pointer("/message/id").and_then(Value::as_str),
+            line.pointer("/message/usage"),
+        ) else {
+            continue;
+        };
+        let max = per_message.entry(id.to_string()).or_default();
+        for (slot, field) in [
+            "input_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ]
+        .iter()
+        .enumerate()
+        {
+            max[slot] = max[slot].max(u64_at(&line, &format!("/message/usage/{field}")));
+        }
+    }
+    per_message.values().flatten().sum()
+}
+
+/// Codex's `input_tokens` includes `cached_input_tokens`; the last
+/// cumulative `total_token_usage` is the session's prompt.
+fn codex_prompt_total() -> u64 {
+    fixture_lines("codex/convo.jsonl")
+        .iter()
+        .filter_map(|l| l.pointer("/payload/info/total_token_usage/input_tokens"))
+        .filter_map(Value::as_u64)
+        .last()
+        .expect("codex fixture has a token_count")
+}
+
+/// Gemini's `input` (`promptTokenCount`) includes `cached`. A message
+/// rewritten under the same id counts once.
+fn gemini_prompt_total() -> u64 {
+    let mut per_message: BTreeMap<String, u64> = BTreeMap::new();
+    for line in fixture_lines("gemini/convo.jsonl") {
+        if let (Some(id), Some(input)) = (
+            line.get("id").and_then(Value::as_str),
+            line.pointer("/tokens/input").and_then(Value::as_u64),
+        ) {
+            per_message.insert(id.to_string(), input);
+        }
+    }
+    per_message.values().sum()
+}
+
+/// Copilot's `session.shutdown` reports each model's `inputTokens`, which
+/// includes its cache reads and writes.
+fn copilot_prompt_total() -> u64 {
+    fixture_lines("copilot/convo.jsonl")
+        .iter()
+        .filter_map(|l| l.pointer("/data/modelMetrics").and_then(Value::as_object))
+        .flat_map(|models| models.values())
+        .map(|m| u64_at(m, "/usage/inputTokens"))
+        .sum()
+}
+
+fn prompt_of(u: &Value) -> u64 {
+    ["input_tokens", "cache_read_tokens", "cache_write_tokens"]
+        .iter()
+        .map(|k| u64_at(u, &format!("/{k}")))
+        .sum()
+}
+
+/// opencode's `total` is `input + output + reasoning + cache.read +
+/// cache.write`, so the prompt is what `total` holds beyond the output.
+fn opencode_prompt_total() -> u64 {
+    let doc: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixtures_dir().join("opencode/convo.json")).expect("fixture read"),
+    )
+    .expect("opencode fixture parses");
+    doc["messages"]
+        .as_array()
+        .expect("opencode messages")
+        .iter()
+        .filter_map(|m| m.pointer("/info/tokens"))
+        .map(|t| u64_at(t, "/total") - u64_at(t, "/output") - u64_at(t, "/reasoning"))
+        .sum()
+}
+
+/// Σ `input_tokens + cache_read_tokens + cache_write_tokens` over a derived
+/// path's group totals.
+fn derived_prompt_total(view: &ConversationView) -> u64 {
+    let doc = derived_document(view);
+    doc.pointer("/paths/0/steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|step| step.get("change").and_then(Value::as_object))
+        .flat_map(|change| change.values())
+        .filter_map(|c| c.get("structural"))
+        .filter(|s| s.get("type").and_then(Value::as_str) == Some("conversation.append"))
+        .filter_map(|s| s.get("token_usage"))
+        .map(prompt_of)
+        .sum()
+}
+
+/// The same sum over the view's session total. Copilot records input and
+/// cache only on `session.shutdown`, which lands in `total_usage` and on no
+/// turn, so a derived Copilot path carries output tokens alone.
+fn session_prompt_total(view: &ConversationView) -> u64 {
+    view.total_usage
+        .as_ref()
+        .map(|u| prompt_of(&serde_json::to_value(u).expect("serialize TokenUsage")))
+        .unwrap_or(0)
+}
+
+#[test]
+fn token_classes_add_up_to_the_source_prompt() {
+    type Total = fn(&ConversationView) -> u64;
+    let oracles: [(&dyn Harness, Total, fn() -> u64); 5] = [
+        (&ClaudeHarness, derived_prompt_total, claude_prompt_total),
+        (&CodexHarness, derived_prompt_total, codex_prompt_total),
+        (&GeminiHarness, derived_prompt_total, gemini_prompt_total),
+        (&CopilotHarness, session_prompt_total, copilot_prompt_total),
+        (
+            &OpencodeHarness,
+            derived_prompt_total,
+            opencode_prompt_total,
+        ),
+    ];
+    let mut failures: Vec<String> = Vec::new();
+    for (h, total, oracle) in oracles {
+        let view = h.load_fixture().expect("fixture on disk");
+        let (derived, source) = (total(&view), oracle());
+        if derived == source {
+            eprintln!("✓ {}: prompt {}", h.name(), source);
+        } else {
+            eprintln!("✗ {}: derived {} vs source {}", h.name(), derived, source);
+            failures.push(format!(
+                "{}: input + cache_read + cache_write sums to {derived}, the source's prompt is {source}",
+                h.name()
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }

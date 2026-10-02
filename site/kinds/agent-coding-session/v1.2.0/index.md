@@ -1,27 +1,25 @@
 ---
 layout: base.njk
-title: "Kind: agent-coding-session v1.1.0"
-permalink: /kinds/agent-coding-session/v1.1.0/
+title: "Kind: agent-coding-session v1.2.0"
+permalink: /kinds/agent-coding-session/v1.2.0/
 ---
 
-# Kind: `agent-coding-session` v1.1.0
+# Kind: `agent-coding-session` v1.2.0
 
 <dl class="kind-meta">
   <dt>URI</dt>
-  <dd><code>https://toolpath.net/kinds/agent-coding-session/v1.1.0</code></dd>
+  <dd><code>https://toolpath.net/kinds/agent-coding-session/v1.2.0</code></dd>
   <dt>Schema</dt>
   <dd><a href="./schema.json"><code>schema.json</code></a></dd>
 </dl>
 
 A Toolpath path whose `meta.kind` is this URI records an AI coding conversation. It is an ordinary path with the extra structure described here. `head`-ancestry, dead ends, signatures, and `base` all behave as in the [base format](/format/).
 
-Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-opencode`, `toolpath-cursor`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input`, the diff text in a change's `raw`, and the value (not the meaning) of `group_id`.
+Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`), which the provider crates (`toolpath-claude`, `toolpath-gemini`, `toolpath-codex`, `toolpath-copilot`, `toolpath-opencode`, `toolpath-cursor`, `toolpath-pi`) all call. The field shapes below are therefore exact. The only producer-specific parts are the contents of a tool's `input`, the diff text in a change's `raw`, and the value (not the meaning) of `group_id`.
 
 Constraints apply by structural `type`, not by artifact key: a `change` entry is checked only when its `structural.type` is one named here, and extra properties never make a path invalid. [`schema.json`](./schema.json) encodes the rules; apply it alongside the base schema. The URI is immutable. Later revisions ship under a new version URI.
 
-> **Erratum — overlapping token classes.** This version does not say whether `input_tokens` includes cached prompt tokens, and producers disagreed. Claude Code, opencode, and Copilot CLI documents count cached input only in `cache_read_tokens`/`cache_write_tokens`. **Codex and Gemini CLI documents count it twice**: `input_tokens` carries the source's inclusive input count (Codex `input_tokens`, Gemini `input`), and `cache_read_tokens` repeats the cached part. A consumer pricing the classes separately therefore over-charges those documents' cached input. To read a v1.1.0 Codex or Gemini document additively, subtract `cache_read_tokens` from `input_tokens` (saturating at zero). [v1.2.0](/kinds/agent-coding-session/v1.2.0/) specifies the classes as additive, and every producer emits them that way from that version onward. This URI keeps meaning what it always meant; this note documents that meaning.
-
-**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `group_id`, and group-level token accounting is now specified — see [Group accounting](#group-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule.
+**Changed from [v1.1.0](/kinds/agent-coding-session/v1.1.0/):** the token classes are now specified as additive — `input_tokens` excludes cached prompt tokens, so the four classes never overlap and their sum is the whole spend; see [Additive classes](#additive-classes). Counts are non-negative, and `attributed_token_usage` may carry `breakdowns`. v1.2.0 documents are structurally valid v1.1.0 documents; the new version exists so consumers can price the classes separately without double-counting cached input, which Codex and Gemini documents under v1.1.0 did.
 
 ## The turn payload
 
@@ -62,7 +60,7 @@ How `token_usage` on steps relates to the source's accounting units:
 2. Within a run of consecutive steps sharing a `group_id` (document order), the run's **last step carries the group's total `token_usage`, verbatim from the source**. In this version, the run's other steps carry none.
 3. A step without a `group_id` is its own group and carries its own `token_usage` (when the source records one).
 
-Consequence: **summing `token_usage` over a v1.1.0 path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-run rule, so it is normative prose, enforced by producer test suites.)
+Consequence: **summing `token_usage` over a path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-run rule, so it is normative prose, enforced by producer test suites and checked by `path p validate`.)
 
 `token_usage` has **one meaning everywhere it appears: the total for a group**. A step without a `group_id` is a one-step group, so its `token_usage` is that group's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `group_id` on the same payload tells you which group it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source format offers both a group total and a finer breakdown (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the total; the breakdown is subordinate detail and does not ride `token_usage`.
 
@@ -96,17 +94,123 @@ Each element is an object:
 
 ### `token_usage`
 
-| Field                | Type            | Notes                                             |
-| -------------------- | --------------- | ------------------------------------------------- |
-| `input_tokens`       | integer \| null | always present                                    |
-| `output_tokens`      | integer \| null | always present                                    |
-| `cache_read_tokens`  | integer         | only when the source records it                   |
-| `cache_write_tokens` | integer         | only when the source records it                   |
-| `breakdowns`         | object          | only when the source itemizes a class (see below) |
+| Field                | Type            | Counts                                                       | Presence                              |
+| -------------------- | --------------- | ------------------------------------------------------------ | ------------------------------------- |
+| `input_tokens`       | integer \| null | prompt tokens neither read from nor written to a cache       | always present                        |
+| `output_tokens`      | integer \| null | generated tokens, reasoning included                         | always present                        |
+| `cache_read_tokens`  | integer         | prompt tokens read from a cache                              | only when the source records it       |
+| `cache_write_tokens` | integer         | prompt tokens written to a cache                             | only when the source records it       |
+| `breakdowns`         | object          | how a class above divides; never a further count (see below) | only when the source itemizes a class |
 
-Values follow the [group accounting](#group-accounting) rule above.
+Every count is a non-negative integer. `null` means the source did not report that class, not zero. Values follow the [group accounting](#group-accounting) rule above.
 
-`breakdowns` is an **optional, informational** decomposition of a top-level class into named sub-classes. It is keyed by the class being broken down (e.g. `"output"`); each value is a map of sub-class → tokens (e.g. `{ "output": { "reasoning": 450 } }`). Breakdowns are **never summed into any total** — the parent class already counts these tokens; a breakdown only says _how_ that class divides. Invariant: **`Σ(inner) ≤` the parent class's value**. The field is omitted entirely when empty. The same shape and rule apply on `attributed_token_usage`. Among current producers, Gemini, OpenCode, and Codex record `output → { reasoning }` (their reasoning/thoughts tokens are part of `output_tokens`); Claude records none (its JSONL `usage` does not itemize thinking tokens).
+### Additive classes
+
+The four counts are **disjoint**: each token the model processed is counted in exactly one of them. In particular, **`input_tokens` excludes cached prompt tokens**: those are in `cache_read_tokens` or `cache_write_tokens` and nowhere else. So:
+
+- the prompt is `input_tokens + cache_read_tokens + cache_write_tokens`;
+- the whole spend is that plus `output_tokens`;
+- a consumer prices each class at its own rate and adds the results, with no overlap to subtract.
+
+This is Anthropic's usage convention. Some sources use OpenAI's instead, where the input count includes the cached part; producers convert at derivation:
+
+| Source      | Wire fields                                                                                                                   | Additive `input_tokens`                                         | `cache_read_tokens`       | `cache_write_tokens`          |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------- | ----------------------------- |
+| Claude Code | `input_tokens` (excludes cache), `cache_read_input_tokens`, `cache_creation_input_tokens`                                     | `input_tokens`                                                  | `cache_read_input_tokens` | `cache_creation_input_tokens` |
+| Codex       | `input_tokens` (includes cache reads, and from Codex 0.145.0 cache writes), `cached_input_tokens`, `cache_write_input_tokens` | `input_tokens − cached_input_tokens − cache_write_input_tokens` | `cached_input_tokens`     | `cache_write_input_tokens`    |
+| Gemini CLI  | `input` (includes cache), `cached`                                                                                            | `input − cached`                                                | `cached`                  | —                             |
+| opencode    | `input`, `cache.read`, `cache.write`                                                                                          | `input` (from opencode 1.0.62; see below)                       | `cache.read`              | `cache.write`                 |
+| Copilot CLI | `tokenDetails.{input,cache_read,cache_write}` (session totals on `session.shutdown`)                                          | `input`                                                         | `cache_read`              | `cache_write`                 |
+
+The source's semantics can change between its versions, and the conversion follows the version that wrote the session. Before opencode 1.0.62, `input` includes cache reads for non-Anthropic models, so the additive value is `input − cache.read`. Before opencode 1.3.16, OpenAI-family models' `output` already includes `reasoning`, so `reasoning` is not added to it again. A projector writing back to a source with inclusive input adds the cached counts back in, so a session round-trips to its original numbers.
+
+#### Examples
+
+A Claude Code message that read most of its prompt from cache and wrote some of it back. The prompt was `6 + 18183 + 8404 = 26593` tokens:
+
+```json
+{
+  "input_tokens": 6,
+  "output_tokens": 218,
+  "cache_read_tokens": 18183,
+  "cache_write_tokens": 8404
+}
+```
+
+A Gemini CLI message whose wire tokens were `{ "input": 9133, "output": 59, "cached": 7498, "thoughts": 10 }`. Gemini's `input` includes `cached`, so `input_tokens` is `9133 − 7498`; Gemini's `output` excludes `thoughts`, so `output_tokens` is `59 + 10`, and the breakdown says how much of it was reasoning:
+
+```json
+{
+  "input_tokens": 1635,
+  "output_tokens": 69,
+  "cache_read_tokens": 7498,
+  "breakdowns": { "output": { "reasoning": 10 } }
+}
+```
+
+A Codex round's total on its last step, with one of its steps' `attributed_token_usage` beside it (the shares over the round's steps sum to the total):
+
+```json
+{
+  "group_id": "019e03b2-11b2-71c2-a3c4-011af11cc435",
+  "token_usage": {
+    "input_tokens": 13852,
+    "output_tokens": 2365,
+    "cache_read_tokens": 149632,
+    "breakdowns": { "output": { "reasoning": 1325 } }
+  },
+  "attributed_token_usage": {
+    "input_tokens": 3830,
+    "output_tokens": 13,
+    "cache_read_tokens": 9600
+  }
+}
+```
+
+### `breakdowns`
+
+`breakdowns` is an **optional, informational** decomposition of a top-level class into named sub-classes. It is keyed by the class being broken down, and each value is a map of sub-class → tokens. Breakdowns are **never summed into any total**: the parent class already counts these tokens, and a breakdown only says _how_ that class divides. The field is omitted entirely when empty. The same shape and rule apply on `attributed_token_usage`.
+
+| Key           | Parent class         |
+| ------------- | -------------------- |
+| `input`       | `input_tokens`       |
+| `output`      | `output_tokens`      |
+| `cache_read`  | `cache_read_tokens`  |
+| `cache_write` | `cache_write_tokens` |
+
+Invariant: **`Σ(inner) ≤` the parent class's value**. The sub-classes need not cover the whole class; the rest is simply not itemized. `path p validate` checks the bound.
+
+Valid — reasoning is part of the output:
+
+```json
+{
+  "input_tokens": 1635,
+  "output_tokens": 69,
+  "breakdowns": { "output": { "reasoning": 10 } }
+}
+```
+
+Valid — a class divided into several sub-classes, together within the parent (`450 + 50 ≤ 500`):
+
+```json
+{
+  "input_tokens": 1200,
+  "output_tokens": 500,
+  "breakdowns": { "output": { "reasoning": 450, "text": 50 } }
+}
+```
+
+Invalid — the breakdown exceeds its parent (`450 > 400`). A producer that holds reasoning outside the output count must fold it into `output_tokens` first:
+
+```json
+{
+  "input_tokens": 1200,
+  "output_tokens": 400,
+  "breakdowns": { "output": { "reasoning": 450 } }
+}
+```
+
+Among current producers, Gemini, OpenCode, and Codex record `output → { reasoning }` (their reasoning/thoughts tokens are part of `output_tokens`); Claude Code's JSONL reports `output_tokens_details.thinking_tokens`, a subset of output that a producer may record as `output → { reasoning }`; the current Claude producer does not record it yet.
 
 ### `environment`
 
@@ -146,14 +250,14 @@ Entries that aren't turns (attachments, preamble lines, snapshots, hook results)
 
 ## Path metadata
 
-| Field                | Meaning                                                                                    |
-| -------------------- | ------------------------------------------------------------------------------------------ |
-| `meta.kind`          | this URI                                                                                   |
-| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, `cursor`, or `pi` |
-| `meta.title`         | session title                                                                              |
-| `meta.actors`        | the actor definitions the steps reference                                                  |
-| `meta.files_changed` | file paths touched across the session                                                      |
-| `meta.vcs_remote`    | repository URL, when known                                                                 |
-| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session           |
+| Field                | Meaning                                                                                               |
+| -------------------- | ----------------------------------------------------------------------------------------------------- |
+| `meta.kind`          | this URI                                                                                              |
+| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `copilot`, `opencode`, `cursor`, or `pi` |
+| `meta.title`         | session title                                                                                         |
+| `meta.actors`        | the actor definitions the steps reference                                                             |
+| `meta.files_changed` | file paths touched across the session                                                                 |
+| `meta.vcs_remote`    | repository URL, when known                                                                            |
+| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session                      |
 
 `files_changed`, `vcs_remote`, and `producer` sit directly under `meta` (they ride `PathMeta`'s flattened `extra`), not under a nested `meta.extra`.

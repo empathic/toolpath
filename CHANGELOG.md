@@ -2,12 +2,43 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## toolpath-claude 0.13.5, toolpath-codex 0.6.2, toolpath-copilot 0.1.1, toolpath-gemini 0.6.2, toolpath-pi 0.6.2 — unreleased
+## Kind agent-coding-session v1.2.0: additive token classes — unreleased
 
-- **`toolpath-claude`** (0.13.5): `meta.producer.name` is `claude-code` on
+- **Kind `agent-coding-session` v1.2.0**: the four token classes are
+  additive. `input_tokens` excludes cached prompt tokens, so
+  `input_tokens + cache_read_tokens + cache_write_tokens` is the prompt
+  and a consumer can price each class at its own rate without
+  double-counting. Counts are non-negative, and `attributed_token_usage`
+  may carry `breakdowns`. The spec page gains worked examples, including
+  valid and invalid `breakdowns`. The v1.1.0 page gains an erratum: its
+  Codex and Gemini documents count cached input in `input_tokens` as well
+  as in `cache_read_tokens`; subtract the latter to read them additively.
+- **`toolpath`** (0.8.0): `PATH_KIND_AGENT_CODING_SESSION` now points at
+  v1.2.0; `PATH_KIND_AGENT_CODING_SESSION_V1_1_0` names the v1.1.0 URI.
+- **`path-cli`** (0.30.0): `path p validate` bundles the v1.2.0 schema
+  and checks the accounting rules JSON Schema cannot express on
+  agent-coding-session v1.1.0 and later: within a run of consecutive
+  steps sharing a `group_id`, only the last carries `token_usage`; a
+  breakdown's sub-classes sum to no more than their parent class. The
+  cross-harness matrix runs those checks on every fixture and cell, and
+  compares each fixture's derived prompt total with the one its wire
+  format reports (Claude, Codex, Gemini, Copilot, opencode).
+
+Crates bumped (every crate that depends on `toolpath`, since the emitted
+kind URI changes; a provider crate must not emit v1.2.0 with
+non-additive classes): `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
+`toolpath-git` 0.7.0, `toolpath-github` 0.7.0, `toolpath-claude` 0.14.0,
+`toolpath-gemini` 0.7.0, `toolpath-codex` 0.7.0, `toolpath-copilot`
+0.2.0, `toolpath-opencode` 0.6.0, `toolpath-cursor` 0.3.0,
+`toolpath-dot` 0.6.0, `toolpath-md` 0.8.0, `toolpath-pi` 0.7.0,
+`path-cli` 0.30.0, `toolpath-cli` 0.30.0. `pathbase-client` is
+unaffected. The provider fixes below ship in these versions.
+
+
+- **`toolpath-claude`** (0.14.0): `meta.producer.name` is `claude-code` on
   every derived path; a session with no recorded CLI version used to
   get no producer at all.
-- **`toolpath-codex`** (0.6.2): `meta.producer.name` is the harness id
+- **`toolpath-codex`** (0.7.0): `meta.producer.name` is the harness id
   `codex` (was Codex's `originator`, e.g. `codex-tui`), so consumers
   keying on the harness see every Codex session. `producer.version`
   stays `cli_version`; the originator moves to
@@ -17,16 +48,16 @@ All notable changes to the Toolpath workspace are documented here.
   `cached_input_tokens` (Codex's wire `input_tokens` includes it, so
   cached input was counted twice by consumers summing the classes);
   `CodexProjector` folds the cached count back into the wire value.
-- **`toolpath-copilot`** (0.1.1): `meta.producer.name` is `copilot`
+- **`toolpath-copilot`** (0.2.0): `meta.producer.name` is `copilot`
   (was `copilot-cli`), matching `meta.source`. The projector writes
   Copilot's own `producer: "copilot-agent"` on `session.start` instead
   of copying the view's producer name.
-- **`toolpath-gemini`** (0.6.2): token classes are now additive:
+- **`toolpath-gemini`** (0.7.0): token classes are now additive:
   `input_tokens` excludes `cached` (Gemini's wire `input`, its
   `promptTokenCount`, includes the cached prompt tokens, so cached input
   was counted twice by consumers summing the classes);
   `GeminiProjector` folds the cached count back into the wire `input`.
-- **`toolpath-pi`** (0.6.2): derived paths carry
+- **`toolpath-pi`** (0.7.0): derived paths carry
   `meta.producer.name = "pi"` (previously no producer).
 
 ## path-cli 0.29.0 — 2026-09-29
