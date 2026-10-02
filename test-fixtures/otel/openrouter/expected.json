@@ -1,0 +1,170 @@
+{
+  "generated_by": "sanitized M0 capture",
+  "sessions": {
+    "claude-code": {
+      "session_id": "177b923f-8cf6-42fc-9f30-9a7b86236265",
+      "generations": 5,
+      "generation_ids": [
+        "gen-1790605442-FDh36zGvkqZaDM6tk5Rd",
+        "gen-1790605448-3Nszmw6UXHVuZUAxw19B",
+        "gen-1790605451-p1GYevJqYQ0gNf6d9ywe",
+        "gen-1790605453-8WgGGPQjk6bBfshcQOU1",
+        "gen-1790605479-45KN4xD5eteKojszrHhX"
+      ],
+      "consecutive_extensions": 4,
+      "tool_call_ids": [
+        "toolu_bdrk_012ruqQFviGtwFzzYTxLJrcg",
+        "toolu_bdrk_01FaCGaFbEgZF1okWoetqbp6",
+        "toolu_bdrk_01LvKrjwGsieqaKxMDHw42j8",
+        "toolu_bdrk_01RJ5YAprPSPoVfqQVNnddT2"
+      ],
+      "total_cost_usd": 0.09746385,
+      "models": [
+        "anthropic/claude-haiku-4.5"
+      ],
+      "cwd": "/work/project",
+      "harness": "claude-code",
+      "history_rewritten_tool_calls": [
+        "toolu_bdrk_012ruqQFviGtwFzzYTxLJrcg",
+        "toolu_bdrk_01LvKrjwGsieqaKxMDHw42j8",
+        "toolu_bdrk_01RJ5YAprPSPoVfqQVNnddT2"
+      ],
+      "harness_import": {
+        "source": "path p import claude (path 0.21.0) on the same session's local transcript",
+        "steps": 44,
+        "change_counts": {
+          "human:conversation.append": 1,
+          "agent:conversation.append": 10,
+          "agent:file.write": 2,
+          "tool:conversation.event": 33
+        },
+        "tool_call_ids": [
+          "toolu_bdrk_012ruqQFviGtwFzzYTxLJrcg",
+          "toolu_bdrk_01FaCGaFbEgZF1okWoetqbp6",
+          "toolu_bdrk_01LvKrjwGsieqaKxMDHw42j8",
+          "toolu_bdrk_01RJ5YAprPSPoVfqQVNnddT2"
+        ],
+        "tool_call_ids_match_trace": true
+      }
+    },
+    "codex": {
+      "session_id": "01a0e870-1365-7a93-b8a1-14726a5a70da",
+      "generations": 6,
+      "generation_ids": [
+        "gen-1790606055-lQEtY5tcJIA3qEdgtaaa",
+        "gen-1790606059-t5wtYWOLe4iC5c17HLyQ",
+        "gen-1790606063-LgDu4PBhc0TCYdZpL73e",
+        "gen-1790606069-INCUlVNj6arfXa72lUbO",
+        "gen-1790606073-GeYNgn87vrb7FfSIeqxb",
+        "gen-1790606076-h44xsdT3F3vAUuZg72Kl"
+      ],
+      "consecutive_extensions": 5,
+      "tool_call_ids": [
+        "call_ZsKc3vj8CPWrnUFiUzDf64xs",
+        "call_dQC58CSAWsGvlgySgicxJFD3",
+        "call_0EuuQLzGaPjSttc4FNljuOjb",
+        "call_82sqdNTmyZp3izzxeT1B5mFL",
+        "call_uyuxoGYlV6WCi0Wj6M0vdF14",
+        "call_monnH2GshKBMa02Mkx53nxS4"
+      ],
+      "total_cost_usd": 0.01639058,
+      "models": [
+        "openai/gpt-5.1-codex-mini"
+      ],
+      "cwd": "/work/project",
+      "harness": "codex"
+    },
+    "opencode": {
+      "session_id": "ses_f17985511ffeWT5KK0SC5G16lu",
+      "generations": 9,
+      "generation_ids": [
+        "gen-1790605504-cpHCKdt8gpR7ocyZa2Hv",
+        "gen-1790605506-RxO6MjGU4V9H3qWn5g5R",
+        "gen-1790605510-GjyIVlASCAZ714H0E2aQ",
+        "gen-1790605512-sWrGEtTiWVyJ3fbXKMwK",
+        "gen-1790605515-GwQH8W93CxhBlFvep5zQ",
+        "gen-1790605517-TOA9ujB5ORXfSfYOfHz2",
+        "gen-1790605519-X3322MEXtg0XHJoZYN8A",
+        "gen-1790605521-Mm40rTRjmc6ld5KwJAc3",
+        "gen-1790605523-OKZnQJJ77TqKU8cVDeri"
+      ],
+      "consecutive_extensions": 8,
+      "tool_call_ids": [
+        "toolu_bdrk_01RKGpvpF5oBzRaFyf7AUMJf",
+        "toolu_bdrk_01ECRuRap6yyAZNoCkeAHgPa",
+        "toolu_bdrk_019apiRDXTxk2FYYkcgDbt6T",
+        "toolu_bdrk_01MNrDt63SEmVj5bTBpMDVcU",
+        "toolu_bdrk_01GpGJ9oFzjsTDvizLxUCWT9",
+        "toolu_bdrk_01RqocE4WkP5KAznK63PGaHV",
+        "toolu_bdrk_01RjYBigGJVNqV6dM8jCgtt6",
+        "toolu_bdrk_01TXxMvU9T5Nc9UqtV5ann4g"
+      ],
+      "total_cost_usd": 0.0380593,
+      "models": [
+        "anthropic/claude-haiku-4.5"
+      ],
+      "cwd": "/work/project",
+      "harness": "opencode"
+    },
+    "pi": {
+      "session_id": null,
+      "generations": 8,
+      "generation_ids": [
+        "gen-1790606294-sdYHTGXUVyDKWCLqX5Op",
+        "gen-1790606298-6JSFeW7zs6W0v5Pu8ZJE",
+        "gen-1790606300-xKiGCNYailpw6MBqpz9B",
+        "gen-1790606302-hCECudk8EJm5JynrZ30E",
+        "gen-1790606304-1SPSO7iqLS7KUrDmTKCm",
+        "gen-1790606306-ezgyzfrwf8AlRbQzSiGe",
+        "gen-1790606311-fyvbCM5LoYAKzflKyBPD",
+        "gen-1790606313-rdcZp2doR4ejZUumM9Yz"
+      ],
+      "consecutive_extensions": 7,
+      "tool_call_ids": [
+        "toolu_bdrk_018qZrwLA5nqTCAkkGb4Y7yF",
+        "toolu_bdrk_014jysoADmrgGHRWi1K9UQ3e",
+        "toolu_bdrk_014NzLf2sVVhEC4ChYh8Zn7G",
+        "toolu_bdrk_013D8erniTFdKPrkzadp8n5q",
+        "toolu_bdrk_014vHDTpkqE1MeK578bxGBxW",
+        "toolu_bdrk_01C2xWFeCxYSeEZY5qDStt5n",
+        "toolu_bdrk_01SeVhEkerUWf3DTffNsmxht"
+      ],
+      "total_cost_usd": 0.0330387,
+      "models": [
+        "anthropic/claude-haiku-4.5"
+      ],
+      "cwd": "/work/project",
+      "harness": "pi"
+    }
+  },
+  "error_span": {
+    "file": "codex-error-span.json",
+    "status_code": 2,
+    "must_be_dropped": true
+  },
+  "connection_test": {
+    "file": "connection-test.json",
+    "must_be_ignored": true
+  },
+  "synthetic_fork": {
+    "file": "synthetic-fork.ndjson",
+    "session_id": "fixture-synthetic-fork",
+    "generations": 4,
+    "forks": [
+      {
+        "at": "assistant turn answering generation 2's prompt",
+        "branches": [
+          "gen-fixture-fork-2",
+          "gen-fixture-fork-2-retry"
+        ]
+      },
+      {
+        "at": "after the leading system message",
+        "branches": [
+          "gen-fixture-fork-1 lineage",
+          "gen-fixture-fork-compacted"
+        ]
+      }
+    ]
+  }
+}

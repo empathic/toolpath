@@ -1,0 +1,1440 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "otel-fixture"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "opentelemetry.instrumentation.google_genai",
+            "version": "1.2b0"
+          },
+          "logRecords": [
+            {
+              "body": {},
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "generate_content"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "gemini"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "gemini-fixture-1"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "30"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "16"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.reasoning.output_tokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "What do src/a.rs and src/b.rs export?"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "path",
+                                                      "value": {
+                                                        "stringValue": "src/a.rs"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "read_file"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_0"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "path",
+                                                      "value": {
+                                                        "stringValue": "src/b.rs"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "read_file"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_1"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "finish_reason",
+                                "value": {
+                                  "stringValue": "stop"
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "content",
+                                "value": {
+                                  "stringValue": "You are a coding assistant."
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "text"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "name",
+                                "value": {
+                                  "stringValue": "read_file"
+                                }
+                              },
+                              {
+                                "key": "description",
+                                "value": {
+                                  "stringValue": "Read a file"
+                                }
+                              },
+                              {
+                                "key": "parameters",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "properties",
+                                        "value": {
+                                          "kvlistValue": {
+                                            "values": [
+                                              {
+                                                "key": "path",
+                                                "value": {
+                                                  "kvlistValue": {
+                                                    "values": [
+                                                      {
+                                                        "key": "type",
+                                                        "value": {
+                                                          "stringValue": "STRING"
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "required",
+                                        "value": {
+                                          "arrayValue": {
+                                            "values": [
+                                              {
+                                                "stringValue": "path"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "type",
+                                        "value": {
+                                          "stringValue": "OBJECT"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "function"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "a43c95de79a04077497fa5c35d67d957",
+              "spanId": "c3e1b850d1f6bcd1",
+              "observedTimeUnixNano": "1800000000001000000",
+              "eventName": "gen_ai.client.inference.operation.details"
+            },
+            {
+              "body": {},
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "generate_content"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "gemini"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "gemini-fixture-2"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "55"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "9"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "What do src/a.rs and src/b.rs export?"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "path",
+                                                      "value": {
+                                                        "stringValue": "src/a.rs"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "read_file"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_0"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "path",
+                                                      "value": {
+                                                        "stringValue": "src/b.rs"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "read_file"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_1"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "response",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "output",
+                                                      "value": {
+                                                        "stringValue": "pub fn a() {}"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_0"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call_response"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "response",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "output",
+                                                      "value": {
+                                                        "stringValue": "pub fn b() {}"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_1"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call_response"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "They export a and b."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "finish_reason",
+                                "value": {
+                                  "stringValue": "stop"
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "content",
+                                "value": {
+                                  "stringValue": "You are a coding assistant."
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "text"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "name",
+                                "value": {
+                                  "stringValue": "read_file"
+                                }
+                              },
+                              {
+                                "key": "description",
+                                "value": {
+                                  "stringValue": "Read a file"
+                                }
+                              },
+                              {
+                                "key": "parameters",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "properties",
+                                        "value": {
+                                          "kvlistValue": {
+                                            "values": [
+                                              {
+                                                "key": "path",
+                                                "value": {
+                                                  "kvlistValue": {
+                                                    "values": [
+                                                      {
+                                                        "key": "type",
+                                                        "value": {
+                                                          "stringValue": "STRING"
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "required",
+                                        "value": {
+                                          "arrayValue": {
+                                            "values": [
+                                              {
+                                                "stringValue": "path"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "type",
+                                        "value": {
+                                          "stringValue": "OBJECT"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "function"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "68e7bd673b9e1850e6b7eced680c2f4d",
+              "spanId": "ecaa54b5e6d4eb7e",
+              "observedTimeUnixNano": "1800000000004000000",
+              "eventName": "gen_ai.client.inference.operation.details"
+            },
+            {
+              "body": {},
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "generate_content"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "gemini"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gemini-2.5-flash"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "gemini-fixture-3"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "70"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "6"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "What do src/a.rs and src/b.rs export?"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "path",
+                                                      "value": {
+                                                        "stringValue": "src/a.rs"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "read_file"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_0"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "path",
+                                                      "value": {
+                                                        "stringValue": "src/b.rs"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "read_file"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_1"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "response",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "output",
+                                                      "value": {
+                                                        "stringValue": "pub fn a() {}"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_0"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call_response"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "response",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "output",
+                                                      "value": {
+                                                        "stringValue": "pub fn b() {}"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "read_file_1"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call_response"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "They export a and b."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "Summarize that in four words."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "One public add function."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "finish_reason",
+                                "value": {
+                                  "stringValue": "stop"
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "content",
+                                "value": {
+                                  "stringValue": "You are a coding assistant."
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "text"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "name",
+                                "value": {
+                                  "stringValue": "read_file"
+                                }
+                              },
+                              {
+                                "key": "description",
+                                "value": {
+                                  "stringValue": "Read a file"
+                                }
+                              },
+                              {
+                                "key": "parameters",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "properties",
+                                        "value": {
+                                          "kvlistValue": {
+                                            "values": [
+                                              {
+                                                "key": "path",
+                                                "value": {
+                                                  "kvlistValue": {
+                                                    "values": [
+                                                      {
+                                                        "key": "type",
+                                                        "value": {
+                                                          "stringValue": "STRING"
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "required",
+                                        "value": {
+                                          "arrayValue": {
+                                            "values": [
+                                              {
+                                                "stringValue": "path"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "type",
+                                        "value": {
+                                          "stringValue": "OBJECT"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "function"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "84b0822219fa5f6e48cb584482e89d66",
+              "spanId": "56452601f5bfbb2e",
+              "observedTimeUnixNano": "1800000000007000000",
+              "eventName": "gen_ai.client.inference.operation.details"
+            }
+          ],
+          "schemaUrl": "https://opentelemetry.io/schemas/1.37.0"
+        }
+      ]
+    }
+  ]
+}

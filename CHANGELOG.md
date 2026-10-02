@@ -2,6 +2,55 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-otel 0.1.0 — 2026-10-01
+
+- **`toolpath-otel`** (0.1.0, new): derive `agent-coding-session` paths
+  from OpenTelemetry LLM telemetry. `derive_path(requests, config)` takes
+  the parsed OTLP/HTTP JSON request bodies (`resourceSpans` and/or
+  `resourceLogs`) of one session; `derive_graph` and `derive` take several
+  sessions, as `toolpath-git`'s do. The caller groups requests into
+  sessions. A walker resolves every span and its correlated log records
+  against profiles chosen by `DeriveConfig::profile`: `openrouter`
+  (OpenRouter Broadcast, connection tests skipped), `semconv` (the
+  OpenTelemetry GenAI semantic conventions, span or log-record content)
+  and an explicit-only `openinference`. Requests are stitched into a turn
+  DAG with chained content ids that stay stable as a session grows;
+  continuations (`previous_response_id`) and skeletons (content not
+  captured) chain onto earlier turns. Steps keep per-request usage, cost,
+  routing and what is needed to rebuild each request under `extra.otel`;
+  write, edit and `apply_patch` tool calls become file changes. Each
+  entry point returns `Derived { output, skipped }`, where `SkipCounts`
+  counts what was read but not derived by reason (error status,
+  connection test, duplicate, truncated, missing payload, unclaimed).
+  Errors: `OtelError::NotOtlp`, `OtelError::NoGenerations` (with the
+  skip counts) and `OtelError::MixedSessions` (generations carrying more
+  than one client session id).
+  - `meta.producer.name` is the inferred harness (`claude-code`, `codex`,
+    `opencode`, `pi`), else `otel`; `meta.source` is `otel`.
+  - Tool categories follow the inferred harness's own provider-crate
+    table; an `unknown` harness gets a category only where every harness
+    table listing the name agrees.
+  - Token classes are additive: `input_tokens` excludes cache reads and
+    writes for every profile; `extra.otel.usage.cache_basis` records
+    whether the source's count was `inclusive` or `exclusive`.
+  - Turn ids, content hashes and digests are defined on RFC 8785 (JCS),
+    through one canonicalizer (`serde_json_canonicalizer`, as `path-cli`
+    uses), from 0.1.0. Derived session ids hash the session key and do
+    not depend on it.
+  - Every `Task`/`Agent` call with a prompt is listed in its turn's
+    `delegations`, from the call and its result alone; a sub-agent thread
+    that matches a call is marked `extra.otel.branch = "subagent"` and
+    joined back by an extra parent where its answer is first received, so
+    it is not a dead end. Threads take calls first come, first served, so
+    duplicate prompts match the first thread to the first call, and a
+    sub-agent that answers twice keeps the merge of its first answer. Side requests and skeleton turns are marked
+    `extra.otel.branch` too. The main line is the first leading system
+    message to produce two turns, and `path.head` is its last turn. Marks
+    depend only on earlier turns or the turn's own data, so a growing
+    session never changes a mark it already gave.
+  - `meta.otel.cost_usd` carries `priced_generations` and `generations`;
+    a total is `null` when any generation it covers is unpriced.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

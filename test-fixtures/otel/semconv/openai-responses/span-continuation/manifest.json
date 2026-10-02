@@ -1,0 +1,55 @@
+{
+  "scenario": "openai-responses",
+  "description": "OpenAI Responses with server-side state (previous_response_id) via\nopentelemetry-instrumentation-genai-openai (openai-v2 2.4b0 does not wrap\nresponses.create). Each request after the first carries only the new input.",
+  "python": "3.12",
+  "packages": {
+    "opentelemetry-api": "1.45.0",
+    "opentelemetry-sdk": "1.45.0",
+    "opentelemetry-proto": "1.45.0",
+    "opentelemetry-exporter-otlp-proto-common": "1.45.0",
+    "opentelemetry-exporter-otlp-proto-http": "1.45.0",
+    "opentelemetry-instrumentation": "0.66b0",
+    "opentelemetry-semantic-conventions": "0.66b0",
+    "opentelemetry-util-genai": "1.2b0",
+    "opentelemetry-instrumentation-openai-v2": "2.4b0",
+    "opentelemetry-instrumentation-genai-openai": "1.2b0",
+    "opentelemetry-instrumentation-genai-anthropic": "1.2b0",
+    "opentelemetry-instrumentation-google-genai": "1.2b0",
+    "openinference-instrumentation": "0.1.66",
+    "openinference-instrumentation-openai": "0.1.61",
+    "openinference-semantic-conventions": "0.1.39",
+    "openai": "3.20.0",
+    "anthropic": "1.9.0",
+    "google-genai": "2.25.0"
+  },
+  "env": {
+    "OTEL_RESOURCE_ATTRIBUTES": "service.name=otel-fixture",
+    "OTEL_EXPERIMENTAL_RESOURCE_DETECTORS": "",
+    "OTEL_TRACES_EXPORTER": "none",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_LOGS_EXPORTER": "none",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+    "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"
+  },
+  "scopes": [
+    {
+      "name": "opentelemetry.instrumentation.genai.openai",
+      "version": "1.2b0"
+    }
+  ],
+  "mock": {
+    "module": "mock_openai",
+    "requests": 3
+  },
+  "mode": "span",
+  "synthetic": {
+    "label": "SYNTHETIC",
+    "derived_from": "semconv/openai-responses/span/traces.json",
+    "added": [
+      "gen_ai.request.previous_response.id"
+    ],
+    "reason": "opentelemetry-instrumentation-genai-openai 1.2b0 never sets gen_ai.request.previous_response.id. This copy of the real capture sets the spec-defined attribute to the previous_response_id the client really sent (recorded by the mock). Everything else is the real capture, byte for byte.",
+    "open_point": "replace with a real capture once a pinned instrumentation emits the attribute"
+  }
+}

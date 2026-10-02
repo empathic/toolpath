@@ -1,0 +1,47 @@
+{
+  "scenario": "openinference-openai-chat",
+  "description": "OpenAI Chat Completions via openinference-instrumentation-openai (flattened\nllm.* span attributes), inside an OpenInference session.",
+  "python": "3.12",
+  "packages": {
+    "opentelemetry-api": "1.45.0",
+    "opentelemetry-sdk": "1.45.0",
+    "opentelemetry-proto": "1.45.0",
+    "opentelemetry-exporter-otlp-proto-common": "1.45.0",
+    "opentelemetry-exporter-otlp-proto-http": "1.45.0",
+    "opentelemetry-instrumentation": "0.66b0",
+    "opentelemetry-semantic-conventions": "0.66b0",
+    "opentelemetry-util-genai": "1.2b0",
+    "opentelemetry-instrumentation-openai-v2": "2.4b0",
+    "opentelemetry-instrumentation-genai-openai": "1.2b0",
+    "opentelemetry-instrumentation-genai-anthropic": "1.2b0",
+    "opentelemetry-instrumentation-google-genai": "1.2b0",
+    "openinference-instrumentation": "0.1.66",
+    "openinference-instrumentation-openai": "0.1.61",
+    "openinference-semantic-conventions": "0.1.39",
+    "openai": "3.20.0",
+    "anthropic": "1.9.0",
+    "google-genai": "2.25.0"
+  },
+  "env": {
+    "OTEL_RESOURCE_ATTRIBUTES": "service.name=otel-fixture",
+    "OTEL_EXPERIMENTAL_RESOURCE_DETECTORS": "",
+    "OTEL_TRACES_EXPORTER": "none",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_LOGS_EXPORTER": "none",
+    "OPENINFERENCE_HIDE_INPUTS": "false",
+    "OPENINFERENCE_HIDE_OUTPUTS": "false",
+    "OPENINFERENCE_HIDE_INPUT_MESSAGES": "false",
+    "OPENINFERENCE_HIDE_OUTPUT_MESSAGES": "false"
+  },
+  "scopes": [
+    {
+      "name": "openinference.instrumentation.openai",
+      "version": "0.1.61"
+    }
+  ],
+  "mock": {
+    "module": "mock_openai",
+    "requests": 3
+  },
+  "mode": "span"
+}

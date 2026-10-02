@@ -1,0 +1,70 @@
+{
+  "scenario": "anthropic",
+  "requests": 3,
+  "generation_ids": [
+    "msg_fixture_1",
+    "msg_fixture_2",
+    "msg_fixture_3"
+  ],
+  "response_ids": [
+    "msg_fixture_1",
+    "msg_fixture_2",
+    "msg_fixture_3"
+  ],
+  "sessions": 1,
+  "turn_roles": [
+    "system",
+    "user",
+    "assistant",
+    "assistant",
+    "user",
+    "assistant"
+  ],
+  "system_text": "You are a coding assistant.",
+  "tool_calls": [
+    {
+      "id": "toolu_fixture_1",
+      "name": "read_file",
+      "input": {
+        "path": "src/lib.rs"
+      },
+      "result": "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+    }
+  ],
+  "completion_texts": [
+    "",
+    "It exports one function, add.",
+    "One public add function."
+  ],
+  "extra_choices": [
+    [],
+    [],
+    []
+  ],
+  "thinking": [
+    "I should read the file first.",
+    null,
+    null
+  ],
+  "signature_sent_in_history": true,
+  "usage_served": [
+    {
+      "input": 11,
+      "cache_read": 7,
+      "cache_write": 5,
+      "output": 20
+    },
+    {
+      "input": 13,
+      "cache_read": 12,
+      "cache_write": 0,
+      "output": 9
+    },
+    {
+      "input": 9,
+      "cache_read": 25,
+      "cache_write": 0,
+      "output": 6
+    }
+  ]
+}

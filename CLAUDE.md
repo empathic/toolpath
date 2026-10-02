@@ -22,6 +22,7 @@ crates/
   toolpath-opencode/            # derive from opencode SQLite databases
   toolpath-cursor/              # derive from Cursor (IDE) state.vscdb bubble store
   toolpath-pi/                  # derive from Pi (pi.dev) agent session logs
+  toolpath-otel/                # derive from OpenTelemetry LLM traces and logs (OTLP/HTTP JSON bodies of one session; openrouter, semconv, openinference profiles)
   toolpath-dot/                 # Graphviz DOT rendering
   toolpath-md/                  # Markdown rendering for LLM consumption
   path-cli/                     # unified CLI (binary: path)
@@ -56,6 +57,8 @@ path-cli (binary: path)
  ├── toolpath-pi      → toolpath, toolpath-convo
  ├── toolpath-dot     → toolpath
  └── toolpath-md      → toolpath
+
+toolpath-otel        → toolpath, toolpath-convo  (library only; no CLI wiring yet)
 
 pathbase-client      (no toolpath deps; built from crates/pathbase-client/openapi.json)
 
@@ -196,7 +199,7 @@ Build the site after changes: `cd site && pnpm run build` (should produce 12 pag
 
 ## Things to know
 
-Format references for the agent on-disk formats live at `docs/agents/formats/` — Claude Code gets twelve focused docs at `docs/agents/formats/claude-code/`; single-file references cover codex, gemini, opencode, cursor, and copilot-cli. **Keep them in sync with their derive crates.** Details below are limited to what you need before opening those docs or the code.
+Format references for the agent on-disk formats live at `docs/agents/formats/` — Claude Code gets twelve focused docs at `docs/agents/formats/claude-code/`; single-file references cover codex, gemini, opencode, cursor, copilot-cli, and otel. **Keep them in sync with their derive crates.** Details below are limited to what you need before opening those docs or the code.
 
 ### Core types
 

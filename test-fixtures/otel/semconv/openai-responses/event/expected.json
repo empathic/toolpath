@@ -1,0 +1,70 @@
+{
+  "scenario": "openai-responses",
+  "requests": 3,
+  "generation_ids": [
+    "resp_fixture_1",
+    "resp_fixture_2",
+    "resp_fixture_3"
+  ],
+  "response_ids": [
+    "resp_fixture_1",
+    "resp_fixture_2",
+    "resp_fixture_3"
+  ],
+  "previous_response_ids": [
+    null,
+    "resp_fixture_1",
+    "resp_fixture_2"
+  ],
+  "sessions": 1,
+  "sessions_without_continuation": 3,
+  "turn_roles": [
+    "system",
+    "user",
+    "assistant",
+    "assistant",
+    "user",
+    "assistant"
+  ],
+  "system_text": "You are a coding assistant.",
+  "tool_calls": [
+    {
+      "id": "call_fixture_r1",
+      "name": "read_file",
+      "input": {
+        "path": "src/lib.rs"
+      },
+      "result": "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+    }
+  ],
+  "completion_texts": [
+    "",
+    "It exports one function, add.",
+    "One public add function."
+  ],
+  "extra_choices": [
+    [],
+    [],
+    []
+  ],
+  "usage_served": [
+    {
+      "input": 40,
+      "output": 15,
+      "cache_read": 0,
+      "reasoning": 6
+    },
+    {
+      "input": 64,
+      "output": 9,
+      "cache_read": 32,
+      "reasoning": 0
+    },
+    {
+      "input": 80,
+      "output": 7,
+      "cache_read": 48,
+      "reasoning": 0
+    }
+  ]
+}

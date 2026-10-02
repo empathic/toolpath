@@ -1,0 +1,42 @@
+{
+  "generations": [
+    [
+      "gen-fixture-fork-1",
+      "f05f98386167c5df5b6cd1e9347f38b24c01e17457893c393b17db8f2d3ad86f"
+    ],
+    [
+      "gen-fixture-fork-2",
+      "9a6403d401b1c06673e49c925352c79df969eac26a4ff6f2c258c06bf8700152"
+    ],
+    [
+      "gen-fixture-fork-2-retry",
+      "a2e7d5c354498003bf0b091a6a549341cb0530363f5639b1c1d706888b67800f"
+    ],
+    [
+      "gen-fixture-fork-compacted",
+      "0a9038bea1516a025f6f8a2c053fe57a8ebe3f182a89ff4f7f40c9741f7947af"
+    ]
+  ],
+  "sessions": [
+    {
+      "completions": [
+        "5d8913105942999d",
+        "a793f04d5439f1d7",
+        "9208a028315fd3ce",
+        "6a7b836ff61f8477"
+      ],
+      "key": "fixture-synthetic-fork",
+      "turn_ids": [
+        "8ec3f0a391372003",
+        "867613746531cba0",
+        "5d8913105942999d",
+        "a793f04d5439f1d7",
+        "9208a028315fd3ce",
+        "46f92460a1a68805",
+        "6a7b836ff61f8477"
+      ]
+    }
+  ],
+  "skipped": [],
+  "unclaimed": 0
+}

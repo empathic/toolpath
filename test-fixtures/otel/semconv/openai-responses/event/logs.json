@@ -1,0 +1,975 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "otel-fixture"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "opentelemetry.instrumentation.genai.openai",
+            "version": "1.2b0"
+          },
+          "logRecords": [
+            {
+              "body": {},
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4.1-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "18431"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool_calls"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4.1-mini-2025-04-14"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_fixture_1"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "40"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "15"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "What does src/lib.rs export?"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "path",
+                                                      "value": {
+                                                        "stringValue": "src/lib.rs"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "read_file"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "call_fixture_r1"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "finish_reason",
+                                "value": {
+                                  "stringValue": "tool_call"
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "content",
+                                "value": {
+                                  "stringValue": "You are a coding assistant."
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "text"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "name",
+                                "value": {
+                                  "stringValue": "read_file"
+                                }
+                              },
+                              {
+                                "key": "description",
+                                "value": {
+                                  "stringValue": "Read a file"
+                                }
+                              },
+                              {
+                                "key": "parameters",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "type",
+                                        "value": {
+                                          "stringValue": "object"
+                                        }
+                                      },
+                                      {
+                                        "key": "properties",
+                                        "value": {
+                                          "kvlistValue": {
+                                            "values": [
+                                              {
+                                                "key": "path",
+                                                "value": {
+                                                  "kvlistValue": {
+                                                    "values": [
+                                                      {
+                                                        "key": "type",
+                                                        "value": {
+                                                          "stringValue": "string"
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "required",
+                                        "value": {
+                                          "arrayValue": {
+                                            "values": [
+                                              {
+                                                "stringValue": "path"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "function"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "openai.api.type",
+                  "value": {
+                    "stringValue": "responses"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "9b210704580682e41c1af9b9db56c3ec",
+              "spanId": "901233563752192c",
+              "observedTimeUnixNano": "1800000000001000000",
+              "eventName": "gen_ai.client.inference.operation.details"
+            },
+            {
+              "body": {},
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4.1-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "18431"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4.1-mini-2025-04-14"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_fixture_2"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "64"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "9"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "32"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "tool"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "response",
+                                              "value": {
+                                                "stringValue": "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "call_fixture_r1"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call_response"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "It exports one function, add."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "finish_reason",
+                                "value": {
+                                  "stringValue": "stop"
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "content",
+                                "value": {
+                                  "stringValue": "You are a coding assistant."
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "text"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "name",
+                                "value": {
+                                  "stringValue": "read_file"
+                                }
+                              },
+                              {
+                                "key": "description",
+                                "value": {
+                                  "stringValue": "Read a file"
+                                }
+                              },
+                              {
+                                "key": "parameters",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "type",
+                                        "value": {
+                                          "stringValue": "object"
+                                        }
+                                      },
+                                      {
+                                        "key": "properties",
+                                        "value": {
+                                          "kvlistValue": {
+                                            "values": [
+                                              {
+                                                "key": "path",
+                                                "value": {
+                                                  "kvlistValue": {
+                                                    "values": [
+                                                      {
+                                                        "key": "type",
+                                                        "value": {
+                                                          "stringValue": "string"
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "required",
+                                        "value": {
+                                          "arrayValue": {
+                                            "values": [
+                                              {
+                                                "stringValue": "path"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "function"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "openai.api.type",
+                  "value": {
+                    "stringValue": "responses"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "14953872b3ca4626a85569f60f7579c6",
+              "spanId": "b900bfc48f101aa6",
+              "observedTimeUnixNano": "1800000000004000000",
+              "eventName": "gen_ai.client.inference.operation.details"
+            },
+            {
+              "body": {},
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4.1-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "127.0.0.1"
+                  }
+                },
+                {
+                  "key": "server.port",
+                  "value": {
+                    "intValue": "18431"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4.1-mini-2025-04-14"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "resp_fixture_3"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "80"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "7"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "48"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "Summarize that in four words."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "One public add function."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "finish_reason",
+                                "value": {
+                                  "stringValue": "stop"
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {}
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "content",
+                                "value": {
+                                  "stringValue": "You are a coding assistant."
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "text"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "name",
+                                "value": {
+                                  "stringValue": "read_file"
+                                }
+                              },
+                              {
+                                "key": "description",
+                                "value": {
+                                  "stringValue": "Read a file"
+                                }
+                              },
+                              {
+                                "key": "parameters",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "type",
+                                        "value": {
+                                          "stringValue": "object"
+                                        }
+                                      },
+                                      {
+                                        "key": "properties",
+                                        "value": {
+                                          "kvlistValue": {
+                                            "values": [
+                                              {
+                                                "key": "path",
+                                                "value": {
+                                                  "kvlistValue": {
+                                                    "values": [
+                                                      {
+                                                        "key": "type",
+                                                        "value": {
+                                                          "stringValue": "string"
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "required",
+                                        "value": {
+                                          "arrayValue": {
+                                            "values": [
+                                              {
+                                                "stringValue": "path"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "function"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "openai.api.type",
+                  "value": {
+                    "stringValue": "responses"
+                  }
+                }
+              ],
+              "flags": 1,
+              "traceId": "31a97b07d933b7bb001a6938409f196e",
+              "spanId": "78e1c3362b9099b1",
+              "observedTimeUnixNano": "1800000000007000000",
+              "eventName": "gen_ai.client.inference.operation.details"
+            }
+          ],
+          "schemaUrl": "https://opentelemetry.io/schemas/1.37.0"
+        }
+      ]
+    }
+  ]
+}

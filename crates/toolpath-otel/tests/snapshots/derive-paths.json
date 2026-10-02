@@ -1,0 +1,27 @@
+{
+  "claude-code.ndjson": {
+    "head": "483278d02765976e",
+    "sha256": "573696b575d2b03b3c31943ebca76a59904ac6a0569fb699306b71bbc638666a",
+    "steps": 7
+  },
+  "codex.ndjson": {
+    "head": "17b6f76e48c86415",
+    "sha256": "c9589ad76724cc2a850c7549f7aa72bb74830dd613b99c9938aae53bf916a3f0",
+    "steps": 9
+  },
+  "opencode.ndjson": {
+    "head": "9b274c7c14b34a1d",
+    "sha256": "7225290609d06aac85576ced18f924103e601d05c1544748931f9d67e8103d04",
+    "steps": 11
+  },
+  "pi.ndjson": {
+    "head": "350cf159b835062a",
+    "sha256": "43bbf0495cc87e4a48bea36e10fefd4ff7a21b0ddf2872c4c06f6963979a91ef",
+    "steps": 10
+  },
+  "synthetic-fork.ndjson": {
+    "head": "6a7b836ff61f8477",
+    "sha256": "626f95512d9055cdab22d43b75d352bc9f56294fd9476786e522e045738ca843",
+    "steps": 7
+  }
+}

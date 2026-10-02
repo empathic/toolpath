@@ -1,0 +1,270 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "otel-fixture"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "opentelemetry.util.genai.handler",
+            "version": "1.1b0"
+          },
+          "spans": [
+            {
+              "traceId": "137cfc99d31ce41c59e462bf7490fe4f",
+              "spanId": "e7da03a1cd7a0320",
+              "name": "chat gpt-4o-mini",
+              "kind": 3,
+              "startTimeUnixNano": "1800000000000000000",
+              "endTimeUnixNano": "1800000000001000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "tool_calls"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-fixture-1"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "42"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "9"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"system\",\"parts\":[{\"content\":\"You are a coding assistant.\",\"type\":\"text\"}]},{\"role\":\"user\",\"parts\":[{\"content\":\"What does src/lib.rs export?\",\"type\":\"text\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"arguments\":{\"path\":\"src/lib.rs\"},\"name\":\"read_file\",\"id\":\"call_fixture_1\",\"type\":\"tool_call\"}],\"finish_reason\":\"tool_calls\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "89a6406ee00452cdab95e42b591d7562",
+              "spanId": "724d1ec642192bc8",
+              "name": "chat gpt-4o-mini",
+              "kind": 3,
+              "startTimeUnixNano": "1800000000002000000",
+              "endTimeUnixNano": "1800000000003000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-fixture-2"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "70"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "8"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"system\",\"parts\":[{\"content\":\"You are a coding assistant.\",\"type\":\"text\"}]},{\"role\":\"user\",\"parts\":[{\"content\":\"What does src/lib.rs export?\",\"type\":\"text\"}]},{\"role\":\"assistant\",\"parts\":[{\"arguments\":{\"path\":\"src/lib.rs\"},\"name\":\"read_file\",\"id\":\"call_fixture_1\",\"type\":\"tool_call\"}]},{\"role\":\"tool\",\"parts\":[{\"response\":\"pub fn add(a: i32, b: i32) -> i32 { a + b }\",\"id\":\"call_fixture_1\",\"type\":\"tool_call_response\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"content\":\"It exports one function, add.\",\"type\":\"text\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            },
+            {
+              "traceId": "5fc1529f4dc9bade707c6c8faef38a5a",
+              "spanId": "9b8f2db9ac84d1f8",
+              "name": "chat gpt-4o-mini",
+              "kind": 3,
+              "startTimeUnixNano": "1800000000004000000",
+              "endTimeUnixNano": "1800000000005000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        },
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-mini-2024-07-18"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-fixture-3"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "90"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "12"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"system\",\"parts\":[{\"content\":\"You are a coding assistant.\",\"type\":\"text\"}]},{\"role\":\"user\",\"parts\":[{\"content\":\"What does src/lib.rs export?\",\"type\":\"text\"}]},{\"role\":\"assistant\",\"parts\":[{\"arguments\":{\"path\":\"src/lib.rs\"},\"name\":\"read_file\",\"id\":\"call_fixture_1\",\"type\":\"tool_call\"}]},{\"role\":\"tool\",\"parts\":[{\"response\":\"pub fn add(a: i32, b: i32) -> i32 { a + b }\",\"id\":\"call_fixture_1\",\"type\":\"tool_call_response\"}]},{\"role\":\"assistant\",\"parts\":[{\"content\":\"It exports one function, add.\",\"type\":\"text\"}]},{\"role\":\"user\",\"parts\":[{\"content\":\"Summarize that in four words.\",\"type\":\"text\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"content\":\"One public add function.\",\"type\":\"text\"}],\"finish_reason\":\"stop\"},{\"role\":\"assistant\",\"parts\":[{\"content\":\"Exports a single adder.\",\"type\":\"text\"}],\"finish_reason\":\"stop\"}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.choice.count",
+                  "value": {
+                    "intValue": "2"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 256
+            }
+          ],
+          "schemaUrl": "https://opentelemetry.io/schemas/1.37.0"
+        }
+      ]
+    }
+  ]
+}
