@@ -2,6 +2,18 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.32.0 — 2026-10-01
+
+- **`path-cli`** (0.32.0): the `cache-index` feature (default: off)
+  adds a SQLite index at `~/.toolpath/index.sqlite` that holds the
+  facts a listing shows for each cached agent session (directory,
+  title, first and last step time). With the feature, `path resume`
+  with no input reads its rows from the index and parses only the
+  documents whose file changed. The index is derived: a file of
+  another schema version is emptied on open, and a file SQLite cannot
+  read is an error that says to delete it.
+- **`toolpath-cli`** (0.32.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
