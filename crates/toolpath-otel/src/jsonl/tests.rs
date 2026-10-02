@@ -2392,3 +2392,509 @@ fn a_continuation_takes_consecutive_sends() {
         }
     }
 }
+
+/// A heredoc append's step depends on its ancestors' calls and results.
+#[test]
+fn a_sent_shell_append_step_matches_a_later_derive() {
+    let dev = json!({"role": "developer", "content": "<environment_context><cwd>/w</cwd></environment_context>"});
+    let ok = "Chunk ID: 1\nProcess exited with code 0\nOutput:\n";
+    let calls = |id: &str, cmd: &str| {
+        let args = json!({"cmd": cmd, "workdir": "/w"}).to_string();
+        json!([{"id": id, "type": "function", "function": {"name": "exec_command", "arguments": args}}])
+    };
+    let echo = |id: &str, cmd: &str| json!({"role": "assistant", "content": "", "tool_calls": calls(id, cmd)});
+    let answer = |id: &str| json!({"role": "tool", "tool_call_id": id, "content": ok});
+    let write = "cat <<'EOF' > a.txt\none\nEOF";
+    let append = "cat >> a.txt <<'EOF'\ntwo\nEOF";
+    let mut g1 = generation("g1", 1, json!([dev, user("go")]), "");
+    g1.completion.tool_calls = serde_json::from_value(calls("c1", write)).unwrap();
+    let mut g2 = generation(
+        "g2",
+        2,
+        json!([dev, user("go"), echo("c1", write), answer("c1")]),
+        "",
+    );
+    g2.completion.tool_calls = serde_json::from_value(calls("c2", append)).unwrap();
+    let history = json!([
+        dev,
+        user("go"),
+        echo("c1", write),
+        answer("c1"),
+        echo("c2", append),
+        answer("c2")
+    ]);
+    let g3 = generation("g3", 3, history.clone(), "done");
+    let mut longer = history.as_array().unwrap().clone();
+    longer.extend([assistant("done"), user("again")]);
+    let g4 = generation("g4", 4, Value::Array(longer), "ok");
+
+    let early = session(vec![g1.clone(), g2.clone(), g3.clone()]);
+    let appended = derive_path(&early)
+        .steps
+        .iter()
+        .find(|st| {
+            st.change.get("a.txt").is_some_and(|c| {
+                c.structural.as_ref().unwrap().extra.get("tool_id") == Some(&json!("c2"))
+            })
+        })
+        .expect("the append's step")
+        .step
+        .id
+        .clone();
+    let lines = send(&early, &convo(), &Remote::default(), false, 0)
+        .unwrap()
+        .concat();
+    let sent = sent_step(&lines, &appended).expect("settled, so sent");
+    let change = &sent["change"]["a.txt"]["structural"];
+    assert_eq!(change["before"], "one\n");
+    assert_eq!(change["after"], "one\ntwo\n");
+    assert_eq!(change["otel"]["source"], "shell-heredoc");
+    assert_eq!(change["otel"]["executions"][0]["append_base"], "tracked");
+
+    let late = derive_path(&session(vec![g1, g2, g3, g4]));
+    assert_eq!(sent, path_step(&late, &appended));
+}
+
+/// A shell write's change key depends on the working directory named
+/// along its ancestry, never on one a later generation names first.
+#[test]
+fn a_sent_shell_write_step_does_not_move_when_a_later_generation_first_names_the_cwd() {
+    let ok = "Chunk ID: 1\nProcess exited with code 0\nOutput:\n";
+    let write = "cat <<'EOF' > a.txt\none\nEOF";
+    let args = json!({"cmd": write, "workdir": "/w"}).to_string();
+    let calls = json!([{"id": "c1", "type": "function", "function": {"name": "exec_command", "arguments": args}}]);
+    let echo = json!({"role": "assistant", "content": "", "tool_calls": calls.clone()});
+    let answer = json!({"role": "tool", "tool_call_id": "c1", "content": ok});
+    let mut g1 = generation("g1", 1, json!([user("go")]), "");
+    g1.completion.tool_calls = serde_json::from_value(calls).unwrap();
+    let g2 = generation(
+        "g2",
+        2,
+        json!([user("go"), echo.clone(), answer.clone()]),
+        "done",
+    );
+    let g3 = generation(
+        "g3",
+        3,
+        json!([
+            user("go"),
+            echo,
+            answer,
+            assistant("done"),
+            user("<environment_context><cwd>/w</cwd></environment_context>")
+        ]),
+        "ok",
+    );
+    let early = session(vec![g1.clone(), g2.clone()]);
+    let id = derive_path(&early)
+        .steps
+        .iter()
+        .find(|s| s.change.contains_key("/w/a.txt"))
+        .expect("keyed on the workdir: no cwd named yet")
+        .step
+        .id
+        .clone();
+    let lines = send(&early, &convo(), &Remote::default(), false, 0)
+        .unwrap()
+        .concat();
+    let sent = sent_step(&lines, &id).expect("settled, so sent");
+    let late = derive_path(&session(vec![g1, g2, g3]));
+    assert_eq!(sent, path_step(&late, &id));
+}
+
+/// A Bash `cd` before a compaction leaves the relative write after it
+/// unresolved when first sent; a later `cd` on the old branch changes
+/// nothing already sent.
+#[test]
+fn a_sent_step_after_a_fork_keeps_its_unresolved_shell_write() {
+    let bash = |id: &str, cmd: &str| {
+        let args = json!({"command": cmd}).to_string();
+        json!([{"id": id, "type": "function", "function": {"name": "Bash", "arguments": args}}])
+    };
+    let echo = |id: &str, cmd: &str| json!({"role": "assistant", "content": "", "tool_calls": bash(id, cmd)});
+    let answer = |id: &str| json!({"role": "tool", "tool_call_id": id, "content": ""});
+    let with_call = |mut g: Generation, id: &str, cmd: &str| {
+        g.completion.tool_calls = serde_json::from_value(bash(id, cmd)).unwrap();
+        g
+    };
+    let sys = json!({"role": "system", "content": "Primary working directory: /w"});
+    let summary = user("This session is being continued from a previous conversation.");
+    let (cd, write) = ("cd sub", "cat > f.txt <<'EOF'\nx\nEOF");
+    let g1 = with_call(generation("g1", 1, json!([sys, user("go")]), ""), "b1", cd);
+    let g2 = generation(
+        "g2",
+        2,
+        json!([sys, user("go"), echo("b1", cd), answer("b1")]),
+        "done",
+    );
+    let g3 = with_call(generation("g3", 3, json!([sys, summary]), ""), "b2", write);
+    let g4 = generation(
+        "g4",
+        4,
+        json!([sys, summary, echo("b2", write), answer("b2")]),
+        "ok",
+    );
+    let g5 = with_call(
+        generation(
+            "g5",
+            5,
+            json!([
+                sys,
+                user("go"),
+                echo("b1", cd),
+                answer("b1"),
+                assistant("done"),
+                user("more")
+            ]),
+            "",
+        ),
+        "b3",
+        "cd /w",
+    );
+    let early = session(vec![g1.clone(), g2.clone(), g3.clone(), g4.clone()]);
+    let unresolved = |s: &toolpath::v1::Step| {
+        s.change.values().any(|c| {
+            c.structural
+                .as_ref()
+                .and_then(|x| x.extra.get("otel"))
+                .is_some_and(|o| o.get("unresolved_shell_writes").is_some())
+        })
+    };
+    let id = derive_path(&early)
+        .steps
+        .iter()
+        .find(|s| unresolved(s))
+        .expect("the write after the fork is unresolved")
+        .step
+        .id
+        .clone();
+    let lines = send(&early, &convo(), &Remote::default(), false, 0)
+        .unwrap()
+        .concat();
+    let sent = sent_step(&lines, &id).expect("settled, so sent");
+    let late = derive_path(&session(vec![g1, g2, g3, g4, g5]));
+    assert_eq!(sent, path_step(&late, &id));
+}
+
+/// A relative write after a Bash `cd` is keyed under the tracked
+/// directory when first sent; a later `cd` on another branch changes
+/// nothing already sent.
+#[test]
+fn a_sent_step_with_a_likely_path_does_not_move() {
+    let bash = |id: &str, cmd: &str| {
+        let args = json!({"command": cmd}).to_string();
+        json!([{"id": id, "type": "function", "function": {"name": "Bash", "arguments": args}}])
+    };
+    let echo = |id: &str, cmd: &str| json!({"role": "assistant", "content": "", "tool_calls": bash(id, cmd)});
+    let answer = |id: &str| json!({"role": "tool", "tool_call_id": id, "content": ""});
+    let with_call = |mut g: Generation, id: &str, cmd: &str| {
+        g.completion.tool_calls = serde_json::from_value(bash(id, cmd)).unwrap();
+        g
+    };
+    let sys = json!({"role": "system", "content": "Primary working directory: /w"});
+    let (cd, write) = ("cd sub", "cat > f.txt <<'EOF'\nx\nEOF");
+    let g1 = with_call(generation("g1", 1, json!([sys, user("go")]), ""), "b1", cd);
+    let g2 = with_call(
+        generation(
+            "g2",
+            2,
+            json!([sys, user("go"), echo("b1", cd), answer("b1")]),
+            "",
+        ),
+        "b2",
+        write,
+    );
+    let g3 = generation(
+        "g3",
+        3,
+        json!([
+            sys,
+            user("go"),
+            echo("b1", cd),
+            answer("b1"),
+            echo("b2", write),
+            answer("b2")
+        ]),
+        "done",
+    );
+    let g4 = with_call(
+        generation("g4", 4, json!([sys, user("go")]), ""),
+        "b3",
+        "cd /w/other",
+    );
+    let early = session(vec![g1.clone(), g2.clone(), g3.clone()]);
+    let attempt = |s: &Value| -> Option<Value> {
+        s["change"]
+            .as_object()?
+            .values()
+            .find_map(|c| c["structural"]["otel"]["unresolved_shell_writes"].get(0))
+            .cloned()
+    };
+    let id = derive_path(&early)
+        .steps
+        .iter()
+        .find(|s| attempt(&serde_json::to_value(s).unwrap()).is_some())
+        .expect("an unresolved attempt")
+        .step
+        .id
+        .clone();
+    let lines = send(&early, &convo(), &Remote::default(), false, 0)
+        .unwrap()
+        .concat();
+    let sent = sent_step(&lines, &id).expect("settled, so sent");
+    assert_eq!(attempt(&sent).unwrap()["likely_path"], "sub/f.txt");
+    let late = derive_path(&session(vec![g1, g2, g3, g4]));
+    assert_eq!(sent, path_step(&late, &id));
+}
+
+/// Two branches under one system prompt naming `/w`: `g1` starts a
+/// side branch whose `Bash` call `cd sub && cd /w` is answered (exit 0)
+/// only by `g4`; `g2` writes `f.txt` with a heredoc on the main line,
+/// answered and echoed by `g3`. Until the `cd` is answered the shell may
+/// be anywhere, so the write is unresolved; once it is, the shell is
+/// back at `/w` and the write resolves.
+fn off_ancestry_cd() -> [Generation; 4] {
+    let bash = |id: &str, cmd: &str| {
+        let args = json!({"command": cmd}).to_string();
+        json!([{"id": id, "type": "function", "function": {"name": "Bash", "arguments": args}}])
+    };
+    let echo = |id: &str, cmd: &str| json!({"role": "assistant", "content": "", "tool_calls": bash(id, cmd)});
+    let answer = |id: &str| json!({"role": "tool", "tool_call_id": id, "content": ""});
+    let with_call = |mut g: Generation, id: &str, cmd: &str| {
+        g.completion.tool_calls = serde_json::from_value(bash(id, cmd)).unwrap();
+        g
+    };
+    let sys = json!({"role": "system", "content": "Primary working directory: /w"});
+    let (cd, write) = ("cd sub && cd /w", "cat > f.txt <<'EOF'\nx\nEOF");
+    let g1 = with_call(
+        generation("g1", 1, json!([sys, user("side")]), ""),
+        "a1",
+        cd,
+    );
+    let g2 = with_call(
+        generation("g2", 2, json!([sys, user("go")]), ""),
+        "b1",
+        write,
+    );
+    let g3 = generation(
+        "g3",
+        3,
+        json!([sys, user("go"), echo("b1", write), answer("b1")]),
+        "done",
+    );
+    let g4 = generation(
+        "g4",
+        4,
+        json!([sys, user("side"), echo("a1", cd), answer("a1")]),
+        "ok",
+    );
+    [g1, g2, g3, g4]
+}
+
+/// The id of the step holding the `f.txt` write, and whether it is
+/// unresolved there.
+fn write_step(p: &Path) -> (String, bool) {
+    let s = p
+        .steps
+        .iter()
+        .find(|s| serde_json::to_string(s).unwrap().contains("cat > f.txt"))
+        .expect("the write's step");
+    let unresolved = s.change.values().any(|c| {
+        c.structural
+            .as_ref()
+            .and_then(|x| x.extra.get("otel"))
+            .is_some_and(|o| o.get("unresolved_shell_writes").is_some())
+    });
+    (s.step.id.clone(), unresolved)
+}
+
+#[test]
+fn a_write_waits_for_an_earlier_off_ancestry_shell_move() {
+    let [g1, g2, g3, g4] = off_ancestry_cd();
+    let early = session(vec![g1.clone(), g2.clone(), g3.clone()]);
+    let (id, unresolved) = write_step(&derive_path(&early));
+    assert!(unresolved, "the cd is unanswered");
+    let all = session(vec![g1, g2, g3, g4]);
+    let one_shot = derive_path(&all);
+    assert_eq!(write_step(&one_shot), (id.clone(), false));
+
+    let mut reader = Reader::default();
+    let first = reader.send(&early, false);
+    assert!(
+        sent_step(&first, &id).is_none(),
+        "held until the cd that may move the shell is answered"
+    );
+    let next = reader.send(&all, false);
+    assert_eq!(sent_step(&next, &id).unwrap(), path_step(&one_shot, &id));
+    reader.send(&all, true);
+    assert_eq!(by_id(&reader.path()), by_id(&one_shot));
+}
+
+#[test]
+fn a_stored_step_an_off_ancestry_answer_restamps_is_amended() {
+    let [g1, g2, g3, g4] = off_ancestry_cd();
+    let early = session(vec![g1.clone(), g2.clone(), g3.clone()]);
+    let (id, _) = write_step(&derive_path(&early));
+    let mut reader = Reader::default();
+    reader.send(&early, true);
+    let err = reader
+        .try_send(&session(vec![g1, g2, g3, g4]), false)
+        .unwrap_err();
+    match err {
+        Failure::Derive(OtelError::Delta(DeltaError::Amended { steps })) => {
+            assert!(steps.contains(&id), "{steps:?}")
+        }
+        Failure::Derive(other) => panic!("{other:?}"),
+        Failure::Rejected(r) => panic!("{r}"),
+    }
+}
+
+/// A frozen step is claimed like a stored one: a continuation whose
+/// off-ancestry answer restamps a frozen shell write is `Amended`.
+#[test]
+fn a_frozen_step_an_off_ancestry_answer_restamps_is_amended() {
+    let [g1, g2, g3, g4] = off_ancestry_cd();
+    let early = session(vec![g1.clone(), g2.clone(), g3.clone()]);
+    let (id, _) = write_step(&derive_path(&early));
+    let mut frozen = Reader::default();
+    frozen.send(&early, true);
+    for hint in HINTS {
+        let mut cont = Reader::new(hint, 0);
+        cont.server.base = frozen.stored();
+        cont.server.base_fed = frozen.fed();
+        match cont.try_send(
+            &session(vec![g1.clone(), g2.clone(), g3.clone(), g4.clone()]),
+            false,
+        ) {
+            Err(Failure::Derive(OtelError::Delta(DeltaError::Amended { steps }))) => {
+                assert!(steps.contains(&id), "{hint:?}: {steps:?}")
+            }
+            other => panic!("{hint:?}: {other:?}"),
+        }
+    }
+}
+
+/// A continuation over a frozen `cd` and the write after it: the write
+/// keeps its frozen stamps, the late `cd` on another branch goes out once
+/// answered, and no frozen step is sent again or named by `Head`.
+#[test]
+fn a_continuation_over_a_frozen_shell_write_sends_only_new_steps() {
+    let all = tracked_cd_then_late_cd().to_vec();
+    let mut frozen = Reader::default();
+    frozen.send(&session(all[..3].to_vec()), true);
+    let base = frozen.stored();
+    let one_shot = derive_path(&session(all.clone()));
+    let (write, unresolved) = write_step(&one_shot);
+    assert!(base.contains(&write) && unresolved);
+    assert_eq!(
+        path_step(&frozen.path(), &write),
+        path_step(&one_shot, &write)
+    );
+    for hint in HINTS {
+        for max in [0, 1] {
+            let what = format!("{hint:?}/{max}");
+            let mut cont = Reader::new(hint, max);
+            cont.server.base = base.clone();
+            cont.server.base_fed = frozen.fed();
+            let mut sent = Vec::new();
+            for (upto, final_) in [(4, false), (5, false), (5, true)] {
+                let lines = cont.send(&session(all[..upto].to_vec()), final_);
+                if let Some(head) = head_of(&lines) {
+                    assert!(!base.contains(&head), "{what}: {upto} heads a frozen step");
+                }
+                sent.extend(lines);
+            }
+            assert!(
+                step_ids(&sent).iter().all(|id| !base.contains(id)),
+                "{what}: a frozen id is sent again"
+            );
+            assert!(!step_ids(&sent).is_empty(), "{what}");
+            let full = derive_path(&in_fed_order(&all, &cont.fed()));
+            assert_unchanged(&sent, &full, &what);
+            let mut union = frozen.path();
+            union.steps.extend(cont.path().steps);
+            let steps = |p: &Path| {
+                let mut v: Vec<Value> = p.steps.iter().map(value).collect();
+                v.sort_by_key(|s| s["step"]["id"].as_str().unwrap().to_string());
+                v
+            };
+            assert_eq!(steps(&union), steps(&full), "{what}: frozen + continuation");
+            assert_eq!(cont.path().path.head, one_shot.path.head, "{what}");
+        }
+    }
+}
+
+/// A `Bash` `cd`, a write after it, and a `cd` on another branch, answered
+/// late: `cd sub`, then a relative heredoc (a `likely_path` attempt), then
+/// `cd /w/other` from a fresh prompt, answered by the last generation.
+fn tracked_cd_then_late_cd() -> [Generation; 5] {
+    let bash = |id: &str, cmd: &str| {
+        let args = json!({"command": cmd}).to_string();
+        json!([{"id": id, "type": "function", "function": {"name": "Bash", "arguments": args}}])
+    };
+    let echo = |id: &str, cmd: &str| json!({"role": "assistant", "content": "", "tool_calls": bash(id, cmd)});
+    let answer = |id: &str| json!({"role": "tool", "tool_call_id": id, "content": ""});
+    let with_call = |mut g: Generation, id: &str, cmd: &str| {
+        g.completion.tool_calls = serde_json::from_value(bash(id, cmd)).unwrap();
+        g
+    };
+    let sys = json!({"role": "system", "content": "Primary working directory: /w"});
+    let (cd, write, away) = ("cd sub", "cat > f.txt <<'EOF'\nx\nEOF", "cd /w/other");
+    let g1 = with_call(generation("g1", 1, json!([sys, user("go")]), ""), "b1", cd);
+    let g2 = with_call(
+        generation(
+            "g2",
+            2,
+            json!([sys, user("go"), echo("b1", cd), answer("b1")]),
+            "",
+        ),
+        "b2",
+        write,
+    );
+    let g3 = generation(
+        "g3",
+        3,
+        json!([
+            sys,
+            user("go"),
+            echo("b1", cd),
+            answer("b1"),
+            echo("b2", write),
+            answer("b2")
+        ]),
+        "done",
+    );
+    let g4 = with_call(
+        generation("g4", 4, json!([sys, user("other")]), ""),
+        "b3",
+        away,
+    );
+    let g5 = generation(
+        "g5",
+        5,
+        json!([sys, user("other"), echo("b3", away), answer("b3")]),
+        "there",
+    );
+    [g1, g2, g3, g4, g5]
+}
+
+/// Shell-write stamps read calls off a turn's ancestry; sends in any
+/// arrival order still only append ([`assert_every_order_appends`]).
+#[test]
+fn shell_moves_and_writes_only_append_in_any_order() {
+    let cases: [Vec<Generation>; 2] = [
+        off_ancestry_cd().to_vec(),
+        tracked_cd_then_late_cd().to_vec(),
+    ];
+    for mut gens in cases {
+        // Billed, so each record is recognisable.
+        for g in &mut gens {
+            g.usage.input_tokens = Some(g.start_ns * 100 + 7);
+            g.usage.output_tokens = Some(3);
+            g.cost.total = Some(g.start_ns as f64 / 10.0);
+        }
+        let stamped = serde_json::to_string(&derive_path(&session(gens.clone()))).unwrap();
+        assert!(stamped.contains("shell-heredoc") || stamped.contains("unresolved_shell_writes"));
+        assert_every_order_appends(&gens);
+    }
+}

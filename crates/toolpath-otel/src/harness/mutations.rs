@@ -2,6 +2,7 @@
 //! canonicalized onto Claude's key names before `file_write_diff`.
 
 use serde_json::{Map, Value, json};
+use toolpath_convo::shell_writes::parse_patch;
 use toolpath_convo::{FileMutation, ToolCategory, ToolInvocation, file_write_diff};
 
 /// Includes the keys convo's fallback reads, so the fallback never fires.
@@ -55,7 +56,7 @@ pub fn file_mutations(tool: &ToolInvocation) -> Vec<FileMutation> {
         return Vec::new();
     }
     // A marker-less patch parses to nothing; still record the file.
-    let muts = match patch_text(tool).map(parse_patch) {
+    let muts = match patch_text(tool).map(patch_mutations) {
         Some(muts) if !muts.is_empty() => muts,
         _ => write_edit(tool).into_iter().collect(),
     };
@@ -97,43 +98,21 @@ fn write_edit(tool: &ToolInvocation) -> Option<FileMutation> {
     })
 }
 
-/// Codex/opencode `apply_patch` (V4A) → one mutation per file. Added
-/// files carry their full content in `after`; updates carry no diff
-/// (V4A hunks are not unified diffs).
-pub fn parse_patch(patch: &str) -> Vec<FileMutation> {
-    let mut out: Vec<FileMutation> = Vec::new();
-    let mut adding: Option<usize> = None;
-    for line in patch.lines() {
-        let file = |op: &str, p: &str| FileMutation {
-            path: p.trim().to_string(),
-            operation: Some(op.to_string()),
+/// Codex/opencode `apply_patch` (V4A) → one mutation per file, read by
+/// [`toolpath_convo::shell_writes::parse_patch`]. Added files carry their
+/// full content in `after`; updates carry no diff (V4A hunks are not
+/// unified diffs).
+pub fn patch_mutations(patch: &str) -> Vec<FileMutation> {
+    parse_patch(patch)
+        .into_iter()
+        .map(|f| FileMutation {
+            path: f.path,
+            operation: Some(f.op.as_str().to_string()),
+            rename_to: f.move_to,
+            after: f.added,
             ..Default::default()
-        };
-        if let Some(p) = line.strip_prefix("*** Add File: ") {
-            out.push(FileMutation {
-                after: Some(String::new()),
-                ..file("add", p)
-            });
-            adding = Some(out.len() - 1);
-        } else if let Some(p) = line.strip_prefix("*** Update File: ") {
-            out.push(file("update", p));
-            adding = None;
-        } else if let Some(p) = line.strip_prefix("*** Delete File: ") {
-            out.push(file("delete", p));
-            adding = None;
-        } else if let Some(p) = line.strip_prefix("*** Move to: ") {
-            if let Some(last) = out.last_mut() {
-                last.rename_to = Some(p.trim().to_string());
-            }
-        } else if line.starts_with("*** ") {
-            adding = None;
-        } else if let (Some(i), Some(content)) = (adding, line.strip_prefix('+')) {
-            let after = out[i].after.get_or_insert_with(String::new);
-            after.push_str(content);
-            after.push('\n');
-        }
-    }
-    out
+        })
+        .collect()
 }
 
 #[cfg(test)]
