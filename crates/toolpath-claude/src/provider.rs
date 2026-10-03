@@ -100,13 +100,28 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let file_mutations = compute_file_mutations(&tool_uses, entry.cwd.as_deref());
 
-    let token_usage = msg.usage.as_ref().map(|u| TokenUsage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        cache_read_tokens: u.cache_read_input_tokens,
-        cache_write_tokens: u.cache_creation_input_tokens,
-        ..Default::default()
-    });
+    // An all-zero usage (e.g. a `<synthetic>` message) is a placeholder,
+    // not a spend.
+    let token_usage = msg
+        .usage
+        .as_ref()
+        .map(|u| TokenUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cache_read_tokens: u.cache_read_input_tokens,
+            cache_write_tokens: u.cache_creation_input_tokens,
+            ..Default::default()
+        })
+        .filter(|u| {
+            [
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_read_tokens,
+                u.cache_write_tokens,
+            ]
+            .iter()
+            .any(|v| v.is_some_and(|n| n > 0))
+        });
 
     let environment = if entry.cwd.is_some() || entry.git_branch.is_some() {
         Some(EnvironmentSnapshot {
@@ -126,8 +141,14 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         // The API message ID (`msg_…`). Claude Code writes one JSONL line
         // per content block, so several turns can share one group_id —
         // and each repeats the message-level `usage`. Downstream accounting
-        // (sum_usage, derive_path) counts a message group once.
-        group_id: msg.id.clone(),
+        // (sum_usage, derive_path) counts a message group once. Without a
+        // `message.id`, an assistant entry's `requestId` names the same API
+        // message; user entries never group.
+        group_id: msg.id.clone().or_else(|| {
+            (msg.role == MessageRole::Assistant)
+                .then(|| entry.request_id.clone())
+                .flatten()
+        }),
         role: claude_role_to_role(&msg.role),
         timestamp: entry.timestamp.clone(),
         text,
@@ -564,77 +585,47 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// per-step attribution from them, and — the format being undocumented — we
 /// do not trust line order.
 ///
-/// For each consecutive `group_id` run this sets `token_usage` on the run's
-/// **final** turn to the field-wise **maximum** across the run (the message
-/// total — never under-counts whatever the stream order) and clears it from
-/// the others, so summing `token_usage` over turns yields session totals.
+/// Groups by `group_id` across the whole turn sequence, not by consecutive
+/// run: interleaved writes (known-issues.md, "Multi-terminal writes to the
+/// same project") can split one message's lines. Each group's field-wise
+/// **maximum** (the message total, whatever the stream order) goes on the
+/// group's **last** turn and every other member is cleared, so summing
+/// `token_usage` over turns yields session totals.
 fn canonicalize_message_usage(turns: &mut [Turn]) {
-    let mut i = 0;
-    while i < turns.len() {
-        let Some(mid) = turns[i].group_id.clone() else {
-            i += 1;
-            continue;
-        };
-        let mut j = i;
-        while j < turns.len() && turns[j].group_id.as_deref() == Some(mid.as_str()) {
-            j += 1;
+    let mut groups: HashMap<String, (Option<TokenUsage>, usize)> = HashMap::new();
+    for (i, t) in turns.iter_mut().enumerate() {
+        let Some(gid) = &t.group_id else { continue };
+        let (total, last) = groups.entry(gid.clone()).or_insert((None, i));
+        if let Some(u) = t.token_usage.take() {
+            *total = Some(match total.take() {
+                Some(acc) => max_usage(&acc, &u),
+                None => u,
+            });
         }
-
-        // Message total = field-wise max across the run (the final streaming
-        // snapshot, found without trusting line order).
-        let mut total: Option<TokenUsage> = None;
-        for t in &turns[i..j] {
-            if let Some(u) = &t.token_usage {
-                total = Some(match total {
-                    Some(acc) => max_usage(&acc, u),
-                    None => u.clone(),
-                });
-            }
-        }
-
-        for t in &mut turns[i..j] {
-            t.token_usage = None;
-        }
-        if let Some(total) = total {
-            turns[j - 1].token_usage = Some(total);
-        }
-        i = j;
+        *last = i;
+    }
+    for (total, last) in groups.into_values() {
+        turns[last].token_usage = total;
     }
 }
 
-/// Sum token usage across all turns.
+/// Sum token usage across all turns. Assumes [`canonicalize_message_usage`]
+/// has run, so each message's total sits on exactly one turn.
 fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
     let mut total = TokenUsage::default();
     let mut any = false;
-    for (idx, turn) in turns.iter().enumerate() {
-        // Turns split from one provider message all repeat that message's
-        // usage; count it once, on the run's last turn.
-        if let Some(mid) = &turn.group_id
-            && turns
-                .get(idx + 1)
-                .is_some_and(|next| next.group_id.as_ref() == Some(mid))
-        {
-            continue;
-        }
-        if let Some(u) = &turn.token_usage {
-            any = true;
-            total.input_tokens =
-                Some(total.input_tokens.unwrap_or(0) + u.input_tokens.unwrap_or(0));
-            total.output_tokens =
-                Some(total.output_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
-            total.cache_read_tokens = match (total.cache_read_tokens, u.cache_read_tokens) {
-                (Some(a), Some(b)) => Some(a + b),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            };
-            total.cache_write_tokens = match (total.cache_write_tokens, u.cache_write_tokens) {
-                (Some(a), Some(b)) => Some(a + b),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            };
-        }
+    for u in turns.iter().filter_map(|t| t.token_usage.as_ref()) {
+        any = true;
+        total.input_tokens = Some(total.input_tokens.unwrap_or(0) + u.input_tokens.unwrap_or(0));
+        total.output_tokens = Some(total.output_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
+        total.cache_read_tokens = match (total.cache_read_tokens, u.cache_read_tokens) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
+        total.cache_write_tokens = match (total.cache_write_tokens, u.cache_write_tokens) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
     }
     if any { Some(total) } else { None }
 }
@@ -834,9 +825,10 @@ pub fn to_turn(entry: &ConversationEntry) -> Option<Turn> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PathResolver;
+    use crate::{ClaudeProjector, PathResolver};
     use std::fs;
     use tempfile::TempDir;
+    use toolpath_convo::ConversationProjector;
 
     /// One assistant turn carrying a cumulative usage snapshot (only
     /// output varies across a split, so input/cache are fixed here).
@@ -932,6 +924,226 @@ mod tests {
         for t in &turns {
             assert!(t.attributed_token_usage.is_none());
         }
+    }
+
+    fn provider_with_session(session: &str, lines: &[String]) -> (TempDir, ClaudeConvo) {
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join(format!("{session}.jsonl")),
+            lines.join("\n"),
+        )
+        .unwrap();
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        (temp, ClaudeConvo::with_resolver(resolver))
+    }
+
+    fn assistant_line(
+        uuid: &str,
+        parent: &str,
+        msg_id: Option<&str>,
+        request_id: Option<&str>,
+        content: &str,
+        usage: &str,
+    ) -> String {
+        let id = msg_id
+            .map(|m| format!(r#""id":"{m}","#))
+            .unwrap_or_default();
+        let req = request_id
+            .map(|r| format!(r#""requestId":"{r}","#))
+            .unwrap_or_default();
+        format!(
+            r#"{{"uuid":"{uuid}","type":"assistant","parentUuid":"{parent}",{req}"timestamp":"2024-01-01T00:00:01Z","message":{{{id}"role":"assistant","content":{content},"model":"claude-opus-4-7","usage":{usage}}}}}"#
+        )
+    }
+
+    const USER_LINE: &str = r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the bug"}}"#;
+
+    /// (group_id, token_usage) of every conversation.append step, in path
+    /// document order.
+    fn derived_step_usage(path: &toolpath::v1::Path) -> Vec<(Option<String>, Option<TokenUsage>)> {
+        path.steps
+            .iter()
+            .flat_map(|s| s.change.values())
+            .filter_map(|c| c.structural.as_ref())
+            .filter(|sc| sc.change_type == "conversation.append")
+            .map(|sc| {
+                (
+                    sc.extra
+                        .get("group_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    sc.extra
+                        .get("token_usage")
+                        .map(|v| serde_json::from_value(v.clone()).unwrap()),
+                )
+            })
+            .collect()
+    }
+
+    /// msg_A's two lines are split by msg_B's line, as interleaved writes
+    /// leave them. msg_A streams 40 -> 120 output tokens.
+    fn interleaved_lines() -> Vec<String> {
+        let a = |out: u32| format!(r#"{{"input_tokens":6,"output_tokens":{out}}}"#);
+        vec![
+            USER_LINE.to_string(),
+            assistant_line(
+                "a1",
+                "u1",
+                Some("msg_A"),
+                Some("req_A"),
+                r#"[{"type":"text","text":"Working."}]"#,
+                &a(40),
+            ),
+            assistant_line(
+                "b1",
+                "u1",
+                Some("msg_B"),
+                Some("req_B"),
+                r#"[{"type":"text","text":"Other terminal."}]"#,
+                r#"{"input_tokens":5,"output_tokens":11}"#,
+            ),
+            assistant_line(
+                "a2",
+                "a1",
+                Some("msg_A"),
+                Some("req_A"),
+                r#"[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.rs"}}]"#,
+                &a(120),
+            ),
+        ]
+    }
+
+    fn assert_one_total_per_group_on_last_step(path: &toolpath::v1::Path) {
+        let steps = derived_step_usage(path);
+        let mut groups: Vec<&str> = steps.iter().filter_map(|(g, _)| g.as_deref()).collect();
+        groups.sort();
+        groups.dedup();
+        for gid in groups {
+            let members: Vec<usize> = steps
+                .iter()
+                .enumerate()
+                .filter(|(_, (g, _))| g.as_deref() == Some(gid))
+                .map(|(i, _)| i)
+                .collect();
+            let carriers: Vec<usize> = members
+                .iter()
+                .copied()
+                .filter(|&i| steps[i].1.is_some())
+                .collect();
+            assert_eq!(
+                carriers,
+                vec![*members.last().unwrap()],
+                "{gid}: exactly its last step in document order carries token_usage"
+            );
+        }
+    }
+
+    #[test]
+    fn interleaved_group_carries_one_total_on_its_last_derived_step() {
+        let (_temp, provider) = provider_with_session("interleaved", &interleaved_lines());
+        let convo = provider
+            .read_conversation("/test/project", "interleaved")
+            .unwrap();
+        let path = crate::derive::derive_path(&convo, &Default::default());
+
+        assert_one_total_per_group_on_last_step(&path);
+        let steps = derived_step_usage(&path);
+        let output: u32 = steps
+            .iter()
+            .filter_map(|(_, u)| u.as_ref()?.output_tokens)
+            .sum();
+        let input: u32 = steps
+            .iter()
+            .filter_map(|(_, u)| u.as_ref()?.input_tokens)
+            .sum();
+        assert_eq!(output, 120 + 11, "msg_A counted once, at its max");
+        assert_eq!(input, 6 + 5);
+
+        let view = to_view(&convo);
+        let total = view.total_usage.unwrap();
+        assert_eq!(total.output_tokens, Some(120 + 11));
+        assert_eq!(total.input_tokens, Some(6 + 5));
+    }
+
+    #[test]
+    fn interleaved_group_survives_projector_round_trip() {
+        let (_temp, provider) = provider_with_session("interleaved", &interleaved_lines());
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "interleaved")
+                .unwrap();
+        let projected = ClaudeProjector.project(&view).unwrap();
+        let path = crate::derive::derive_path(&projected, &Default::default());
+
+        assert_one_total_per_group_on_last_step(&path);
+        let output: u32 = derived_step_usage(&path)
+            .iter()
+            .filter_map(|(_, u)| u.as_ref()?.output_tokens)
+            .sum();
+        assert_eq!(output, 120 + 11);
+    }
+
+    #[test]
+    fn idless_assistant_lines_group_by_request_id() {
+        let usage = r#"{"input_tokens":5,"output_tokens":10}"#;
+        let lines = vec![
+            USER_LINE.to_string(),
+            assistant_line(
+                "a1",
+                "u1",
+                None,
+                Some("req_1"),
+                r#"[{"type":"text","text":"Working."}]"#,
+                usage,
+            ),
+            assistant_line(
+                "a2",
+                "a1",
+                None,
+                Some("req_1"),
+                r#"[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.rs"}}]"#,
+                usage,
+            ),
+        ];
+        let (_temp, provider) = provider_with_session("idless", &lines);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "idless").unwrap();
+
+        assert!(view.turns[0].group_id.is_none(), "user lines never group");
+        assert_eq!(view.turns[1].group_id.as_deref(), Some("req_1"));
+        assert_eq!(view.turns[2].group_id.as_deref(), Some("req_1"));
+        assert!(view.turns[1].token_usage.is_none());
+        assert_eq!(view.total_usage.unwrap().output_tokens, Some(10));
+    }
+
+    #[test]
+    fn user_entry_request_id_never_groups() {
+        let lines = vec![
+            r#"{"uuid":"u1","type":"user","requestId":"req_x","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Fix the bug"}}"#.to_string(),
+        ];
+        let (_temp, provider) = provider_with_session("userreq", &lines);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "userreq").unwrap();
+        assert!(view.turns[0].group_id.is_none());
+    }
+
+    #[test]
+    fn all_zero_synthetic_usage_derives_no_token_usage() {
+        let lines = vec![
+            USER_LINE.to_string(),
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"id":"msg_syn","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"No response requested."}],"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}"#.to_string(),
+        ];
+        let (_temp, provider) = provider_with_session("synthetic", &lines);
+        let convo = provider
+            .read_conversation("/test/project", "synthetic")
+            .unwrap();
+        let view = to_view(&convo);
+        assert!(view.turns[1].token_usage.is_none());
+        assert!(view.total_usage.is_none());
+        let path = crate::derive::derive_path(&convo, &Default::default());
+        assert!(derived_step_usage(&path).iter().all(|(_, u)| u.is_none()));
     }
 
     fn setup_provider() -> (TempDir, ClaudeConvo) {

@@ -15,7 +15,19 @@ over-counts (~3× on typical sessions) — the values are **cumulative
 snapshots of one message, not per-line bills.**
 
 The grouping key is **`message.id`** (`msg_…`), identical on every line
-of the split. Empirically, across every session sampled:
+of the split. When a line has no `message.id`, `toolpath-claude` falls
+back to the entry-level `requestId` for assistant entries
+([jsonl-envelope.md](jsonl-envelope.md)): one API request yields one
+assistant message, so the lines of an id-less message still form one
+group. User entries never group, even if one carries a `requestId`.
+
+A group's lines are **not** guaranteed to be contiguous: interleaved
+writes (see [known-issues.md](known-issues.md), "Multi-terminal writes
+to the same project") can put another message's lines between them.
+Grouping is by key across the whole session, never by consecutive run;
+grouping by run would count an interleaved message once per fragment.
+
+Empirically, across every session sampled:
 
 - `input_tokens` and the cache counters are **constant** across a
   message's lines (prompt-side cost, paid once for the message).
@@ -25,11 +37,26 @@ of the split. Empirically, across every session sampled:
   line (stamped after generation); ~27% genuinely stream (distinct
   values). Either way the max — which is the last line — is the total.
 
-Correct accounting: take the **maximum** `usage` per distinct
-`message.id` (don't trust line order; the format is undocumented). This
-is what `toolpath-claude` does — derived paths put the message total on
-the last step of each `message.id` group, per the
-[`agent-coding-session` v1.1.0 kind](https://toolpath.net/kinds/agent-coding-session/v1.1.0/).
+Which of the two you see depends on the Claude Code version. Since
+v2.1.132 every line of a message repeats the identical final `usage`;
+older versions wrote the growing streaming snapshots
+([anthropics/claude-code#27361](https://github.com/anthropics/claude-code/issues/27361)).
+The field-wise max is correct for both.
+
+Correct accounting: take the field-wise **maximum** `usage` per
+distinct group key (don't trust line order; the format is undocumented).
+This is what `toolpath-claude` does. A derived path puts the message
+total on the group's last step in path document order, and no other step
+of the group carries `token_usage`, per the
+[`agent-coding-session` v1.2.0 kind](https://toolpath.net/kinds/agent-coding-session/v1.2.0/).
+Derived steps follow JSONL line order, so that step is the group's last
+line.
+
+**All-zero usage is not recorded.** `<synthetic>` assistant messages
+(Claude Code's locally generated placeholders, such as "No response
+requested.") carry a `usage` with every counter at 0. That is a
+placeholder, not a spend, so `toolpath-claude` derives no `token_usage`
+for it.
 
 **Why this is a snapshot, not a per-block bill.** The Anthropic
 [streaming API](https://platform.claude.com/docs/en/build-with-claude/streaming.md)
