@@ -28,8 +28,9 @@
 //!    sets each group's total `Turn.token_usage` to the sum of its
 //!    attributions, on the group's final turn — one source of truth, so
 //!    `Σ token_usage == Σ attributed ==` session total. Codex's
-//!    `input_tokens` includes `cached_input_tokens`; the derived
-//!    `input_tokens` excludes it (classes are additive).
+//!    `input_tokens` includes `cached_input_tokens` and (0.145+)
+//!    `cache_write_input_tokens`; the derived `input_tokens` excludes
+//!    both (classes are additive).
 //! 8. Everything else (`task_started`, `task_complete`, `turn_context`,
 //!    `user_message`/`agent_message` duplicates, unknown events) lands
 //!    in `ConversationView.events` as a typed [`ConversationEvent`].
@@ -937,15 +938,16 @@ fn usage_delta(current: &TokenUsage, prev: &TokenUsage) -> TokenUsage {
 
 fn apply_token_count(total: &mut TokenUsage, info: &TokenCountInfo) {
     if let Some(t) = info.total_token_usage.as_ref() {
-        // Codex's `input_tokens` includes `cached_input_tokens`; derived
-        // classes are additive, so the cached share is counted only under
-        // `cache_read_tokens`.
-        let uncached = t
-            .input_tokens
-            .map(|i| i.saturating_sub(t.cached_input_tokens.unwrap_or(0)));
+        // Codex's `input_tokens` includes cache reads and cache writes;
+        // derived classes are additive, so each is counted only once.
+        let uncached = t.input_tokens.map(|i| {
+            i.saturating_sub(t.cached_input_tokens.unwrap_or(0))
+                .saturating_sub(t.cache_write_input_tokens.unwrap_or(0))
+        });
         total.input_tokens = uncached.or(total.input_tokens);
         total.output_tokens = t.output_tokens.or(total.output_tokens);
         total.cache_read_tokens = t.cached_input_tokens.or(total.cache_read_tokens);
+        total.cache_write_tokens = t.cache_write_input_tokens.or(total.cache_write_tokens);
         // `reasoning_output_tokens` ⊆ `output_tokens` (informational); carry the
         // cumulative reasoning counter under breakdowns["output"]["reasoning"]
         // so `usage_delta` differences it per call just like the others. Only
@@ -1333,6 +1335,119 @@ mod tests {
         let total = view.turns[2].token_usage.as_ref().unwrap();
         assert_eq!(total.output_tokens, Some(20));
         assert_eq!(total.input_tokens, Some(90));
+    }
+
+    /// Codex ≥ 0.145 rollout: `cache_write_input_tokens` rides inside
+    /// `input_tokens` alongside `cached_input_tokens`. Round 1 has one step
+    /// (input 100 = 40 cached + 60 cache-write); round 2 has two steps.
+    fn cache_write_session() -> String {
+        let tc = |input: u32, cached: u32, write: u32, out: u32| {
+            format!(
+                r#"{{"timestamp":"2026-04-20T16:44:38.800Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"cache_write_input_tokens":{write},"output_tokens":{out},"total_tokens":{}}},"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"cache_write_input_tokens":{write},"output_tokens":{out},"total_tokens":{}}}}}}}}}"#,
+                input + out,
+                input + out
+            )
+        };
+        [
+            r#"{"timestamp":"2026-04-20T16:44:37.772Z","type":"session_meta","payload":{"id":"019dabc6-8fef-7681-a054-b5bb75fcb97d","timestamp":"2026-04-20T16:43:30.171Z","cwd":"/tmp/proj","originator":"codex-tui","cli_version":"0.145.0","source":"cli"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.773Z","type":"turn_context","payload":{"turn_id":"r1","cwd":"/tmp/proj","model":"gpt-5.4"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:37.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"round one"}]}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:38.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first"}],"phase":"final","end_turn":true}}"#.to_string(),
+            tc(100, 40, 60, 10),
+            r#"{"timestamp":"2026-04-20T16:44:39.700Z","type":"turn_context","payload":{"turn_id":"r2","cwd":"/tmp/proj","model":"gpt-5.4"}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:39.800Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"round two"}]}}"#.to_string(),
+            r#"{"timestamp":"2026-04-20T16:44:40.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"step one"}],"phase":"commentary"}}"#.to_string(),
+            tc(250, 140, 80, 30),
+            r#"{"timestamp":"2026-04-20T16:44:40.900Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"step two"}],"phase":"final","end_turn":true}}"#.to_string(),
+            tc(400, 240, 110, 50),
+        ]
+        .join("\n")
+    }
+
+    fn classes(u: &TokenUsage) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>) {
+        (
+            u.input_tokens,
+            u.cache_read_tokens,
+            u.cache_write_tokens,
+            u.output_tokens,
+        )
+    }
+
+    #[test]
+    fn cache_write_input_tokens_are_counted_outside_input() {
+        let (_t, mgr, id) = setup_session_fixture(&cache_write_session());
+        let view = to_view(&mgr.read_session(&id).unwrap());
+        let assistants: Vec<&Turn> = view
+            .turns
+            .iter()
+            .filter(|t| t.role == Role::Assistant)
+            .collect();
+        assert_eq!(assistants.len(), 3);
+
+        let r1 = assistants[0].token_usage.as_ref().unwrap();
+        assert_eq!(classes(r1), (Some(0), Some(40), Some(60), Some(10)));
+
+        let a1 = assistants[1].attributed_token_usage.as_ref().unwrap();
+        assert_eq!(classes(a1), (Some(30), Some(100), Some(20), Some(20)));
+        let a2 = assistants[2].attributed_token_usage.as_ref().unwrap();
+        assert_eq!(classes(a2), (Some(20), Some(100), Some(30), Some(20)));
+        let r2 = assistants[2].token_usage.as_ref().unwrap();
+        assert_eq!(classes(r2), (Some(50), Some(200), Some(50), Some(40)));
+
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(classes(total), (Some(50), Some(240), Some(110), Some(50)));
+    }
+
+    #[test]
+    fn rollout_without_cache_write_field_records_no_cache_write() {
+        let (_t, mgr, id) = setup_session_fixture(&two_round_session(true));
+        let view = to_view(&mgr.read_session(&id).unwrap());
+        for t in &view.turns {
+            for u in [&t.token_usage, &t.attributed_token_usage]
+                .into_iter()
+                .flatten()
+            {
+                assert_eq!(u.cache_write_tokens, None);
+            }
+        }
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(total.cache_write_tokens, None);
+        assert_eq!(total.input_tokens, Some(260));
+    }
+
+    #[test]
+    fn cache_write_round_trips_through_projector() {
+        use toolpath_convo::ConversationProjector;
+        let (_t, mgr, id) = setup_session_fixture(&cache_write_session());
+        let view = to_view(&mgr.read_session(&id).unwrap());
+        let projected = crate::project::CodexProjector::default()
+            .project(&view)
+            .unwrap();
+        let last_total = projected
+            .lines
+            .iter()
+            .rev()
+            .find(|l| l.payload["type"] == "token_count")
+            .map(|l| l.payload["info"]["total_token_usage"].clone())
+            .unwrap();
+        assert_eq!(last_total["input_tokens"], 400);
+        assert_eq!(last_total["cached_input_tokens"], 240);
+        assert_eq!(last_total["cache_write_input_tokens"], 110);
+        assert_eq!(last_total["output_tokens"], 50);
+
+        let back = to_view(&projected);
+        let usages = |v: &ConversationView| {
+            v.turns
+                .iter()
+                .map(|t| (t.token_usage.clone(), t.attributed_token_usage.clone()))
+                .map(|(a, b)| (a.map(|u| classes(&u)), b.map(|u| classes(&u))))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(usages(&back), usages(&view));
+        assert_eq!(
+            back.total_usage.as_ref().map(classes),
+            view.total_usage.as_ref().map(classes)
+        );
     }
 
     #[test]
