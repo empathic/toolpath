@@ -8,7 +8,9 @@
 //! `scripts/capture-elicit-fixtures.sh`). Recent Gemini versions write
 //! a JSONL stream — line 1 is a `ChatFile` header, subsequent lines are
 //! either `GeminiMessage` entries (carry `type`) or `$set`-style
-//! header-mutation events (skipped). Older versions wrote a single
+//! header-mutation events (skipped). A message rewritten later is
+//! appended again under the same `id`; the last copy wins, kept in the
+//! first copy's position. Older versions wrote a single
 //! JSON object; this test handles the JSONL form to match what the
 //! capture script writes.
 
@@ -48,7 +50,10 @@ fn load_fixture_conversation() -> Conversation {
             continue;
         }
         if let Ok(msg) = serde_json::from_value::<GeminiMessage>(v) {
-            chat_file.messages.push(msg);
+            match chat_file.messages.iter_mut().find(|m| m.id == msg.id) {
+                Some(earlier) => *earlier = msg,
+                None => chat_file.messages.push(msg),
+            }
         }
     }
     let session_uuid = chat_file.session_id.clone();
@@ -258,4 +263,24 @@ fn projector_output_is_re_parseable_by_reader() {
         .expect("tempfile");
     std::fs::write(tmp.path(), &json).expect("write tempfile");
     ConversationReader::read_chat_file(tmp.path()).expect("re-read projected ChatFile");
+}
+
+/// The fixture rewrites each assistant message by appending a later record
+/// with the same `id`; every message must count once.
+#[test]
+fn fixture_messages_are_unique_and_tokens_count_once() {
+    let convo = load_fixture_conversation();
+    let ids: Vec<&str> = convo.main.messages.iter().map(|m| m.id.as_str()).collect();
+    let unique: BTreeSet<&str> = ids.iter().copied().collect();
+    assert_eq!(ids.len(), unique.len(), "duplicate message ids: {ids:?}");
+    assert!(
+        convo.main.messages.iter().any(|m| m.tool_calls.is_some()),
+        "the later copy of a rewritten message carries its tool calls"
+    );
+
+    let view = toolpath_gemini::provider::to_view(&convo);
+    let total = view.total_usage.expect("fixture has token usage");
+    assert_eq!(total.input_tokens, Some(38_754));
+    assert_eq!(total.cache_read_tokens, Some(67_148));
+    assert_eq!(total.output_tokens, Some(1_080));
 }

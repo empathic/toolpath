@@ -279,11 +279,21 @@ fn tokens_from_common(u: &TokenUsage) -> Tokens {
         .get("output")
         .and_then(|m| m.get("reasoning"))
         .copied();
-    // Derived `input_tokens` excludes cache reads; Gemini's `input` includes
-    // them.
+    let tool = u
+        .breakdowns
+        .get("input")
+        .and_then(|m| m.get("tool_use"))
+        .copied()
+        .unwrap_or(0);
+    // Derived `input_tokens` excludes cache reads and includes tool-use
+    // prompt tokens; Gemini's `input` is the reverse.
     let input = match (u.input_tokens, u.cache_read_tokens) {
         (None, None) => None,
-        (i, c) => Some(i.unwrap_or(0).saturating_add(c.unwrap_or(0))),
+        (i, c) => Some(
+            i.unwrap_or(0)
+                .saturating_sub(tool)
+                .saturating_add(c.unwrap_or(0)),
+        ),
     };
     Tokens {
         input,
@@ -293,7 +303,7 @@ fn tokens_from_common(u: &TokenUsage) -> Tokens {
         },
         cached: u.cache_read_tokens,
         thoughts,
-        tool: None,
+        tool: Some(tool),
         total: None,
     }
 }
@@ -610,6 +620,56 @@ mod tests {
     }
 
     #[test]
+    fn tokens_from_common_folds_tool_use_back_out_of_input() {
+        let usage = TokenUsage {
+            input_tokens: Some(675 + 300),
+            cache_read_tokens: Some(8887),
+            breakdowns: BTreeMap::from([(
+                "input".to_string(),
+                BTreeMap::from([("tool_use".to_string(), 300u32)]),
+            )]),
+            ..Default::default()
+        };
+        let tokens = tokens_from_common(&usage);
+        assert_eq!(tokens.input, Some(9562));
+        assert_eq!(tokens.cached, Some(8887));
+        assert_eq!(tokens.tool, Some(300));
+
+        let no_tool = TokenUsage {
+            input_tokens: Some(10),
+            ..Default::default()
+        };
+        assert_eq!(tokens_from_common(&no_tool).tool, Some(0));
+    }
+
+    #[test]
+    fn tool_use_tokens_round_trip_through_derive() {
+        let wire = Tokens {
+            input: Some(9562),
+            output: Some(157),
+            cached: Some(8887),
+            thoughts: Some(24),
+            tool: Some(300),
+            total: None,
+        };
+        let usage = crate::provider::tokens_to_usage(&wire);
+        assert_eq!(
+            serde_json::to_value(tokens_from_common(&usage)).unwrap(),
+            serde_json::to_value(&wire).unwrap()
+        );
+
+        let zero_tool = Tokens {
+            tool: Some(0),
+            ..wire.clone()
+        };
+        let usage = crate::provider::tokens_to_usage(&zero_tool);
+        assert_eq!(
+            serde_json::to_value(tokens_from_common(&usage)).unwrap(),
+            serde_json::to_value(&zero_tool).unwrap()
+        );
+    }
+
+    #[test]
     fn tokens_from_common_without_breakdown_leaves_output_unchanged() {
         let usage = TokenUsage {
             output_tokens: Some(337),
@@ -754,7 +814,8 @@ mod tests {
         assert_eq!(tokens.input, Some(120));
         assert_eq!(tokens.output, Some(50));
         assert_eq!(tokens.cached, Some(20));
-        // thoughts/tool/total unknown on the fallback path
+        // thoughts/total unknown on the fallback path; tool zero-fills
+        assert_eq!(tokens.tool, Some(0));
         assert!(tokens.total.is_none());
     }
 
