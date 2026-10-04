@@ -349,10 +349,24 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// supplied. Progenitor doesn't expose a bearer-token setter, so we
 /// pre-bake the header into the http client and hand it via
 /// `Client::new_with_client`.
+/// One ceiling covers every Pathbase request. Uploads are the reason it
+/// is generous: a long session derives to several MB and goes up in one
+/// request. `$PATH_HTTP_TIMEOUT_SECS` overrides it for every command;
+/// `share --timeout` sets that variable for its own invocation.
+pub(crate) fn http_timeout() -> std::time::Duration {
+    const DEFAULT_SECS: u64 = 300;
+    let secs = std::env::var(crate::config::HTTP_TIMEOUT_ENV)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(DEFAULT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
 fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_client::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(30));
+        .timeout(http_timeout());
     if let Some(t) = token {
         let mut headers = reqwest::header::HeaderMap::new();
         let mut auth = reqwest::header::HeaderValue::from_str(&format!("Bearer {t}"))

@@ -22,6 +22,8 @@ pub(crate) const CONFIG_DIR_ENV: &str = "TOOLPATH_CONFIG_DIR";
 /// out of the wasm/emscripten build; a constant declared there does
 /// not exist on that target.
 pub(crate) const PATHBASE_URL_ENV: &str = "PATHBASE_URL";
+/// Pathbase request timeout override, in seconds (see `cmd_pathbase`).
+pub(crate) const HTTP_TIMEOUT_ENV: &str = "PATH_HTTP_TIMEOUT_SECS";
 
 // Every file and directory name under the config dir is declared here,
 // next to the directory resolution — never inline at a use site.
@@ -54,6 +56,8 @@ pub(crate) struct Config {
     pub(crate) copilot_home: Option<PathBuf>,
     /// `$HOME`: config-root fallback and the harness resolvers' root.
     pub(crate) home: Option<PathBuf>,
+    /// `$PATH_HTTP_TIMEOUT_SECS`: Pathbase request timeout override.
+    pub(crate) path_http_timeout_secs: Option<String>,
     /// `$PATHBASE_URL`: Pathbase server override (see `cmd_pathbase`).
     pub(crate) pathbase_url: Option<String>,
     /// `$SSH_AUTH_SOCK`: the ssh agent's socket (see `ssh`).
@@ -106,6 +110,7 @@ impl Config {
         ("CLAUDE_CONFIG_DIR", "claude_config_dir"),
         ("COPILOT_HOME", "copilot_home"),
         ("HOME", "home"),
+        (HTTP_TIMEOUT_ENV, "path_http_timeout_secs"),
         (PATHBASE_URL_ENV, "pathbase_url"),
         ("SSH_AUTH_SOCK", "ssh_auth_sock"),
         ("TERM", "term"),
@@ -219,6 +224,7 @@ mod tests {
             jail.set_env("APPDATA", "/home/jailed/appdata");
             jail.set_env("CLAUDE_CONFIG_DIR", "/home/jailed/.config/claude");
             jail.set_env(PATHBASE_URL_ENV, "https://pathbase.test");
+            jail.set_env(HTTP_TIMEOUT_ENV, "600");
             jail.set_env("TOOLPATH_QUERY_EXPLAIN", "1");
             jail.set_env("USERPROFILE", "/home/jailed-profile");
             jail.set_env("SSH_AUTH_SOCK", "/run/jailed/agent.sock");
@@ -231,6 +237,7 @@ mod tests {
                     claude_config_dir: Some(PathBuf::from("/home/jailed/.config/claude")),
                     copilot_home: Some(PathBuf::from("/home/jailed/.copilot")),
                     home: Some(PathBuf::from("/home/jailed")),
+                    path_http_timeout_secs: Some("600".to_string()),
                     pathbase_url: Some("https://pathbase.test".to_string()),
                     #[cfg(all(unix, feature = "resume-remote"))]
                     ssh_auth_sock: Some(PathBuf::from("/run/jailed/agent.sock")),
