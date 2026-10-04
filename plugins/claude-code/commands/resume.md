@@ -50,6 +50,8 @@ Always invoke the CLI through the wrapper, and write paths as literal absolute s
 
 Send a session to an ssh host and run it there under tmux. The remote needs `claude` and `tmux` on it, and the project directory. The deliverable is the attach command.
 
+The plugin's `resume-remote-hook.sh` handles a `/path:resume --remote <user@host>` prompt before it reaches you: it sends the current session and hands the user the attach command, and you never see the prompt. You are reading this because the hook let the prompt through. The hook does that when the user named a document to send, the arguments carry a quote, `jq` is not installed, the hook's input lacks a session ID, no `path` is installed (the hook never installs one), or the installed `path` lacks `resume --session`. Do not diagnose, build, or install; the check below decides.
+
 This mode needs a `path` built with the `resume-remote` cargo feature, version 0.28.0 or later. Check first:
 
 ```

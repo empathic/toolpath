@@ -1,0 +1,16 @@
+{
+  "description": "When `/path:resume` expands, the hook reads its arguments. `--remote <user@host>` with no document sends the current session to that host under tmux and blocks the expansion with the attach command as the reason, so the send costs no model turn; any other argument list expands as usual.",
+  "hooks": {
+    "UserPromptExpansion": [
+      {
+        "matcher": "path:resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/resume-remote-hook.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
