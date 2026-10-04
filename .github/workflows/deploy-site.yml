@@ -24,6 +24,14 @@ jobs:
           key: cargo-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-test-
 
+      # The wasm gate bootstraps emsdk into local/emsdk when emcc is missing.
+      # Same key as the deploy job's cache, so both jobs share one install.
+      - name: Cache emsdk
+        uses: actions/cache@v4
+        with:
+          path: local/emsdk
+          key: emsdk-${{ hashFiles('.emsdk-version') }}
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
