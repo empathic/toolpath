@@ -62,6 +62,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         .base_uri
         .clone()
         .map(|uri| Base {
+            from: None,
             uri,
             ref_str: view.base.as_ref().and_then(|b| b.vcs_revision.clone()),
             branch: view.base.as_ref().and_then(|b| b.vcs_branch.clone()),
@@ -75,6 +76,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     wd.clone()
                 };
                 Some(Base {
+                    from: None,
                     uri,
                     ref_str: b.vcs_revision.clone(),
                     branch: b.vcs_branch.clone(),
@@ -92,6 +94,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         wd
                     };
                     Base {
+                        from: None,
                         uri,
                         ref_str: None,
                         branch: None,

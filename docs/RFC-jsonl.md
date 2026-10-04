@@ -599,3 +599,9 @@ could cover the case, guarded by a version bump.
   Shares the "each record is self-describing" property.
 - **JCS (RFC 8785)**: JSON Canonicalization Scheme. Used unchanged for
   the signature path.
+
+
+`PathOpen.base` preserves the same optional `from` structural reference as JSON
+documents, independently of VCS context. A stored continuation stream contains
+only owned steps; it does not resend inherited steps as local replacements.
+Resolving and composing a frozen base follows the core RFC, not append replay.

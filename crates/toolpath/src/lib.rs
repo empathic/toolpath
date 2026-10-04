@@ -2,6 +2,7 @@
 
 mod jsonl;
 mod query;
+mod reference;
 mod types;
 
 /// The canonical JSON Schema for Toolpath documents, baked into the binary.
@@ -145,6 +146,7 @@ pub mod v1 {
         };
     }
 
+    pub use crate::reference::{BaseReference, ReferenceError};
     pub use crate::types::{
         ActorDefinition, ArtifactChange, Base, Graph, GraphIdentity, GraphMeta, Identity, Key,
         PATH_KIND_AGENT_CODING_SESSION, PATH_KIND_AGENT_CODING_SESSION_V1_0_0, Path, PathIdentity,

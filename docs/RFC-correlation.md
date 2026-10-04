@@ -610,3 +610,12 @@ extraction than to rely on clock agreement.
 - **Git Notes**: Attaching metadata to commits after the fact. Correlation
   refs serve a similar purpose — enriching existing objects without modifying
   their core content.
+
+
+### Continuation annotation
+
+Graph and path `meta.refs` may use `rel: "continues"` with `uri` identifying
+the preceding frozen graph document (graph-level) or its scoped base reference
+(path-level). This human-facing relationship labels resumed work; it does not
+create parent edges and never substitutes for structural `path.base.from`.
+The continuation owns only new steps; frozen history remains in its source.

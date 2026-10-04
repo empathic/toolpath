@@ -307,6 +307,7 @@ fn init_session(config: InitConfig) -> Result<PathBuf> {
     let session_id = format!("track-{ts_compact}-{pid}");
 
     let base = config.base_uri.map(|uri| v1::Base {
+        from: None,
         uri,
         ref_str: config.base_ref,
         branch: None,
@@ -848,6 +849,7 @@ mod tests {
     fn test_session_with_base() {
         let dir = TempDir::new().unwrap();
         let base = v1::Base {
+            from: None,
             uri: "github:org/repo".to_string(),
             ref_str: Some("main".to_string()),
             branch: None,
@@ -1817,6 +1819,7 @@ mod tests {
     fn test_session_with_base_is_valid_document() {
         let dir = TempDir::new().unwrap();
         let base = v1::Base {
+            from: None,
             uri: "github:org/repo".to_string(),
             ref_str: Some("abc123".to_string()),
             branch: None,
