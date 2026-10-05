@@ -209,6 +209,7 @@ const CODEX: &[(&str, ToolCategory)] = &[
     ("replace", FileWrite),
     ("edit", FileWrite),
     ("shell", Shell),
+    ("shell_command", Shell),
     ("exec_command", Shell),
     ("unified_exec", Shell),
     ("write_stdin", Shell),
@@ -483,6 +484,10 @@ mod tests {
             Some(Shell)
         );
         assert_eq!(
+            tool_category(KnownHarness::Codex, "shell_command"),
+            Some(Shell)
+        );
+        assert_eq!(
             tool_category(KnownHarness::Cursor, "StrReplace"),
             Some(FileWrite)
         );
@@ -502,6 +507,7 @@ mod tests {
         assert_eq!(fallback_tool_category("Bash"), Some(Shell));
         assert_eq!(fallback_tool_category("apply_patch"), Some(FileWrite));
         assert_eq!(fallback_tool_category("unified_exec"), Some(Shell));
+        assert_eq!(fallback_tool_category("shell_command"), Some(Shell));
         assert_eq!(fallback_tool_category("edit"), Some(FileWrite));
         assert_eq!(fallback_tool_category("ls"), None);
         assert_eq!(fallback_tool_category("list_dir"), None);

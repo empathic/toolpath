@@ -18,7 +18,9 @@ All notable changes to the Toolpath workspace are documented here.
   **`toolpath-opencode`**, **`toolpath-pi`**, **`toolpath-copilot`**,
   **`toolpath-cursor`**: their `tool_category` (pi: `classify_tool`)
   now delegates to the shared table. Internal only: same signatures,
-  same categories, derived documents unchanged.
+  same categories, derived documents unchanged, except as below.
+- **`toolpath-codex`**: Codex's `shell_command` tool is now categorized
+  as `Shell`; it was uncategorized before.
 
 ## path-cli 0.29.0 — 2026-09-29
 
