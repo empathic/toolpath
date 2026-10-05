@@ -580,6 +580,222 @@ fn records_of_two_sessions_read_together_and_mix_only_when_derived_together() {
     assert!(matches!(err, OtelError::MixedSessions(ids) if ids.len() == 2));
 }
 
+/// Every pointer into `v`: the root, each member, and each element.
+fn pointers(v: &Value, at: String, out: &mut Vec<String>) {
+    out.push(at.clone());
+    match v {
+        Value::Object(m) => m
+            .iter()
+            .for_each(|(k, x)| pointers(x, format!("{at}/{k}"), out)),
+        Value::Array(a) => a
+            .iter()
+            .enumerate()
+            .for_each(|(i, x)| pointers(x, format!("{at}/{i}"), out)),
+        _ => {}
+    }
+}
+
+/// `v` with the value at `ptr` removed (`None`) or replaced.
+fn mutated(v: &Value, ptr: &str, with: &Option<Value>) -> Option<Value> {
+    let Some((parent, key)) = ptr.rsplit_once('/') else {
+        return with.clone();
+    };
+    let mut v = v.clone();
+    match (v.pointer_mut(parent)?, with) {
+        (Value::Object(o), None) => {
+            o.remove(key);
+        }
+        (Value::Object(o), Some(x)) => {
+            o.insert(key.into(), x.clone());
+        }
+        (Value::Array(a), None) => {
+            a.remove(key.parse().ok()?);
+        }
+        (Value::Array(a), Some(x)) => a[key.parse::<usize>().ok()?] = x.clone(),
+        _ => return None,
+    }
+    Some(v)
+}
+
+/// Every field of a record and of a stored message, removed or replaced
+/// by a value of another type, either fails to deserialize or derives (or
+/// errors) without a panic.
+#[test]
+fn malformed_fields_are_rejected_or_derived_without_a_panic() {
+    let batch = read(&deliveries("claude-code.ndjson"), ProfileSelection::Auto).output;
+    let config = classified();
+    let withs = [
+        None,
+        Some(Value::Null),
+        Some(json!("")),
+        Some(json!(-1)),
+        Some(json!(1.5)),
+        Some(json!(u64::MAX)),
+        Some(json!(true)),
+        Some(json!([])),
+        Some(json!({})),
+        Some(json!("a".repeat(64))),
+    ];
+    let mut cases = 0;
+    let mut check = |v: &Value, derive: &dyn Fn(Value)| {
+        let mut ptrs = Vec::new();
+        pointers(v, String::new(), &mut ptrs);
+        for ptr in &ptrs {
+            for with in &withs {
+                let Some(m) = mutated(v, ptr, with) else {
+                    continue;
+                };
+                let run = std::panic::AssertUnwindSafe(|| derive(m));
+                assert!(std::panic::catch_unwind(run).is_ok(), "{ptr} = {with:?}");
+                cases += 1;
+            }
+        }
+    };
+    let last = batch.records.len() - 1;
+    let record = serde_json::to_value(&batch.records[last]).unwrap();
+    check(&record, &|m| {
+        if let Ok(r) = serde_json::from_value::<GenerationRecord>(m) {
+            let mut records = batch.records.clone();
+            records[last] = r;
+            let _ = from_records(
+                &GenerationBatch {
+                    records,
+                    messages: batch.messages.clone(),
+                },
+                &config,
+            );
+        }
+    });
+    let (hash, message) = batch.messages.iter().next().unwrap();
+    check(&serde_json::to_value(message).unwrap(), &|m| {
+        if let Ok(stored) = serde_json::from_value::<StoredMessage>(m) {
+            let mut messages = batch.messages.clone();
+            messages.insert(hash.clone(), stored);
+            let _ = derive_path_from_records(&batch.records, |h| messages.get(h), &config);
+        }
+    });
+    assert!(cases > 500, "{cases}");
+}
+
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n as u64) as usize
+    }
+}
+
+/// A session of prompts drawn from a few messages (system, id-less and
+/// id'd calls, their results, an error result), so prompts share prefixes
+/// at every depth; some generations are deltas, prompt-absent skeletons,
+/// or redelivered copies, in no particular start order.
+fn random_generations(rng: &mut Rng) -> Vec<Generation> {
+    use crate::generation::{Completion, FunctionCall, History, ToolCall};
+    let pool = [
+        json!({"role": "system", "content": "sys"}),
+        json!({"role": "user", "content": "u"}),
+        json!({"role": "user", "content": "v"}),
+        json!({"role": "assistant", "content": "a0"}),
+        json!({"role": "assistant", "content": "a1",
+            "tool_calls": [{"id": "", "function": {"name": "Bash", "arguments": "{}"}}]}),
+        json!({"role": "assistant", "content": "a2",
+            "tool_calls": [{"id": "c1", "function": {"name": "Bash", "arguments": "{}"}}]}),
+        json!({"role": "tool", "content": "r"}),
+        json!({"role": "tool", "content": "r", "tool_call_id": "c1"}),
+        json!({"role": "tool", "content": "e", "tool_call_id": "c1", "is_error": true}),
+        json!({"role": "developer", "content": "dev"}),
+    ];
+    let n = 1 + rng.below(10);
+    let mut gens: Vec<Generation> = (0..n)
+        .map(|i| {
+            let messages: Vec<Message> = (0..rng.below(7))
+                .map(|_| serde_json::from_value(pool[rng.below(pool.len())].clone()).unwrap())
+                .collect();
+            let tool_calls = (0..rng.below(3))
+                .map(|k| ToolCall {
+                    id: match rng.below(2) {
+                        0 => String::new(),
+                        _ => format!("c{}", rng.below(2) + k),
+                    },
+                    function: FunctionCall {
+                        name: "Bash".into(),
+                        arguments: json!("{}"),
+                    },
+                })
+                .collect();
+            let mut g = Generation {
+                id: format!("g{i:02}"),
+                trace_id: format!("t{}", rng.below(2)),
+                start_ns: rng.below(5) as u64,
+                end_ns: 10,
+                profile: OR.into(),
+                messages: messages.into(),
+                completion: Completion {
+                    text: format!("a{}", rng.below(3)),
+                    tool_calls,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            if i > 0 && rng.below(4) == 0 {
+                g.continues = Some(format!("g{:02}", rng.below(n + 1)));
+                g.history = History::Delta;
+            }
+            if rng.below(10) == 0 {
+                g.absent.prompt = true;
+                g.messages = Default::default();
+            }
+            g
+        })
+        .collect();
+    let copies: Vec<Generation> = gens.iter().filter(|_| rng.below(5) == 0).cloned().collect();
+    gens.extend(copies);
+    gens
+}
+
+/// Records rebuilt from a message store, in any order, stitch by message
+/// hash to what the generations themselves stitch to by content.
+#[test]
+fn random_sessions_derive_alike_from_records_and_from_generations() {
+    let config = classified();
+    let mut derived = 0;
+    for seed in 1..300u64 {
+        let mut rng = Rng(seed.wrapping_mul(0x2545_f491_4f6c_dd1d) | 1);
+        let gens = random_generations(&mut rng);
+        let entries = gens
+            .iter()
+            .map(|g| Entry::Generation(Box::new(g.clone()), None))
+            .collect();
+        let (session, _) = session_of(
+            entries,
+            ProfileSelection::Auto,
+            Pick::Rank,
+            SkipCounts::default(),
+        )
+        .unwrap();
+        let want = bytes(&crate::derive::derive_session(
+            &session,
+            &config.convo,
+            config.tool_category.as_ref(),
+        ));
+        let mut batch = GenerationBatch::default();
+        batch.records = gens
+            .into_iter()
+            .map(|g| GenerationRecord::of(g, &mut batch.messages))
+            .collect();
+        for i in (1..batch.records.len()).rev() {
+            batch.records.swap(i, rng.below(i + 1));
+        }
+        let got = from_records(&through_json(&batch), &config).unwrap();
+        assert!(bytes(&got.output) == want, "seed {seed}");
+        derived += 1;
+    }
+    assert_eq!(derived, 299);
+}
+
 /// Every order of `items`.
 fn orders<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
     if items.len() <= 1 {
