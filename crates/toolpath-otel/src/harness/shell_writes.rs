@@ -2,7 +2,7 @@
 //! ones inferred from shell heredocs, with whole-file content carried
 //! along the turn's ancestry.
 
-use super::mutations::{file_mutations, patch_mutations};
+use super::mutations::{fallback_path, file_mutations, patch_mutations};
 use super::shell::{
     Basis, Outcome, ShellCall, ShellOutcome, call_outcome, shell_call, shell_outcome,
 };
@@ -188,13 +188,28 @@ struct Entry {
 }
 
 fn observed(tool: &ToolInvocation, cwd: Option<&str>, known: &mut Known, entries: &mut Vec<Entry>) {
+    // Left to convo's fallback: no mutation here, but its change replaces
+    // a shell write's to the same path.
+    if let Some(path) = fallback_path(tool) {
+        known.remove(&track_key(path, cwd));
+        if let Some(e) = entries
+            .iter_mut()
+            .rev()
+            .find(|e| e.m.path == path && !e.execs.is_empty())
+        {
+            e.source = None;
+        }
+        return;
+    }
     let ok = shell_outcome(&tool.name, tool.result.as_ref()).outcome == Outcome::Success;
+    // A notebook edit's `after` is one cell's source.
+    let cell = tool.input.get("new_source").is_some();
     for m in file_mutations(tool) {
         let key = track_key(&m.path, cwd);
         // Whole-file content: a Write (`after` without `before`) or a
         // patch's added file. Edits carry fragments, so they forget.
         let whole = m.operation.as_deref() == Some("add")
-            || (m.operation.is_none() && m.before.is_none() && m.after.is_some());
+            || (!cell && m.operation.is_none() && m.before.is_none() && m.after.is_some());
         match m.after.as_deref() {
             Some(a) if ok && whole => {
                 known.insert(key, a.into());
@@ -1196,6 +1211,54 @@ mod tests {
             &mut ShellState::default(),
         );
         assert_eq!(t.mutations[0].path, "a");
+    }
+
+    fn multi_edit(id: &str, path: &str) -> ToolInvocation {
+        call(
+            id,
+            "MultiEdit",
+            json!({"file_path": path, "edits": [{"old_string": "x", "new_string": "z"}]}),
+            Some(("ok", false)),
+        )
+    }
+
+    #[test]
+    fn a_multi_edit_left_to_the_fallback_forgets_the_file() {
+        let mut known = Known::from([("/w/a.txt".to_string(), Rc::from("x\n"))]);
+        let t = run(&[multi_edit("e1", "a.txt")], &mut known);
+        assert!(t.mutations.is_empty(), "{:?}", t.mutations);
+        assert_eq!(known.get("/w/a.txt"), None);
+    }
+
+    #[test]
+    fn a_multi_edit_after_a_shell_write_takes_it_over() {
+        let mut known = Known::new();
+        let t = run(
+            &[
+                exec("c1", "cat <<'EOF' > a.txt\nx\nEOF", Some(OK)),
+                multi_edit("e1", "a.txt"),
+            ],
+            &mut known,
+        );
+        let s = &t.stamps["a.txt"];
+        assert_eq!(s.get("source"), None, "{s}");
+        assert_eq!(s["executions"].as_array().unwrap().len(), 1);
+        assert_eq!(known.get("/w/a.txt"), None);
+    }
+
+    #[test]
+    fn a_notebook_edit_is_not_whole_file_content() {
+        let mut known = Known::new();
+        run(
+            &[call(
+                "n1",
+                "NotebookEdit",
+                json!({"notebook_path": "nb.ipynb", "cell_id": "c", "new_source": "print(1)"}),
+                Some(("ok", false)),
+            )],
+            &mut known,
+        );
+        assert_eq!(known.get("/w/nb.ipynb"), None);
     }
 
     #[test]

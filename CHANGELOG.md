@@ -34,8 +34,10 @@ All notable changes to the Toolpath workspace are documented here.
   is gone, and a file header with an empty path is no longer a change.
   `derive_jsonl` keeps every sent step final: a turn also waits for an
   unanswered call from an earlier generation that may move a persistent
-  shell. Sessions without shell writes derive as before. Requires
-  `toolpath-convo` 0.11.2.
+  shell. Sessions without shell writes derive as before. A `NotebookEdit`
+  (one cell) or a `MultiEdit` left to `toolpath-convo`'s fallback forgets
+  the file's known content, and such a fallback call takes over a shell
+  write to its file earlier in the turn. Requires `toolpath-convo` 0.11.2.
 
 ## toolpath-convo 0.11.2 — 2026-10-01
 

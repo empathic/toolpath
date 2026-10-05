@@ -745,7 +745,7 @@ what the same patch sent to the `apply_patch` tool records (`operation`
 
 | Key | Value |
 |---|---|
-| `source` | `"shell-heredoc"` or `"shell-apply-patch"` (the last shell source to touch the path in the turn); absent when a later observed write in the same turn took the change over |
+| `source` | `"shell-heredoc"` or `"shell-apply-patch"` (the last shell source to touch the path in the turn); absent when a later observed write in the same turn took the change over, including a call left to `toolpath-convo`'s fallback |
 | `outcome` | `failure` if any execution failed, else `unknown` if any is unknown, else `success` |
 | `executions[]` | one per shell write or patch of this path in this turn, in order |
 
@@ -808,9 +808,10 @@ or a shell). A shell write counts as known only when its call succeeded and
 or a write followed by `;`/newline and more commands is recorded but not
 known. An append onto known content carries `before`, `after` and a diff;
 onto unknown content it carries no diff and `operation: "append"`. Content
-is forgotten after an edit, a patch update, delete or move, a write not
-known to have happened, and any other shell command whose text names the
-file. A write's diff is taken from the known content, else from empty (as
+is forgotten after an edit (a `NotebookEdit`'s `new_source` is one cell, a
+call left to the fallback carries no content), a patch update, delete or
+move, a write not known to have happened, and any other shell command whose
+text names the file. A write's diff is taken from the known content, else from empty (as
 for `Write`).
 
 ## Profile `semconv` (OpenTelemetry GenAI semantic conventions)
