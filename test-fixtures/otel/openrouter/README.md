@@ -15,7 +15,16 @@ These are sanitized OpenRouter Broadcast deliveries (OTLP/HTTP JSON). They were 
 
 ## What sanitizing changed
 
-- **System and developer messages, and injected user context** (system reminders, AGENTS.md, environment blocks) became deterministic stubs such as `[sanitized system d01fe707]`. They keep the harness's cwd marker (`Primary working directory: /work/project`, or `<environment_context><cwd>/work/project</cwd>…`). Identical originals map to identical stubs, so prefix stitching still holds.
+- **System and developer messages, and injected user context** (system reminders, AGENTS.md, environment blocks) became deterministic stubs such as `[sanitized system d01fe707]`. Each stub keeps its own harness's cwd marker, in the role and form that harness sends it, around the sanitized path:
+
+  | File | Marker kept |
+  |---|---|
+  | `claude-code.ndjson`, `synthetic-fork.ndjson` | system: ` - Primary working directory: /work/project` |
+  | `codex.ndjson`, `codex-error-span.json` | user: `<environment_context>` with `<cwd>/work/project</cwd>` |
+  | `opencode.ndjson` | system: `Here is some useful information about the environment you are running in:` then `<env>` / `  Working directory: /work/project` / `</env>` (sst/opencode `session/system.ts`; the block's other lines are sanitized away) |
+  | `pi.ndjson` | system: `Current working directory: /work/project` (badlogic/pi-mono `coding-agent/src/core/system-prompt.ts`, line form) |
+
+  Identical originals map to identical stubs, so prefix stitching still holds.
 - **The real task prompt is unchanged:** "Create wc.py …".
 - **Paths:** the run directory became `/work/project`, and the home directory became `/home/user`. Names and emails became `Dev User` / `dev@example.com`.
 - **Attribution:** user, device and entity ids were replaced with fixed fakes. `api_key_name` became `"fixture key"`.

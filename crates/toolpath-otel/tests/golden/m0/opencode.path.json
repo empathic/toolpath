@@ -80,7 +80,7 @@
         "base": {
           "uri": "file:///work/project"
         },
-        "head": "9b274c7c14b34a1d",
+        "head": "38d662f5f60f4c1f",
         "id": "path-otel-46eb80f4"
       },
       "steps": [
@@ -89,19 +89,19 @@
             "otel://46eb80f4-332f-826e-b07f-6035f8401f54": {
               "structural": {
                 "otel": {
-                  "content_hash": "bd976a9292ba98163d8f0a3f50d9c63dad71fc871afc0d9864baa4dc28dcfcff",
+                  "content_hash": "0dae766db750b059e6cd3999e41128e6bf5f9b65e47a5fcb4930ef3cb9f1ef14",
                   "first_generation_id": "gen-1790605504-cpHCKdt8gpR7ocyZa2Hv",
                   "message_role": "system"
                 },
                 "role": "system",
-                "text": "<system-reminder>\n[sanitized system 64be43df]\n - Primary working directory: /work/project\n</system-reminder>",
+                "text": "<system-reminder>\n[sanitized system 64be43df]\nHere is some useful information about the environment you are running in:\n<env>\n  Working directory: /work/project\n</env>\n</system-reminder>",
                 "type": "conversation.append"
               }
             }
           },
           "step": {
             "actor": "tool:otel",
-            "id": "5900707f0e26a0b2",
+            "id": "70af5e26612f3dfc",
             "timestamp": "2026-09-28T14:25:04.206Z"
           }
         },
@@ -122,9 +122,9 @@
           },
           "step": {
             "actor": "human:user",
-            "id": "6c07294fb215299a",
+            "id": "6caad294a32e52c4",
             "parents": [
-              "5900707f0e26a0b2"
+              "70af5e26612f3dfc"
             ],
             "timestamp": "2026-09-28T14:25:04.206Z"
           }
@@ -182,7 +182,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "6c07294fb215299a",
+                  "prompt_tip": "6caad294a32e52c4",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "245d3f0a534cbf6f096087a280658b63",
@@ -253,9 +253,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "c6ecc1c6ed32ab92",
+            "id": "6c292540f4846573",
             "parents": [
-              "6c07294fb215299a"
+              "6caad294a32e52c4"
             ],
             "timestamp": "2026-09-28T14:25:06.649Z"
           }
@@ -322,7 +322,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "e35c0e05d914834f",
+                  "prompt_tip": "479a6cb34e705e36",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "865c9090017379aa75d97ca932abac1f",
@@ -368,9 +368,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "46ed5594a39bf9d1",
+            "id": "d6fea6c14381bce5",
             "parents": [
-              "c6ecc1c6ed32ab92"
+              "6c292540f4846573"
             ],
             "timestamp": "2026-09-28T14:25:09.913Z"
           }
@@ -437,7 +437,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "e4b7bab6a6f0568a",
+                  "prompt_tip": "740d3e422019ac10",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "306812e579ad8a1007b2f115917c6d0a",
@@ -483,9 +483,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "bbbfb53f37c57c61",
+            "id": "a157555056b31ba4",
             "parents": [
-              "46ed5594a39bf9d1"
+              "d6fea6c14381bce5"
             ],
             "timestamp": "2026-09-28T14:25:12.369Z"
           }
@@ -543,7 +543,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "50755bde603730e2",
+                  "prompt_tip": "41e34daf8a694c71",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "2cfd47c4a1ce2eeebad7c1d980328c26",
@@ -614,9 +614,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "03f3233031b1679b",
+            "id": "6732259ccc87bd3f",
             "parents": [
-              "bbbfb53f37c57c61"
+              "a157555056b31ba4"
             ],
             "timestamp": "2026-09-28T14:25:15.059Z"
           }
@@ -674,7 +674,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "a5c21f4d22a1ea5c",
+                  "prompt_tip": "7ba3804582d7b942",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "87218175a39e5429ab45d01dce985fab",
@@ -719,9 +719,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "1438f3c17127b40d",
+            "id": "74fdf966838551b2",
             "parents": [
-              "03f3233031b1679b"
+              "6732259ccc87bd3f"
             ],
             "timestamp": "2026-09-28T14:25:17.090Z"
           }
@@ -779,7 +779,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "71e178f1fda8c5ae",
+                  "prompt_tip": "f415381da10c0601",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "c8a270e2a58aebdde0890a3fbe3aa806",
@@ -850,9 +850,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "6e1233815f50f977",
+            "id": "8f058d0c86337cab",
             "parents": [
-              "1438f3c17127b40d"
+              "74fdf966838551b2"
             ],
             "timestamp": "2026-09-28T14:25:19.364Z"
           }
@@ -910,7 +910,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "f7b3c586c2921cbc",
+                  "prompt_tip": "7a1c41d918247a42",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "98024c61c95f04f051c1ada8b7347d87",
@@ -955,9 +955,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "de3356930fe20a40",
+            "id": "0ad4dfe8ac14231a",
             "parents": [
-              "6e1233815f50f977"
+              "8f058d0c86337cab"
             ],
             "timestamp": "2026-09-28T14:25:21.615Z"
           }
@@ -1015,7 +1015,7 @@
                     },
                     "upstream_finish_reason": "tool_use"
                   },
-                  "prompt_tip": "7fd66d87307e0c8d",
+                  "prompt_tip": "682f26e595e17475",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "cfec3c60da9fcff78955664b7d1c71f0",
@@ -1086,9 +1086,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "c0dae24186afda92",
+            "id": "8194aea38a640f08",
             "parents": [
-              "de3356930fe20a40"
+              "0ad4dfe8ac14231a"
             ],
             "timestamp": "2026-09-28T14:25:23.754Z"
           }
@@ -1147,7 +1147,7 @@
                     },
                     "upstream_finish_reason": "end_turn"
                   },
-                  "prompt_tip": "c5fd0feaf1c150a6",
+                  "prompt_tip": "49e8e8af42fc3ea1",
                   "provider": "anthropic",
                   "request_model": "anthropic/claude-haiku-4.5",
                   "trace_id": "5a3e87e23b3ae557682397e1626f566e",
@@ -1178,9 +1178,9 @@
           },
           "step": {
             "actor": "agent:anthropic/claude-haiku-4.5",
-            "id": "9b274c7c14b34a1d",
+            "id": "38d662f5f60f4c1f",
             "parents": [
-              "c0dae24186afda92"
+              "8194aea38a640f08"
             ],
             "timestamp": "2026-09-28T14:25:25.564Z"
           }
