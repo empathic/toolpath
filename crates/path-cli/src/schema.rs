@@ -159,56 +159,58 @@ fn appends(step: &serde_json::Value) -> Vec<(String, &serde_json::Value)> {
 /// Breaches of the agent-coding-session accounting rules, as
 /// `(pointer within the path, message)`:
 /// - a `group_id`'s `token_usage` sits on one step only, placed by `rule`;
-/// - a breakdown is keyed by one of the four classes, and its sub-classes sum
-///   to no more than that class, on `token_usage` and `attributed_token_usage`.
+/// - a breakdown's sub-classes sum to no more than their class, on
+///   `token_usage` and `attributed_token_usage`.
+fn group_id_of(append: &serde_json::Value) -> Option<&str> {
+    append.get("group_id").and_then(|g| g.as_str())
+}
+
 fn accounting_violations(path: &serde_json::Value, rule: GroupRule) -> Vec<(String, String)> {
     let Some(steps) = path.get("steps").and_then(|s| s.as_array()) else {
         return Vec::new();
     };
     let per_step: Vec<Vec<(String, &serde_json::Value)>> = steps.iter().map(appends).collect();
-    let group_of = |j: usize| {
-        per_step[j]
-            .iter()
-            .find_map(|(_, a)| a.get("group_id").and_then(|g| g.as_str()))
+    let step_has_group = |j: usize, g: &str| {
+        per_step
+            .get(j)
+            .is_some_and(|ps| ps.iter().any(|(_, a)| group_id_of(a) == Some(g)))
     };
     let mut last_of_group: HashMap<&str, usize> = HashMap::new();
-    for j in 0..steps.len() {
-        if let Some(group) = group_of(j) {
-            last_of_group.insert(group, j);
+    for (j, payloads) in per_step.iter().enumerate() {
+        for (_, a) in payloads {
+            if let Some(g) = group_id_of(a) {
+                last_of_group.insert(g, j);
+            }
         }
     }
 
     let mut out = Vec::new();
     for (j, payloads) in per_step.iter().enumerate() {
-        if let Some(group) = group_of(j) {
-            let carries_total = match rule {
-                GroupRule::LastOfRun => j + 1 == steps.len() || group_of(j + 1) != Some(group),
-                GroupRule::LastOfGroup => last_of_group[group] == j,
-            };
-            if !carries_total {
-                let place = match rule {
-                    GroupRule::LastOfRun => "the last step of its run",
-                    GroupRule::LastOfGroup => "the group's last step",
+        for (pointer, append) in payloads {
+            if let Some(g) = group_id_of(append)
+                && append.get("token_usage").is_some()
+            {
+                let (carries_total, place) = match rule {
+                    GroupRule::LastOfRun => (!step_has_group(j + 1, g), "the last step of its run"),
+                    GroupRule::LastOfGroup => (last_of_group[g] == j, "the group's last step"),
                 };
-                for (pointer, append) in payloads {
-                    if append.get("token_usage").is_some() {
-                        out.push((
-                            format!("/steps/{j}{pointer}/token_usage"),
-                            format!(
-                                "token_usage on a step of group_id {group:?} that is not \
-                                 {place}; the group total belongs there only"
-                            ),
-                        ));
-                    }
+                if !carries_total {
+                    out.push((
+                        format!("/steps/{j}{pointer}/token_usage"),
+                        format!(
+                            "token_usage on a step of group_id {g:?} that is not {place}; \
+                             the group total belongs there only"
+                        ),
+                    ));
                 }
             }
-        }
-        for (pointer, append) in payloads {
             for key in ["token_usage", "attributed_token_usage"] {
                 if let Some(usage) = append.get(key) {
-                    out.extend(breakdown_violations(usage).into_iter().map(|(class, msg)| {
-                        (format!("/steps/{j}{pointer}/{key}/breakdowns/{class}"), msg)
-                    }));
+                    out.extend(breakdown_violations(usage, rule).into_iter().map(
+                        |(class, msg)| {
+                            (format!("/steps/{j}{pointer}/{key}/breakdowns/{class}"), msg)
+                        },
+                    ));
                 }
             }
         }
@@ -218,13 +220,21 @@ fn accounting_violations(path: &serde_json::Value, rule: GroupRule) -> Vec<(Stri
 
 const BREAKDOWN_CLASSES: [&str; 4] = ["input", "output", "cache_read", "cache_write"];
 
-fn breakdown_violations(usage: &serde_json::Value) -> Vec<(String, String)> {
+/// v1.2.0 keys breakdowns by the four classes and counts an unreported parent
+/// as zero; v1.1.0 bounds only a breakdown whose parent is reported.
+fn breakdown_violations(usage: &serde_json::Value, rule: GroupRule) -> Vec<(String, String)> {
+    let strict = rule == GroupRule::LastOfGroup;
     let Some(breakdowns) = usage.get("breakdowns").and_then(|b| b.as_object()) else {
         return Vec::new();
     };
     breakdowns
         .iter()
         .filter_map(|(class, inner)| {
+            let field = format!("{class}_tokens");
+            let reported = usage.get(&field).and_then(|v| v.as_u64());
+            if !strict && reported.is_none() {
+                return None;
+            }
             if !BREAKDOWN_CLASSES.contains(&class.as_str()) {
                 return Some((
                     escape_pointer(class),
@@ -234,8 +244,7 @@ fn breakdown_violations(usage: &serde_json::Value) -> Vec<(String, String)> {
                     ),
                 ));
             }
-            let field = format!("{class}_tokens");
-            let parent = usage.get(&field).and_then(|v| v.as_u64()).unwrap_or(0);
+            let parent = reported.unwrap_or(0);
             let sum = inner
                 .as_object()?
                 .values()
@@ -555,6 +564,31 @@ mod tests {
             ],
         );
         validate(&doc).expect("v1.1.0 puts a total on each run's last step");
+    }
+
+    #[test]
+    fn each_append_is_judged_by_its_own_group() {
+        let mut doc = acs_steps(
+            ACS_KIND,
+            &[
+                assistant(Some("msg_1"), None),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        doc["paths"][0]["steps"][0]["change"]["agent://claude-code/s2"] =
+            json!({"structural": assistant(Some("msg_2"), Some(usage(3, 1)))});
+        validate(&doc).expect("msg_2's only step carries msg_2's total");
+    }
+
+    #[test]
+    fn v1_1_0_breakdowns_keep_their_original_bound() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"total": {"x": 1}, "cache_read": {"y": 2}});
+        validate(&acs_steps(
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+            &[assistant(None, Some(u))],
+        ))
+        .expect("v1.1.0 bounds only a breakdown whose parent is reported");
     }
 
     #[test]

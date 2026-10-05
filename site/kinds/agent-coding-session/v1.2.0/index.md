@@ -69,7 +69,7 @@ How `token_usage` on steps relates to the source's accounting units:
 
 Consequence: **summing `token_usage` over a path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-group rule, so it is normative prose, enforced by producer test suites and checked by `path p validate`.)
 
-`token_usage` has **one meaning everywhere it appears: the total for a group**. A step without a `group_id` is a one-step group, so its `token_usage` is that group's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `group_id` on the same payload tells you which group it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source itemizes a group's spend (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the group total and the items do not ride `token_usage`. The total covers every billed part of the group on the group's own model, including parts the source's top-level total leaves out: for an Anthropic message it is the sum of the `usage.iterations` entries billed on the message's model, compaction iterations included, which the top-level `usage` excludes. Tokens billed on a different model (an advisor or fallback iteration) are outside the four classes, because adding them to the message's own counts would mix two models' prices. Per-request fees, such as server tool use, are outside `token_usage` too.
+`token_usage` has **one meaning everywhere it appears: the total for a group**. A step without a `group_id` is a one-step group, so its `token_usage` is that group's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `group_id` on the same payload tells you which group it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source itemizes a group's spend (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the group total and the items do not ride `token_usage`. The total covers every billed part of the group on the group's own model, including parts the source's top-level total leaves out: for an Anthropic message it is the sum of the `usage.iterations` entries billed on the message's model, compaction iterations included, which the top-level `usage` excludes. Tokens billed on a different model (an advisor or fallback iteration) are outside the four classes, because adding them to the message's own counts would mix two models' prices. An iteration that names no model belongs to the message's model. Where a message's usage repeats across records, the producer takes its final usage (the field-wise maximum) and then sums that usage's iterations. Per-request fees, such as server tool use, are outside `token_usage` too.
 
 ### Per-step attribution: `attributed_token_usage`
 
@@ -78,10 +78,10 @@ Some sources expose, per step, the spend attributable to that step alone — dis
 How it relates to the group total:
 
 - Within a `group_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is _computed_ by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay source observations (converted to the additive classes) and source inconsistencies stay visible.
-- For a group where the source attributes everything (e.g. Codex, where each step is a separate API call and the per-call delta is reported directly), the remainder is zero and `Σ attributed_token_usage == token_usage`.
+- For a group where the source attributes everything (e.g. Codex, where each step is one API call and the per-call delta is reported directly), the remainder is zero and `Σ attributed_token_usage == token_usage`.
 - A group with no per-step data carries no `attributed_token_usage` at all — only the group total. Producers must not fabricate a split.
 
-A producer populates `attributed_token_usage` only when the source genuinely reports per-step spend. Among current producers, **Codex does** (its `token_count` events carry a per-call delta). **Claude does not**: its per-content-block `usage` values are cumulative streaming snapshots stamped at flush time, not per-block costs, so deriving a split from them would be fabrication — Claude-derived steps carry the group total only.
+A producer populates `attributed_token_usage` only when the source genuinely reports per-step spend. Among current producers, **Codex does** (its `token_count` events carry a per-call delta). **Claude does not**: its per-content-block records repeat the message's `usage` (a growing streaming snapshot in older Claude Code versions, the final value since v2.1.132), not per-block costs, so deriving a split from them would be fabrication — Claude-derived steps carry the group total only.
 
 `Σ token_usage` over a path's steps is unaffected by `attributed_token_usage` (they are separate keys), so the session-total guarantee above always holds. A consumer wanting per-step cost reads `attributed_token_usage` where present and falls back to the group total otherwise.
 
@@ -109,14 +109,14 @@ Each element is an object:
 | `cache_write_tokens` | integer         | prompt tokens written to a cache                             | only when the source records it       |
 | `breakdowns`         | object          | how a class above divides; never a further count (see below) | only when the source itemizes a class |
 
-Every count is a non-negative integer. `null` means the source did not report that class, not zero. Values follow the [group accounting](#group-accounting) rule above.
+Every count is a non-negative integer. `null` means the source did not report that class, not zero, so a breakdown of an unreported class may hold only zeros. Values follow the [group accounting](#group-accounting) rule above.
 
 ### Additive classes
 
 The four counts are **disjoint**: each token the model processed is counted in exactly one of them. In particular, **`input_tokens` excludes cached prompt tokens**: those are in `cache_read_tokens` or `cache_write_tokens` and nowhere else. So:
 
 - the prompt is `input_tokens + cache_read_tokens + cache_write_tokens`;
-- the whole spend is that plus `output_tokens`;
+- the whole spend on the message's model is that plus `output_tokens`;
 - a consumer prices each class at the rate of the model that produced it and adds the results, with no overlap to subtract.
 
 This is Anthropic's usage convention. Some sources use OpenAI's instead, where the input count includes cache reads and, where the source reports them, cache writes; producers convert at derivation, clamping a converted count at zero. Where a source's inclusive convention is a recommendation rather than a guarantee (the OpenTelemetry GenAI semantic conventions, OpenInference), an input count smaller than the source's cache counts is read as already exclusive.
@@ -198,7 +198,7 @@ A Codex 0.145+ round of two API calls. Over the round, the wire's cumulative cou
 | `cache_read`  | `cache_read_tokens`  |
 | `cache_write` | `cache_write_tokens` |
 
-Invariant: **`Σ(inner) ≤` the parent class's value**, where an absent or `null` parent counts as zero. The sub-classes need not cover the whole class; the rest is simply not itemized. `path p validate` checks the bound and rejects any other key.
+Invariant: **`Σ(inner) ≤` the parent class's value**; a breakdown of an absent or `null` class may hold only zeros. The sub-classes need not cover the whole class; the rest is simply not itemized. `path p validate` checks the bound and rejects any other key.
 
 Sub-class names are open, but these carry a fixed meaning:
 
@@ -248,6 +248,10 @@ The rules above are what a v1.2.0 document means. These producers, as first rele
 - **opencode** sessions are read with current opencode semantics, because opencode records no per-message version to convert by. Messages written before opencode 1.3.16 overcount output when the model reasoned (from opencode 1.3.4 every provider's `output` already included `reasoning`; before that, OpenAI-family models'). Messages written by opencode 1.3.4–1.3.5 overcount input for Anthropic and Bedrock models, whose `input` then included cache reads and writes, and messages written before opencode 1.0.62 overcount input for other providers, whose `input` then included cache reads.
 - **pi** sessions are read with current pi semantics. Sessions written before pi 0.63.0 (Google and Vertex models) or 0.12.10 (OpenAI models) include cache reads in `input`, and before pi 0.70.0 OpenAI-compatible models double-counted reasoning in `output`.
 - **Claude Code** messages are read from their top-level `usage`, so compaction iterations are not yet counted.
+- **Codex** forked sessions book the parent session's replayed spend into the fork's first round, and spend after a counter reset (context-window overflow) can be lost.
+- **Gemini CLI** sub-agent spend sits only in `delegations[].turns`, on no step, so summing a path's steps undercounts it. Gemini CLI has written sessions as `.jsonl` since 0.39.0, and the Gemini producer reads only `.json` sessions.
+- **Cursor** reports a per-bubble `tokenCount` whose meaning is not documented and is usually zero; it is carried as-is.
+- **Resumed sessions.** A session that Toolpath wrote into a harness from a v1.1.0 Codex or Gemini CLI document carries that document's overlapping counts, and derives with them.
 
 ### `environment`
 

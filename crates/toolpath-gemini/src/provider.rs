@@ -169,8 +169,6 @@ pub(crate) fn tokens_to_usage(t: &Tokens) -> TokenUsage {
     let generated = output.saturating_add(thoughts);
 
     let mut usage = TokenUsage {
-        // Gemini's `input` includes `cached`; derived classes are additive,
-        // so the cached share is counted only under `cache_read_tokens`.
         input_tokens: match (t.input, t.tool.filter(|&n| n > 0)) {
             (None, None) => None,
             (i, tool) => Some(
