@@ -2519,4 +2519,49 @@ fn a_truncation_marker_after_final_reaches_the_stored_meta() {
     }
 }
 
+/// A cut-off copy of `g2` arrives before a whole one: the session reads
+/// truncated until the whole copy is fed, then not, and the stored meta
+/// follows with a `PathMeta` patch, no step changed.
+#[test]
+fn truncated_clears_when_a_kept_copy_arrives_later() {
+    let g1 = generation("g1", 1, json!([user("go")]), "a");
+    let g2 = generation(
+        "g2",
+        2,
+        json!([user("go"), assistant("a"), user("more")]),
+        "b",
+    );
+    let g3 = generation(
+        "g3",
+        3,
+        json!([
+            user("go"),
+            assistant("a"),
+            user("more"),
+            assistant("b"),
+            user("again")
+        ]),
+        "c",
+    );
+    for hint in HINTS {
+        for final_ in [false, true] {
+            let what = format!("{hint:?}/{final_}");
+            let mut store = BTreeMap::new();
+            let mut records = vec![
+                GenerationRecord::of(g1.clone(), &mut store),
+                truncation_marker("g2"),
+                GenerationRecord::of(g3.clone(), &mut store),
+            ];
+            let mut r = Reader::new(hint, 0);
+            let first = r.try_send_records(&records, &store, false).unwrap();
+            assert!(!step_ids(&first).is_empty(), "{what}");
+            assert_eq!(stored_truncated(&r), json!(true), "{what}");
+            records.push(GenerationRecord::of(g2.clone(), &mut store));
+            r.try_send_records(&records, &store, final_)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(stored_truncated(&r), json!(false), "{what}");
+        }
+    }
+}
+
 mod property;

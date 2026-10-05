@@ -873,7 +873,10 @@ record whose prompt chain the store lacks fails derivation with
   not start order). Every other skip is counted by `read_generations`.
   Its counts are per call: `unclaimed` counts a span once per read, so a
   span redelivered in separate deliveries counts once in each, and
-  per-delivery counts summed over a session can exceed one read's.
+  per-delivery counts summed over a session can exceed one read's. The
+  reasons can also split differently: a cut-off copy read in a delivery
+  of its own is `truncated` there, while one read of every delivery
+  counts it `duplicate` when the kept copy comes first (the same total).
 - **Storage.** Each OpenRouter request repeats the whole history, so raw
   bodies, or records with inline prompts, grow with the square of the
   session. Records plus chained messages grow with its new messages: a
@@ -949,7 +952,11 @@ every turn and is passed once the session is over.
   any turn is echoed). Once the path is opened every call returns at least
   one body, so a meta-only change goes out with no step to send: a
   truncation marker that arrives after the `Settle::Final` send still sets
-  the stored `meta.otel.truncated` on the next call. `PathClose` and
+  the stored `meta.otel.truncated` on the next call. `meta.otel.truncated`
+  can also clear: a marker received before any copy of its call marks the
+  session, and once a copy of that call is fed the marker is a duplicate
+  (Generation records), so the next call patches it back to `false`; no
+  step changes. `PathClose` and
   path-level signatures are never sent.
 - **Feed order, not start order.** The session is derived with the `fed`
   generations first, in that order, then the rest by `(start_ns, id)`.
