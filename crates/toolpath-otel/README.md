@@ -132,10 +132,13 @@ use toolpath_otel::{
 # let mut records: Vec<GenerationRecord> = Vec::new();
 # let mut messages: BTreeMap<MessageHash, StoredMessage> = BTreeMap::new();
 // At ingest: read the delivery once, append its records (in arrival
-// order), upsert its messages.
+// order), add the messages the store lacks (never replace one: two
+// spellings of a number share a hash).
 let read = read_generations(&[delivery], ProfileSelection::Auto)?;
 records.extend(read.output.records);
-messages.extend(read.output.messages);
+for (hash, message) in read.output.messages {
+    messages.entry(hash).or_insert(message);
+}
 
 // From the stored path: does it exist, its meta.otel.generation_ids,
 // the step ids known to be stored (any subset; empty resends everything)

@@ -3,7 +3,7 @@ use crate::SkipCounts;
 use crate::derive::{canonical_step_json, derive_session};
 use crate::read_session;
 use crate::record::GenerationBatch;
-use crate::tests::common::{CONVERSATIONS, REAL, deliveries};
+use crate::tests::common::{CONVERSATIONS, REAL, deliveries, respell_reasoning_index};
 use crate::tests::otel::{classified, classifier};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -1720,9 +1720,36 @@ fn stored(requests: &[Value]) -> GenerationBatch {
         let text = serde_json::to_string(&read).unwrap();
         let read: GenerationBatch = serde_json::from_str(&text).unwrap();
         all.records.extend(read.records);
-        all.messages.extend(read.messages);
+        for (h, m) in read.messages {
+            all.messages.entry(h).or_insert(m);
+        }
     }
     all
+}
+
+/// Later deliveries spell an echoed message's number `0.0` where earlier
+/// ones spelled `0`: one hash, so the store keeps the first spelling and
+/// no sent step changes when a later delivery is read.
+#[test]
+fn a_later_spelling_of_a_stored_message_never_changes_a_sent_step() {
+    let mut all = deliveries("pi.ndjson");
+    for (j, d) in all.iter_mut().enumerate() {
+        let index = if j < 4 { json!(0) } else { json!(0.0) };
+        respell_reasoning_index(d, &index);
+    }
+    let store = stored(&all);
+    let want =
+        crate::derive_path_from_records(&store.records, |h| store.messages.get(h), &classified())
+            .unwrap()
+            .output;
+    for hint in HINTS {
+        let mut reader = Reader::new(hint, 0);
+        let order: Vec<usize> = (0..all.len()).collect();
+        let sent = arrive_requests(&all, &order, 1, &mut reader);
+        let what = format!("{hint:?}");
+        assert_unchanged(&sent, &want, &what);
+        assert_same(&reader.path(), &want, &what);
+    }
 }
 
 fn files() -> Vec<&'static str> {

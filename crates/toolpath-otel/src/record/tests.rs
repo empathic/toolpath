@@ -84,7 +84,9 @@ fn per_delivery(values: &[Value], profile: ProfileSelection) -> (GenerationBatch
         skipped.add(&d.skipped);
         let b = through_json(&d.output);
         all.records.extend(b.records);
-        all.messages.extend(b.messages);
+        for (h, m) in b.messages {
+            all.messages.entry(h).or_insert(m);
+        }
     }
     (all, skipped)
 }
