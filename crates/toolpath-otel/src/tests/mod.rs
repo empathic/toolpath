@@ -17,6 +17,8 @@ mod openinference_profile;
 pub(crate) mod otel;
 pub(crate) mod otlp_oracle;
 mod privacy_mode;
+#[cfg(feature = "protobuf")]
+mod protobuf_roundtrip;
 mod provider;
 mod regression;
 mod regressions_317;
