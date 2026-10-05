@@ -14,17 +14,15 @@
 //! thread under a different leading system message than the main line's is
 //! a side request, except a tree that a delta with a missing continuation
 //! target started, which continues the main line. A system turn whose
-//! threads are all sub-agents' takes its first thread's mark.
+//! first thread is a sub-agent's takes that thread's mark.
 //!
 //! Every mark depends only on turns that come earlier in feed order, or on
 //! the turn's own data, so appending generations never changes a mark a
 //! turn already has: the delegating turn's `delegations` come from its own
 //! calls and results, a thread is matched only to a call that precedes it,
 //! and the main line is the first leading system message to produce two
-//! turns. Two qualifications: until a main line is decided no turn is
-//! marked side, so a turn left unmarked then can become side once it is;
-//! and a system turn above a sub-agent's thread becomes side if an
-//! unmatched thread later starts under it.
+//! turns. One qualification: until a main line is decided no turn is
+//! marked side, so a turn left unmarked then can become side once it is.
 
 use crate::harness::SourceHarness;
 use crate::harness::tools::tool_category;
@@ -183,15 +181,12 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
             children[p].push(i);
         }
     }
-    // A system turn above only sub-agent threads belongs to them, under its
-    // first child's call.
+    // A system turn takes its first child's sub-agent mark; later children
+    // never change it.
     for i in (0..n).rev() {
         if anchor[i].is_none()
             && let Some(&first) = children[i].first()
             && matches!(kind[first], Some(BranchKind::Subagent(_)))
-            && children[i]
-                .iter()
-                .all(|&j| matches!(kind[j], Some(BranchKind::Subagent(_))))
         {
             kind[i] = kind[first].clone();
         }
@@ -875,6 +870,64 @@ mod tests {
             b.kind[produced_by(&g, 2)],
             Some(BranchKind::Subagent("c1".into()))
         );
+        assert_prefixes_agree(&s);
+    }
+
+    /// A matched thread and then an unmatched one under one system prompt:
+    /// the system turn keeps its first thread's mark, and the later thread
+    /// is side.
+    #[test]
+    fn a_system_turn_keeps_its_first_threads_mark() {
+        let sys = |t: &str| m(json!({"role": "system", "content": t}));
+        let mut main = vec![sys("MAIN"), m(json!({"role": "user", "content": "do it"}))];
+        let call = vec![agent("c1", "sub A")];
+        let g0 = generation(
+            "g0",
+            10,
+            main.clone(),
+            Completion {
+                tool_calls: call.clone(),
+                ..Default::default()
+            },
+        );
+        let g1 = generation(
+            "g1",
+            20,
+            vec![sys("SUB"), m(json!({"role": "user", "content": "sub A"}))],
+            text("A done"),
+        );
+        let g2 = generation(
+            "g2",
+            21,
+            vec![
+                sys("SUB"),
+                m(json!({"role": "user", "content": "unrelated"})),
+            ],
+            text("U done"),
+        );
+        main.push(Message {
+            role: "assistant".into(),
+            tool_calls: call,
+            ..Default::default()
+        });
+        main.push(m(
+            json!({"role": "tool", "tool_call_id": "c1", "content": "A done"}),
+        ));
+        let g3 = generation("g3", 30, main, text("all done"));
+        let s = Session::new("s".into(), None, vec![g0, g1, g2, g3]);
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        let system = g
+            .nodes
+            .iter()
+            .position(|n| n.message.role == "system" && texts_of(n) == "SUB")
+            .unwrap();
+        assert_eq!(b.kind[system], Some(BranchKind::Subagent("c1".into())));
+        assert_eq!(
+            b.kind[produced_by(&g, 1)],
+            Some(BranchKind::Subagent("c1".into()))
+        );
+        assert_eq!(b.kind[produced_by(&g, 2)], Some(BranchKind::Side));
         assert_prefixes_agree(&s);
     }
 

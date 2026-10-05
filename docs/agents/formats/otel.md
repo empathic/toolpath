@@ -608,9 +608,11 @@ branches. A *thread* is everything below a first user message.
   earliest); a later answer never moves the merge. The sub-agent's steps
   are then ancestors of the head, not dead ends. A sub-agent whose answer
   never comes back in the capture keeps its steps off the head's
-  ancestry, still marked `subagent`. A system turn whose threads are all
-  sub-agents' (the shared sub-agent system prompt) carries its first
-  thread's marks.
+  ancestry, still marked `subagent`. A system turn (the shared sub-agent
+  system prompt) takes its first thread's mark when that thread is a
+  sub-agent's; later threads never change it. So the shared turn names
+  only the first call, and a later unmatched thread under it is `side`
+  below a `subagent` system turn.
 - **Side request.** A thread under a different leading system message than
   the main line's (titles, classifiers) carries `extra.otel.branch =
   "side"`; it is a dead end by construction. A tree started by a request
@@ -638,11 +640,9 @@ branches. A *thread* is everything below a first user message.
   no earlier thread took, a merge is the first answer received, the main
   line is decided once, and `delegations` read only the delegating turn.
   Appending generations therefore never changes a mark a turn already
-  has; it can only add marks and extra parents to new turns. Two
-  qualifications: turns left unmarked while the main line is undecided
-  become `side` once it is decided if they are off it, and a system turn
-  above a sub-agent's thread becomes `side` if an unmatched thread later
-  starts under it.
+  has; it can only add marks and extra parents to new turns. One
+  qualification: turns left unmarked while the main line is undecided
+  become `side` once it is decided if they are off it.
 
 `toolpath::v1::query::dead_ends` (and `path query`'s `.dead_end`) then
 report only side requests, skeletons, unreturned sub-agents, unplaced
