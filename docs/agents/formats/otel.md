@@ -544,7 +544,8 @@ completion turn instead of from the root, so its turns hang off the
 conversation they continue. If the continued generation is not in the
 session (not captured, or skipped as `truncated` or `error-status`), the
 request chains from the root and the id is listed in
-`meta.otel.missing_continuations`.
+`meta.otel.missing_continuations`. The tree such a request starts stays on
+the main line (it is never a side request), so `path.head` can reach it.
 
 ## Skeletons
 
@@ -583,8 +584,9 @@ branches. A *thread* is everything below a first user message.
   `extra.otel.branch = "subagent"` and `extra.otel.delegation = <call
   id>`. The sub-agent's turns stay steps of the path. Its answer (a
   final assistant turn whose text the call's result carries, or a later
-  turn of the delegating thread carries, e.g. a background agent's task
-  notification) becomes an **extra parent** of the delegating thread's
+  user turn of the delegating thread carries, e.g. a background agent's
+  task notification; an assistant turn that merely repeats the text is
+  not one) becomes an **extra parent** of the delegating thread's
   turn that receives it: the first such turn after the answer, for a
   result, or the turn carrying the text. A sub-agent that answers more
   than once (resumed after its first answer) merges at the turn that
@@ -592,15 +594,19 @@ branches. A *thread* is everything below a first user message.
   earliest); a later answer never moves the merge. The sub-agent's steps
   are then ancestors of the head, not dead ends. A sub-agent whose answer
   never comes back in the capture keeps its steps off the head's
-  ancestry, still marked `subagent`.
+  ancestry, still marked `subagent`. A system turn whose threads are all
+  sub-agents' (the shared sub-agent system prompt) carries its first
+  thread's marks.
 - **Side request.** A thread under a different leading system message than
   the main line's (titles, classifiers) carries `extra.otel.branch =
-  "side"`; it is a dead end by construction.
+  "side"`; it is a dead end by construction. A tree started by a request
+  whose continuation target is missing is not one.
 - **Main line and head.** The main line is the first leading system
-  message, in start order, to produce two turns outside sub-agent threads
-  (else the one that produced the first such turn), so a title or quota
-  request that starts first does not take it; `path.head` is the main
-  line's last turn in view order, whatever came later in time. A retry or
+  message, in start order, to produce two turns outside sub-agent threads,
+  so a title or quota request that starts first does not take it. Until
+  one has, the main line is undecided and no turn is marked `side`.
+  `path.head` is the last unmarked turn in view order, whatever came later
+  in time. A retry or
   a compaction on the main line still forks, and the abandoned branch is
   an unmarked dead end.
 - **Unplaced step.** A generation whose completion is already a turn
@@ -616,8 +622,13 @@ branches. A *thread* is everything below a first user message.
   before it (in start order, or in feed order for incremental sends) or on
   the step's own data: a thread is matched only to a call before it and
   no earlier thread took, a merge is the first answer received, the main
-  line is decided once, and `delegations` read only the delegating turn. Appending generations therefore never changes a mark a turn
-  already has; it can only add marks and extra parents to new turns.
+  line is decided once, and `delegations` read only the delegating turn.
+  Appending generations therefore never changes a mark a turn already
+  has; it can only add marks and extra parents to new turns. Two
+  qualifications: turns left unmarked while the main line is undecided
+  become `side` once it is decided if they are off it, and a system turn
+  above a sub-agent's thread becomes `side` if an unmatched thread later
+  starts under it.
 
 `toolpath::v1::query::dead_ends` (and `path query`'s `.dead_end`) then
 report only side requests, skeletons, unreturned sub-agents, unplaced

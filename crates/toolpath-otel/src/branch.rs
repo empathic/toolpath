@@ -6,20 +6,25 @@
 //! delegation call (`Task`, `Agent`, `task`) is that call's sub-agent;
 //! threads take calls first come, first served in feed order, so with
 //! duplicate prompts the first thread takes the first call. Its answer (a
-//! final assistant turn whose text the call's result or a later turn of
-//! the delegating thread carries) becomes an extra parent of the
+//! final assistant turn whose text the call's result or a later user turn
+//! of the delegating thread carries) becomes an extra parent of the
 //! delegating thread's turn that receives it, so the sub-agent's turns are
 //! ancestors of the head. A sub-agent that answers twice merges at the
 //! first answer received in feed order; a later answer never moves it. A
 //! thread under a different leading system message than the main line's is
-//! a side request.
+//! a side request, except a tree that a delta with a missing continuation
+//! target started, which continues the main line. A system turn whose
+//! threads are all sub-agents' takes its first thread's mark.
 //!
 //! Every mark depends only on turns that come earlier in feed order, or on
 //! the turn's own data, so appending generations never changes a mark a
 //! turn already has: the delegating turn's `delegations` come from its own
 //! calls and results, a thread is matched only to a call that precedes it,
 //! and the main line is the first leading system message to produce two
-//! turns.
+//! turns. Two qualifications: until a main line is decided no turn is
+//! marked side, so a turn left unmarked then can become side once it is;
+//! and a system turn above a sub-agent's thread becomes side if an
+//! unmatched thread later starts under it.
 
 use crate::harness::SourceHarness;
 use crate::harness::tools::tool_category;
@@ -138,12 +143,18 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         }
     }
 
-    let delegated_of = |i: usize| anchor[i].and_then(|a| delegated.get(&a).copied());
+    let thread: Vec<Option<usize>> = (0..n)
+        .map(|i| anchor[i].and_then(|a| delegated.get(&a).copied()))
+        .collect();
+    // A delta whose continuation target is missing roots a tree that
+    // continues the conversation, so it is never a side request.
+    let missing: BTreeSet<usize> = graph.continues_missing.iter().copied().collect();
+    let continues = |r: usize| missing.contains(&nodes[r].first_generation);
     // Produced turns outside sub-agent threads, in feed order. The main line
-    // is the first root to produce two of them, else the first one's root:
-    // a later generation comes later in feed order, so the choice holds.
+    // is the first root to produce two of them: a later generation comes
+    // later in feed order, so the choice holds. Until then nothing is side.
     let mut produced: Vec<(usize, usize)> = (0..n)
-        .filter(|&i| delegated_of(i).is_none())
+        .filter(|&i| thread[i].is_none() && !continues(root[i]))
         .filter_map(|i| nodes[i].producer.map(|g| (g, root[i])))
         .collect();
     produced.sort_unstable();
@@ -155,29 +166,34 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
             *c += 1;
             *c == 2
         })
-        .or(produced.first())
         .map(|(_, r)| *r);
 
     let mut kind: Vec<Option<BranchKind>> = (0..n)
-        .map(|i| match delegated_of(i) {
+        .map(|i| match thread[i] {
             Some(ci) => Some(BranchKind::Subagent(calls[ci].id.clone())),
-            None if main_root.is_some_and(|m| root[i] != m) => Some(BranchKind::Side),
+            None if main_root.is_some_and(|m| root[i] != m && !continues(root[i])) => {
+                Some(BranchKind::Side)
+            }
             None => None,
         })
         .collect();
-    // A system turn above only sub-agent threads belongs to them.
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, p) in parent.iter().enumerate() {
+        if let Some(p) = *p {
+            children[p].push(i);
+        }
+    }
+    // A system turn above only sub-agent threads belongs to them, under its
+    // first child's call.
     for i in (0..n).rev() {
         if anchor[i].is_none()
-            && kind[i] == Some(BranchKind::Side)
-            && let Some(sub) =
-                (i + 1..n)
-                    .filter(|&j| parent[j] == Some(i))
-                    .find_map(|j| match &kind[j] {
-                        Some(BranchKind::Subagent(c)) => Some(c.clone()),
-                        _ => None,
-                    })
+            && let Some(&first) = children[i].first()
+            && matches!(kind[first], Some(BranchKind::Subagent(_)))
+            && children[i]
+                .iter()
+                .all(|&j| matches!(kind[j], Some(BranchKind::Subagent(_))))
         {
-            kind[i] = Some(BranchKind::Subagent(sub));
+            kind[i] = kind[first].clone();
         }
     }
 
@@ -192,8 +208,34 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         });
     }
 
+    let merges = merges(graph, &calls, &delegated, &anchor, &thread, &kind, &parent);
+
+    let head = (0..n)
+        .rev()
+        .find(|&i| kind[i].is_none())
+        .or(n.checked_sub(1));
+    Branches {
+        kind,
+        delegations,
+        merges,
+        head,
+    }
+}
+
+/// Where each matched sub-agent's answer joins its delegating thread, as
+/// `(node, extra parent)` pairs, sorted.
+fn merges(
+    graph: &TurnGraph,
+    calls: &[Call],
+    delegated: &BTreeMap<usize, usize>,
+    anchor: &[Option<usize>],
+    thread: &[Option<usize>],
+    kind: &[Option<BranchKind>],
+    parent: &[Option<usize>],
+) -> Vec<(usize, usize)> {
+    let nodes = &graph.nodes;
+    let n = nodes.len();
     let generation = |i: usize| nodes[i].producer.unwrap_or(nodes[i].first_generation);
-    let thread = |i: usize| delegated_of(i).map(|ci| calls[ci].id.as_str());
     let is_descendant = |mut j: usize, of: usize| loop {
         if j == of {
             return true;
@@ -208,7 +250,7 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         .map(|x| content_text(&x.message.content))
         .collect();
     let mut merges = Vec::new();
-    for (&a, &ci) in &delegated {
+    for (&a, &ci) in delegated {
         let from = calls[ci].node;
         let result = nodes[from]
             .results
@@ -216,15 +258,16 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
             .map(|r| r.content.as_str());
         let in_thread = |j: usize, last: usize| {
             j > from.max(last)
-                && thread(j) == thread(from)
+                && thread[j] == thread[from]
                 && kind[j] == kind[from]
                 && is_descendant(j, from)
         };
         // The sub-agent's answer: a final assistant turn whose text comes
-        // back in the call's result or in a later delegating-thread turn.
-        // A sub-agent that answers twice merges at the turn that receives
-        // an answer first in feed order (of the answers it receives, the
-        // earliest), so a later answer never moves the merge.
+        // back in the call's result or in a later delegating-thread user
+        // turn (a tool result or notification). A sub-agent that answers
+        // twice merges at the turn that receives an answer first in feed
+        // order (of the answers it receives, the earliest), so a later
+        // answer never moves the merge.
         let finals = (0..n).filter(|&i| {
             anchor[i] == Some(a)
                 && nodes[i].producer.is_some()
@@ -233,7 +276,6 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         });
         let join = finals.filter_map(|last| {
             let answer = texts[last].trim();
-            let carried = (from + 1..n).find(|&j| in_thread(j, last) && texts[j].contains(answer));
             let returned = result
                 .is_some_and(|r| r.contains(answer))
                 .then(|| {
@@ -242,26 +284,15 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
                     })
                 })
                 .flatten();
-            [carried, returned]
-                .into_iter()
-                .flatten()
-                .min()
-                .map(|j| (j, last))
+            let carried = (from + 1..returned.unwrap_or(n)).find(|&j| {
+                nodes[j].message.role == "user" && in_thread(j, last) && texts[j].contains(answer)
+            });
+            carried.or(returned).map(|j| (j, last))
         });
         merges.extend(join.min());
     }
     merges.sort_unstable();
-
-    let head = (0..n)
-        .rev()
-        .find(|&i| kind[i].is_none())
-        .or(n.checked_sub(1));
-    Branches {
-        kind,
-        delegations,
-        merges,
-        head,
-    }
+    merges
 }
 
 /// Node indices with every parent before its children (graph order when
@@ -486,6 +517,33 @@ mod tests {
         assert_eq!(b.merges, [(note, produced_by(&g, 2))]);
     }
 
+    /// A short answer merges where it is delivered, not at an earlier
+    /// assistant turn that happens to contain it.
+    #[test]
+    fn a_short_answer_merges_at_the_notification_that_delivers_it() {
+        let mut s = fan_out();
+        s.generations[2].completion.text = "OK".into();
+        let resumed = &mut s.generations[4].messages;
+        for t in resumed.iter_mut().filter(|t| t.role == "tool") {
+            t.content = json!("launched");
+        }
+        resumed.push(m(
+            json!({"role": "assistant", "content": "OK, waiting for agents"}),
+        ));
+        resumed.push(m(
+            json!({"role": "user", "content": "<task-notification>OK</task-notification>"}),
+        ));
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        let note = g
+            .nodes
+            .iter()
+            .position(|n| n.message.role == "user" && texts_of(n).contains("<task-notification>OK"))
+            .unwrap();
+        assert_eq!(b.merges, [(note, produced_by(&g, 2))]);
+        assert_prefixes_agree(&s);
+    }
+
     fn texts_of(n: &crate::stitch::Node) -> String {
         crate::normalize::content_text(&n.message.content)
     }
@@ -539,6 +597,20 @@ mod tests {
         let b = classify(&g, SourceHarness::Unknown);
         assert_eq!(b.kind[produced_by(&g, 0)], Some(BranchKind::Side));
         assert_eq!(b.head, Some(produced_by(&g, 5)));
+        assert_prefixes_agree(&s);
+    }
+
+    /// Before any root has produced two turns, nothing is side, so a
+    /// title request that starts first is never marked main and then side.
+    #[test]
+    fn nothing_is_side_until_the_main_line_is_decided() {
+        let mut s = fan_out();
+        let title = s.generations.pop().unwrap();
+        s.generations.insert(0, title);
+        s.generations.truncate(2);
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        assert!(!b.kind.contains(&Some(BranchKind::Side)));
     }
 
     /// Appending generations never changes a mark a turn already has.
@@ -576,7 +648,8 @@ mod tests {
     }
 
     /// Every prefix of `s` agrees with the whole on the marks and merges
-    /// it already has.
+    /// it already has. A prefix with no side mark may not have decided its
+    /// main line yet, so its unmarked turns may later be side.
     fn assert_prefixes_agree(s: &Session) {
         let whole = stitch(s);
         let all = classify(&whole, SourceHarness::Unknown);
@@ -592,8 +665,13 @@ mod tests {
             prefix.generations.truncate(k);
             let g = stitch(&prefix);
             let b = classify(&g, SourceHarness::Unknown);
+            let undecided = !b.kind.contains(&Some(BranchKind::Side));
             for (x, mark) in g.nodes.iter().zip(&b.kind) {
-                assert_eq!(kind[x.id.as_str()], mark, "after {k}: {}", x.id);
+                let whole = kind[x.id.as_str()];
+                if undecided && mark.is_none() && *whole == Some(BranchKind::Side) {
+                    continue;
+                }
+                assert_eq!(whole, mark, "after {k}: {}", x.id);
             }
             for m in id_merges(&g, &b) {
                 assert!(full_merges.contains(&m), "after {k}: {m:?} moved");
@@ -705,5 +783,109 @@ mod tests {
         ));
         let m2 = generation("m2", 40, main, text("done"));
         Session::new("s".into(), None, vec![m0, a1, m1, a2, m2])
+    }
+
+    /// An unmatched thread and then a matched one under one system prompt:
+    /// the system turn is not the sub-agent's, and no prefix says it is.
+    #[test]
+    fn a_system_turn_above_an_unmatched_thread_stays_side() {
+        let sys = |t: &str| m(json!({"role": "system", "content": t}));
+        let mut main = vec![sys("MAIN"), m(json!({"role": "user", "content": "do it"}))];
+        let call = vec![agent("c1", "sub A")];
+        let g0 = generation(
+            "g0",
+            10,
+            main.clone(),
+            Completion {
+                tool_calls: call.clone(),
+                ..Default::default()
+            },
+        );
+        let g1 = generation(
+            "g1",
+            20,
+            vec![
+                sys("SUB"),
+                m(json!({"role": "user", "content": "unrelated"})),
+            ],
+            text("U done"),
+        );
+        let g2 = generation(
+            "g2",
+            21,
+            vec![sys("SUB"), m(json!({"role": "user", "content": "sub A"}))],
+            text("A done"),
+        );
+        main.push(Message {
+            role: "assistant".into(),
+            tool_calls: call,
+            ..Default::default()
+        });
+        main.push(m(
+            json!({"role": "tool", "tool_call_id": "c1", "content": "A done"}),
+        ));
+        let g3 = generation("g3", 30, main, text("all done"));
+        let s = Session::new("s".into(), None, vec![g0, g1, g2, g3]);
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        let system = g
+            .nodes
+            .iter()
+            .position(|n| n.message.role == "system" && texts_of(n) == "SUB")
+            .unwrap();
+        assert_eq!(b.kind[system], Some(BranchKind::Side));
+        assert_eq!(b.kind[produced_by(&g, 1)], Some(BranchKind::Side));
+        assert_eq!(
+            b.kind[produced_by(&g, 2)],
+            Some(BranchKind::Subagent("c1".into()))
+        );
+        assert_prefixes_agree(&s);
+    }
+
+    /// A delta whose continuation target is missing continues the
+    /// conversation: its turns are not side and the head reaches them.
+    #[test]
+    fn a_missing_continuation_stays_on_the_main_line() {
+        use crate::generation::History;
+        let delta = |id: &str, start, msgs: Vec<Message>, out: &str, continues: &str| {
+            let mut g = generation(id, start, msgs, text(out));
+            g.history = History::Delta;
+            g.continues = Some(continues.into());
+            g
+        };
+        let tool = |c: &str| m(json!({"role": "tool", "tool_call_id": c, "content": "out"}));
+        let mut g0 = generation(
+            "g0",
+            10,
+            vec![
+                m(json!({"role": "system", "content": "MAIN"})),
+                m(json!({"role": "user", "content": "go"})),
+            ],
+            text(""),
+        );
+        g0.completion.tool_calls = vec![ToolCall {
+            id: "t0".into(),
+            function: FunctionCall {
+                name: "read".into(),
+                arguments: Value::String("{}".into()),
+            },
+        }];
+        let s = Session::new(
+            "s".into(),
+            None,
+            vec![
+                g0,
+                delta("g1", 20, vec![tool("t0")], "a1", "g0"),
+                delta("g2", 30, vec![tool("tx")], "a2", "gX"),
+                delta("g3", 40, vec![tool("ty")], "a3", "g2"),
+            ],
+        );
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        assert_eq!(g.missing_continuations, ["gX"]);
+        assert_eq!(g.nodes[produced_by(&g, 2)].parent, None);
+        assert!(b.kind.iter().all(Option::is_none), "{:?}", b.kind);
+        assert_eq!(b.head, Some(produced_by(&g, 3)));
+        assert_prefixes_agree(&s);
     }
 }

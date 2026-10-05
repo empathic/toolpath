@@ -83,6 +83,8 @@ pub struct TurnGraph {
     /// Continuation targets not found earlier in the session (those
     /// generations chained from the root), first-seen order, deduplicated.
     pub missing_continuations: Vec<String>,
+    /// Generations (in order) whose continuation target was missing.
+    pub continues_missing: Vec<usize>,
 }
 
 /// How history echoed a produced turn, when it differs. Same turn id means
@@ -314,6 +316,7 @@ impl<'s> Stitcher<'s> {
                 links: Vec::new(),
                 dropped_content: BTreeMap::new(),
                 missing_continuations: Vec::new(),
+                continues_missing: Vec::new(),
             },
             index: HashMap::new(),
             first_index,
@@ -336,6 +339,7 @@ impl<'s> Stitcher<'s> {
                 if !self.graph.missing_continuations.contains(&id) {
                     self.graph.missing_continuations.push(id);
                 }
+                self.graph.continues_missing.push(gi);
                 (Cursor::new(&self.root), 0)
             }
             Target::Root => (Cursor::new(&self.root), 0),
