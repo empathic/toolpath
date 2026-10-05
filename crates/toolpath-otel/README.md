@@ -116,7 +116,8 @@ built). A service decoding untrusted bodies passes its own to
 The caller groups requests, or records by `GenerationRecord::session_id`,
 into sessions; order does not matter. Every generation that carries a
 client session id (`session.id`, or `gen_ai.conversation.id` for
-`semconv`) must carry the same one, or the call returns `OtelError::MixedSessions`; generations without an id belong to the
+`semconv`) must carry the same one, or the call returns
+`OtelError::MixedSessions`; generations without an id belong to the
 session as given. For traffic that mixes sessions or carries no id,
 `group_sessions` groups generations in layer order, first match wins in
 start order:

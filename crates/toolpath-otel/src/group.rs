@@ -4,7 +4,7 @@
 use crate::error::{OtelError, Result};
 use crate::generation::Generation;
 use crate::normalize::{NormMessage, kept_prompt};
-use crate::otlp::{LogRecord, ResourceLogs, ResourceSpans, ScopeLogs, ScopeSpans, Span};
+use crate::otlp::{self, LogRecord, ResourceLogs, ResourceSpans, ScopeLogs, ScopeSpans, Span};
 use crate::profile::ProfileSelection;
 use crate::session::{Session, cluster_key, trace_key};
 use crate::walk::{self, Attribution, UnitId};
@@ -123,8 +123,9 @@ pub fn derive_session(
     crate::derive_keyed(&session.requests, config, Some(&session.key))
 }
 
-/// `body` with every list element the walker cannot read dropped, so that
-/// the walker and [`Split`] number spans and records alike.
+/// `body` with every list element the walker cannot read dropped and every
+/// container, span and record written positionally rewritten by name, so
+/// that the walker and [`Split`] number spans and records alike.
 fn prune(body: &Value) -> Result<Value> {
     if !crate::otlp::is_otlp(body) {
         return Err(OtelError::NotOtlp);
@@ -135,13 +136,19 @@ fn prune(body: &Value) -> Result<Value> {
             list,
             |v| ResourceSpans::read(v).is_some(),
             |rs| {
+                named(rs, &otlp::RESOURCE_SPANS);
                 if let Some(list) = rs.get_mut("scopeSpans") {
                     retain(
                         list,
                         |v| ScopeSpans::read(v).is_some(),
                         |ss| {
+                            named(ss, &otlp::SCOPE_SPANS);
                             if let Some(list) = ss.get_mut("spans") {
-                                retain(list, |v| Span::read(v).is_some(), |_| {});
+                                retain(
+                                    list,
+                                    |v| Span::read(v).is_some(),
+                                    |s| named(s, &otlp::SPAN),
+                                );
                             }
                         },
                     );
@@ -154,13 +161,19 @@ fn prune(body: &Value) -> Result<Value> {
             list,
             |v| ResourceLogs::read(v).is_some(),
             |rl| {
+                named(rl, &otlp::RESOURCE_LOGS);
                 if let Some(list) = rl.get_mut("scopeLogs") {
                     retain(
                         list,
                         |v| ScopeLogs::read(v).is_some(),
                         |sl| {
+                            named(sl, &otlp::SCOPE_LOGS);
                             if let Some(list) = sl.get_mut("logRecords") {
-                                retain(list, |v| LogRecord::read(v).is_some(), |_| {});
+                                retain(
+                                    list,
+                                    |v| LogRecord::read(v).is_some(),
+                                    |r| named(r, &otlp::LOG_RECORD),
+                                );
                             }
                         },
                     );
@@ -176,6 +189,17 @@ fn retain(list: &mut Value, reads: fn(&Value) -> bool, mut visit: impl FnMut(&mu
     if let Value::Array(items) = list {
         items.retain(reads);
         items.iter_mut().for_each(&mut visit);
+    }
+}
+
+/// A struct the walker read by position, rewritten as an object by name.
+fn named(v: &mut Value, names: &[&str]) {
+    if let Value::Array(items) = v {
+        let fields = names
+            .iter()
+            .map(|n| n.to_string())
+            .zip(std::mem::take(items));
+        *v = Value::Object(fields.collect());
     }
 }
 

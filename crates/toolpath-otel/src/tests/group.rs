@@ -484,6 +484,45 @@ fn unreadable_elements_do_not_shift_the_cut() {
 }
 
 #[test]
+fn positional_span_containers_cut_like_named_ones() {
+    let positional = json!({"resourceSpans": [[{}, [[{}, [
+        span("g1", 1, Some("s1"), &[("user", "a")]),
+        span("g2", 2, Some("s2"), &[("user", "b")]),
+    ]]]]]});
+    let named = body(vec![span("g3", 3, Some("s3"), &[("user", "c")])]);
+    let sessions = group(&[positional, named]);
+    assert_eq!(
+        sessions.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(),
+        ["s1", "s2", "s3"]
+    );
+    for s in &sessions {
+        assert_eq!(all_spans(&s.requests).count(), 1, "{}", s.key);
+        let path = derive_session(s, &crate::tests::otel::classified())
+            .unwrap()
+            .output;
+        assert_eq!(
+            path.meta.unwrap().extra["otel"]["session_id"],
+            s.key.as_str()
+        );
+    }
+}
+
+#[test]
+fn unreadable_elements_in_positional_containers_do_not_shift_the_cut() {
+    let b = json!({"resourceSpans": [7, [{}, ["x", [{}, [
+        "not a span",
+        span("g1", 1, Some("s1"), &[("user", "a")]),
+        span("g2", 2, Some("s2"), &[("user", "b")]),
+    ]]]]]});
+    let sessions = group(&[b]);
+    assert_eq!(
+        sessions.iter().map(|s| s.key.as_str()).collect::<Vec<_>>(),
+        ["s1", "s2"]
+    );
+    assert_eq!(all_spans(&sessions[1].requests).count(), 1);
+}
+
+#[test]
 fn skips_are_the_batchs() {
     let mut err = span("g9", 9, Some("s1"), &[("user", "a")]);
     err["status"] = json!({"code": 2});
@@ -632,4 +671,199 @@ fn id_and_id_less_sessions_keep_their_keys() {
         keys.contains(&"otel-cluster:a5e9812ec99e6966".to_string()),
         "{keys:?}"
     );
+}
+
+// ── positional structs ──────────────────────────────────────────────────
+
+/// `v` as an array of `names`' values, `null` for a missing one, trailing
+/// missing ones left off: the positional form the walker also reads.
+fn positional_struct(v: &Value, names: &[&str]) -> Value {
+    let mut items: Vec<Value> = names
+        .iter()
+        .map(|n| v.get(*n).cloned().unwrap_or(Value::Null))
+        .collect();
+    while items.len() > 1
+        && items.last() == Some(&Value::Null)
+        && v.get(names[items.len() - 1]).is_none()
+    {
+        items.pop();
+    }
+    Value::Array(items)
+}
+
+fn positional_list(v: Option<&Value>, f: impl Fn(&Value) -> Value) -> Value {
+    match v {
+        Some(Value::Array(items)) => Value::Array(items.iter().map(f).collect()),
+        Some(other) => other.clone(),
+        None => Value::Null,
+    }
+}
+
+/// `body` with every resource, scope, span and log record written
+/// positionally.
+fn positional(body: &Value) -> Value {
+    const SPAN: [&str; 9] = [
+        "traceId",
+        "spanId",
+        "parentSpanId",
+        "name",
+        "startTimeUnixNano",
+        "endTimeUnixNano",
+        "attributes",
+        "events",
+        "status",
+    ];
+    const LOG: [&str; 7] = [
+        "timeUnixNano",
+        "observedTimeUnixNano",
+        "body",
+        "attributes",
+        "traceId",
+        "spanId",
+        "eventName",
+    ];
+    let mut out = body.clone();
+    if let Some(list) = body.get("resourceSpans") {
+        out["resourceSpans"] = positional_list(Some(list), |rs| {
+            let mut rs = rs.clone();
+            rs["scopeSpans"] = positional_list(rs.get("scopeSpans"), |ss| {
+                let mut ss = ss.clone();
+                ss["spans"] = positional_list(ss.get("spans"), |s| positional_struct(s, &SPAN));
+                positional_struct(&ss, &["scope", "spans"])
+            });
+            positional_struct(&rs, &["resource", "scopeSpans"])
+        });
+    }
+    if let Some(list) = body.get("resourceLogs") {
+        out["resourceLogs"] = positional_list(Some(list), |rl| {
+            let mut rl = rl.clone();
+            rl["scopeLogs"] = positional_list(rl.get("scopeLogs"), |sl| {
+                let mut sl = sl.clone();
+                sl["logRecords"] =
+                    positional_list(sl.get("logRecords"), |r| positional_struct(r, &LOG));
+                positional_struct(&sl, &["scope", "logRecords"])
+            });
+            positional_struct(&rl, &["resource", "scopeLogs"])
+        });
+    }
+    out
+}
+
+fn all_logs(bodies: &[Value]) -> impl Iterator<Item = &Value> {
+    bodies
+        .iter()
+        .flat_map(|b| b["resourceLogs"].as_array().unwrap())
+        .flat_map(|rl| rl["scopeLogs"].as_array().unwrap())
+        .flat_map(|sl| sl["logRecords"].as_array().unwrap())
+}
+
+fn count(bodies: &[Value], key: &str) -> usize {
+    if !bodies.iter().any(|b| b.get(key).is_some()) {
+        return 0;
+    }
+    let with: Vec<Value> = bodies
+        .iter()
+        .filter(|b| b.get(key).is_some())
+        .cloned()
+        .collect();
+    match key {
+        "resourceSpans" => all_spans(&with).count(),
+        _ => all_logs(&with).count(),
+    }
+}
+
+fn assert_positional_groups_alike(name: &str, named: &[Value], sel: ProfileSelection) {
+    let rewritten: Vec<Value> = named.iter().map(positional).collect();
+    assert_ne!(rewritten, named, "{name}: nothing was rewritten");
+    let want = group_sessions(named, sel).unwrap().output;
+    let got = group_sessions(&rewritten, sel).unwrap().output;
+    let keys = |g: &[SessionRequests]| g.iter().map(|s| s.key.clone()).collect::<Vec<_>>();
+    assert_eq!(keys(&got), keys(&want), "{name}");
+    let config = DeriveConfig {
+        profile: sel,
+        ..crate::tests::otel::classified()
+    };
+    for (g, w) in got.iter().zip(&want) {
+        for key in ["resourceSpans", "resourceLogs"] {
+            assert_eq!(
+                count(&g.requests, key),
+                count(&w.requests, key),
+                "{name}: {} {key}",
+                g.key
+            );
+        }
+        assert_eq!(
+            path_json(&derive_session(g, &config).unwrap().output),
+            path_json(&derive_session(w, &config).unwrap().output),
+            "{name}: {}",
+            g.key
+        );
+    }
+}
+
+#[test]
+fn every_capture_written_positionally_groups_like_its_named_form() {
+    assert_positional_groups_alike(
+        "openrouter",
+        &bodies_in(&fixtures().join("openrouter")),
+        ProfileSelection::Auto,
+    );
+    for name in ["openai-chat", "openai-responses", "anthropic", "gemini"] {
+        for mode in ["span", "event"] {
+            let dir = fixtures().join("semconv").join(name).join(mode);
+            assert_positional_groups_alike(
+                &format!("{name}/{mode}"),
+                &bodies_in(&dir),
+                ProfileSelection::Auto,
+            );
+        }
+    }
+    let oi = fixtures().join("openinference/openai-chat");
+    assert_positional_groups_alike(
+        "openinference",
+        &bodies_in(&oi),
+        ProfileSelection::OpenInference,
+    );
+}
+
+#[test]
+fn positional_log_containers_cut_like_named_ones() {
+    let mut all = Vec::new();
+    for name in ["openai-chat", "anthropic"] {
+        all.extend(bodies_in(
+            &fixtures().join("semconv").join(name).join("event"),
+        ));
+    }
+    assert!(all.iter().any(|b| b.get("resourceLogs").is_some()));
+    let mixed: Vec<Value> = all
+        .iter()
+        .enumerate()
+        .map(|(i, b)| if i % 2 == 0 { positional(b) } else { b.clone() })
+        .collect();
+    let want = group(&all);
+    let got = group(&mixed);
+    assert_eq!(got.len(), want.len());
+    for (g, w) in got.iter().zip(&want) {
+        assert_eq!(g.key, w.key);
+        assert_eq!(
+            count(&g.requests, "resourceLogs"),
+            count(&w.requests, "resourceLogs"),
+            "{}",
+            g.key
+        );
+        assert_eq!(
+            path_json(
+                &derive_session(g, &crate::tests::otel::classified())
+                    .unwrap()
+                    .output
+            ),
+            path_json(
+                &derive_session(w, &crate::tests::otel::classified())
+                    .unwrap()
+                    .output
+            ),
+            "{}",
+            g.key
+        );
+    }
 }
