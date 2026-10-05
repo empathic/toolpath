@@ -537,6 +537,10 @@ fn malformed_records_and_hashes_do_not_deserialize() {
     let err = serde_json::from_value::<GenerationRecord>(v).unwrap_err();
     assert!(err.to_string().contains("profile"), "{err}");
     let mut v = serde_json::to_value(marker("g", OR)).unwrap();
+    v["prompt"] = json!(r.prompt().unwrap());
+    let err = serde_json::from_value::<GenerationRecord>(v.clone()).unwrap_err();
+    assert!(err.to_string().contains("marker"), "{err}");
+    v.as_object_mut().unwrap().remove("prompt");
     v["truncated"]["profile"] = json!("");
     assert!(serde_json::from_value::<GenerationRecord>(v).is_err());
     for bad in ["ABC", "", &"g".repeat(64), &"A".repeat(64)] {
@@ -834,5 +838,18 @@ fn a_marker_for_a_kept_call_never_marks_the_session_in_any_order() {
                 assert!(s.truncated, "{pick:?} {marker_profile} {order:?}");
             }
         }
+    }
+}
+
+/// Every record's prompt must be in the store, a copy derivation will
+/// discard included: the store keeps every message of every batch read.
+#[test]
+fn a_discarded_copys_missing_prompt_is_an_error() {
+    let (or, m1) = gen_record("g", OR, "from the gateway");
+    let (sem, _) = gen_record("g", "semconv", "from semconv");
+    let store: HashMap<MessageHash, StoredMessage> = [(m1.hash(), m1)].into();
+    for records in [[or.clone(), sem.clone()], [sem, or]] {
+        let err = derive_path_from_records(&records, |h| store.get(h), &classified()).unwrap_err();
+        assert!(matches!(err, OtelError::MessageMissing(_)), "{err}");
     }
 }

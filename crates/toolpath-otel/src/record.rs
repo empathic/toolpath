@@ -215,6 +215,9 @@ impl TryFrom<Wire> for GenerationRecord {
                 "a generation record holds exactly one of `generation`, `truncated`".into(),
             );
         }
+        if w.truncated.is_some() && w.prompt.is_some() {
+            return Err("a truncation marker names no prompt".into());
+        }
         if w.generation
             .as_ref()
             .is_some_and(|g| !g.messages.is_empty())
