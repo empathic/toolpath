@@ -24,7 +24,7 @@ set-based: a new step placed before stored ones in document order goes out
 like any other. `JsonlError` is unchanged; the release is purely additive.
 `docs/RFC-jsonl.md` gains a "Delta Emission" section. `toolpath` now enables
 serde_json's `float_roundtrip` feature, so JSON and JSONL read back every
-number exactly as written (cargo unifies the feature across a build; parsing
+number serde_json writes exactly, to the last bit of a double (cargo unifies the feature across a build; parsing
 floats is slightly slower).
 
 Adds batching, so callers that send a path in request bodies stop

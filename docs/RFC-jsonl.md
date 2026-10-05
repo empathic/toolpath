@@ -521,7 +521,10 @@ The bodies keep these rules:
 
 Concatenated, the bodies read back as the input lines would: the
 intermediate `Head` lines are overwritten by the last one, and the moved
-`PathMeta` patches are applied before the steps rather than after them.
+`PathMeta` patches are applied before the steps rather than after them. An
+input with no `Head` line is the exception: its last body ends with the
+head the rule chose, where the input alone would leave the reader to infer
+one (or fail on an ambiguous head).
 
 ## Signatures
 
