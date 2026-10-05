@@ -339,7 +339,13 @@ cost.
 Consulted only under `ProfileSelection::OpenInference`. A span with
 `openinference.span.kind = LLM` is a generation; any other kind is absorbed.
 Ids are `span-<spanId>` (no response id is emitted); the session is
-`session.id`. Messages come from `llm.input_messages.<i>.message.*`, tool
+`session.id`. Messages come from `llm.input_messages.<i>.message.*`. A
+message without `message.content` takes its content from the
+`message.contents.<k>.message_content.{type, text, image.image.url}` list:
+a string (parts joined with `\n`) when every part is text, else an
+OpenAI-style parts list (`{type: "text", text}`, `{type: "image_url",
+image_url: {url}}`, other types verbatim), the shape `semconv` gives;
+the completion's text is its text parts joined. Tool
 calls from `….message.tool_calls.<j>.tool_call.{id, function.name,
 function.arguments}`, tool results from `….message.tool_call_id`; the
 completion is the lowest `llm.output_messages.<i>` index present, other

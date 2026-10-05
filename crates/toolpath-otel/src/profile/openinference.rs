@@ -122,12 +122,63 @@ fn tool_calls(fields: &[(String, Value)]) -> Vec<ToolCall> {
         .collect()
 }
 
+/// One `message_content.*` entry as an OpenAI-style part: `text` →
+/// `{type: "text", text}`, `image` → `{type: "image_url", image_url: {url}}`,
+/// any other type → its fields verbatim, less the `message_content.` prefix.
+fn content_part(fields: &[(String, Value)]) -> Value {
+    match text(fields, "message_content.type").as_deref() {
+        Some("text") => json!({"type": "text", "text": get(fields, "message_content.text")}),
+        Some("image") => json!({
+            "type": "image_url",
+            "image_url": {"url": get(fields, "message_content.image.image.url")},
+        }),
+        _ => Value::Object(
+            fields
+                .iter()
+                .map(|(k, v)| {
+                    let k = k.strip_prefix("message_content.").unwrap_or(k);
+                    (k.to_string(), v.clone())
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// `message.contents.N.message_content.*` as message content: only text
+/// parts → one string joined with `\n`; anything else → the parts list,
+/// less text parts without text; nothing → `null`.
+fn contents(fields: &[(String, Value)]) -> Value {
+    let parts: Vec<Value> = indexed(fields, "message.contents.")
+        .into_values()
+        .map(|p| content_part(&p))
+        .collect();
+    let is_text = |p: &Value| p["type"] == "text";
+    if parts.is_empty() {
+        Value::Null
+    } else if parts.iter().all(is_text) {
+        Value::String(
+            parts
+                .iter()
+                .filter_map(|p| p["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+    } else {
+        Value::Array(
+            parts
+                .into_iter()
+                .filter(|p| !is_text(p) || p["text"].is_string())
+                .collect(),
+        )
+    }
+}
+
 fn message(fields: &[(String, Value)]) -> Message {
     Message {
         role: text(fields, "message.role").unwrap_or_default(),
         content: get(fields, "message.content")
             .cloned()
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|| contents(fields)),
         tool_calls: tool_calls(fields),
         tool_call_id: text(fields, "message.tool_call_id"),
         ..Default::default()
@@ -193,7 +244,14 @@ fn extract_span(id: String, resource: &Resource, scope: &Scope, span: &Span) -> 
         .map(|f| {
             let m = message(f);
             Completion {
-                text: m.content.as_str().unwrap_or_default().to_string(),
+                text: match &m.content {
+                    Value::Array(parts) => parts
+                        .iter()
+                        .filter_map(|p| p["text"].as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    c => c.as_str().unwrap_or_default().to_string(),
+                },
                 tool_calls: m.tool_calls,
                 ..Default::default()
             }

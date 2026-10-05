@@ -139,6 +139,56 @@ fn tool_messages_carry_their_call_id() {
     );
 }
 
+/// SYNTHETIC span: the `message.contents` list form OpenInference uses for
+/// content-part messages, on both the input and the output side.
+#[test]
+fn message_contents_parts_become_content() {
+    let part = |side: &str, m: usize, p: usize, rest: &str, v: &str| {
+        kv(
+            &format!("llm.{side}_messages.{m}.message.contents.{p}.message_content.{rest}"),
+            s(v),
+        )
+    };
+    let out = read(
+        llm_span(vec![
+            kv("llm.input_messages.0.message.role", s("user")),
+            part("input", 0, 0, "type", "text"),
+            part("input", 0, 0, "text", "first"),
+            part("input", 0, 1, "type", "text"),
+            part("input", 0, 1, "text", "second"),
+            kv("llm.input_messages.1.message.role", s("user")),
+            part("input", 1, 0, "type", "text"),
+            part("input", 1, 0, "text", "what is this?"),
+            part("input", 1, 1, "type", "image"),
+            part(
+                "input",
+                1,
+                1,
+                "image.image.url",
+                "https://example.com/a.png",
+            ),
+            kv("llm.output_messages.0.message.role", s("assistant")),
+            part("output", 0, 0, "type", "text"),
+            part("output", 0, 0, "text", "A cat."),
+        ]),
+        named(),
+    );
+    let g = &out.generations[0];
+    assert!(!g.absent.prompt && !g.absent.completion);
+    let contents: Vec<&Value> = g.messages.iter().map(|m| &m.content).collect();
+    assert_eq!(
+        contents,
+        [
+            &json!("first\nsecond"),
+            &json!([
+                {"type": "text", "text": "what is this?"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+            ]),
+        ]
+    );
+    assert_eq!(g.completion.text, "A cat.");
+}
+
 #[test]
 fn redacted_or_missing_families_make_a_skeleton_side() {
     let redacted = read(
