@@ -823,7 +823,9 @@ bodies.
   "truncated": {"generation_id", "session_id", "profile"}}` (`session_id`
   absent when the call carries none), which sets `meta.otel.truncated` as
   the raw read does: a marker without a session id marks the session it is
-  derived with. Deserializing a record of a newer format, with both or
+  derived with, and a marker for a generation id some kept copy delivers
+  is a duplicate, in any record order and whichever profile ranks better.
+  Deserializing a record of a newer format, with both or
   neither of `generation`/`truncated`, with inline `messages`, or without
   a `profile`, fails.
 - **Message (`StoredMessage`).** JSON `{"parent": "<hash>", "message":

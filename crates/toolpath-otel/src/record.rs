@@ -382,9 +382,8 @@ pub(crate) enum Entry {
     Truncated(Truncated),
 }
 
-/// A walk's calls as entries: truncation markers first (a walk marks a
-/// call truncated only before keeping any copy of it), then the
-/// generations.
+/// A walk's calls as entries: truncation markers first, then the
+/// generations ([`session_of`] reads markers in any order).
 pub(crate) fn entries(out: ReadOutcome) -> impl Iterator<Item = Entry> {
     out.skipped
         .into_iter()
@@ -523,7 +522,7 @@ pub(crate) fn session_of(
     };
     let mut seen: HashMap<String, (usize, usize)> = HashMap::new();
     let mut kept: Vec<Option<(Generation, Option<PromptHashes>)>> = Vec::new();
-    let mut truncated: BTreeSet<Option<String>> = BTreeSet::new();
+    let mut markers: Vec<Truncated> = Vec::new();
     for entry in entries {
         match entry {
             Entry::Generation(g, hashes) => {
@@ -542,19 +541,20 @@ pub(crate) fn session_of(
                 seen.insert(g.id.clone(), (r, kept.len()));
                 kept.push(Some((*g, hashes)));
             }
-            Entry::Truncated(t) => {
-                // A copy after a kept one is a duplicate, never a truncation.
-                let duplicate = t
-                    .generation_id
-                    .as_ref()
-                    .and_then(|id| seen.get(id))
-                    .is_some_and(|&(k, _)| k <= rank(&t.profile));
-                if !duplicate {
-                    truncated.insert(t.session_id);
-                }
-            }
+            Entry::Truncated(t) => markers.push(t),
         }
     }
+    // A truncated copy of a call some copy delivers is a duplicate, in any
+    // order and whichever profile ranks better.
+    let truncated: BTreeSet<Option<String>> = markers
+        .into_iter()
+        .filter(|t| {
+            t.generation_id
+                .as_ref()
+                .is_none_or(|id| !seen.contains_key(id))
+        })
+        .map(|t| t.session_id)
+        .collect();
     let mut hashes: HashMap<String, PromptHashes> = HashMap::new();
     let mut generations: Vec<Generation> = Vec::new();
     for (g, h) in kept.into_iter().flatten() {

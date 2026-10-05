@@ -248,35 +248,6 @@ fn in_arrival_order_the_first_copy_wins() {
 }
 
 #[test]
-fn a_truncated_copy_marks_the_session_only_before_a_kept_one() {
-    for pick in [Pick::Rank, Pick::Arrival] {
-        let (g, m) = gen_record("g", OR, "hi");
-        let (s, _) = session_for(
-            &[marker("g", OR), g.clone()],
-            std::slice::from_ref(&m),
-            pick,
-        );
-        assert!(s.truncated);
-        let (s, _) = session_for(
-            &[g.clone(), marker("g", OR)],
-            std::slice::from_ref(&m),
-            pick,
-        );
-        assert!(!s.truncated, "a copy after a kept one is a duplicate");
-        let (s, _) = session_for(&[g, marker("other", OR)], &[m], pick);
-        assert!(s.truncated);
-    }
-    // In arrival order any kept copy makes a later marker a duplicate; by
-    // rank a better-ranked marker still marks the session.
-    let (sem, m) = gen_record("g", "semconv", "hi");
-    let records = [sem, marker("g", OR)];
-    let (s, _) = session_for(&records, std::slice::from_ref(&m), Pick::Arrival);
-    assert!(!s.truncated);
-    let (s, _) = session_for(&records, &[m], Pick::Rank);
-    assert!(s.truncated);
-}
-
-#[test]
 fn a_truncated_call_reads_as_a_marker_that_round_trips() {
     let good = deliveries("claude-code.ndjson");
     let mut cut = good[0].clone();
@@ -292,27 +263,34 @@ fn a_truncated_call_reads_as_a_marker_that_round_trips() {
             a["value"]["stringValue"] = json!("{\"messages\":[{\"role\"");
         }
     }
-    // Without the call's good copy: with it the marker is a duplicate.
-    let mut values = vec![cut];
-    values.extend_from_slice(&good[1..]);
+    // Without the call's good copy the marker marks the session; with it,
+    // the marker is a duplicate.
     let config = classified();
-    let raw = derive_path(&values, &config).unwrap();
-    assert_eq!(raw.skipped.truncated, 1);
-    let (batch, skipped) = per_delivery(&values, ProfileSelection::Auto);
-    assert_eq!(skipped.truncated, 1);
-    let marker = &batch.records[0];
-    assert!(marker.is_truncated());
-    assert_eq!(marker.start_ns(), None);
-    assert!(marker.prompt().is_none());
-    assert_eq!(marker.session_id(), batch.records[1].session_id());
-    assert!(
-        batch.records[1..]
+    for (values, truncated) in [
+        ([vec![cut.clone()], good[1..].to_vec()].concat(), true),
+        ([vec![cut], good].concat(), false),
+    ] {
+        let raw = derive_path(&values, &config).unwrap();
+        assert_eq!(raw.skipped.truncated, usize::from(truncated));
+        // Read alone, the cut delivery has no kept copy to duplicate.
+        let (batch, skipped) = per_delivery(&values, ProfileSelection::Auto);
+        assert_eq!(skipped.truncated, 1);
+        let marker = &batch.records[0];
+        assert!(marker.is_truncated());
+        assert_eq!(marker.start_ns(), None);
+        assert!(marker.prompt().is_none());
+        assert_eq!(marker.session_id(), batch.records[1].session_id());
+        let delivered = batch.records[1..]
             .iter()
-            .all(|r| r.generation_id() != marker.generation_id())
-    );
-    let got = from_records(&batch, &config).unwrap();
-    assert_eq!(bytes(&got.output), bytes(&raw.output));
-    assert_eq!(got.output.meta.unwrap().extra["otel"]["truncated"], true);
+            .any(|r| r.generation_id() == marker.generation_id());
+        assert_eq!(delivered, !truncated);
+        let got = from_records(&batch, &config).unwrap();
+        assert_eq!(bytes(&got.output), bytes(&raw.output));
+        assert_eq!(
+            got.output.meta.unwrap().extra["otel"]["truncated"],
+            truncated
+        );
+    }
 }
 
 /// A truncated call without a session id still reads as a marker and
@@ -600,4 +578,45 @@ fn records_of_two_sessions_read_together_and_mix_only_when_derived_together() {
     assert_eq!(ids.len(), 2);
     let err = from_records(&b, &classified()).unwrap_err();
     assert!(matches!(err, OtelError::MixedSessions(ids) if ids.len() == 2));
+}
+
+/// Every order of `items`.
+fn orders<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+    if items.len() <= 1 {
+        return vec![items.to_vec()];
+    }
+    let mut out = Vec::new();
+    for i in 0..items.len() {
+        let mut rest = items.to_vec();
+        let first = rest.remove(i);
+        for mut tail in orders(&rest) {
+            tail.insert(0, first.clone());
+            out.push(tail);
+        }
+    }
+    out
+}
+
+/// A truncated copy of a call some kept copy delivers is a duplicate in
+/// every record order and whichever profile ranks better; only a marker
+/// for a call no copy delivers marks the session.
+#[test]
+fn a_marker_for_a_kept_call_never_marks_the_session_in_any_order() {
+    let (or, m1) = gen_record("g", OR, "from the gateway");
+    let (sem, m2) = gen_record("g", "semconv", "from semconv");
+    let msgs = [m1, m2];
+    for pick in [Pick::Rank, Pick::Arrival] {
+        for marker_profile in [OR, "semconv"] {
+            let records = [or.clone(), sem.clone(), marker("g", marker_profile)];
+            for order in orders(&records) {
+                let (s, _) = session_for(&order, &msgs, pick);
+                assert!(!s.truncated, "{pick:?} {marker_profile} {order:?}");
+            }
+            let records = [or.clone(), marker("other", marker_profile)];
+            for order in orders(&records) {
+                let (s, _) = session_for(&order, &msgs, pick);
+                assert!(s.truncated, "{pick:?} {marker_profile} {order:?}");
+            }
+        }
+    }
 }
