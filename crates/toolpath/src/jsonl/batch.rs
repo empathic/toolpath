@@ -142,13 +142,16 @@ impl fmt::Display for BatchError {
         match self {
             BatchError::Jsonl(_) => write!(f, "serializing a JSONL line failed"),
             BatchError::PathOpenNotFirst { index } => {
-                write!(f, "line {index}: PathOpen may only be the first line")
+                write!(
+                    f,
+                    "input index {index}: PathOpen may only be the first line"
+                )
             }
             BatchError::OrphanSignature { index, target } => write!(
                 f,
-                "line {index}: Signature for {target:?} does not follow its step"
+                "input index {index}: Signature for {target:?} does not follow its step"
             ),
-            BatchError::AfterClose { index } => write!(f, "line {index}: after PathClose"),
+            BatchError::AfterClose { index } => write!(f, "input index {index}: after PathClose"),
             BatchError::DuplicateStep { step } => write!(f, "step {step:?} is sent twice"),
             BatchError::ParentNotHeld { step, parent } => write!(
                 f,
@@ -918,6 +921,13 @@ mod tests {
             assert!(matches!(run(l, &held), BatchError::ReservedMetaKey { .. }));
         }
         assert!(BatchError::NoHead.to_string().contains("no head"));
+    }
+
+    #[test]
+    fn errors_name_the_input_position_unambiguously() {
+        let msg = BatchError::PathOpenNotFirst { index: 1 }.to_string();
+        assert!(!msg.starts_with("line 1:"), "{msg}");
+        assert!(msg.contains("index 1"), "{msg}");
     }
 
     // ── Generated DAGs ──────────────────────────────────────────────────
