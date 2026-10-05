@@ -158,18 +158,25 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
 /// `input − cached` (saturating) and `cache_read_tokens` is `cached`:
 /// the classes are additive. The projector adds `cached` back.
 ///
-/// `tool` is prompt-side (tool-result tokens billed separately) and
-/// `total` is a Gemini-side sum; neither is folded here — both remain
-/// available raw via `Turn.extra["gemini"]["tokens"]`.
-fn tokens_to_usage(t: &Tokens) -> TokenUsage {
+/// `tool` (`toolUsePromptTokenCount`) is prompt-side input that lies
+/// outside `input`, so it is added to `input_tokens` and recorded under
+/// `breakdowns["input"]["tool_use"]` when non-zero. `total` is a
+/// Gemini-side sum and is not folded; it stays raw in
+/// `Turn.extra["gemini"]["tokens"]`.
+pub(crate) fn tokens_to_usage(t: &Tokens) -> TokenUsage {
     let output = t.output.unwrap_or(0);
     let thoughts = t.thoughts.unwrap_or(0);
     let generated = output.saturating_add(thoughts);
 
     let mut usage = TokenUsage {
-        // Gemini's `input` includes `cached`; derived classes are additive,
-        // so the cached share is counted only under `cache_read_tokens`.
-        input_tokens: t.input.map(|i| i.saturating_sub(t.cached.unwrap_or(0))),
+        input_tokens: match (t.input, t.tool.filter(|&n| n > 0)) {
+            (None, None) => None,
+            (i, tool) => Some(
+                i.unwrap_or(0)
+                    .saturating_sub(t.cached.unwrap_or(0))
+                    .saturating_add(tool.unwrap_or(0)),
+            ),
+        },
         // Fold reasoning into output (additive in Gemini — billed as
         // output). None only when both output and thoughts are
         // absent/zero, mirroring the per-field Option semantics.
@@ -194,6 +201,14 @@ fn tokens_to_usage(t: &Tokens) -> TokenUsage {
             .entry("output".to_string())
             .or_default()
             .insert("reasoning".to_string(), thoughts);
+    }
+
+    if let Some(tool) = t.tool.filter(|&n| n > 0) {
+        usage
+            .breakdowns
+            .entry("input".to_string())
+            .or_default()
+            .insert("tool_use".to_string(), tool);
     }
 
     usage
@@ -905,6 +920,83 @@ mod tests {
         let u2 = tokens_to_usage(&empty);
         assert_eq!(u2.output_tokens, None);
         assert!(u2.breakdowns.is_empty());
+    }
+
+    #[test]
+    fn test_tool_use_prompt_tokens_counted_as_input() {
+        // `tool` (toolUsePromptTokenCount) is prompt-side and outside
+        // `input` (promptTokenCount): total = input + output + thoughts + tool.
+        let t = Tokens {
+            input: Some(9562),
+            output: Some(157),
+            cached: Some(8887),
+            thoughts: Some(24),
+            tool: Some(300),
+            total: Some(10043),
+        };
+        let u = tokens_to_usage(&t);
+        assert_eq!(u.input_tokens, Some(9562 - 8887 + 300));
+        assert_eq!(u.cache_read_tokens, Some(8887));
+        assert_eq!(u.output_tokens, Some(157 + 24));
+        assert_eq!(
+            u.breakdowns.get("input").and_then(|m| m.get("tool_use")),
+            Some(&300)
+        );
+        let classes =
+            u.input_tokens.unwrap() + u.cache_read_tokens.unwrap() + u.output_tokens.unwrap();
+        assert_eq!(Some(classes), t.total);
+    }
+
+    #[test]
+    fn test_zero_or_absent_tool_tokens_yield_no_input_breakdown() {
+        for tool in [Some(0), None] {
+            let t = Tokens {
+                input: Some(100),
+                output: Some(10),
+                cached: Some(40),
+                tool,
+                ..Default::default()
+            };
+            let u = tokens_to_usage(&t);
+            assert_eq!(u.input_tokens, Some(60));
+            assert!(!u.breakdowns.contains_key("input"), "tool={tool:?}");
+        }
+    }
+
+    #[test]
+    fn test_zero_tool_tokens_do_not_report_an_absent_input() {
+        let t = Tokens {
+            output: Some(10),
+            tool: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(tokens_to_usage(&t).input_tokens, None);
+    }
+
+    #[test]
+    fn test_tool_tokens_without_prompt_count() {
+        let t = Tokens {
+            tool: Some(7),
+            ..Default::default()
+        };
+        assert_eq!(tokens_to_usage(&t).input_tokens, Some(7));
+    }
+
+    #[test]
+    fn test_session_total_includes_tool_tokens() {
+        let chat: ChatFile = serde_json::from_str(
+            r#"{"sessionId":"s","projectHash":"h","messages":[
+              {"id":"u1","timestamp":"2026-04-17T15:00:00Z","type":"user","content":[{"text":"hi"}]},
+              {"id":"a1","timestamp":"2026-04-17T15:00:01Z","type":"gemini","content":"one","tokens":{"input":100,"output":10,"cached":40,"thoughts":5,"tool":25,"total":140}},
+              {"id":"a2","timestamp":"2026-04-17T15:00:02Z","type":"gemini","content":"two","tokens":{"input":200,"output":20,"cached":0,"thoughts":0,"tool":0,"total":220}}
+            ]}"#,
+        )
+        .unwrap();
+        let view = to_view(&Conversation::new("s".into(), chat));
+        let total = view.total_usage.unwrap();
+        assert_eq!(total.input_tokens, Some((100 - 40 + 25) + 200));
+        assert_eq!(total.cache_read_tokens, Some(40));
+        assert_eq!(total.output_tokens, Some(15 + 20));
     }
 
     #[test]

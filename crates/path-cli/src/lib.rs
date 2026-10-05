@@ -43,7 +43,7 @@ mod projection;
 mod providers;
 mod query;
 mod remote;
-mod schema;
+pub mod schema;
 #[cfg(not(target_os = "emscripten"))]
 mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]

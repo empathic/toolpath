@@ -13,8 +13,12 @@
 //! base. The kind schema bytes are bundled from `site/kinds/**/schema.json`
 //! and matched by their exact URI; an unrecognized `kind` is treated as a
 //! generic path (base schema only), exactly as the format intends.
+//!
+//! agent-coding-session v1.1.0 and later also carry accounting rules that
+//! JSON Schema cannot express (one total per group, breakdowns bounded by
+//! their class); [`validate`] checks those in code.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use jsonschema::Validator;
@@ -89,6 +93,11 @@ pub fn validate(instance: &serde_json::Value) -> anyhow::Result<()> {
                     err.instance_path()
                 ));
             }
+            if let Some(rule) = group_rule(kind) {
+                for (pointer, msg) in accounting_violations(path, rule) {
+                    errors.push(format!("  at /paths/{i}{pointer}: {msg} (kind {kind})"));
+                }
+            }
         }
     }
 
@@ -100,6 +109,162 @@ pub fn validate(instance: &serde_json::Value) -> anyhow::Result<()> {
             errors.join("\n")
         ))
     }
+}
+
+/// How an agent-coding-session version places a group's `token_usage`.
+#[derive(Clone, Copy, PartialEq)]
+enum GroupRule {
+    /// v1.1.0: on the last step of each run of consecutive steps sharing a
+    /// `group_id`.
+    LastOfRun,
+    /// v1.2.0 and later: on the last step of the `group_id`, wherever its
+    /// steps fall.
+    LastOfGroup,
+}
+
+/// The group rule for agent-coding-session kinds that carry accounting rules,
+/// which are prose in the spec because JSON Schema cannot express them.
+fn group_rule(kind: &str) -> Option<GroupRule> {
+    let (name, v) = crate::kinds::parse_kind_uri(kind)?;
+    match (name == "agent-coding-session", v.major, v.minor) {
+        (true, 1, 1) => Some(GroupRule::LastOfRun),
+        (true, 1, m) if m >= 2 => Some(GroupRule::LastOfGroup),
+        _ => None,
+    }
+}
+
+fn escape_pointer(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// The `conversation.append` payloads of a step, with the JSON pointer of each.
+fn appends(step: &serde_json::Value) -> Vec<(String, &serde_json::Value)> {
+    let Some(change) = step.get("change").and_then(|c| c.as_object()) else {
+        return Vec::new();
+    };
+    change
+        .iter()
+        .filter_map(|(key, c)| {
+            let structural = c.get("structural")?;
+            (structural.get("type")?.as_str()? == "conversation.append").then(|| {
+                (
+                    format!("/change/{}/structural", escape_pointer(key)),
+                    structural,
+                )
+            })
+        })
+        .collect()
+}
+
+/// Breaches of the agent-coding-session accounting rules, as
+/// `(pointer within the path, message)`:
+/// - a `group_id`'s `token_usage` sits on one step only, placed by `rule`;
+/// - a breakdown's sub-classes sum to no more than their class, on
+///   `token_usage` and `attributed_token_usage`.
+fn group_id_of(append: &serde_json::Value) -> Option<&str> {
+    append.get("group_id").and_then(|g| g.as_str())
+}
+
+fn accounting_violations(path: &serde_json::Value, rule: GroupRule) -> Vec<(String, String)> {
+    let Some(steps) = path.get("steps").and_then(|s| s.as_array()) else {
+        return Vec::new();
+    };
+    let per_step: Vec<Vec<(String, &serde_json::Value)>> = steps.iter().map(appends).collect();
+    let step_has_group = |j: usize, g: &str| {
+        per_step
+            .get(j)
+            .is_some_and(|ps| ps.iter().any(|(_, a)| group_id_of(a) == Some(g)))
+    };
+    let mut last_of_group: HashMap<&str, usize> = HashMap::new();
+    for (j, payloads) in per_step.iter().enumerate() {
+        for (_, a) in payloads {
+            if let Some(g) = group_id_of(a) {
+                last_of_group.insert(g, j);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (j, payloads) in per_step.iter().enumerate() {
+        let mut totals_on_step = HashSet::new();
+        for (pointer, append) in payloads {
+            if let Some(g) = group_id_of(append)
+                && append.get("token_usage").is_some()
+            {
+                let (carries_total, place) = match rule {
+                    GroupRule::LastOfRun => (!step_has_group(j + 1, g), "the last step of its run"),
+                    GroupRule::LastOfGroup => (last_of_group[g] == j, "the group's last step"),
+                };
+                if carries_total && !totals_on_step.insert(g) {
+                    out.push((
+                        format!("/steps/{j}{pointer}/token_usage"),
+                        format!("duplicate token_usage for group_id {g:?} on its final step"),
+                    ));
+                }
+                if !carries_total {
+                    out.push((
+                        format!("/steps/{j}{pointer}/token_usage"),
+                        format!(
+                            "token_usage on a step of group_id {g:?} that is not {place}; \
+                             the group total belongs there only"
+                        ),
+                    ));
+                }
+            }
+            for key in ["token_usage", "attributed_token_usage"] {
+                if let Some(usage) = append.get(key) {
+                    out.extend(breakdown_violations(usage, rule).into_iter().map(
+                        |(class, msg)| {
+                            (format!("/steps/{j}{pointer}/{key}/breakdowns/{class}"), msg)
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+const BREAKDOWN_CLASSES: [&str; 4] = ["input", "output", "cache_read", "cache_write"];
+
+/// v1.2.0 keys breakdowns by the four classes and counts an unreported parent
+/// as zero; v1.1.0 bounds only a breakdown whose parent is reported.
+fn breakdown_violations(usage: &serde_json::Value, rule: GroupRule) -> Vec<(String, String)> {
+    let strict = rule == GroupRule::LastOfGroup;
+    let Some(breakdowns) = usage.get("breakdowns").and_then(|b| b.as_object()) else {
+        return Vec::new();
+    };
+    breakdowns
+        .iter()
+        .filter_map(|(class, inner)| {
+            let field = format!("{class}_tokens");
+            let reported = usage.get(&field).and_then(|v| v.as_u64());
+            if !strict && reported.is_none() {
+                return None;
+            }
+            if !BREAKDOWN_CLASSES.contains(&class.as_str()) {
+                return Some((
+                    escape_pointer(class),
+                    format!(
+                        "breakdown key {class:?} is not a class; use one of {}",
+                        BREAKDOWN_CLASSES.join(", ")
+                    ),
+                ));
+            }
+            let parent = reported.unwrap_or(0);
+            let sum = inner
+                .as_object()?
+                .values()
+                .filter_map(|n| n.as_u64())
+                .fold(0u64, u64::saturating_add);
+            (sum > parent).then(|| {
+                (
+                    escape_pointer(class),
+                    format!("breakdown sums to {sum}, more than its parent {field} ({parent})"),
+                )
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -282,6 +447,301 @@ mod tests {
         }));
         doc["paths"][0]["meta"]["kind"] = json!("https://toolpath.net/kinds/made-up/v9.9.9");
         validate(&doc).expect("an unknown kind imposes no extra constraints");
+    }
+
+    /// An agent-coding-session graph with one step per payload, in order.
+    fn acs_steps(kind: &str, appends: &[serde_json::Value]) -> serde_json::Value {
+        let steps: Vec<serde_json::Value> = appends
+            .iter()
+            .enumerate()
+            .map(|(i, append)| {
+                json!({
+                    "step": {
+                        "id": format!("s{i}"),
+                        "actor": "agent:claude-code",
+                        "timestamp": "2026-01-29T10:00:00Z"
+                    },
+                    "change": {"agent://claude-code/s1": {"structural": append}}
+                })
+            })
+            .collect();
+        json!({
+            "graph": {"id": "g1"},
+            "paths": [{
+                "path": {"id": "p1", "head": format!("s{}", appends.len() - 1)},
+                "meta": {"kind": kind},
+                "steps": steps
+            }]
+        })
+    }
+
+    fn assistant(group: Option<&str>, usage: Option<serde_json::Value>) -> serde_json::Value {
+        let mut v = json!({"type": "conversation.append", "role": "assistant", "text": "ok"});
+        if let Some(g) = group {
+            v["group_id"] = json!(g);
+        }
+        if let Some(u) = usage {
+            v["token_usage"] = u;
+        }
+        v
+    }
+
+    fn usage(input: u64, output: u64) -> serde_json::Value {
+        json!({"input_tokens": input, "output_tokens": output})
+    }
+
+    #[test]
+    fn group_total_on_last_step_of_run_is_valid() {
+        let doc = acs_steps(
+            ACS_KIND,
+            &[
+                assistant(Some("msg_1"), None),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+                assistant(None, Some(usage(3, 1))),
+            ],
+        );
+        validate(&doc).expect("one total per group, on the run's last step");
+    }
+
+    #[test]
+    fn group_total_on_a_non_final_step_is_rejected() {
+        let doc = acs_steps(
+            ACS_KIND,
+            &[
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        let msg = validate(&doc)
+            .expect_err("a repeated group total double-counts the group")
+            .to_string();
+        assert!(msg.contains("/paths/0/steps/0"), "names the step: {msg}");
+        assert!(msg.contains("msg_1"), "names the group: {msg}");
+        assert!(msg.contains(ACS_KIND), "attributes the kind: {msg}");
+        assert!(
+            !msg.contains("/paths/0/steps/1"),
+            "the last step is fine: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_split_group_carries_one_total_from_v1_2_0() {
+        let doc = acs_steps(
+            ACS_KIND,
+            &[
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+                assistant(Some("msg_2"), Some(usage(3, 1))),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        let msg = validate(&doc)
+            .expect_err("two totals for one group double-count it")
+            .to_string();
+        assert!(
+            msg.contains("/paths/0/steps/0"),
+            "names the early step: {msg}"
+        );
+        assert!(
+            !msg.contains("/paths/0/steps/2"),
+            "the last step is fine: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_split_group_with_its_total_on_its_last_step_is_valid() {
+        let doc = acs_steps(
+            ACS_KIND,
+            &[
+                assistant(Some("msg_1"), None),
+                assistant(Some("msg_2"), Some(usage(3, 1))),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        validate(&doc).expect("one total per group, on the group's last step");
+    }
+
+    #[test]
+    fn v1_1_0_keeps_one_total_per_run() {
+        let doc = acs_steps(
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+            &[
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+                assistant(None, None),
+                assistant(Some("msg_1"), Some(usage(4, 2))),
+            ],
+        );
+        validate(&doc).expect("v1.1.0 puts a total on each run's last step");
+    }
+
+    #[test]
+    fn each_append_is_judged_by_its_own_group() {
+        let mut doc = acs_steps(
+            ACS_KIND,
+            &[
+                assistant(Some("msg_1"), None),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        doc["paths"][0]["steps"][0]["change"]["agent://claude-code/s2"] =
+            json!({"structural": assistant(Some("msg_2"), Some(usage(3, 1)))});
+        validate(&doc).expect("msg_2's only step carries msg_2's total");
+    }
+
+    #[test]
+    fn duplicate_group_totals_in_one_step_are_rejected() {
+        for kind in [
+            ACS_KIND,
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+        ] {
+            let append = assistant(Some("msg_1"), Some(usage(10, 5)));
+            let mut doc = acs_steps(kind, std::slice::from_ref(&append));
+            doc["paths"][0]["steps"][0]["change"]["agent://claude-code/s2"] =
+                json!({"structural": append});
+            let msg = validate(&doc)
+                .expect_err("two payloads repeat the same group's total")
+                .to_string();
+            assert!(msg.contains("/paths/0/steps/0/change/"), "{msg}");
+            assert!(msg.contains("msg_1"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn distinct_group_totals_in_one_step_are_valid() {
+        for kind in [
+            ACS_KIND,
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+        ] {
+            for group in [None, Some("msg_2")] {
+                let mut doc = acs_steps(kind, &[assistant(Some("msg_1"), Some(usage(10, 5)))]);
+                doc["paths"][0]["steps"][0]["change"]["agent://claude-code/s2"] =
+                    json!({"structural": assistant(group, Some(usage(3, 1)))});
+                validate(&doc).expect("independent totals may share a step");
+            }
+        }
+    }
+
+    #[test]
+    fn v1_1_0_breakdowns_keep_their_original_bound() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"total": {"x": 1}, "cache_read": {"y": 2}});
+        validate(&acs_steps(
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+            &[assistant(None, Some(u))],
+        ))
+        .expect("v1.1.0 bounds only a breakdown whose parent is reported");
+    }
+
+    #[test]
+    fn breakdown_of_an_unreported_class_is_rejected() {
+        let u = json!({"input_tokens": 10, "output_tokens": null,
+                       "breakdowns": {"output": {"reasoning": 5}}});
+        let msg = validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("a breakdown cannot exceed an unreported parent")
+            .to_string();
+        assert!(msg.contains("breakdowns/output"), "points at it: {msg}");
+    }
+
+    #[test]
+    fn breakdown_of_a_missing_cache_class_is_rejected() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"cache_write": {"ttl_1h": 7}});
+        validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("cache_write_tokens is absent, so its breakdown exceeds it");
+    }
+
+    #[test]
+    fn breakdown_with_an_unknown_class_is_rejected() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"total": {"x": 1}});
+        let msg = validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("breakdowns are keyed by one of the four classes")
+            .to_string();
+        assert!(msg.contains("breakdowns/total"), "points at it: {msg}");
+    }
+
+    #[test]
+    fn huge_breakdowns_do_not_overflow() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"output": {"a": u64::MAX, "b": u64::MAX}});
+        validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("the sum saturates and still exceeds the parent");
+    }
+
+    #[test]
+    fn breakdown_within_its_parent_is_valid() {
+        let mut u = usage(10, 500);
+        u["breakdowns"] = json!({"output": {"reasoning": 450, "text": 50}});
+        validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect("Σ(inner) may equal the parent");
+    }
+
+    #[test]
+    fn breakdown_above_its_parent_is_rejected() {
+        let mut u = usage(10, 400);
+        u["breakdowns"] = json!({"output": {"reasoning": 450}});
+        let msg = validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("a breakdown cannot exceed its parent class")
+            .to_string();
+        assert!(
+            msg.contains("token_usage/breakdowns/output"),
+            "points at it: {msg}"
+        );
+        assert!(
+            msg.contains("450") && msg.contains("400"),
+            "gives both sums: {msg}"
+        );
+    }
+
+    #[test]
+    fn attributed_breakdown_above_its_parent_is_rejected() {
+        let mut a = assistant(None, Some(usage(10, 400)));
+        a["attributed_token_usage"] = json!({"input_tokens": 10, "output_tokens": 100, "breakdowns": {"output": {"reasoning": 101}}});
+        let msg = validate(&acs_steps(ACS_KIND, &[a]))
+            .expect_err("the bound applies on attributed_token_usage too")
+            .to_string();
+        assert!(
+            msg.contains("attributed_token_usage/breakdowns/output"),
+            "points at it: {msg}"
+        );
+    }
+
+    #[test]
+    fn negative_counts_are_rejected_from_v1_2_0() {
+        let doc = acs_steps(
+            ACS_KIND,
+            &[assistant(
+                None,
+                Some(json!({"input_tokens": -3, "output_tokens": 1})),
+            )],
+        );
+        let msg = validate(&doc)
+            .expect_err("counts are non-negative")
+            .to_string();
+        assert!(msg.contains("input_tokens"), "names the field: {msg}");
+    }
+
+    #[test]
+    fn accounting_rules_apply_to_v1_1_0() {
+        let doc = acs_steps(
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+            &[
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        validate(&doc).expect_err("v1.1.0 introduced the once-per-group rule");
+    }
+
+    #[test]
+    fn accounting_rules_do_not_apply_to_v1_0_0() {
+        let doc = acs_steps(
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0,
+            &[
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        validate(&doc).expect("v1.0.0 left accounting unspecified");
     }
 
     #[test]

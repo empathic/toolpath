@@ -235,8 +235,9 @@ fn roundtrip_preserves_input_output_tokens() {
     // `output_tokens` is `output + thoughts`. The reasoning slice is
     // recorded in `breakdowns["output"]["reasoning"]`, so the projector
     // un-folds it back out on projection — `output` and `thoughts` both
-    // round-trip losslessly. Only the `tool`/`total` counters were
-    // Gemini-extra only (no IR home) and don't survive.
+    // round-trip losslessly. `tool` survives via
+    // `breakdowns["input"]["tool_use"]` (zero-filled when absent); only
+    // `total` has no IR home and doesn't survive.
     let source = load_source_conversation();
     let (_, rebuilt, _) = roundtrip(&source);
 
@@ -256,6 +257,12 @@ fn roundtrip_preserves_input_output_tokens() {
         assert_eq!(bt.output, at.output, "output tokens at msg {}", i);
         assert_eq!(bt.thoughts, at.thoughts, "thoughts tokens at msg {}", i);
         assert_eq!(bt.cached, at.cached, "cached tokens at msg {}", i);
+        assert_eq!(
+            bt.tool.unwrap_or(0),
+            at.tool.unwrap_or(0),
+            "tool tokens at msg {}",
+            i
+        );
     }
 }
 

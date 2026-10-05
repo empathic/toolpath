@@ -108,6 +108,13 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let mut turn_to_step: HashMap<String, String> = HashMap::new();
     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
 
+    let mut last_turn_of_group: HashMap<&str, usize> = HashMap::new();
+    for (idx, turn) in view.turns.iter().enumerate() {
+        if let Some(group) = turn.group_id.as_deref() {
+            last_turn_of_group.insert(group, idx);
+        }
+    }
+
     for (idx, turn) in view.turns.iter().enumerate() {
         // Step id: use the turn's native id when set so it round-trips
         // through `extract_conversation`; otherwise synthesize sequentially.
@@ -180,17 +187,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             extra.insert("tool_uses".to_string(), serde_json::Value::Array(arr));
         }
 
-        // Message-level accounting lands exactly once per message: when a
-        // provider splits one message across several turns (group_id
-        // set on each), only the run's last turn carries token_usage, so
-        // summing over steps yields session totals. A turn without a
-        // group_id is its own accounting unit.
-        let last_of_message = match &turn.group_id {
+        // A group's total lands once, on the group's last turn wherever its
+        // turns fall, so summing over steps yields session totals.
+        let last_of_message = match turn.group_id.as_deref() {
             None => true,
-            Some(mid) => view
-                .turns
-                .get(idx + 1)
-                .is_none_or(|next| next.group_id.as_ref() != Some(mid)),
+            Some(group) => last_turn_of_group[group] == idx,
         };
         if last_of_message
             && let Some(usage) = &turn.token_usage
@@ -1611,10 +1612,7 @@ mod tests {
     }
 
     #[test]
-    fn test_message_grouping_is_consecutive_only() {
-        // A group_id reappearing after an intervening message starts a
-        // new group (defensive: source formats never interleave, but the
-        // rule is defined over consecutive runs in document order).
+    fn test_interleaved_group_carries_one_total_on_its_last_step() {
         let mk = |id: &str, msg: &str, out: u32| {
             let mut t = base_turn(id, Role::Assistant);
             t.group_id = Some(msg.into());
@@ -1628,10 +1626,7 @@ mod tests {
         ]);
         let path = derive_path(&view, &DeriveConfig::default());
         let changes: Vec<&StructuralChange> = path.steps.iter().map(conv_change).collect();
-        assert_eq!(
-            changes[0].extra["token_usage"]["output_tokens"],
-            serde_json::json!(100)
-        );
+        assert!(!changes[0].extra.contains_key("token_usage"));
         assert_eq!(
             changes[1].extra["token_usage"]["output_tokens"],
             serde_json::json!(200)

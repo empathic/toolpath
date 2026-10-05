@@ -143,16 +143,24 @@ pub struct Base {
 }
 
 /// [`PathMeta::kind`] URI for a path derived from an AI coding conversation.
-/// Spec at <https://toolpath.net/kinds/agent-coding-session/v1.1.0>.
+/// Spec at <https://toolpath.net/kinds/agent-coding-session/v1.2.0>.
 ///
-/// v1.1.0 specifies message-level token accounting: steps derived from one
-/// provider message share a `message_id`, and the message's `token_usage`
+/// v1.1.0 specified message-level token accounting: steps derived from one
+/// provider message share a `group_id`, and the group's `token_usage`
 /// appears on exactly one of them (the group's last step in document
 /// order), so summing usage over a path's steps yields session totals.
+/// v1.2.0 adds that the four token classes are additive: `input_tokens`
+/// excludes cache reads and writes, so their sum is the prompt.
 pub const PATH_KIND_AGENT_CODING_SESSION: &str =
+    "https://toolpath.net/kinds/agent-coding-session/v1.2.0";
+
+/// The v1.1.0 URI. Documents produced before the v1.2.0 additive rule carry
+/// it; Codex and Gemini documents under it count cached input inside
+/// `input_tokens` as well as in `cache_read_tokens`.
+pub const PATH_KIND_AGENT_CODING_SESSION_V1_1_0: &str =
     "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
 
-/// The previous version URI. Documents produced before the v1.1.0
+/// The v1.0.0 URI. Documents produced before the v1.1.0
 /// accounting rule carry this kind; consumers summing their `token_usage`
 /// per step must deduplicate repeated message-level usage themselves.
 pub const PATH_KIND_AGENT_CODING_SESSION_V1_0_0: &str =
@@ -853,6 +861,10 @@ mod tests {
     fn test_path_kind_constant_spells_current_uri() {
         assert_eq!(
             PATH_KIND_AGENT_CODING_SESSION,
+            "https://toolpath.net/kinds/agent-coding-session/v1.2.0"
+        );
+        assert_eq!(
+            PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
             "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
         );
     }
