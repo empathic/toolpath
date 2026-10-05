@@ -186,10 +186,13 @@ for body in &sent.output {
   cannot arise.
 - **What the caller stores.** The records and messages, nothing else. Each
   body is one append; send them in order. No bodies means no turn has
-  settled yet. A call costs about 0.23 s of CPU for 1,000 full-history
-  calls (0.78 s for 2,000): a derive of the records, and with `stored`
+  settled yet. A call costs a derive of the records, and with `stored`
   given a second derive of the generations already sent, to check that no
-  stored step changed.
+  stored step changed: about 0.21 s of CPU for the 1,000th call of a
+  synthetic session of one linear full-history conversation (0.74 s for
+  the 2,000th). Deciding the harness stitches about `n log n`
+  generations in all, whatever the session's shape: 22 ms per call for
+  1,000 requests that never share history (which never settle).
 - **`PathOpen` or `PathMeta`.** The first body starts with a `PathOpen` when
   `opened` is false, else with a `PathMeta` patch. Either carries the new
   feed order, so it commits with the first steps.

@@ -224,6 +224,21 @@ followed by a late arrival can decide another harness without it (the call
 is `Amended`). Always pass the stored `meta.otel.harness`. A continuation
 keeps the frozen path's harness (Incremental JSONL, Continuation).
 
+Finding that prefix stitches about `n log n` generations, not every
+prefix in turn. A prefix emits a step exactly when it emits a root turn
+(a step goes out only after its parents), and while the prefix's harness
+stays the same a longer prefix emits every root a shorter one emits: tool
+results and echoes are only added, a thread's sub-agent match and the
+main line, once found, never move, and a root's children only grow. So
+each run of one harness along the feed is searched by doubling from its
+start, then bisecting. Across a harness change emission is not monotone (a
+sub-agent's tree settles under Claude Code's `Agent`, then a developer
+message makes the session codex's, where `Agent` delegates nothing), so
+the search restarts at every change; the rules change their answer only a
+few times along any feed. A session that never settles, such as
+independent prompts under one session id, costs about two stitches of the
+whole feed.
+
 The working directory becomes `path.base`:
 
 | Harness | cwd marker |
@@ -1088,10 +1103,13 @@ every turn and is passed once the session is over.
   one-shot `derive_path` would.
 - **Cost.** A call derives the whole session from its records, and with a
   non-empty `stored` derives the `fed` generations again to compare every
-  stored step: about 0.23 s of CPU for 1,000 full-history calls (2.26 GB
-  of OTLP) and 0.78 s for 2,000, against 1.65 s at 1,000 when every call
-  re-read the raw bodies. With `stored` empty it skips the comparison
-  (0.18 s at 1,000) but resends every settled step.
+  stored step: about 0.21 s of CPU for the 1,000th call of a synthetic
+  session of one linear full-history conversation (2.26 GB of OTLP) and
+  0.74 s for the 2,000th, against 1.65 s at 1,000 when every call re-read
+  the raw bodies. With `stored` empty it skips the comparison (0.16 s at
+  1,000) but resends every settled step. Deciding the harness adds about
+  two stitches of the feed for a session that never settles (1,000
+  requests that never share history: 22 ms per call).
 - **Soundness.** The whole session is derived and the unsettled steps
   dropped. That equals deriving only the settled turns, because a step
   depends only on its own turn, its parent's id and the generations that

@@ -24,12 +24,14 @@ All notable changes to the Toolpath workspace are documented here.
   and a store keeps the first spelling.
 - **Faster reads and derives.** The read parses each distinct message text
   once and shares prompts that extend each other instead of copying every
-  history; records stitch by message hash. 1,000 synthetic full-history calls:
-  one-shot `derive_path` from the bodies 1.9 s → 0.18 s with peak heap
-  3.4 GB → 0.25 GB; from records 0.15 s → 0.07 s.
+  history; records stitch by message hash. 1,000 synthetic calls of one
+  linear full-history conversation: one-shot `derive_path` from the bodies
+  1.9 s → about 0.2 s with peak heap 3.4 GB → 0.25 GB; from records
+  0.15 s → 0.06 s (measured after the settle search below).
 - **Stateless incremental sends.** `derive_jsonl(records, messages, config,
-  remote, settle, limits)` derives from the session's records (a
-  pre-read call costs about 0.23 s of CPU for 1,000 full-history generations) and
+  remote, settle, limits)` derives from the session's records (the
+  1,000th call of that synthetic session costs about 0.21 s of CPU from
+  pre-read records) and
   returns the request bodies (`Vec<Body>`, split by `toolpath`'s batcher
   within `BatchLimits`) that bring a stored
   path up to a growing session's settled turns, as appends to Pathbase's
@@ -57,9 +59,15 @@ All notable changes to the Toolpath workspace are documented here.
   parents included. The harness is decided by the generations that settle
   the session's first turn and frozen for the rest of it: stored as
   `meta.otel.harness` and passed back as `Remote::harness`, whose unknown
-  name is `OtelError::UnknownHarness` (`derive_path`
-  too, which can change `meta.otel.harness`, `producer.name` and tool
-  categories from 0.1.0 for a session whose later calls point elsewhere).
+  name is `OtelError::UnknownHarness`. `derive_path` decides the harness
+  the same way, so its output (`meta.otel.harness`, `producer.name` and
+  tool categories) can differ from 0.1.0's for a session whose later calls
+  point elsewhere. Finding the settling prefix searches each run of one
+  harness by doubling and bisecting, about `n log n` generations stitched
+  in all, so a session that never settles (requests that never share
+  history) costs about two stitches, not one per prefix: 1,000 such
+  requests, 2.6 s → 22 ms per `derive_jsonl` call and 3.7 s → 64 ms for
+  `derive_path`.
   A continuation of a frozen path passes the frozen step ids as `base` on
   every send (the first with the frozen path's `fed` and `opened` false):
   the bodies open the continuation path once, hold only the new steps, never
