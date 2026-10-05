@@ -28,8 +28,9 @@ All notable changes to the Toolpath workspace are documented here.
   the last turn of each run of consecutive turns.
 - **`path-cli`** (0.30.0): `path p validate` bundles the v1.2.0 schema
   and checks the accounting rules JSON Schema cannot express: one
-  `token_usage` per `group_id` (v1.2.0; per run for v1.1.0), including
-  duplicate totals in different change entries on the same step, and
+  `token_usage` per `group_id` (v1.2.0; per run for v1.1.0), no second
+  total for a group in another change entry on the same step (v1.1.0
+  documents too, since it breaks v1.1.0's session-total promise), and
   breakdowns keyed by a class and bounded by it. The cross-harness
   matrix runs those checks on every fixture and cell, and compares each
   fixture's derived prompt, cache reads and cache writes with what its
