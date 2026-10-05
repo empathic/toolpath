@@ -39,9 +39,10 @@ and every body ends with a `Head` the reader holds by then, chosen by a
 which takes the input's head. A step over the byte limit goes alone, over
 it. Ordering faults are a new `#[non_exhaustive]` `BatchError`.
 `delta_bodies(path, stored, opened, limits, head)` is `delta_lines`,
-batched; `DeltaError` gains `Batch(BatchError)`. `BatchLimits`, `Body` and
-`HeadContext` are `#[non_exhaustive]`, so a field added later is not a
-breaking change (build limits with `BatchLimits::new` or `default()`).
+batched; `DeltaError` gains `Batch(BatchError)`. `BatchLimits`, `Body`,
+`HeadContext` and `HeadRule` are `#[non_exhaustive]`, so a field or rule
+added later is not a breaking change (build limits with `BatchLimits::new`
+or `default()`).
 The line builders are public: `PathOpenBody::for_path`,
 `PathOpenMeta::for_meta`, `PathMetaPatch::full`, `JsonlLine::head`,
 `JsonlLine::to_wire`, `step_lines`, `actor_def_lines`,

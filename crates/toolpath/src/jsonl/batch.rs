@@ -63,6 +63,7 @@ pub struct HeadContext<'a> {
 
 /// How a body that is not the last one chooses its `Head`. The last body
 /// takes the input's own `Head` line when it has one.
+#[non_exhaustive]
 pub enum HeadRule<'a> {
     /// The body's last step.
     LastStep,
