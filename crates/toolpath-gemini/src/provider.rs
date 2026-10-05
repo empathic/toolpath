@@ -171,7 +171,7 @@ pub(crate) fn tokens_to_usage(t: &Tokens) -> TokenUsage {
     let mut usage = TokenUsage {
         // Gemini's `input` includes `cached`; derived classes are additive,
         // so the cached share is counted only under `cache_read_tokens`.
-        input_tokens: match (t.input, t.tool) {
+        input_tokens: match (t.input, t.tool.filter(|&n| n > 0)) {
             (None, None) => None,
             (i, tool) => Some(
                 i.unwrap_or(0)
@@ -963,6 +963,16 @@ mod tests {
             assert_eq!(u.input_tokens, Some(60));
             assert!(!u.breakdowns.contains_key("input"), "tool={tool:?}");
         }
+    }
+
+    #[test]
+    fn test_zero_tool_tokens_do_not_report_an_absent_input() {
+        let t = Tokens {
+            output: Some(10),
+            tool: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(tokens_to_usage(&t).input_tokens, None);
     }
 
     #[test]
