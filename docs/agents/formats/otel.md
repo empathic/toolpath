@@ -214,8 +214,8 @@ harness's marker is read, and only in the role the table names (system
 covers developer); the first match wins. Codex's AGENTS.md and a typed
 prompt are `user` messages, so a `Working directory:` line in them never
 sets the cwd of a Codex session. When a known harness's own marker is
-absent (another release's prompt, or a sanitized capture), any harness's
-marker is accepted, but only in system and developer messages. For an
+absent (another release's prompt), the session has no cwd: another
+harness's marker is never read, even in a system message. For an
 `unknown` harness, the first marker of any harness in a system, developer
 or user message wins. Assistant and tool messages are never scanned, since
 a tool's output can quote a marker.

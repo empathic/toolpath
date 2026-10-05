@@ -69,19 +69,18 @@ fn first(gens: &[Generation], scanned: Scanned, read: Reader) -> Option<String> 
 }
 
 /// A known harness: the first match of its own marker in the messages it
-/// puts its environment in, else the first [`cwd_in`] match over system and
-/// developer messages. An unknown harness: the first [`cwd_in`] match over
-/// system, developer and user messages. Assistant and tool messages are
-/// never scanned: a tool's output can quote any marker.
+/// puts its environment in. An unknown harness: the first [`cwd_in`] match
+/// over system, developer and user messages. Assistant and tool messages
+/// are never scanned: a tool's output can quote any marker.
 pub fn find_cwd(gens: &[Generation], harness: SourceHarness) -> Option<String> {
     let (scanned, read): (Scanned, Reader) = match harness {
         SourceHarness::ClaudeCode => (is_system, claude_code),
         SourceHarness::Codex => (is_user, cwd_tag),
         SourceHarness::Opencode => (is_system, opencode),
         SourceHarness::Pi => (is_system, pi),
-        SourceHarness::Unknown => return first(gens, is_user_or_system, cwd_in),
+        SourceHarness::Unknown => (is_user_or_system, cwd_in),
     };
-    first(gens, scanned, read).or_else(|| first(gens, is_system, cwd_in))
+    first(gens, scanned, read)
 }
 
 #[cfg(test)]
@@ -195,9 +194,9 @@ mod tests {
             assert_eq!(find_cwd(&g, harness).as_deref(), Some(want), "{harness:?}");
         }
         assert_eq!(
-            find_cwd(&g, SourceHarness::Codex).as_deref(),
-            Some("/cc"),
-            "no <cwd>: any marker, but only in a system message"
+            find_cwd(&g, SourceHarness::Codex),
+            None,
+            "no <cwd>: another harness's marker is not read"
         );
         let typed_only = of(vec![msg("user", "Primary working directory: /typed")]);
         for harness in [
@@ -212,6 +211,25 @@ mod tests {
         assert_eq!(
             find_cwd(&pi_tag, SourceHarness::Pi).as_deref(),
             Some("/home/user/proj")
+        );
+    }
+
+    #[test]
+    fn a_known_harness_ignores_another_harness_marker() {
+        let g = of(vec![msg(
+            "system",
+            "[sanitized system 64be43df]\n - Primary working directory: /work/project",
+        )]);
+        for harness in [
+            SourceHarness::Opencode,
+            SourceHarness::Pi,
+            SourceHarness::Codex,
+        ] {
+            assert_eq!(find_cwd(&g, harness), None, "{harness:?}");
+        }
+        assert_eq!(
+            find_cwd(&g, SourceHarness::ClaudeCode).as_deref(),
+            Some("/work/project")
         );
     }
 }
