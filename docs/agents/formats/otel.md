@@ -807,8 +807,9 @@ returns a `GenerationBatch { records, messages }` with the walker's skip
 counts. `derive_path_from_records(records, messages, config)` and
 `derive_jsonl` are the derive half; `messages` is a lookup
 `Fn(&MessageHash) -> Option<&StoredMessage>`. A store keeps the records of
-every delivery and upserts the messages by hash, instead of the raw
-bodies.
+every delivery and adds the messages it lacks by hash, never replacing a
+stored one (two spellings of a number share a hash, below; replacing would
+change steps already derived), instead of the raw bodies.
 
 - **Record (`GenerationRecord`, `FORMAT` 1).** JSON
   `{"format": 1, "generation": {…}, "prompt": "<hash>"}`. `generation` is
