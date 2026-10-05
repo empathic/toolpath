@@ -125,6 +125,12 @@ Valid variants: `PathOpen`, `Step`, `ActorDef`, `Signature`, `PathMeta`,
 | `Step`, `ActorDef`, `Signature`, `PathMeta` | Zero or more, any order, between `PathOpen` and `PathClose`. |
 | `Signature` with `target: "step:<id>"` | Must appear after the referenced `Step` line. |
 
+These constraints are what a reader accepts. The batcher (see
+[Batching](#batching)) is stricter: it wants each step `Signature` directly
+after its `Step` line or after another `Signature` for that step. A valid
+log whose step signatures come later must be reordered before it is
+batched.
+
 ### Parsing Strictness
 
 Readers MUST treat the following as fatal errors:
@@ -498,7 +504,8 @@ The bodies keep these rules:
   patch first lets metadata a later send depends on commit with the first
   steps rather than after the last.
 - **Steps stay whole.** A `Step` travels with the step `Signature` lines
-  that follow it; one elsewhere is an error. Bodies keep the input's step
+  that directly follow it; one elsewhere is an error, though the order
+  constraints allow it, so reorder such a log first. Bodies keep the input's step
   order, so a parents-first input stays parents-first across bodies. A
   step whose parent is neither held nor sent earlier is an error.
 - **A `Head` per body.** Every body ends with a `Head` naming a step the

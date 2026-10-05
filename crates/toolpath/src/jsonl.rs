@@ -637,8 +637,10 @@ impl JsonlLine {
     ///
     /// # Errors
     ///
-    /// [`JsonlError::BadBody`] if the body cannot be serialized (a map in
-    /// `extra` with non-string keys, say).
+    /// [`JsonlError::BadBody`] if serde_json fails to serialize the body.
+    /// Every body is built from string-keyed maps and `serde_json::Value`s,
+    /// so this does not happen in practice; the `Result` keeps a failing
+    /// serializer from panicking.
     pub fn to_wire(&self) -> Result<String, JsonlError> {
         let mut s = serde_json::to_string(self).map_err(|e| JsonlError::BadBody {
             line_num: 0,
