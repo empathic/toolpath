@@ -45,7 +45,7 @@ pub enum SkipReason {
     ErrorStatus,
     /// OpenRouter's destination test span.
     ConnectionTest,
-    /// A generation id already read from an earlier delivery.
+    /// Another copy of a generation id that is kept.
     Duplicate,
     /// Prompt or completion present but not valid JSON (a cut-off
     /// attribute), or valid JSON of the wrong shape.
@@ -206,6 +206,12 @@ pub(crate) fn read_with<'a>(
             &mut out,
         );
     }
+    for (at, id) in dedupe.failed {
+        if dedupe.seen.contains_key(&id) {
+            out.skipped[at].reason = SkipReason::Duplicate;
+            out.skipped[at].profile = None;
+        }
+    }
     out.generations = dedupe.kept.into_iter().flatten().collect();
     Ok(out)
 }
@@ -215,6 +221,9 @@ struct Dedupe {
     /// id -> (rank, slot in `kept`, the kept unit's ident).
     seen: HashMap<String, (usize, usize, Ident)>,
     kept: Vec<Option<Generation>>,
+    /// Failed extracts with an id: (slot in `skipped`, id); a duplicate
+    /// when some copy of that id is kept.
+    failed: Vec<(usize, String)>,
 }
 
 fn slice_of<'m, T>(m: &'m HashMap<String, Vec<T>>, key: &str) -> &'m [T] {
@@ -295,7 +304,12 @@ fn run_unit<'a>(
                 .insert(g.id.clone(), (rank, dedupe.kept.len(), ident));
             dedupe.kept.push(Some(g));
         }
-        Err(reason) => out.skipped.push(skip(reason, &ident, true)),
+        Err(reason) => {
+            if let Some(id) = &ident.generation_id {
+                dedupe.failed.push((out.skipped.len(), id.clone()));
+            }
+            out.skipped.push(skip(reason, &ident, true));
+        }
     }
 }
 
@@ -400,12 +414,117 @@ mod tests {
     }
 
     #[test]
-    fn a_truncated_first_copy_does_not_suppress_a_good_redelivery() {
-        let out = read(&[root("g1", r#"{"messages":[{"role""#), root("g1", GOOD)]);
-        assert_eq!(out.generations.len(), 1);
-        assert_eq!(out.generations[0].id, "g1");
-        assert_eq!(out.skipped.len(), 1);
-        assert_eq!(out.skipped[0].reason, SkipReason::Truncated);
+    fn a_truncated_copy_of_a_kept_generation_is_a_duplicate_in_either_order() {
+        for values in [
+            [root("g1", r#"{"messages":[{"role""#), root("g1", GOOD)],
+            [root("g1", GOOD), root("g1", r#"{"messages":[{"role""#)],
+        ] {
+            let out = read(&values);
+            assert_eq!(out.generations.len(), 1);
+            assert_eq!(out.generations[0].id, "g1");
+            assert_eq!(out.skipped.len(), 1);
+            assert_eq!(out.skipped[0].reason, SkipReason::Duplicate);
+            assert_eq!(out.skipped[0].profile, None);
+        }
+    }
+
+    /// One OpenRouter Broadcast generation of session `s`.
+    fn broadcast(id: &str, start: u64, prompt: &str, completion: &str) -> Value {
+        json!({"resourceSpans": [{"scopeSpans": [{"spans": [{
+            "traceId": format!("t-{id}"), "spanId": "r", "name": "LLM Generation",
+            "startTimeUnixNano": start.to_string(), "endTimeUnixNano": (start + 1).to_string(),
+            "attributes": [
+                attr("gen_ai.response.id", id), attr("session.id", "s"),
+                attr("gen_ai.prompt", prompt), attr("gen_ai.completion", completion)
+            ]
+        }]}]}]})
+    }
+
+    /// An app-side semconv span for the call Broadcast reports as `id`.
+    fn app_chat(id: &str, start: u64, input: &str, output: Option<&str>) -> Value {
+        let mut attrs = vec![
+            attr("gen_ai.operation.name", "chat"),
+            attr("gen_ai.response.id", id),
+            attr("session.id", "s"),
+            attr("gen_ai.input.messages", input),
+        ];
+        attrs.extend(output.map(|o| attr("gen_ai.output.messages", o)));
+        json!({"resourceSpans": [{"scopeSpans": [{"spans": [{
+            "traceId": format!("app-{id}"), "spanId": "s1", "name": "chat",
+            "startTimeUnixNano": start.to_string(), "endTimeUnixNano": (start + 1).to_string(),
+            "attributes": attrs
+        }]}]}]})
+    }
+
+    fn permutations(n: usize) -> Vec<Vec<usize>> {
+        if n == 0 {
+            return vec![Vec::new()];
+        }
+        let mut out = Vec::new();
+        for p in permutations(n - 1) {
+            for at in 0..=p.len() {
+                let mut q = p.clone();
+                q.insert(at, n - 1);
+                out.push(q);
+            }
+        }
+        out
+    }
+
+    /// Paths byte-identical and skip counts identical for every delivery
+    /// order of `requests`.
+    fn assert_order_independent(requests: &[Value]) -> crate::Derived<toolpath::v1::Path> {
+        let config = crate::DeriveConfig::default();
+        let bytes =
+            |p: &toolpath::v1::Path| crate::hash::canonical_json(&serde_json::to_value(p).unwrap());
+        let one = crate::derive_path(requests, &config).unwrap();
+        for order in permutations(requests.len()) {
+            let arrived: Vec<Value> = order.iter().map(|&i| requests[i].clone()).collect();
+            let got = crate::derive_path(&arrived, &config).unwrap();
+            assert_eq!(got.skipped, one.skipped, "{order:?}: skip counts");
+            assert_eq!(bytes(&got.output), bytes(&one.output), "{order:?}: path");
+        }
+        one
+    }
+
+    fn truncated_marker(p: &toolpath::v1::Path) -> Value {
+        p.meta.as_ref().unwrap().extra["otel"]["truncated"].clone()
+    }
+
+    const NEXT: &str = r#"{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"more"}]}"#;
+
+    #[test]
+    fn a_worse_ranked_truncated_copy_of_a_kept_call_does_not_depend_on_delivery_order() {
+        let one = assert_order_independent(&[
+            broadcast("g1", 10, GOOD, r#"{"completion":"hello"}"#),
+            broadcast("g2", 20, NEXT, r#"{"completion":"ok"}"#),
+            app_chat("g2", 20, r#"[{"role""#, None),
+        ]);
+        assert_eq!(one.skipped.duplicate, 1);
+        assert_eq!(one.skipped.truncated, 0);
+        assert_ne!(truncated_marker(&one.output), json!(true));
+    }
+
+    #[test]
+    fn a_better_ranked_truncated_copy_yields_to_a_complete_worse_ranked_one_in_any_order() {
+        let one = assert_order_independent(&[
+            broadcast("g1", 10, GOOD, r#"{"completion":"hello"}"#),
+            broadcast(
+                "g2",
+                20,
+                r#"{"messages":[{"role""#,
+                r#"{"completion":"ok"}"#,
+            ),
+            app_chat(
+                "g2",
+                20,
+                r#"[{"role":"user","parts":[{"type":"text","content":"more"}]}]"#,
+                Some(r#"[{"role":"assistant","parts":[{"type":"text","content":"ok"}]}]"#),
+            ),
+        ]);
+        assert_eq!(one.skipped.duplicate, 1);
+        assert_eq!(one.skipped.truncated, 0);
+        assert_ne!(truncated_marker(&one.output), json!(true));
     }
 
     #[test]

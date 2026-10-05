@@ -107,6 +107,13 @@ units (see Logs):
    only after a successful extract, so a truncated first copy never hides a
    good redelivery.
 
+A failed extract (step 5) of a generation id that another copy in the same
+read is kept for is a `duplicate`, not its own reason, whatever the input
+order or the copies' ranks: rank picks between copies that extract, so a
+truncated `openrouter` copy yields to a complete `semconv` one. `truncated`
+(and `meta.otel.truncated`) therefore means no copy of that generation was
+kept.
+
 A profile's `TraceView` lists each `(traceId, spanId)` once, the first in
 input order; a span with no span id is always listed. Candidates are not
 affected: a redelivered unit is handled by the generation-id dedupe.

@@ -77,7 +77,7 @@ session as given.
 |---|---|
 | `error_status` | The generation's span status is an error |
 | `connection_test` | An OpenRouter destination or settings test |
-| `duplicate` | A generation already read from an earlier request |
+| `duplicate` | Another copy (complete or cut off) of a generation that is kept |
 | `truncated` | A prompt or completion that is cut off or malformed |
 | `missing_payload` | A claimed span with no generation id or nothing to build from |
 | `unclaimed` | Spans and orphan log records no profile claims |
