@@ -3097,6 +3097,43 @@ fn shell_moves_and_writes_only_append_in_any_order() {
     }
 }
 
+/// A MultiEdit left to convo's fallback, then a shell write to the same
+/// file in the same turn: the change is the shell write's, with its stamps.
+#[test]
+fn a_shell_write_after_a_fallback_multi_edit_keeps_its_change_and_stamps() {
+    let sys = json!({"role": "system", "content": "Primary working directory: /w"});
+    let edit = json!({"file_path": "a.txt", "edits": [{"old_string": "x", "new_string": "y"}]});
+    let write = json!({"command": "cat <<'EOF' > a.txt\nnew\nEOF"});
+    let calls = json!([
+        {"id": "m1", "type": "function", "function": {"name": "MultiEdit", "arguments": edit.to_string()}},
+        {"id": "b1", "type": "function", "function": {"name": "Bash", "arguments": write.to_string()}}
+    ]);
+    let echo = json!({"role": "assistant", "content": "", "tool_calls": calls.clone()});
+    let answer = |id: &str| json!({"role": "tool", "tool_call_id": id, "content": "ok"});
+    let mut g1 = generation("g1", 1, json!([sys, user("go")]), "");
+    g1.completion.tool_calls = serde_json::from_value(calls).unwrap();
+    let g2 = generation(
+        "g2",
+        2,
+        json!([sys, user("go"), echo, answer("m1"), answer("b1")]),
+        "done",
+    );
+    let path = derive_path(&session(vec![g1, g2]));
+    let change = path
+        .steps
+        .iter()
+        .find_map(|s| s.change.get("a.txt"))
+        .expect("a change to a.txt");
+    let st = change.structural.as_ref().unwrap();
+    assert_eq!(st.extra.get("tool_id"), Some(&json!("b1")), "{st:?}");
+    assert_eq!(st.extra.get("tool"), Some(&json!("Bash")), "{st:?}");
+    assert_eq!(st.extra.get("after"), Some(&json!("new\n")), "{st:?}");
+    assert_eq!(st.extra.get("edits"), None, "{st:?}");
+    let otel = &st.extra["otel"];
+    assert_eq!(otel["source"], "shell-heredoc");
+    assert_eq!(otel["executions"][0]["tool_id"], "b1");
+}
+
 mod property;
 
 /// The categories of the tool calls in the steps `lines` send.
