@@ -682,8 +682,8 @@ impl<'a> Builder<'a> {
     /// turns' per-step attributions, on the group's final turn (the kind's
     /// once-per-group rule). One source of truth — the group total and its
     /// per-step shares can't drift, and `Σ token_usage == Σ attributed ==`
-    /// session total. A run of assistant turns sharing a `group_id` is one
-    /// round; an assistant turn without one is its own group.
+    /// session total. All assistant turns sharing a `group_id` form one
+    /// round, even when interleaved; an assistant turn without one is its own group.
     fn finalize_usage(&mut self) {
         // A step's spend that arrived after the last assistant turn (no
         // later turn to drain onto) still belongs to that turn.
@@ -698,28 +698,24 @@ impl<'a> Builder<'a> {
             );
         }
 
-        let assistants: Vec<usize> = (0..self.turns.len())
-            .filter(|&i| self.turns[i].role == Role::Assistant)
-            .collect();
-        let mut k = 0;
-        while k < assistants.len() {
-            let start = k;
-            let mid = self.turns[assistants[k]].group_id.clone();
-            if mid.is_some() {
-                while k + 1 < assistants.len() && self.turns[assistants[k + 1]].group_id == mid {
-                    k += 1;
-                }
+        let mut groups: HashMap<String, (usize, Option<TokenUsage>)> = HashMap::new();
+        for (idx, turn) in self.turns.iter_mut().enumerate() {
+            if turn.role != Role::Assistant {
+                continue;
             }
-            let mut total: Option<TokenUsage> = None;
-            for &gi in &assistants[start..=k] {
-                if let Some(a) = &self.turns[gi].attributed_token_usage {
-                    add_usage(total.get_or_insert_with(TokenUsage::default), a);
-                }
+            let Some(group) = &turn.group_id else {
+                turn.token_usage = turn.attributed_token_usage.clone();
+                continue;
+            };
+            turn.token_usage = None;
+            let (last, total) = groups.entry(group.clone()).or_insert((idx, None));
+            *last = idx;
+            if let Some(usage) = &turn.attributed_token_usage {
+                add_usage(total.get_or_insert_with(TokenUsage::default), usage);
             }
-            if let Some(total) = total {
-                self.turns[assistants[k]].token_usage = Some(total);
-            }
-            k += 1;
+        }
+        for (last, total) in groups.into_values() {
+            self.turns[last].token_usage = total;
         }
     }
 

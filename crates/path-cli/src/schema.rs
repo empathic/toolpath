@@ -18,7 +18,7 @@
 //! JSON Schema cannot express (one total per group, breakdowns bounded by
 //! their class); [`validate`] checks those in code.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use jsonschema::Validator;
@@ -186,6 +186,7 @@ fn accounting_violations(path: &serde_json::Value, rule: GroupRule) -> Vec<(Stri
 
     let mut out = Vec::new();
     for (j, payloads) in per_step.iter().enumerate() {
+        let mut totals_on_step = HashSet::new();
         for (pointer, append) in payloads {
             if let Some(g) = group_id_of(append)
                 && append.get("token_usage").is_some()
@@ -194,6 +195,12 @@ fn accounting_violations(path: &serde_json::Value, rule: GroupRule) -> Vec<(Stri
                     GroupRule::LastOfRun => (!step_has_group(j + 1, g), "the last step of its run"),
                     GroupRule::LastOfGroup => (last_of_group[g] == j, "the group's last step"),
                 };
+                if carries_total && !totals_on_step.insert(g) {
+                    out.push((
+                        format!("/steps/{j}{pointer}/token_usage"),
+                        format!("duplicate token_usage for group_id {g:?} on its final step"),
+                    ));
+                }
                 if !carries_total {
                     out.push((
                         format!("/steps/{j}{pointer}/token_usage"),
@@ -578,6 +585,39 @@ mod tests {
         doc["paths"][0]["steps"][0]["change"]["agent://claude-code/s2"] =
             json!({"structural": assistant(Some("msg_2"), Some(usage(3, 1)))});
         validate(&doc).expect("msg_2's only step carries msg_2's total");
+    }
+
+    #[test]
+    fn duplicate_group_totals_in_one_step_are_rejected() {
+        for kind in [
+            ACS_KIND,
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+        ] {
+            let append = assistant(Some("msg_1"), Some(usage(10, 5)));
+            let mut doc = acs_steps(kind, std::slice::from_ref(&append));
+            doc["paths"][0]["steps"][0]["change"]["agent://claude-code/s2"] =
+                json!({"structural": append});
+            let msg = validate(&doc)
+                .expect_err("two payloads repeat the same group's total")
+                .to_string();
+            assert!(msg.contains("/paths/0/steps/0/change/"), "{msg}");
+            assert!(msg.contains("msg_1"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn distinct_group_totals_in_one_step_are_valid() {
+        for kind in [
+            ACS_KIND,
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
+        ] {
+            for group in [None, Some("msg_2")] {
+                let mut doc = acs_steps(kind, &[assistant(Some("msg_1"), Some(usage(10, 5)))]);
+                doc["paths"][0]["steps"][0]["change"]["agent://claude-code/s2"] =
+                    json!({"structural": assistant(group, Some(usage(3, 1)))});
+                validate(&doc).expect("independent totals may share a step");
+            }
+        }
     }
 
     #[test]

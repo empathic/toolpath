@@ -35,15 +35,18 @@ Empirically, across every session sampled:
   upward as the model generates, and the **last line carries the
   message total**. ~73% of split messages repeat one value on every
   line (stamped after generation); ~27% genuinely stream (distinct
-  values). Either way the max — which is the last line — is the total.
+  values). The max deduplicates the recorded snapshots; it is the
+  message total only if the final usage was recorded.
 
-Which of the two you see depends on the Claude Code version. Since
-v2.1.132 every line of a message repeats the identical final `usage`;
-older versions wrote the growing streaming snapshots
+Claude Code v2.1.97 fixed per-block records to carry final usage
+([official changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#2197)).
+Older versions wrote growing streaming snapshots and could omit the
+final update entirely
 ([anthropics/claude-code#27361](https://github.com/anthropics/claude-code/issues/27361)).
-The field-wise max is correct for both.
+The field-wise max avoids counting repeated snapshots twice, but cannot
+recover billed tokens missing from the transcript.
 
-Correct accounting: take the field-wise **maximum** `usage` per
+To deduplicate recorded usage, take the field-wise **maximum** `usage` per
 distinct group key (don't trust line order; the format is undocumented).
 This is what `toolpath-claude` does. A derived path puts the message
 total on the group's last step in path document order, and no other step
@@ -56,7 +59,13 @@ line.
 (Claude Code's locally generated placeholders, such as "No response
 requested.") carry a `usage` with every counter at 0. That is a
 placeholder, not a spend, so `toolpath-claude` derives no `token_usage`
-for it.
+for it. This filter examines only the top-level counters: all-zero usage
+alone does not prove a synthetic message. Billed on-demand compaction
+can also have zero top-level counters and nonzero `usage.iterations`.
+The producer does not yet read iterations, so compaction and same-model
+advisor usage excluded from the top-level counters are missing from
+derived totals. See Anthropic's [compaction usage](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand#count-compaction-usage)
+and [advisor billing](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool#usage-and-billing).
 
 **Why this is a snapshot, not a per-block bill.** The Anthropic
 [streaming API](https://platform.claude.com/docs/en/build-with-claude/streaming.md)

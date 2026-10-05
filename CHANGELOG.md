@@ -17,7 +17,8 @@ All notable changes to the Toolpath workspace are documented here.
   `cache_write.ttl_5m`/`ttl_1h`), and `attributed_token_usage` may carry
   `breakdowns`. The spec page has a per-source conversion table, worked
   examples, and a list of known producer gaps (Copilot session-only
-  totals, older opencode and pi sessions, Claude compaction iterations).
+  totals, older opencode and pi sessions, Claude compaction and same-model
+  advisor iterations, and older Claude logs missing final usage).
   The v1.1.0 page gains an erratum covering its double-counted Codex and
   Gemini documents and its per-run group totals.
 - **`toolpath`** (0.8.0): `PATH_KIND_AGENT_CODING_SESSION` now points at
@@ -27,7 +28,8 @@ All notable changes to the Toolpath workspace are documented here.
   the last turn of each run of consecutive turns.
 - **`path-cli`** (0.30.0): `path p validate` bundles the v1.2.0 schema
   and checks the accounting rules JSON Schema cannot express: one
-  `token_usage` per `group_id` (v1.2.0; per run for v1.1.0), and
+  `token_usage` per `group_id` (v1.2.0; per run for v1.1.0), including
+  duplicate totals in different change entries on the same step, and
   breakdowns keyed by a class and bounded by it. The cross-harness
   matrix runs those checks on every fixture and cell, and compares each
   fixture's derived prompt, cache reads and cache writes with what its
@@ -44,7 +46,9 @@ All notable changes to the Toolpath workspace are documented here.
   from the cumulative total and subtracted from `input_tokens`. Rollouts
   without the field are unchanged. `CodexProjector` adds cache writes
   back into the wire `input_tokens` and emits
-  `cache_write_input_tokens`. `meta.producer.name` is the harness id
+  `cache_write_input_tokens`. Group totals sum attributions across all
+  occurrences of a group, preserving interleaved groups through projection
+  and re-import. `meta.producer.name` is the harness id
   `codex` (was Codex's `originator`, e.g. `codex-tui`), so consumers
   keying on the harness see every Codex session. `producer.version`
   stays `cli_version`; the originator moves to

@@ -100,8 +100,9 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let file_mutations = compute_file_mutations(&tool_uses, entry.cwd.as_deref());
 
-    // An all-zero usage (e.g. a `<synthetic>` message) is a placeholder,
-    // not a spend.
+    // Omit all-zero top-level usage (common on `<synthetic>` messages).
+    // This does not establish zero billed spend: iterations are not yet read,
+    // and can carry compaction or same-model advisor usage outside these counts.
     let token_usage = msg
         .usage
         .as_ref()
