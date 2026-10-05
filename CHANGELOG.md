@@ -64,14 +64,21 @@ All notable changes to the Toolpath workspace are documented here.
   character, as in bash. Conservative: a script with a subshell, command
   substitution, backquotes, a group or a compound command is one `Other`,
   as is any write form it cannot follow exactly (extra redirects,
-  env-prefixed commands). Additive; `FileMutation` and `derive_path` are
-  unchanged.
+  env-prefixed commands). Additive; `FileMutation` is unchanged.
 - **`toolpath-convo`** (0.11.2): `shell_writes::parse_patch(patch)` reads
   the files of a V4A patch (Codex's `apply_patch` format) as `PatchFile`s:
   `op` (`PatchOp::{Add, Update, Delete}`), `path`, `move_to` and an added
   file's `added` content; `HeredocPatch::files` applies it to a patch read
   from a script. One parser for every provider that sees `apply_patch`
   text.
+- **`toolpath-convo`** (0.11.2): `derive_path` applies a turn's file
+  changes in tool-call order: a `file_mutations` entry and the change
+  synthesized for a `FileWrite` call with no mutation now interleave by
+  their call's position in `tool_uses`, so the last write to a path wins
+  with its own call's `tool_id` and `tool`. Before, every synthesized
+  change was applied after all `file_mutations`, so an earlier unsupplied
+  write overwrote a later supplied one. Mutations naming no call of the
+  turn keep their place in `file_mutations`.
 
 ## path-cli 0.29.0 — 2026-09-29
 
