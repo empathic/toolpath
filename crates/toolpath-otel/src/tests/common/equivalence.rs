@@ -1,18 +1,21 @@
-//! The spec's comparison set, shared by the cross-profile equivalence tests
-//! and the event-mode captures.
+//! The cross-profile comparison set: what two derivations of one
+//! conversation from different profiles must agree on (cited from
+//! docs/agents/formats/otel.md, Event-mode captures). Shared by the
+//! cross-profile equivalence tests and the event-mode captures.
 
 use serde_json::{Map, Value, json};
 use toolpath::v1::Path;
 use toolpath::v1::query::dead_ends;
 
-/// A string holding JSON compares as the parsed value (spec: "parsed input").
+/// A string holding JSON compares as the parsed value
+/// (docs/agents/formats/otel.md, Deliberately dropped, item 4).
 fn parsed(v: &Value) -> Value {
     v.as_str()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_else(|| v.clone())
 }
 
-/// One `conversation.append` structural change, reduced to the spec's set.
+/// One `conversation.append` structural change, reduced to the comparison set.
 /// `StructuralChange.extra` is `#[serde(flatten)]`, so `type`, `role`,
 /// `text`, `thinking`, `tool_uses`, `token_usage` and `otel` sit side by side.
 pub fn conversation(x: &Value) -> Value {
@@ -52,7 +55,7 @@ pub fn conversation(x: &Value) -> Value {
     })
 }
 
-/// The spec's comparison set: head, dead-end set, and per step the id,
+/// The comparison set: head, dead-end set, and per step the id,
 /// parents, actor, conversation fields and file changes (artifact key → raw).
 pub fn comparison_set(p: &Path) -> Value {
     let mut dead: Vec<&str> = dead_ends(&p.steps, &p.path.head)

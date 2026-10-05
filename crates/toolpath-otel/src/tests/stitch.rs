@@ -1,5 +1,6 @@
 //! Stitch regression gate. The literals were computed independently from
-//! the spec formulas with python3 hashlib/json (not the crate). A failure
+//! the session-key and turn-id formulas in docs/agents/formats/otel.md
+//! (Sessions and ids) with python3 hashlib/json (not the crate). A failure
 //! means turn ids moved: every imported id would re-key. Never edit a
 //! literal to make this pass.
 

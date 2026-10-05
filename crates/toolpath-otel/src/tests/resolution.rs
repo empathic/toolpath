@@ -1,4 +1,5 @@
-//! Profile resolution with semconv in the auto list (spec: Resolution order).
+//! Profile resolution with semconv in the auto list (docs/agents/formats/otel.md:
+//! Walker, step 1, and Profile `semconv`).
 
 use super::common::*;
 use serde_json::{Value, json};

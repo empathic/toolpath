@@ -1,4 +1,5 @@
-//! Derived-Path keys (spec: Retention, Path meta and Per step).
+//! Derived-Path keys (docs/agents/formats/otel.md: Retention, Path meta and
+//! Per step).
 
 use super::common::*;
 use crate::tests::otel::{

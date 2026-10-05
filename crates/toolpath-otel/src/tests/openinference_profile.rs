@@ -1,4 +1,5 @@
-//! The minimal OpenInference profile (spec: `openinference`).
+//! The minimal OpenInference profile (docs/agents/formats/otel.md: Profile
+//! `openinference`).
 
 use crate::tests::otel::{
     DeriveConfig, History, ProfileSelection, ReadOutcome, decode_input, derive_path,

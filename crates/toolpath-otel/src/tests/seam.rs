@@ -1,4 +1,4 @@
-//! The seam (spec): only `src/profile/` may name an attribute key or
+//! The seam: only `src/profile/` may name an attribute key or
 //! OpenRouter. Scans the string literals in non-test code of every other
 //! source file.
 

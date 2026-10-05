@@ -63,7 +63,7 @@ fn attribute_keys(name: &str) -> BTreeSet<String> {
 }
 
 /// The SYNTHETIC continuation copy of the real openai-responses capture:
-/// fixture normalization set the spec-defined
+/// fixture normalization set the GenAI semconv attribute
 /// `gen_ai.request.previous_response.id` on a copy, with the value the
 /// client really sent; the real capture is untouched.
 fn continuation_traces() -> Vec<Value> {

@@ -1,4 +1,6 @@
-//! Checks the re-encoded fixtures against the spec's Re-encoder table.
+//! Checks the re-encoded fixtures against the Re-encoder table in
+//! test-fixtures/otel/equivalence/README.md (the mapping
+//! scripts/otel-fixtures/reencode_openrouter.py applies).
 
 use super::common::*;
 use serde_json::Value;

@@ -1,6 +1,6 @@
 //! Cross-profile equivalence: each M0 conversation read by `openrouter` and
 //! its semconv re-encoding read under `auto` derive Paths that agree on
-//! exactly the spec's comparison set. Also the retention round-trip over the
+//! exactly the comparison set in common/equivalence.rs. Also the retention round-trip over the
 //! re-encoded fixtures and the span-content captures, and the oracle's own
 //! Delta and skeleton paths over inline sessions.
 

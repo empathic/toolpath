@@ -337,7 +337,7 @@ fn content_absent_gives_a_delta_skeleton() {
 
 #[test]
 fn previous_response_id_sets_continues_and_delta() {
-    // SYNTHETIC input: the spec-defined attribute; no pinned instrumentation emits it.
+    // SYNTHETIC input: the GenAI semconv attribute; no pinned instrumentation emits it.
     let g = one(vec![
         kv("gen_ai.request.previous_response.id", s("resp-0")),
         json_attr(
