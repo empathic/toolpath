@@ -47,21 +47,14 @@ pub trait Profile: Sync {
     /// `generation_id` is `Some` and equals that generation's `id` (the
     /// walker dedupes on it before extracting). An empty id is `None`.
     fn identify(&self, unit: &Unit<'_>) -> Ident;
-    /// Build the neutral generation. `Err` only for a skip.
-    fn extract(
-        &self,
-        unit: &Unit<'_>,
-        trace: &TraceView<'_>,
-    ) -> std::result::Result<Generation, SkipReason>;
-    /// [`Profile::extract`] with the read's memos; the walker calls this.
-    fn extract_with<'a>(
+    /// Build the neutral generation, with the read's memos. `Err` only for
+    /// a skip.
+    fn extract<'a>(
         &self,
         unit: &Unit<'a>,
         trace: &TraceView<'a>,
-        _cx: &mut ReadCx<'a>,
-    ) -> std::result::Result<Generation, SkipReason> {
-        self.extract(unit, trace)
-    }
+        cx: &mut ReadCx<'a>,
+    ) -> std::result::Result<Generation, SkipReason>;
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

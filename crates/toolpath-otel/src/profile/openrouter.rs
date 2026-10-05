@@ -97,15 +97,7 @@ impl Profile for OpenRouter {
         }
     }
 
-    fn extract(
-        &self,
-        unit: &Unit<'_>,
-        trace: &TraceView<'_>,
-    ) -> std::result::Result<Generation, SkipReason> {
-        self.extract_with(unit, trace, &mut ReadCx::default())
-    }
-
-    fn extract_with<'a>(
+    fn extract<'a>(
         &self,
         unit: &Unit<'a>,
         _trace: &TraceView<'a>,

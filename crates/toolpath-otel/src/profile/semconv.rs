@@ -11,7 +11,7 @@ use crate::normalize::content_text;
 use crate::otlp::{
     Attrs, KeyValue, LogRecord, Resource, Scope, Span, SpanEvent, any_value_to_json, nanos,
 };
-use crate::walk::SkipReason;
+use crate::walk::{ReadCx, SkipReason};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -93,7 +93,12 @@ impl Profile for Semconv {
         }
     }
 
-    fn extract(&self, unit: &Unit<'_>, trace: &TraceView<'_>) -> Result<Generation, SkipReason> {
+    fn extract<'a>(
+        &self,
+        unit: &Unit<'a>,
+        trace: &TraceView<'a>,
+        _cx: &mut ReadCx<'a>,
+    ) -> Result<Generation, SkipReason> {
         let mut g = extract_unit(unit, EXCLUSIVE_INPUT_SCOPES)?;
         // An orphan unit has no span to scope `execute_tool` results by.
         if let Some(span) = unit.span {

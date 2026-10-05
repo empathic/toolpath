@@ -334,10 +334,11 @@ mod tests {
                 session_id: None,
             }
         }
-        fn extract(
+        fn extract<'a>(
             &self,
-            _: &crate::profile::Unit<'_>,
-            _: &crate::profile::TraceView<'_>,
+            _: &crate::profile::Unit<'a>,
+            _: &crate::profile::TraceView<'a>,
+            _cx: &mut crate::walk::ReadCx<'a>,
         ) -> Result<crate::generation::Generation, crate::walk::SkipReason> {
             Err(crate::walk::SkipReason::MissingPayload)
         }
@@ -413,10 +414,11 @@ mod tests {
                     session_id: None,
                 }
             }
-            fn extract(
+            fn extract<'a>(
                 &self,
-                _: &crate::profile::Unit<'_>,
-                _: &crate::profile::TraceView<'_>,
+                _: &crate::profile::Unit<'a>,
+                _: &crate::profile::TraceView<'a>,
+                _cx: &mut crate::walk::ReadCx<'a>,
             ) -> Result<crate::generation::Generation, crate::walk::SkipReason> {
                 Err(crate::walk::SkipReason::MissingPayload)
             }
@@ -468,10 +470,11 @@ mod tests {
                 session_id: None,
             }
         }
-        fn extract(
+        fn extract<'a>(
             &self,
-            unit: &crate::profile::Unit<'_>,
-            _trace: &crate::profile::TraceView<'_>,
+            unit: &crate::profile::Unit<'a>,
+            _trace: &crate::profile::TraceView<'a>,
+            _cx: &mut crate::walk::ReadCx<'a>,
         ) -> Result<crate::generation::Generation, crate::walk::SkipReason> {
             let id = self
                 .identify(unit)
@@ -657,10 +660,11 @@ mod tests {
         fn identify(&self, unit: &crate::profile::Unit<'_>) -> crate::profile::Ident {
             LogTest.identify(unit)
         }
-        fn extract(
+        fn extract<'a>(
             &self,
-            unit: &crate::profile::Unit<'_>,
-            trace: &crate::profile::TraceView<'_>,
+            unit: &crate::profile::Unit<'a>,
+            trace: &crate::profile::TraceView<'a>,
+            _cx: &mut crate::walk::ReadCx<'a>,
         ) -> Result<crate::generation::Generation, crate::walk::SkipReason> {
             let id = self
                 .identify(unit)

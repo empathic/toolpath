@@ -6,7 +6,7 @@ use crate::generation::{
     Absent, CacheBasis, Completion, FunctionCall, Generation, History, Message, ToolCall, Usage,
 };
 use crate::otlp::{Attrs, KeyValue, Resource, Scope, Span, any_value_to_json, nanos};
-use crate::walk::SkipReason;
+use crate::walk::{ReadCx, SkipReason};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -65,7 +65,12 @@ impl Profile for OpenInference {
         }
     }
 
-    fn extract(&self, unit: &Unit<'_>, _trace: &TraceView<'_>) -> Result<Generation, SkipReason> {
+    fn extract<'a>(
+        &self,
+        unit: &Unit<'a>,
+        _trace: &TraceView<'a>,
+        _cx: &mut ReadCx<'a>,
+    ) -> Result<Generation, SkipReason> {
         let span = unit.span.ok_or(SkipReason::MissingPayload)?;
         let id = generation_id(span).ok_or(SkipReason::MissingPayload)?;
         Ok(extract_span(id, unit.resource, unit.scope, span))

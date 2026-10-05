@@ -259,7 +259,7 @@ fn run_unit<'a>(
         out.skipped.push(skip(SkipReason::Duplicate, &ident, false));
         return;
     }
-    match p.extract_with(unit, trace, cx) {
+    match p.extract(unit, trace, cx) {
         Ok(mut g) => {
             g.profile = p.name().to_string();
             // Only after a successful extract, so a truncated first
@@ -455,10 +455,11 @@ mod tests {
                 session_id: None,
             }
         }
-        fn extract(
+        fn extract<'a>(
             &self,
-            unit: &Unit<'_>,
-            _: &TraceView<'_>,
+            unit: &Unit<'a>,
+            _: &TraceView<'a>,
+            _cx: &mut crate::walk::ReadCx<'a>,
         ) -> std::result::Result<Generation, SkipReason> {
             Ok(Generation {
                 id: unit.span.map(|s| s.span_id.to_string()).unwrap_or_default(),
@@ -626,10 +627,11 @@ mod tests {
                 session_id: None,
             }
         }
-        fn extract(
+        fn extract<'a>(
             &self,
-            _: &Unit<'_>,
-            trace: &TraceView<'_>,
+            _: &Unit<'a>,
+            trace: &TraceView<'a>,
+            _cx: &mut crate::walk::ReadCx<'a>,
         ) -> std::result::Result<Generation, SkipReason> {
             let n = trace.spans().filter(|r| r.span.name == "aux").count();
             let mut source_meta = serde_json::Map::new();
