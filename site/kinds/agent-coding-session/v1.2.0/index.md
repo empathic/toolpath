@@ -19,7 +19,14 @@ Every such path comes from one place: the shared `ConversationView → Path` der
 
 Constraints apply by structural `type`, not by artifact key: a `change` entry is checked only when its `structural.type` is one named here, and extra properties never make a path invalid. [`schema.json`](./schema.json) encodes the rules; apply it alongside the base schema. The URI is immutable. Later revisions ship under a new version URI.
 
-**Changed from [v1.1.0](/kinds/agent-coding-session/v1.1.0/):** the token classes are now specified as additive — `input_tokens` excludes cached prompt tokens, so the four classes never overlap and their sum is the whole spend; see [Additive classes](#additive-classes). Counts are non-negative, and `attributed_token_usage` may carry `breakdowns`. v1.2.0 documents are structurally valid v1.1.0 documents; the new version exists so consumers can price the classes separately without double-counting cached input, which Codex and Gemini documents under v1.1.0 did.
+**Changed from [v1.1.0](/kinds/agent-coding-session/v1.1.0/):**
+
+- the token classes are additive: `input_tokens` excludes cached prompt tokens, so the four classes never overlap (see [Additive classes](#additive-classes));
+- a group's total sits on the group's last step wherever its steps fall, not on the last step of each run of consecutive steps (see [Group accounting](#group-accounting));
+- a message's total includes every billed part of it on its own model, including parts the source's top-level total leaves out;
+- counts are non-negative, `breakdowns` keys are the four classes, and `attributed_token_usage` may carry `breakdowns`.
+
+The schema accepts the same shapes as v1.1.0's apart from negative counts and its own `meta.kind` URI. The new version exists so consumers can price the classes separately and sum steps without double-counting cached input (Codex and Gemini CLI documents under v1.1.0) or interleaved groups (Claude Code documents under v1.1.0).
 
 ## The turn payload
 
@@ -50,19 +57,19 @@ The model identifier is not on the change. It lives in `step.actor` (`agent:<mod
 
 ### `group_id`
 
-The provider's identifier for the **source accounting unit** these steps were derived from — Claude Code's `message.id` (`msg_…`) for one split message, Codex's round `turn_id` for one round (which may itself contain several messages). It is a **grouping key, not a step identifier**: when a producer derives several steps from one accounting unit (Claude Code writes one JSONL line per content block; a Codex round emits a commentary turn plus a final turn), every sibling step carries the same `group_id`. A step without a `group_id` is its own group of one. The stored value is the provider's verbatim id; only its _meaning_ (which unit it names) is provider-specific.
+The provider's identifier for the **source accounting unit** these steps were derived from — Claude Code's `message.id` (`msg_…`, or the entry's `requestId` for an assistant message with no id) for one split message, Codex's round `turn_id` for one round (which may itself contain several messages). It is a **grouping key, not a step identifier**: when a producer derives several steps from one accounting unit (Claude Code writes one JSONL line per content block; a Codex round emits a commentary turn plus a final turn), every sibling step carries the same `group_id`. A step without a `group_id` is its own group of one. The stored value is the provider's verbatim id; only its _meaning_ (which unit it names) is provider-specific.
 
 ### Group accounting
 
 How `token_usage` on steps relates to the source's accounting units:
 
 1. `token_usage` records a group's spend — a **per-group amount, never a cumulative session counter**.
-2. Within a run of consecutive steps sharing a `group_id` (document order), the run's **last step carries the group's total `token_usage`, verbatim from the source**. In this version, the run's other steps carry none.
+2. Among the steps sharing a `group_id`, the **last in document order carries the group's total `token_usage`**, converted to the [classes below](#additive-classes); the group's other steps carry none. A group's steps need not be consecutive: when a source interleaves two groups' records, each group still has exactly one total.
 3. A step without a `group_id` is its own group and carries its own `token_usage` (when the source records one).
 
-Consequence: **summing `token_usage` over a path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-run rule, so it is normative prose, enforced by producer test suites and checked by `path p validate`.)
+Consequence: **summing `token_usage` over a path's steps yields the session totals.** Consumers need no dedup heuristics. (JSON Schema cannot express the once-per-group rule, so it is normative prose, enforced by producer test suites and checked by `path p validate`.)
 
-`token_usage` has **one meaning everywhere it appears: the total for a group**. A step without a `group_id` is a one-step group, so its `token_usage` is that group's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `group_id` on the same payload tells you which group it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source format offers both a group total and a finer breakdown (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the total; the breakdown is subordinate detail and does not ride `token_usage`.
+`token_usage` has **one meaning everywhere it appears: the total for a group**. A step without a `group_id` is a one-step group, so its `token_usage` is that group's total (which is also its own spend — the two coincide for a group of one). Within a multi-step group, the total sits on the final step. Interpreting a value never requires reading the rest of its group: the key tells you it is a total, and `group_id` on the same payload tells you which group it totals. Per-step spend, when the source has it, rides a separate [`attributed_token_usage`](#per-step-attribution-attributed_token_usage) key — never `token_usage`. When a source itemizes a group's spend (Claude's `usage.iterations`, opencode's per-part `step-finish` tokens), `token_usage` carries the group total and the items do not ride `token_usage`. The total covers every billed part of the group on the group's own model, including parts the source's top-level total leaves out: for an Anthropic message it is the sum of the `usage.iterations` entries billed on the message's model, compaction iterations included, which the top-level `usage` excludes. Tokens billed on a different model (an advisor or fallback iteration) are outside the four classes, because adding them to the message's own counts would mix two models' prices. Per-request fees, such as server tool use, are outside `token_usage` too.
 
 ### Per-step attribution: `attributed_token_usage`
 
@@ -70,7 +77,7 @@ Some sources expose, per step, the spend attributable to that step alone — dis
 
 How it relates to the group total:
 
-- Within a `group_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is _computed_ by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay verbatim source observations and source inconsistencies stay visible.
+- Within a `group_id` group, `Σ attributed_token_usage` over the group's steps is the group's attributed spend. The **unattributed remainder** — anything the source could not pin to a step — is _computed_ by a consumer as `group's token_usage − Σ group's attributed_token_usage`; it is never recorded, so stored values stay source observations (converted to the additive classes) and source inconsistencies stay visible.
 - For a group where the source attributes everything (e.g. Codex, where each step is a separate API call and the per-call delta is reported directly), the remainder is zero and `Σ attributed_token_usage == token_usage`.
 - A group with no per-step data carries no `attributed_token_usage` at all — only the group total. Producers must not fabricate a split.
 
@@ -110,19 +117,20 @@ The four counts are **disjoint**: each token the model processed is counted in e
 
 - the prompt is `input_tokens + cache_read_tokens + cache_write_tokens`;
 - the whole spend is that plus `output_tokens`;
-- a consumer prices each class at its own rate and adds the results, with no overlap to subtract.
+- a consumer prices each class at the rate of the model that produced it and adds the results, with no overlap to subtract.
 
-This is Anthropic's usage convention. Some sources use OpenAI's instead, where the input count includes the cached part; producers convert at derivation:
+This is Anthropic's usage convention. Some sources use OpenAI's instead, where the input count includes cache reads and, where the source reports them, cache writes; producers convert at derivation, clamping a converted count at zero. Where a source's inclusive convention is a recommendation rather than a guarantee (the OpenTelemetry GenAI semantic conventions, OpenInference), an input count smaller than the source's cache counts is read as already exclusive.
 
-| Source      | Wire fields                                                                                                                   | Additive `input_tokens`                                         | `cache_read_tokens`       | `cache_write_tokens`          |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------- | ----------------------------- |
-| Claude Code | `input_tokens` (excludes cache), `cache_read_input_tokens`, `cache_creation_input_tokens`                                     | `input_tokens`                                                  | `cache_read_input_tokens` | `cache_creation_input_tokens` |
-| Codex       | `input_tokens` (includes cache reads, and from Codex 0.145.0 cache writes), `cached_input_tokens`, `cache_write_input_tokens` | `input_tokens − cached_input_tokens − cache_write_input_tokens` | `cached_input_tokens`     | `cache_write_input_tokens`    |
-| Gemini CLI  | `input` (includes cache), `cached`                                                                                            | `input − cached`                                                | `cached`                  | —                             |
-| opencode    | `input`, `cache.read`, `cache.write`                                                                                          | `input` (from opencode 1.0.62; see below)                       | `cache.read`              | `cache.write`                 |
-| Copilot CLI | `tokenDetails.{input,cache_read,cache_write}` (session totals on `session.shutdown`)                                          | `input`                                                         | `cache_read`              | `cache_write`                 |
+| Source      | Wire fields                                                                                                                   | Additive `input_tokens`                                                     | `cache_read_tokens`       | `cache_write_tokens`          |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------- | ----------------------------- |
+| Claude Code | `input_tokens` (excludes cache), `cache_read_input_tokens`, `cache_creation_input_tokens`                                     | `input_tokens`                                                              | `cache_read_input_tokens` | `cache_creation_input_tokens` |
+| Codex       | `input_tokens` (includes cache reads, and from Codex 0.145.0 cache writes), `cached_input_tokens`, `cache_write_input_tokens` | `input_tokens − cached_input_tokens − cache_write_input_tokens`             | `cached_input_tokens`     | `cache_write_input_tokens`    |
+| Gemini CLI  | `input` (includes cache), `cached`, `tool` (tool-use prompt tokens, outside `input`)                                          | `input − cached + tool`                                                     | `cached`                  | —                             |
+| opencode    | `input`, `cache.read`, `cache.write`                                                                                          | `input` (current opencode; see [Known producer gaps](#known-producer-gaps)) | `cache.read`              | `cache.write`                 |
+| pi          | `input`, `cacheRead`, `cacheWrite` (pi normalizes every provider's usage to exclude cache)                                    | `input` (current pi; see [Known producer gaps](#known-producer-gaps))       | `cacheRead`               | `cacheWrite`                  |
+| Copilot CLI | `tokenDetails.{input,cache_read,cache_write}`, session totals on `session.shutdown`                                           | `input`                                                                     | `cache_read`              | `cache_write`                 |
 
-The source's semantics can change between its versions, and the conversion follows the version that wrote the session. Before opencode 1.0.62, `input` includes cache reads for non-Anthropic models, so the additive value is `input − cache.read`. Before opencode 1.3.16, OpenAI-family models' `output` already includes `reasoning`, so `reasoning` is not added to it again. A projector writing back to a source with inclusive input adds the cached counts back in, so a session round-trips to its original numbers.
+Copilot does not document whether `tokenDetails.input` includes cache; the row follows recorded sessions, where `modelMetrics.*.usage.inputTokens` equals `input + cache_read + cache_write`. A projector writing back to a source with inclusive input adds the cached counts back in, so a session round-trips to its original numbers. Gemini CLI writes 0 for a count it lacks, so its documents cannot tell an unreported class from a zero one.
 
 #### Examples
 
@@ -148,23 +156,35 @@ A Gemini CLI message whose wire tokens were `{ "input": 9133, "output": 59, "cac
 }
 ```
 
-A Codex round's total on its last step, with one of its steps' `attributed_token_usage` beside it (the shares over the round's steps sum to the total):
+A Codex 0.145+ round of two API calls. Over the round, the wire's cumulative counters grew by input 300, cached 200, cache write 50 and output 40, so the round's `input_tokens` is `300 − 200 − 50`. Each step's `attributed_token_usage` holds its own call's share, and the shares sum to the total on the round's last step:
 
 ```json
-{
-  "group_id": "019e03b2-11b2-71c2-a3c4-011af11cc435",
-  "token_usage": {
-    "input_tokens": 13852,
-    "output_tokens": 2365,
-    "cache_read_tokens": 149632,
-    "breakdowns": { "output": { "reasoning": 1325 } }
+[
+  {
+    "group_id": "turn-2",
+    "attributed_token_usage": {
+      "input_tokens": 30,
+      "output_tokens": 20,
+      "cache_read_tokens": 100,
+      "cache_write_tokens": 20
+    }
   },
-  "attributed_token_usage": {
-    "input_tokens": 3830,
-    "output_tokens": 13,
-    "cache_read_tokens": 9600
+  {
+    "group_id": "turn-2",
+    "token_usage": {
+      "input_tokens": 50,
+      "output_tokens": 40,
+      "cache_read_tokens": 200,
+      "cache_write_tokens": 50
+    },
+    "attributed_token_usage": {
+      "input_tokens": 20,
+      "output_tokens": 20,
+      "cache_read_tokens": 100,
+      "cache_write_tokens": 30
+    }
   }
-}
+]
 ```
 
 ### `breakdowns`
@@ -178,7 +198,15 @@ A Codex round's total on its last step, with one of its steps' `attributed_token
 | `cache_read`  | `cache_read_tokens`  |
 | `cache_write` | `cache_write_tokens` |
 
-Invariant: **`Σ(inner) ≤` the parent class's value**. The sub-classes need not cover the whole class; the rest is simply not itemized. `path p validate` checks the bound.
+Invariant: **`Σ(inner) ≤` the parent class's value**, where an absent or `null` parent counts as zero. The sub-classes need not cover the whole class; the rest is simply not itemized. `path p validate` checks the bound and rejects any other key.
+
+Sub-class names are open, but these carry a fixed meaning:
+
+| Breakdown                      | Meaning                                                                                 |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| `output.reasoning`             | reasoning or thinking tokens, part of the output                                        |
+| `input.tool_use`               | prompt tokens from tool use that the source counts outside its prompt (Gemini's `tool`) |
+| `cache_write.ttl_5m`, `ttl_1h` | cache writes by lifetime; Anthropic prices the two tiers differently                    |
 
 Valid — reasoning is part of the output:
 
@@ -210,7 +238,16 @@ Invalid — the breakdown exceeds its parent (`450 > 400`). A producer that hold
 }
 ```
 
-Among current producers, Gemini, OpenCode, and Codex record `output → { reasoning }` (their reasoning/thoughts tokens are part of `output_tokens`); Claude Code's JSONL reports `output_tokens_details.thinking_tokens`, a subset of output that a producer may record as `output → { reasoning }`; the current Claude producer does not record it yet.
+Among current producers, Gemini, OpenCode, and Codex record `output → { reasoning }` (their reasoning/thoughts tokens are part of `output_tokens`), and Gemini records `input → { tool_use }`. Claude Code's JSONL reports `output_tokens_details.thinking_tokens`, a subset of output (Anthropic's re-tokenized estimate, present only on a message's final record), and splits `cache_creation` into `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`; the current Claude producer records neither.
+
+### Known producer gaps
+
+The rules above are what a v1.2.0 document means. These producers, as first released with this version, fall short of them for some sessions:
+
+- **Copilot CLI** records input and cache counts only as session totals on `session.shutdown`; its per-call usage is never written to disk. Derived steps carry output tokens alone, so summing a Copilot path's steps undercounts its input and cache.
+- **opencode** sessions are read with current opencode semantics, because opencode records no per-message version to convert by. Messages written before opencode 1.3.16 overcount output when the model reasoned (from opencode 1.3.4 every provider's `output` already included `reasoning`; before that, OpenAI-family models'). Messages written by opencode 1.3.4–1.3.5 overcount input for Anthropic and Bedrock models, whose `input` then included cache reads and writes, and messages written before opencode 1.0.62 overcount input for other providers, whose `input` then included cache reads.
+- **pi** sessions are read with current pi semantics. Sessions written before pi 0.63.0 (Google and Vertex models) or 0.12.10 (OpenAI models) include cache reads in `input`, and before pi 0.70.0 OpenAI-compatible models double-counted reasoning in `output`.
+- **Claude Code** messages are read from their top-level `usage`, so compaction iterations are not yet counted.
 
 ### `environment`
 

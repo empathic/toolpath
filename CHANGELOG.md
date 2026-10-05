@@ -7,26 +7,47 @@ All notable changes to the Toolpath workspace are documented here.
 - **Kind `agent-coding-session` v1.2.0**: the four token classes are
   additive. `input_tokens` excludes cached prompt tokens, so
   `input_tokens + cache_read_tokens + cache_write_tokens` is the prompt
-  and a consumer can price each class at its own rate without
-  double-counting. Counts are non-negative, and `attributed_token_usage`
-  may carry `breakdowns`. The spec page gains worked examples, including
-  valid and invalid `breakdowns`. The v1.1.0 page gains an erratum: its
-  Codex and Gemini documents count cached input in `input_tokens` as well
-  as in `cache_read_tokens`; subtract the latter to read them additively.
+  and each class can be priced at its own model's rate without
+  double-counting. A group's total sits on the group's last step wherever
+  its steps fall, so interleaved groups no longer carry a total per run.
+  A message's total covers every billed part on its own model; other
+  models' tokens stay outside the classes. Counts are non-negative,
+  `breakdowns` keys are the four classes (named sub-classes:
+  `output.reasoning`, `input.tool_use`, `cache_write.ttl_5m`/`ttl_1h`),
+  and `attributed_token_usage` may carry `breakdowns`. The spec page has
+  a per-source conversion table, worked examples, and a list of known
+  producer gaps (Copilot session-only totals, older opencode and pi
+  sessions, Claude compaction iterations). The v1.1.0 page gains an
+  erratum covering its double-counted Codex and Gemini documents and its
+  per-run group totals.
 - **`toolpath`** (0.8.0): `PATH_KIND_AGENT_CODING_SESSION` now points at
   v1.2.0; `PATH_KIND_AGENT_CODING_SESSION_V1_1_0` names the v1.1.0 URI.
 - **`path-cli`** (0.30.0): `path p validate` bundles the v1.2.0 schema
-  and checks the accounting rules JSON Schema cannot express on
-  agent-coding-session v1.1.0 and later: within a run of consecutive
-  steps sharing a `group_id`, only the last carries `token_usage`; a
-  breakdown's sub-classes sum to no more than their parent class. The
-  cross-harness matrix runs those checks on every fixture and cell, and
-  compares each fixture's derived prompt total with the one its wire
-  format reports (Claude, Codex, Gemini, Copilot, opencode).
+  and checks the accounting rules JSON Schema cannot express: one
+  `token_usage` per `group_id` (v1.2.0; per run for v1.1.0), and
+  breakdowns keyed by a class and bounded by it. The cross-harness matrix
+  runs those checks on every fixture and cell, and compares each
+  fixture's derived prompt, cache reads and cache writes with what its
+  wire format reports (Claude, Codex, Gemini, Copilot, opencode).
+- **`toolpath-claude`** (0.14.0): each message group carries one usage
+  total, on its last step in document order, even when its lines are
+  interleaved with another message's. Id-less assistant messages group by
+  `requestId`. All-zero (`<synthetic>`) usage no longer becomes
+  zero-filled `token_usage`. (Approach from #123.)
+- **`toolpath-codex`** (0.7.0): Codex CLI 0.145+ `cache_write_input_tokens`
+  becomes `cache_write_tokens`, differenced from the cumulative total and
+  subtracted from `input_tokens`. Rollouts without the field are
+  unchanged. `CodexProjector` adds cache writes back into the wire
+  `input_tokens` and emits `cache_write_input_tokens`.
+- **`toolpath-gemini`** (0.7.0): Gemini's `tool` tokens
+  (`toolUsePromptTokenCount`, prompt input outside `promptTokenCount`)
+  count in `input_tokens` and are recorded as `breakdowns.input.tool_use`
+  when non-zero. `GeminiProjector` folds them back into the wire
+  `tool`/`input`.
 
 Crates bumped (every crate that depends on `toolpath`, since the emitted
-kind URI changes; a provider crate must not emit v1.2.0 with
-non-additive classes): `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
+kind URI changes, and the providers' conversions changed with it, so
+no provider crate emits v1.2.0 under its old conversion): `toolpath` 0.8.0, `toolpath-convo` 0.12.0,
 `toolpath-git` 0.7.0, `toolpath-github` 0.7.0, `toolpath-claude` 0.14.0,
 `toolpath-gemini` 0.7.0, `toolpath-codex` 0.7.0, `toolpath-copilot`
 0.2.0, `toolpath-opencode` 0.6.0, `toolpath-cursor` 0.3.0,
