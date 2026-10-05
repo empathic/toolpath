@@ -1,7 +1,6 @@
 use super::common::retention::{assert_retains, conv_extra, meta, otel_extra, rebuild};
 use super::common::*;
 use crate::tests::otel::derive::canonical_step_json;
-use crate::tests::otel::hash::{canonical_json, sha256_hex};
 use crate::tests::otel::{
     DeriveConfig, ProfileSelection, Session, derive_path, derive_paths, group_sessions,
     session_to_view, stitch,
@@ -426,27 +425,5 @@ fn a_truncated_span_marks_its_session() {
     assert_eq!(
         truncated,
         vec![(json!("s"), json!(true)), (json!("other"), json!(false))]
-    );
-}
-
-#[test]
-fn derived_paths_are_pinned() {
-    let mut rec = serde_json::Map::new();
-    for file in CONVERSATIONS {
-        let p = derive_path(&session(file), &DeriveConfig::default());
-        let canon = canonical_json(&serde_json::to_value(&p).unwrap());
-        if let Ok(dir) = std::env::var("TOOLPATH_OTEL_DUMP") {
-            std::fs::write(format!("{dir}/{file}.path.json"), &canon).unwrap();
-        }
-        rec.insert(
-            file.to_string(),
-            json!({"head": p.path.head, "steps": p.steps.len(), "sha256": sha256_hex(&[canon.as_bytes()])}),
-        );
-    }
-    check_snapshot_with_hint(
-        "derive-paths",
-        &Value::Object(rec),
-        "\nRe-run with TOOLPATH_OTEL_DUMP=<dir> to write each derived path as \
-         <dir>/<fixture>.path.json and diff it against the base branch's dump.",
     );
 }

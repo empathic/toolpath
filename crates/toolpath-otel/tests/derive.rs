@@ -1,10 +1,13 @@
 //! The public API over the committed fixtures. Each M0 conversation's
-//! derived Path must match its golden exactly.
+//! derived Path must match its golden exactly. A golden is the Path as a
+//! single-path document (`Graph::from_path`), so `path p validate --input`
+//! reads it.
 //!
-//! Bless: TOOLPATH_OTEL_BLESS=1 cargo test -p toolpath-otel --test derive
+//! Bless (goldens and every snapshot): TOOLPATH_OTEL_BLESS=1 cargo test -p toolpath-otel
 
 use serde_json::Value;
 use std::path::PathBuf;
+use toolpath::v1::Graph;
 use toolpath_otel::{
     DeriveConfig, OtelError, ProfileSelection, SkipCounts, derive, derive_graph, derive_path,
 };
@@ -55,7 +58,7 @@ fn m0_paths_match_their_goldens() {
         let path = derive_path(&openrouter(file), &DeriveConfig::default())
             .unwrap()
             .output;
-        let got = Value::Array(vec![serde_json::to_value(path).unwrap()]);
+        let got = serde_json::to_value(Graph::from_path(path)).unwrap();
         if bless {
             std::fs::write(
                 golden(file),

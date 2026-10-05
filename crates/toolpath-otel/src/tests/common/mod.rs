@@ -86,24 +86,24 @@ pub fn fork_points(g: &TurnGraph) -> Vec<String> {
 /// Compare `actual` with `tests/snapshots/<name>.json`. A missing file is
 /// written and the test fails, so a new snapshot is always reviewed
 /// before it is committed. Regenerating a committed snapshot changes
-/// ids/bytes consumers rely on; do it only deliberately.
+/// ids/bytes consumers rely on; do it only deliberately, with the crate's
+/// one bless command: `TOOLPATH_OTEL_BLESS=1 cargo test -p toolpath-otel`.
 pub fn check_snapshot(name: &str, actual: &Value) {
-    check_snapshot_with_hint(name, actual, "");
-}
-
-/// [`check_snapshot`] with `hint` appended to the failure message (how to
-/// get more detail than the snapshot itself holds).
-pub fn check_snapshot_with_hint(name: &str, actual: &Value, hint: &str) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/snapshots")
         .join(format!("{name}.json"));
     let text = format!("{}\n", serde_json::to_string_pretty(actual).unwrap());
+    if std::env::var_os("TOOLPATH_OTEL_BLESS").is_some() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &text).unwrap();
+        return;
+    }
     match std::fs::read_to_string(&path) {
         Ok(want) => assert!(
             want == text,
             "snapshot {name} differs\n--- committed\n{want}\n--- now\n{text}\n\
              Regenerating this snapshot changes ids/bytes consumers rely on; \
-             do it only deliberately.{hint}"
+             do it only deliberately (TOOLPATH_OTEL_BLESS=1)."
         ),
         Err(_) => {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
