@@ -40,7 +40,7 @@ pub struct DeriveConfig {
 /// A derived document and what was left out of it.
 #[derive(Debug, Clone)]
 pub struct Derived<T> {
-    /// The derived document (for `derive_jsonl`, the request bodies).
+    /// The derived document.
     pub output: T,
     /// Telemetry read but not derived, by reason.
     pub skipped: SkipCounts,
@@ -113,8 +113,10 @@ pub fn derive(sessions: &[&[Value]], config: &DeriveConfig) -> Result<Derived<Gr
     match sessions {
         [one] => {
             let d = derive_path(one, config)?;
+            let mut output = Graph::from_path(d.output);
+            output.meta = graph_meta(config);
             Ok(Derived {
-                output: Graph::from_path(d.output),
+                output,
                 skipped: d.skipped,
             })
         }
@@ -188,10 +190,14 @@ pub fn derive_graph(sessions: &[&[Value]], config: &DeriveConfig) -> Result<Deri
             .into_iter()
             .map(|p| PathOrRef::Path(Box::new(p)))
             .collect(),
-        meta: config.title.as_ref().map(|t| GraphMeta {
-            title: Some(t.clone()),
-            ..Default::default()
-        }),
+        meta: graph_meta(config),
     };
     Ok(Derived { output, skipped })
+}
+
+fn graph_meta(config: &DeriveConfig) -> Option<GraphMeta> {
+    config.title.as_ref().map(|t| GraphMeta {
+        title: Some(t.clone()),
+        ..Default::default()
+    })
 }

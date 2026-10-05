@@ -95,6 +95,10 @@ fn derive_wraps_one_session_and_derive_graph_keeps_one_path_per_session() {
     let codex = openrouter("codex.ndjson");
     let one = derive(&[&claude], &cfg).unwrap().output;
     assert_eq!(one.paths.len(), 1);
+    assert_eq!(
+        one.meta.as_ref().and_then(|m| m.title.as_deref()),
+        Some("two")
+    );
 
     let g = derive(&[&claude, &codex], &cfg).unwrap().output;
     assert_eq!(g.paths.len(), 2);
