@@ -123,8 +123,9 @@ pub fn delta_lines(
 
 /// `steps` in an order where every step comes after its parents among
 /// `steps`: document order when it already is, else a stable topological
-/// order (ready steps taken in document order). A parent may also be one of
-/// the `held` ids, which the reader already has.
+/// order (ready steps taken in document order). A parent not among `steps`
+/// may be one of the `held` ids, which the reader already has; a parent
+/// among `steps` comes first even when it is also held.
 ///
 /// # Errors
 ///
@@ -153,11 +154,9 @@ fn parents_first_refs<'a>(
     let mut in_order = true;
     for (i, s) in new.iter().enumerate() {
         for p in &s.step.parents {
-            if stored.contains(p) {
-                continue;
-            }
             match index.get(p.as_str()) {
                 Some(&j) => in_order &= j < i,
+                None if stored.contains(p) => {}
                 None => {
                     return Err(DeltaError::DanglingParent {
                         step: s.step.id.clone(),
@@ -177,12 +176,10 @@ fn parents_first_refs<'a>(
     let mut pending: Vec<usize> = vec![0; new.len()];
     for (i, s) in new.iter().enumerate() {
         for p in &s.step.parents {
-            if stored.contains(p) {
-                continue;
+            if let Some(&j) = index.get(p.as_str()) {
+                children[j].push(i);
+                pending[i] += 1;
             }
-            let j = index[p.as_str()];
-            children[j].push(i);
-            pending[i] += 1;
         }
     }
     let mut ready: BinaryHeap<Reverse<usize>> = (0..new.len())
@@ -596,6 +593,17 @@ mod tests {
         );
         let lines = delta_lines(&path, &ids(&["s1"]), true).unwrap();
         assert_eq!(step_ids(&lines), ["s2", "s3"]);
+    }
+
+    #[test]
+    fn parents_first_orders_a_parent_among_steps_even_when_held() {
+        let steps = vec![step("s2", &["s1"]), step("s1", &[])];
+        let order: Vec<&str> = parents_first(&steps, &ids(&["s1"]))
+            .unwrap()
+            .into_iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        assert_eq!(order, ["s1", "s2"]);
     }
 
     #[test]
