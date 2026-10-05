@@ -619,8 +619,15 @@ branches. A *thread* is everything below a first user message.
   whose continuation target is missing is not one.
 - **Main line and head.** The main line is the first leading system
   message, in start order, to produce two turns outside sub-agent threads,
-  so a title or quota request that starts first does not take it. Until
-  one has, the main line is undecided and no turn is marked `side`.
+  so a title or quota request that starts first does not take it. A tree
+  started by a request whose continuation target is missing takes part in
+  that choice like any other tree, so a capture that starts mid-session
+  (the exporter enabled late, or the first requests dropped) keeps its
+  conversation as the main line and the side requests around it are
+  `side`. Such a tree is never `side` itself, and one that starts after
+  the main line is decided leaves that choice as it was. Until
+  some tree has produced two turns, the main line is undecided and no turn
+  is marked `side`.
   `path.head` is the last unmarked turn in view order, whatever came later
   in time. A retry or
   a compaction on the main line still forks, and the abandoned branch is

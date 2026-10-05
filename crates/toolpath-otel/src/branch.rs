@@ -13,16 +13,22 @@
 //! first answer received in feed order; a later answer never moves it. A
 //! thread under a different leading system message than the main line's is
 //! a side request, except a tree that a delta with a missing continuation
-//! target started, which continues the main line. A system turn whose
-//! first thread is a sub-agent's takes that thread's mark.
+//! target started, which continues the conversation and is never side. A
+//! system turn whose first thread is a sub-agent's takes that thread's
+//! mark.
 //!
 //! Every mark depends only on turns that come earlier in feed order, or on
 //! the turn's own data, so appending generations never changes a mark a
 //! turn already has: the delegating turn's `delegations` come from its own
 //! calls and results, a thread is matched only to a call that precedes it,
-//! and the main line is the first leading system message to produce two
-//! turns. One qualification: until a main line is decided no turn is
-//! marked side, so a turn left unmarked then can become side once it is.
+//! and the main line is the first tree (a leading system message, or a
+//! tree a missing continuation started) to produce two turns. Such a
+//! continuation tree counts toward that choice like any other, so a
+//! capture that starts mid-session keeps its conversation as the main
+//! line; one that starts after the main line is decided leaves that choice
+//! alone and is simply not side. One qualification: until a main line is
+//! decided no turn is marked side, so a turn left unmarked then can become
+//! side once it is.
 
 use crate::harness::SourceHarness;
 use crate::harness::tools::tool_category;
@@ -145,14 +151,15 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         .map(|i| anchor[i].and_then(|a| delegated.get(&a).copied()))
         .collect();
     // A delta whose continuation target is missing roots a tree that
-    // continues the conversation, so it is never a side request.
+    // continues the conversation, so it is never a side request; it can
+    // take the main line like any other root.
     let missing: BTreeSet<usize> = graph.continues_missing.iter().copied().collect();
     let continues = |r: usize| missing.contains(&nodes[r].first_generation);
     // Produced turns outside sub-agent threads, in feed order. The main line
     // is the first root to produce two of them: a later generation comes
     // later in feed order, so the choice holds. Until then nothing is side.
     let mut produced: Vec<(usize, usize)> = (0..n)
-        .filter(|&i| thread[i].is_none() && !continues(root[i]))
+        .filter(|&i| thread[i].is_none())
         .filter_map(|i| nodes[i].producer.map(|g| (g, root[i])))
         .collect();
     produced.sort_unstable();
@@ -975,6 +982,89 @@ mod tests {
         assert_eq!(g.nodes[produced_by(&g, 2)].parent, None);
         assert!(b.kind.iter().all(Option::is_none), "{:?}", b.kind);
         assert_eq!(b.head, Some(produced_by(&g, 3)));
+        assert_prefixes_agree(&s);
+    }
+
+    fn delta_continuing(
+        id: &str,
+        start: u64,
+        user: &str,
+        out: &str,
+        continues: &str,
+    ) -> Generation {
+        let mut g = generation(
+            id,
+            start,
+            vec![m(json!({"role": "user", "content": user}))],
+            text(out),
+        );
+        g.history = crate::generation::History::Delta;
+        g.continues = Some(continues.into());
+        g
+    }
+
+    fn title(id: &str, start: u64, system: &str, user: &str) -> Generation {
+        generation(
+            id,
+            start,
+            vec![
+                m(json!({"role": "system", "content": system})),
+                m(json!({"role": "user", "content": user})),
+            ],
+            text("Title"),
+        )
+    }
+
+    /// A capture that starts mid-session: the first request continues a
+    /// missing target, so that tree is the conversation and can take the
+    /// main line; later title requests are side and the head stays on it.
+    #[test]
+    fn a_capture_starting_mid_session_keeps_its_main_line() {
+        let s = Session::new(
+            "s".into(),
+            None,
+            vec![
+                delta_continuing("g0", 10, "u0", "a0", "gX"),
+                delta_continuing("g1", 20, "u1", "a1", "g0"),
+                delta_continuing("g2", 30, "u2", "a2", "g1"),
+                title("g3", 40, "TITLE", "name it"),
+                title("g4", 50, "TITLE", "name it again"),
+            ],
+        );
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        assert_eq!(g.missing_continuations, ["gX"]);
+        assert_eq!(b.kind[produced_by(&g, 3)], Some(BranchKind::Side));
+        assert_eq!(b.kind[produced_by(&g, 4)], Some(BranchKind::Side));
+        assert_eq!(b.kind[produced_by(&g, 2)], None);
+        assert_eq!(b.head, Some(produced_by(&g, 2)));
+        assert_prefixes_agree(&s);
+    }
+
+    /// Two side requests under one system prompt do not take the main
+    /// line from a mid-session capture's tree that produced two turns
+    /// first.
+    #[test]
+    fn a_mid_session_tree_beats_two_side_requests_under_one_prompt() {
+        let s = Session::new(
+            "s".into(),
+            None,
+            vec![
+                delta_continuing("g0", 10, "u0", "a0", "gX"),
+                title("g1", 15, "TITLE", "name it"),
+                delta_continuing("g2", 20, "u1", "a1", "g0"),
+                title("g3", 25, "TITLE", "classify it"),
+                delta_continuing("g4", 30, "u2", "a2", "g2"),
+            ],
+        );
+        let g = stitch(&s);
+        let b = classify(&g, SourceHarness::Unknown);
+        assert_eq!(b.kind[produced_by(&g, 1)], Some(BranchKind::Side));
+        assert_eq!(b.kind[produced_by(&g, 3)], Some(BranchKind::Side));
+        for gi in [0, 2, 4] {
+            assert_eq!(b.kind[produced_by(&g, gi)], None, "g{gi}");
+        }
+        assert_eq!(b.head, Some(produced_by(&g, 4)));
         assert_prefixes_agree(&s);
     }
 
