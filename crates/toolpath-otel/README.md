@@ -86,20 +86,21 @@ session as given.
 
 | OpenTelemetry concept | Toolpath concept |
 |---|---|
-| Session (`session.id`, else a content key) | Path; `meta.otel.derived_session_id` |
+| Session (`session.id`, else a key from its first generation) | Path; `meta.otel.derived_session_id` |
 | Model call (generation) | The step(s) for the turns it adds |
 | Prompt message | Conversation turn, stitched by chained content id (`step.id`) |
 | User / system message | `step.actor` as `human:user` / `tool:otel` |
 | Assistant completion | `step.actor` as `agent:<model>` |
 | Tool call and its result | `tool_uses` on the turn's conversation change |
 | Sub-agent started by a `Task`/`Agent` call | `delegations` on the delegating turn (every such call with a prompt); its turns stay steps marked `extra.otel.branch = "subagent"`, and its answer is an extra parent of the turn that receives it, so they are not dead ends |
-| Side request (another system prompt) | Steps marked `extra.otel.branch = "side"`; `path.head` stays on the main line, the first system prompt to produce two turns |
+| Side request (another system prompt) | Steps marked `extra.otel.branch = "side"` once the main line is decided: the first system prompt, or tree continuing a missing request, to produce two turns; `path.head` is the last unmarked turn |
+| Generation repeating an existing turn (identical retry) | A dead-end step marked `extra.otel.branch = "unplaced"` that carries its tokens |
 | Call whose content was not captured (skeleton) | Steps marked `extra.otel.branch = "skeleton"` and `extra.otel.absent` |
-| Write, edit and `apply_patch` tool calls | `change[file]` file changes |
+| Write, edit, `NotebookEdit`, `apply_patch` and opencode `delete` tool calls | `change[file]` file changes |
 | Token usage | `token_usage` on the step, additive: `input_tokens` excludes cache reads and writes (`cache_read_tokens`, `cache_write_tokens`); the source's convention is `extra.otel.usage.cache_basis` |
 | Cost | Per-call `extra.otel.cost`; `meta.otel.cost_usd` totals are `null` when any call is unpriced |
-| Working directory from the agent's system prompt | `path.base.uri` |
-| Agent recognised from prompts and tool names | `meta.producer.name` (`claude-code`, `codex`, `opencode`, `pi`, else `otel`) and `meta.otel.harness`; `meta.source` is `otel` |
+| Working directory from the inferred harness's own cwd marker (the system prompt; Codex's `<environment_context>` user message) | `path.base.uri` |
+| Agent recognised from session ids, prompts and tool names | `meta.producer.name` (`claude-code`, `codex`, `opencode`, `pi`, else `otel`) and `meta.otel.harness`; `meta.source` is `otel` |
 | Everything needed to rebuild the requests | `structural.extra.otel` |
 
 See `docs/agents/formats/otel.md` for the full format reference.
