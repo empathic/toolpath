@@ -319,7 +319,7 @@ cached tokens. Each producer passes its source's count through, except
 | `toolpath-codex` | inclusive of cache reads (no cache writes reported) | `total_token_usage.input_tokens`, which contains `cached_input_tokens` |
 | `toolpath-gemini` | inclusive of cache reads (no cache writes reported) | `tokens.input`, which contains `tokens.cached` |
 | `toolpath-opencode` | exclusive | `tokens.input`; `total = input + output + reasoning + cache.read + cache.write` |
-| `toolpath-pi` | exclusive | `usage.input`, beside `cacheRead` and `cacheWrite` |
+| `toolpath-pi` | exclusive, for every upstream provider: pi normalizes each provider's count before writing it (verified against pi 0.87.1) | `usage.input`, beside `cacheRead` and `cacheWrite` |
 | `toolpath-cursor` | unknown (no cache classes reported) | `tokenCount.inputTokens` |
 | `toolpath-copilot` | exclusive | `session.shutdown` `tokenDetails.input.tokenCount`, beside `cache_read` and `cache_write`; a session without `tokenDetails` falls back to `usage.inputTokens`, whose basis is unknown |
 | `toolpath-otel` | exclusive | `gen_ai.usage.input_tokens` (or OpenRouter's), less cache reads and writes when the source was inclusive; the source's basis is kept as `cache_basis` |
