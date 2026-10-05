@@ -8,7 +8,6 @@ use crate::session::Session;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::hash::Hash;
 use std::rc::Rc;
 
 #[non_exhaustive]
@@ -195,14 +194,12 @@ struct TrieNode {
 /// start `(prev, base)`: a later prompt replays the longest prefix it
 /// shares with any earlier one. One node per distinct prompt prefix, so it
 /// is never larger than the session's prompts.
-struct Trie<'h, H> {
+struct Trie {
     nodes: Vec<TrieNode>,
     roots: HashMap<(Rc<str>, usize), usize>,
-    /// `(root, prefix hash)` → node, when matching by hash.
-    hashed: HashMap<(usize, &'h H), usize>,
 }
 
-impl<'h, H: Eq + Hash> Trie<'h, H> {
+impl Trie {
     fn root(&mut self, start: &str, base: usize) -> usize {
         let key = (Rc::from(start), base);
         if let Some(&r) = self.roots.get(&key) {
@@ -228,57 +225,18 @@ impl<'h, H: Eq + Hash> Trie<'h, H> {
     }
 
     /// The deepest node under `root` on `prompt`'s path, and its depth.
-    fn longest(
-        &self,
-        session: &Session,
-        root: usize,
-        gi: usize,
-        hashes: Option<&'h [H]>,
-    ) -> (usize, usize) {
+    fn longest(&self, session: &Session, root: usize, gi: usize) -> (usize, usize) {
         let prompt = &session.generations[gi].messages;
-        let Some(hashes) = hashes else {
-            let (mut cur, mut depth) = (root, 0);
-            while depth < prompt.len() {
-                let Some(c) = self.child(cur, |(g, m)| {
-                    session.generations[g].messages[m] == prompt[depth]
-                }) else {
-                    break;
-                };
-                (cur, depth) = (c, depth + 1);
-            }
-            return (cur, depth);
-        };
-        // Every prefix of a present prefix is present, so the present
-        // depths are `0..=d`: binary search for `d`.
-        let (mut lo, mut hi) = (0, prompt.len());
-        while lo < hi {
-            let mid = lo + (hi - lo).div_ceil(2);
-            if self.hashed.contains_key(&(root, &hashes[mid - 1])) {
-                lo = mid;
-            } else {
-                hi = mid - 1;
-            }
+        let (mut cur, mut depth) = (root, 0);
+        while depth < prompt.len() {
+            let Some(c) = self.child(cur, |(g, m)| {
+                session.generations[g].messages[m] == prompt[depth]
+            }) else {
+                break;
+            };
+            (cur, depth) = (c, depth + 1);
         }
-        if lo == 0 {
-            return (root, 0);
-        }
-        let n = self.hashed[&(root, &hashes[lo - 1])];
-        debug_assert!(
-            self.path_matches(session, n, &prompt[..lo]),
-            "equal prefix hashes, unequal prompts"
-        );
-        (n, lo)
-    }
-
-    fn path_matches(&self, session: &Session, mut n: usize, prompt: &[Message]) -> bool {
-        for m in prompt.iter().rev() {
-            let (g, i) = self.nodes[n].at;
-            if session.generations[g].messages[i] != *m {
-                return false;
-            }
-            n = self.nodes[n].parent;
-        }
-        self.nodes[n].parent == NONE
+        (cur, depth)
     }
 
     fn child(&self, parent: usize, mut same: impl FnMut((usize, usize)) -> bool) -> Option<usize> {
@@ -294,14 +252,7 @@ impl<'h, H: Eq + Hash> Trie<'h, H> {
 
     /// Add `replay`, the stitching of prompt message `at` (an id-less
     /// tool message when `idless`), under `parent`.
-    fn push(
-        &mut self,
-        parent: usize,
-        at: (usize, usize),
-        replay: Replay,
-        idless: bool,
-        hash: Option<(usize, &'h H)>,
-    ) -> usize {
+    fn push(&mut self, parent: usize, at: (usize, usize), replay: Replay, idless: bool) -> usize {
         let n = self.nodes.len();
         let p = &mut self.nodes[parent];
         let next_sibling = std::mem::replace(&mut p.first_child, n);
@@ -322,9 +273,6 @@ impl<'h, H: Eq + Hash> Trie<'h, H> {
             first_child: NONE,
             next_sibling,
         });
-        if let Some(key) = hash {
-            self.hashed.insert(key, n);
-        }
         n
     }
 
@@ -367,33 +315,10 @@ impl<'h, H: Eq + Hash> Trie<'h, H> {
 
 /// Stitch a session's generations into one turn DAG.
 pub fn stitch(session: &Session) -> TurnGraph {
-    stitch_hashed::<()>(session, &|_| None)
+    stitch_impl(session, true)
 }
 
-/// [`stitch`] given, for each generation, one hash per prompt
-/// message that identifies the prompt up to and including that message: a
-/// chained hash such as the record format's `MessageHash`. A shared prompt
-/// prefix is then found by hash lookups, without reading the messages, so
-/// a prompt costs its new messages plus a binary search.
-///
-/// Equal hashes are trusted as equal prefixes. For prompts rebuilt from a
-/// message store that holds one message and parent per hash, that is true
-/// by construction; for hashes computed from content it rests on sha256's
-/// collision resistance. Debug builds compare the messages. Unless every
-/// generation has exactly one hash per prompt message, none is used and
-/// prefixes are compared by content.
-pub(crate) fn stitch_hashed<'h, H: Eq + Hash>(
-    session: &Session,
-    hashes: &dyn Fn(&Generation) -> Option<&'h [H]>,
-) -> TurnGraph {
-    stitch_impl(session, true, hashes)
-}
-
-fn stitch_impl<'h, H: Eq + Hash>(
-    session: &Session,
-    replay: bool,
-    hashes: &dyn Fn(&Generation) -> Option<&'h [H]>,
-) -> TurnGraph {
+fn stitch_impl(session: &Session, replay: bool) -> TurnGraph {
     let root = root_id(&session.key);
     let mut graph = TurnGraph {
         nodes: Vec::new(),
@@ -406,19 +331,11 @@ fn stitch_impl<'h, H: Eq + Hash>(
     for (i, g) in session.generations.iter().enumerate() {
         first_index.entry(g.id.as_str()).or_insert(i);
     }
-    let hashes: Option<Vec<&'h [H]>> = session
-        .generations
-        .iter()
-        .map(|g| hashes(g).filter(|h| h.len() == g.messages.len()))
-        .collect();
-
     let mut trie = Trie {
         nodes: Vec::new(),
         roots: HashMap::new(),
-        hashed: HashMap::new(),
     };
     for (gi, generation) in session.generations.iter().enumerate() {
-        let prompt_hashes = hashes.as_ref().map(|h| h[gi]);
         let target = continuation_target(&session.generations, gi, &first_index);
         let tip_node = match target {
             Target::Found(tj) => Some(index[&graph.links[tj].completion]),
@@ -459,7 +376,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
         // What the prefix leaves behind is read off its last trie node.
         let r = if replay { trie.root(&prev, base) } else { NONE };
         let (mut cur, reused) = if replay {
-            trie.longest(session, r, gi, prompt_hashes)
+            trie.longest(session, r, gi)
         } else {
             (NONE, 0)
         };
@@ -479,7 +396,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
         // A call id binds to its latest turn: one after the replayed prefix
         // (`calls`), else one in it, else the tip.
         let mut calls: HashMap<&str, usize> = HashMap::new();
-        let call = |calls: &HashMap<&str, usize>, trie: &Trie<'h, H>, id: &str| {
+        let call = |calls: &HashMap<&str, usize>, trie: &Trie, id: &str| {
             if let Some(&ni) = calls.get(id) {
                 return Some(ni);
             }
@@ -492,7 +409,6 @@ fn stitch_impl<'h, H: Eq + Hash>(
         };
 
         for (mi, m) in generation.messages.iter().enumerate().skip(reused) {
-            let hash = prompt_hashes.map(|h| (r, &h[mi]));
             let norm = normalize(m);
             if is_dropped(base + mi, &m.role) {
                 let h = content_hash(&norm);
@@ -506,7 +422,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
                         dropped: Some(h.clone()),
                         node: None,
                     };
-                    cur = trie.push(cur, (gi, mi), replay, false, hash);
+                    cur = trie.push(cur, (gi, mi), replay, false);
                 }
                 dropped.push(Dropped {
                     index: mi,
@@ -535,7 +451,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
                         dropped: None,
                         node: None,
                     };
-                    cur = trie.push(cur, (gi, mi), replay, tcid.is_empty(), hash);
+                    cur = trie.push(cur, (gi, mi), replay, tcid.is_empty());
                 }
                 prev = id;
                 continue;
@@ -578,7 +494,7 @@ fn stitch_impl<'h, H: Eq + Hash>(
                     dropped: None,
                     node: Some(ni),
                 };
-                cur = trie.push(cur, (gi, mi), replay, false, hash);
+                cur = trie.push(cur, (gi, mi), replay, false);
             }
             prev_turn = Some(id.clone());
             prev = id;
@@ -671,46 +587,13 @@ mod tests {
     }
 
     fn plain(s: &Session) -> TurnGraph {
-        stitch_impl::<()>(s, false, &|_| None)
+        stitch_impl(s, false)
     }
 
-    /// A chained hash per prompt message, by generation id: sha256 of the
-    /// previous message's hash and this message's canonical JSON. A
-    /// stand-in for the record format's `MessageHash`; any hash that
-    /// identifies the prompt up to the message serves.
-    fn message_hashes(s: &Session) -> HashMap<String, Vec<String>> {
-        use crate::hash::{canonical_json, sha256_hex};
-        s.generations
-            .iter()
-            .map(|g| {
-                let mut parent = String::new();
-                let h = g
-                    .messages
-                    .iter()
-                    .map(|m| {
-                        let v = serde_json::to_value(m).unwrap();
-                        parent =
-                            sha256_hex(&[parent.as_bytes(), b"\0", canonical_json(&v).as_bytes()]);
-                        parent.clone()
-                    })
-                    .collect();
-                (g.id.clone(), h)
-            })
-            .collect()
-    }
-
-    fn hashed(s: &Session, hashes: &HashMap<String, Vec<String>>) -> TurnGraph {
-        stitch_hashed(s, &|g| hashes.get(&g.id).map(Vec::as_slice))
-    }
-
-    /// [`super::stitch`], checked against stitching without prompt replay
-    /// and with replay matched by message hash.
+    /// [`super::stitch`], checked against stitching without prompt replay.
     fn stitch(s: &Session) -> TurnGraph {
         let g = super::stitch(s);
-        let want = format!("{:?}", plain(s));
-        assert_eq!(format!("{g:?}"), want);
-        let h = hashed(s, &message_hashes(s));
-        assert_eq!(format!("{h:?}"), want);
+        assert_eq!(format!("{g:?}"), format!("{:?}", plain(s)));
         g
     }
 
@@ -723,82 +606,10 @@ mod tests {
                     ..s.clone()
                 };
                 let want = format!("{:?}", plain(&s));
-                let hashes = message_hashes(&s);
-                for got in [super::stitch(&s), hashed(&s, &hashes)] {
-                    assert_eq!(format!("{got:?}"), want, "{} prefix {k}", s.key);
-                }
+                let got = format!("{:?}", super::stitch(&s));
+                assert_eq!(got, want, "{} prefix {k}", s.key);
             }
         }
-    }
-
-    /// One generation without a hash list, or with one of the wrong
-    /// length, turns hashes off: the others here all collide, so using
-    /// them would replay the wrong prefixes.
-    #[test]
-    fn a_missing_or_misaligned_hash_list_turns_hashes_off() {
-        for s in fixture_sessions() {
-            let want = format!("{:?}", plain(&s));
-            let colliding: HashMap<String, Vec<String>> = s
-                .generations
-                .iter()
-                .map(|g| (g.id.clone(), vec!["h".to_string(); g.messages.len()]))
-                .collect();
-            let first = &s.generations[0].id;
-            let mut missing = colliding.clone();
-            missing.remove(first);
-            let mut misaligned = colliding;
-            misaligned.get_mut(first).unwrap().push("h".into());
-            for hashes in [missing, misaligned] {
-                let got = format!("{:?}", hashed(&s, &hashes));
-                assert_eq!(got, want, "{}", s.key);
-            }
-        }
-    }
-
-    #[test]
-    fn unequal_hashes_only_skip_replay() {
-        for s in fixture_sessions() {
-            let want = format!("{:?}", plain(&s));
-            let mut hashes = message_hashes(&s);
-            for (i, g) in s.generations.iter().enumerate() {
-                for h in hashes.get_mut(&g.id).unwrap() {
-                    h.push_str(&i.to_string());
-                }
-            }
-            assert_eq!(format!("{:?}", hashed(&s, &hashes)), want, "{}", s.key);
-        }
-    }
-
-    /// Matching looks up hashes, never content; a debug build checks that
-    /// every hash match is a content match.
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "equal prefix hashes, unequal prompts")]
-    fn equal_hashes_are_trusted_as_equal_messages() {
-        let s = Session::new(
-            "s".into(),
-            None,
-            vec![
-                gen_(
-                    "g1",
-                    1,
-                    vec![msg(json!({"role": "user", "content": "a"}))],
-                    "x",
-                ),
-                gen_(
-                    "g2",
-                    2,
-                    vec![msg(json!({"role": "user", "content": "b"}))],
-                    "y",
-                ),
-            ],
-        );
-        let hashes: HashMap<String, Vec<String>> = [
-            ("g1".into(), vec!["h".into()]),
-            ("g2".into(), vec!["h".into()]),
-        ]
-        .into();
-        hashed(&s, &hashes);
     }
 
     #[test]
