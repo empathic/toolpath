@@ -38,7 +38,11 @@ impl Session {
         s.key = match &s.session_id {
             Some(id) => id.clone(),
             None if first.is_delta() => trace_key(first.client_key.as_deref(), &first.trace_id),
-            None => cluster_key(first.client_key.as_deref(), &kept_prompt(&first.messages)),
+            None => cluster_key(
+                first.client_key.as_deref(),
+                &kept_prompt(&first.messages),
+                &first.id,
+            ),
         };
         Some(s)
     }
@@ -55,8 +59,12 @@ pub fn trace_key(client_key: Option<&str>, trace_id: &str) -> String {
 }
 
 /// `otel-cluster:` + hash of (client key, leading system message, first
-/// user message).
-pub fn cluster_key(client_key: Option<&str>, prompt: &[NormMessage]) -> String {
+/// user message, generation id).
+pub fn cluster_key(
+    client_key: Option<&str>,
+    prompt: &[NormMessage],
+    generation_id: &str,
+) -> String {
     let system = prompt
         .first()
         .filter(|m| is_system_like(&m.role))
@@ -71,6 +79,8 @@ pub fn cluster_key(client_key: Option<&str>, prompt: &[NormMessage]) -> String {
         system.as_bytes(),
         b"\0",
         user.as_bytes(),
+        b"\0",
+        generation_id.as_bytes(),
     ]);
     format!("otel-cluster:{}", &h[..16])
 }
@@ -117,7 +127,7 @@ mod tests {
         let s = Session::from_generations(vec![g("a", 1, None)]).unwrap();
         assert_eq!(
             s.key,
-            cluster_key(Some("k"), &kept_prompt(&s.generations[0].messages))
+            cluster_key(Some("k"), &kept_prompt(&s.generations[0].messages), "a")
         );
 
         let mut delta = g("a", 1, None);
@@ -129,5 +139,16 @@ mod tests {
         assert_eq!(s.key, trace_key(Some("k"), "trace-a"));
 
         assert!(Session::from_generations(Vec::new()).is_none());
+    }
+
+    #[test]
+    fn same_opening_sessions_without_an_id_get_distinct_keys() {
+        let one = Session::from_generations(vec![g("a", 1, None)]).unwrap();
+        let other = Session::from_generations(vec![g("b", 1, None)]).unwrap();
+        assert_ne!(one.key, other.key);
+        let grown =
+            Session::from_generations(vec![g("a", 1, None), g("c", 2, None), g("d", 3, None)])
+                .unwrap();
+        assert_eq!(grown.key, one.key);
     }
 }

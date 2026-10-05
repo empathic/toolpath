@@ -34,7 +34,7 @@ fn claude_code_turn_ids_are_pinned() {
 
 #[test]
 fn pi_cluster_key_is_pinned() {
-    assert_eq!(session("pi.ndjson").key, "otel-cluster:4c9f0c410e076f96");
+    assert_eq!(session("pi.ndjson").key, "otel-cluster:e9e5aa560c5e61a6");
 }
 
 /// Oracle: expected.json's tool-call ids. Every call before the session's

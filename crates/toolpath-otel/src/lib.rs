@@ -131,8 +131,9 @@ pub fn derive(sessions: &[&[Value]], config: &DeriveConfig) -> Result<Derived<Gr
 /// client session id (`session.id`, or `gen_ai.conversation.id` for
 /// `semconv`) must carry the same one; generations without one belong to
 /// the session as given. The session key is that id, else the first
-/// generation's: a hash of its leading system and first user message
-/// (full-history requests), or of its trace id (delta requests).
+/// generation's: a hash of its leading system message, first user message
+/// and generation id (full-history requests), or of its trace id (delta
+/// requests).
 ///
 /// # Errors
 ///

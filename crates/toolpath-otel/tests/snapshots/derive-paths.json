@@ -15,8 +15,8 @@
     "steps": 11
   },
   "pi.ndjson": {
-    "head": "350cf159b835062a",
-    "sha256": "43bbf0495cc87e4a48bea36e10fefd4ff7a21b0ddf2872c4c06f6963979a91ef",
+    "head": "877fca12598eb6dd",
+    "sha256": "d59ae13333ca59be4a39be75f76144bb4205ae687ae75da5d2eabf314968f22d",
     "steps": 10
   },
   "synthetic-fork.ndjson": {

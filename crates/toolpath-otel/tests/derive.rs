@@ -244,6 +244,35 @@ fn one_session_id_or_none_derives() {
     assert_eq!(session_id(&whole), None);
 }
 
+#[test]
+fn same_opening_sessions_without_an_id_get_distinct_path_ids() {
+    let cfg = DeriveConfig::default();
+    let pi = openrouter("pi.ndjson");
+    let mut other = pi[..1].to_vec();
+    let text = serde_json::to_string(&other[0])
+        .unwrap()
+        .replace(r#""gen-"#, r#""gen-other-"#);
+    other[0] = serde_json::from_str(&text).unwrap();
+    let g = derive_graph(&[&pi[..1], &other], &cfg).unwrap().output;
+    let ids: Vec<&str> = g
+        .paths
+        .iter()
+        .map(|p| match p {
+            toolpath::v1::PathOrRef::Path(p) => p.path.id.as_str(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+
+    let key =
+        |p: &toolpath::v1::Path| p.meta.as_ref().unwrap().extra["otel"]["session_key"].clone();
+    let one = derive_path(&pi[..1], &cfg).unwrap().output;
+    let whole = derive_path(&pi, &cfg).unwrap().output;
+    assert_eq!(key(&one), key(&whole));
+    assert_eq!(one.path.id, whole.path.id);
+}
+
 fn attr(k: &str, v: &str) -> Value {
     serde_json::json!({"key": k, "value": {"stringValue": v}})
 }

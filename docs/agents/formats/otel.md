@@ -488,8 +488,13 @@ this.
   session key is that id. A session with none (older pi releases) is
   keyed by its first generation: a
   full-history request gives `otel-cluster:<16 hex>` (a hash of the client
-  key, the leading system message and the first user message), a delta
-  request `otel-trace:<16 hex>` (a hash of the client key and trace id).
+  key, the leading system message, the first user message and the
+  generation id), a delta request `otel-trace:<16 hex>` (a hash of the
+  client key and trace id). Both read only the first generation, so the
+  key holds as the session grows. The generation id keeps two sessions
+  that open with the same system and user message (one client, a "hi" or
+  a slash command) from sharing a key, and with it a path id, derived
+  session id and turn ids.
 - **Turn ids** are chained content hashes: the root is
   `sha256("toolpath-otel/v1\0" ‖ session_key)`, and each turn's id is
   `sha256(previous id ‖ canonical(normalized message))`, 16 lowercase hex.
