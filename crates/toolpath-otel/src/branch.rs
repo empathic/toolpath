@@ -1068,6 +1068,158 @@ mod tests {
         assert_prefixes_agree(&s);
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Gap {
+        /// The capture starts with a request whose target is missing.
+        Start,
+        /// The main line is decided, then a target goes missing.
+        Mid,
+        /// Starts on a missing target and loses another later.
+        StartTwice,
+        /// The main line is decided, then two targets go missing.
+        MidTwice,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Role {
+        Main,
+        Side,
+        Sub,
+    }
+
+    /// Four main-line requests `m0..m3` (with `gap` deciding which continue
+    /// a missing target), optionally a sub-agent called by `m2` and
+    /// answered in `m3`'s tool result, and title requests under one
+    /// system prompt inserted before the main request at each position.
+    fn gapped(gap: Gap, sub: bool, sides: &[usize]) -> Vec<(Role, Generation)> {
+        let full = |id: &str, start, out: &str| {
+            generation(
+                id,
+                start,
+                vec![
+                    m(json!({"role": "system", "content": "MAIN"})),
+                    m(json!({"role": "user", "content": "u0"})),
+                ],
+                text(out),
+            )
+        };
+        let (m0, m2, m3) = match gap {
+            Gap::Start => (Some("gX"), "m1", "m2"),
+            Gap::Mid => (None, "gX", "m2"),
+            Gap::StartTwice => (Some("gX"), "gY", "m2"),
+            Gap::MidTwice => (None, "gX", "gY"),
+        };
+        let mut main = vec![
+            match m0 {
+                Some(t) => delta_continuing("m0", 10, "u0", "a0", t),
+                None => full("m0", 10, "a0"),
+            },
+            delta_continuing("m1", 20, "u1", "a1", "m0"),
+            delta_continuing("m2", 30, "u2", "a2", m2),
+            delta_continuing("m3", 40, "u3", "a3", m3),
+        ];
+        let mut out: Vec<(Role, Generation)> = Vec::new();
+        if sub {
+            main[2].completion = Completion {
+                tool_calls: vec![agent("c1", "sub A")],
+                ..Default::default()
+            };
+            main[3].messages.insert(
+                0,
+                m(json!({"role": "tool", "tool_call_id": "c1", "content": "A done"})),
+            );
+        }
+        for (i, g) in main.into_iter().enumerate() {
+            for (k, _) in sides.iter().enumerate().filter(|&(_, &at)| at == i) {
+                out.push((
+                    Role::Side,
+                    title(
+                        &format!("t{k}"),
+                        5 + 10 * i as u64,
+                        "TITLE",
+                        &format!("t{k}"),
+                    ),
+                ));
+            }
+            out.push((Role::Main, g));
+            if sub && i == 2 {
+                out.push((
+                    Role::Sub,
+                    generation(
+                        "s",
+                        35,
+                        vec![
+                            m(json!({"role": "system", "content": "SUB"})),
+                            m(json!({"role": "user", "content": "sub A"})),
+                        ],
+                        text("A done"),
+                    ),
+                ));
+            }
+        }
+        for (k, _) in sides.iter().enumerate().filter(|&(_, &at)| at == 4) {
+            out.push((
+                Role::Side,
+                title(&format!("t{k}"), 50, "TITLE", &format!("t{k}")),
+            ));
+        }
+        out
+    }
+
+    /// Wherever the capture loses a continuation target, the conversation
+    /// is the main line, side requests are side once it is decided, a
+    /// sub-agent's turns (and its system turn) are its own, the head is
+    /// the last main-line turn, and every prefix agrees with the whole.
+    /// Two side requests that both arrive before the conversation's second
+    /// turn take the main line by the first-to-two rule, so they are left
+    /// out.
+    #[test]
+    fn the_conversation_is_the_main_line_whatever_continuation_is_missing() {
+        let mut placements: Vec<Vec<usize>> = vec![vec![]];
+        placements.extend((0..=4).map(|a| vec![a]));
+        for a in 0..=4 {
+            for b in a..=4 {
+                if b >= 2 {
+                    placements.push(vec![a, b]);
+                }
+            }
+        }
+        let mut cases = 0;
+        for gap in [Gap::Start, Gap::Mid, Gap::StartTwice, Gap::MidTwice] {
+            for sub in [false, true] {
+                for sides in &placements {
+                    let roles = gapped(gap, sub, sides);
+                    let case = format!("{gap:?} sub={sub} sides={sides:?}");
+                    let s = Session::new(
+                        "s".into(),
+                        None,
+                        roles.iter().map(|(_, g)| g.clone()).collect(),
+                    );
+                    let g = stitch(&s);
+                    let b = classify(&g, SourceHarness::Unknown);
+                    for (i, x) in g.nodes.iter().enumerate() {
+                        let want = match roles[x.first_generation].0 {
+                            Role::Main => None,
+                            Role::Side => Some(BranchKind::Side),
+                            Role::Sub => Some(BranchKind::Subagent("c1".into())),
+                        };
+                        assert_eq!(b.kind[i], want, "{case}: {}", x.id);
+                    }
+                    let last = roles.iter().rposition(|(r, _)| *r == Role::Main).unwrap();
+                    assert_eq!(b.head, Some(produced_by(&g, last)), "{case}");
+                    // Under `MidTwice` the answer arrives in a tree the
+                    // delegating turn is not an ancestor of, so it never
+                    // merges.
+                    let merged = sub && gap != Gap::MidTwice;
+                    assert_eq!(b.merges.len(), usize::from(merged), "{case}");
+                    assert_prefixes_agree(&s);
+                    cases += 1;
+                }
+            }
+        }
+        assert_eq!(cases, 4 * 2 * 18);
+    }
+
     /// A main line of `2 * steps` turns sent as deltas, with nine
     /// synchronous `Agent` calls spread along it, each answered in its
     /// call's result.
