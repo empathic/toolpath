@@ -208,7 +208,10 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
         });
     }
 
-    let merges = merges(graph, &calls, &delegated, &anchor, &thread, &kind, &parent);
+    let ancestry = Ancestry::new(&parent, &children);
+    let merges = merges(
+        graph, &calls, &delegated, &anchor, &thread, &kind, &ancestry,
+    );
 
     let head = (0..n)
         .rev()
@@ -231,20 +234,11 @@ fn merges(
     anchor: &[Option<usize>],
     thread: &[Option<usize>],
     kind: &[Option<BranchKind>],
-    parent: &[Option<usize>],
+    ancestry: &Ancestry,
 ) -> Vec<(usize, usize)> {
     let nodes = &graph.nodes;
     let n = nodes.len();
     let generation = |i: usize| nodes[i].producer.unwrap_or(nodes[i].first_generation);
-    let is_descendant = |mut j: usize, of: usize| loop {
-        if j == of {
-            return true;
-        }
-        match parent[j] {
-            Some(p) => j = p,
-            None => return false,
-        }
-    };
     let texts: Vec<String> = nodes
         .iter()
         .map(|x| content_text(&x.message.content))
@@ -260,7 +254,7 @@ fn merges(
             j > from.max(last)
                 && thread[j] == thread[from]
                 && kind[j] == kind[from]
-                && is_descendant(j, from)
+                && ancestry.is_descendant(j, from)
         };
         // The sub-agent's answer: a final assistant turn whose text comes
         // back in the call's result or in a later delegating-thread user
@@ -293,6 +287,48 @@ fn merges(
     }
     merges.sort_unstable();
     merges
+}
+
+/// Entry and exit times of a depth-first walk over the parent forest, so
+/// ancestry is a range check.
+struct Ancestry {
+    enter: Vec<usize>,
+    exit: Vec<usize>,
+}
+
+impl Ancestry {
+    fn new(parent: &[Option<usize>], children: &[Vec<usize>]) -> Self {
+        let n = parent.len();
+        let mut enter = vec![0; n];
+        let mut exit = vec![0; n];
+        let mut clock = 0;
+        for r in (0..n).filter(|&i| parent[i].is_none()) {
+            let mut stack = vec![(r, 0)];
+            enter[r] = clock;
+            clock += 1;
+            while let Some((i, next)) = stack.last_mut() {
+                match children[*i].get(*next) {
+                    Some(&c) => {
+                        *next += 1;
+                        enter[c] = clock;
+                        clock += 1;
+                        stack.push((c, 0));
+                    }
+                    None => {
+                        exit[*i] = clock;
+                        clock += 1;
+                        stack.pop();
+                    }
+                }
+            }
+        }
+        Ancestry { enter, exit }
+    }
+
+    /// Whether `of` is `j` or one of its ancestors.
+    fn is_descendant(&self, j: usize, of: usize) -> bool {
+        self.enter[of] <= self.enter[j] && self.exit[j] <= self.exit[of]
+    }
 }
 
 /// Node indices with every parent before its children (graph order when
@@ -887,5 +923,124 @@ mod tests {
         assert!(b.kind.iter().all(Option::is_none), "{:?}", b.kind);
         assert_eq!(b.head, Some(produced_by(&g, 3)));
         assert_prefixes_agree(&s);
+    }
+
+    /// A main line of `2 * steps` turns sent as deltas, with nine
+    /// synchronous `Agent` calls spread along it, each answered in its
+    /// call's result.
+    fn long_session(steps: usize) -> Session {
+        use crate::generation::History;
+        let sys = |t: &str| m(json!({"role": "system", "content": t}));
+        let every = (steps / 10).max(1);
+        let mut gens = vec![generation(
+            "m0",
+            0,
+            vec![sys("MAIN"), m(json!({"role": "user", "content": "start"}))],
+            text("r0"),
+        )];
+        let mut prev = "m0".to_string();
+        let mut pending: Option<String> = None;
+        for i in 1..steps {
+            let mut msgs = Vec::new();
+            if let Some(k) = pending.take() {
+                msgs.push(m(
+                    json!({"role": "tool", "tool_call_id": format!("c{k}"), "content": format!("answer {k}")}),
+                ));
+            }
+            msgs.push(m(json!({"role": "user", "content": format!("step {i}")})));
+            let id = format!("m{i}");
+            let mut g = generation(&id, 10 * i as u64, msgs, text(&format!("r{i}")));
+            g.history = History::Delta;
+            g.continues = Some(prev.clone());
+            if i % every == 0 {
+                let k = i.to_string();
+                g.completion = Completion {
+                    tool_calls: vec![agent(&format!("c{k}"), &format!("task {k}"))],
+                    ..Default::default()
+                };
+                gens.push(g);
+                gens.push(generation(
+                    &format!("s{k}"),
+                    10 * i as u64 + 5,
+                    vec![
+                        sys("SUB"),
+                        m(json!({"role": "user", "content": format!("task {k}")})),
+                    ],
+                    text(&format!("answer {k}")),
+                ));
+                pending = Some(k);
+            } else {
+                gens.push(g);
+            }
+            prev = id;
+        }
+        Session::new("s-long".into(), None, gens)
+    }
+
+    #[test]
+    fn ancestry_ranges_agree_with_parent_walks() {
+        for s in [fan_out(), answering_twice(), long_session(40)] {
+            let g = stitch(&s);
+            let index: HashMap<&str, usize> = g
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, x)| (x.id.as_str(), i))
+                .collect();
+            let parent: Vec<Option<usize>> = g
+                .nodes
+                .iter()
+                .map(|x| x.parent.as_deref().map(|p| index[p]))
+                .collect();
+            let mut children = vec![Vec::new(); parent.len()];
+            for (i, p) in parent.iter().enumerate() {
+                if let Some(p) = *p {
+                    children[p].push(i);
+                }
+            }
+            let ancestry = Ancestry::new(&parent, &children);
+            let walk = |mut j: usize, of: usize| loop {
+                if j == of {
+                    return true;
+                }
+                match parent[j] {
+                    Some(p) => j = p,
+                    None => return false,
+                }
+            };
+            for j in 0..parent.len() {
+                for of in 0..parent.len() {
+                    assert_eq!(ancestry.is_descendant(j, of), walk(j, of), "{j} {of}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_main_line_merges_every_answer() {
+        let s = long_session(2000);
+        let g = stitch(&s);
+        let start = std::time::Instant::now();
+        let b = classify(&g, SourceHarness::Unknown);
+        let took = start.elapsed();
+        assert_eq!(b.merges.len(), 9);
+        for &(node, from) in &b.merges {
+            assert_eq!(g.nodes[node].message.role, "user");
+            assert!(matches!(b.kind[from], Some(BranchKind::Subagent(_))));
+        }
+        assert_eq!(b.head, Some(g.nodes.len() - 1));
+        assert!(took.as_secs() < 5, "classify took {took:?}");
+    }
+
+    /// `cargo test -p toolpath-otel --release -- --ignored --nocapture classify_scaling`
+    #[test]
+    #[ignore]
+    fn classify_scaling() {
+        for steps in [500, 1000, 2000, 4000] {
+            let g = stitch(&long_session(steps));
+            let start = std::time::Instant::now();
+            classify(&g, SourceHarness::Unknown);
+            println!("{} turns: {:?}", g.nodes.len(), start.elapsed());
+        }
     }
 }
