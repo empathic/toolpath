@@ -49,7 +49,8 @@ All notable changes to the Toolpath workspace are documented here.
   `Settle::Settled`, and `Settle::Final` sends the rest once the session is
   over.
   A turn settles only once its marks and parents are known too: unmarked
-  turns wait until the main line is decided, side requests wait for
+  turns outside a tree a missing continuation started wait until the main
+  line is decided, side requests wait for
   `Settle::Final`, and a delegating thread's turns after a `Task`/`Agent` call
   wait until the sub-agent's answer is found (the receiving turn gains an
   extra parent); a turn goes out only after all its parents, extra

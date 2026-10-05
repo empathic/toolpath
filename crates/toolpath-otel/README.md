@@ -202,7 +202,8 @@ for body in &sent.output {
   session is over. Requests that arrive out of start order only append, and a late
   sub-agent never takes the head.
 - **What waits.** Besides turns whose calls or echo are still pending:
-  everything until the main line is decided (its second produced turn), a
+  everything outside a tree a missing continuation started until the main
+  line is decided (the first tree's second produced turn), a
   side request until `Settle::Final`, and a delegating thread's turns after a
   `Task`/`Agent` call until that sub-agent's answer is found, because the
   turn that receives it gains an extra parent. A sub-agent's turns go out

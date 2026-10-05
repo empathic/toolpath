@@ -691,7 +691,8 @@ steps and real abandoned attempts; select on `.change[].structural.otel.branch` 
 them apart.
 
 An incremental send (Incremental JSONL, "Marks and holds") holds back a
-turn whose marks or parents a later generation could still set: until the
+turn whose marks or parents a later generation could still set: every
+unmarked turn outside a tree a missing continuation started until the
 main line is decided, a side request's turns until `Settle::Final`, and every
 turn of a delegating thread after a delegation call until that call's
 sub-agent has answered. A sub-agent's own turns need no hold of their own:
@@ -876,7 +877,8 @@ record whose prompt chain the store lacks fails derivation with
   per-delivery counts summed over a session can exceed one read's. The
   reasons can also split differently: a cut-off copy read in a delivery
   of its own is `truncated` there, while one read of every delivery
-  counts it `duplicate` when the kept copy comes first (the same total).
+  counts it `duplicate` whenever another copy is kept, in any order (the
+  same total).
 - **Storage.** Each OpenRouter request repeats the whole history, so raw
   bodies, or records with inline prompts, grow with the square of the
   session. Records plus chained messages grow with its new messages: a
@@ -1005,8 +1007,9 @@ every turn and is passed once the session is over.
   and a non-final call also holds back, whatever their own state:
   - every unmarked turn outside a continuing tree (one a `Delta` with a
     missing continuation target started), until the main line is decided
-    (a leading system message has produced two turns outside sub-agent
-    threads), since until then it could still become a side request's;
+    (a tree, a leading system message's or one a missing continuation
+    started, has produced two turns outside sub-agent threads), since
+    until then it could still become a side request's;
   - a side request's turns, until `Settle::Final`;
   - an unmarked system turn with no child yet, since it takes its first
     child's sub-agent mark (and `delegation`);
