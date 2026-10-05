@@ -36,6 +36,12 @@ pub fn classifier() -> crate::ToolClassifier {
     crate::ToolClassifier::new(super::classifier::provider_tool_category)
 }
 
+/// [`classifier`], shared.
+pub fn tools() -> Option<&'static crate::ToolClassifier> {
+    static TOOLS: std::sync::LazyLock<crate::ToolClassifier> = std::sync::LazyLock::new(classifier);
+    Some(&TOOLS)
+}
+
 /// The default config, tool categories from the provider crates'
 /// classifiers.
 pub fn classified() -> crate::DeriveConfig {
