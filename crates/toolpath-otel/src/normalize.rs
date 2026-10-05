@@ -1,22 +1,57 @@
 //! Canonical message form for comparison and ids. What this discards is
 //! preserved elsewhere (per-step `dropped` / `echo` extras), not lost.
 
-use crate::generation::{Completion, Message};
+use crate::generation::{Completion, Message, ToolCall};
 use crate::hash::{canonical_json, sha256_hex};
 use serde::Serialize;
+use serde::ser::{SerializeSeq, Serializer};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NormMessage {
     pub role: String,
     pub text: String,
-    /// Assistant tool calls as `(id, name)`; arguments are never compared.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub calls: Vec<(String, String)>,
+    pub calls: Vec<NormCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub is_error: bool,
+}
+
+/// An assistant tool call as compared: `[id, name]`, or for an id-less
+/// call `["", name, arguments]` with the JCS form of its parsed arguments,
+/// since nothing else tells two id-less calls apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Option<String>,
+}
+
+impl NormCall {
+    fn of(c: &ToolCall) -> Self {
+        NormCall {
+            id: c.id.clone(),
+            name: c.function.name.clone(),
+            arguments: c
+                .id
+                .is_empty()
+                .then(|| canonical_json(&c.function.parsed_arguments())),
+        }
+    }
+}
+
+impl Serialize for NormCall {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let mut seq = s.serialize_seq(None)?;
+        seq.serialize_element(&self.id)?;
+        seq.serialize_element(&self.name)?;
+        if let Some(a) = &self.arguments {
+            seq.serialize_element(a)?;
+        }
+        seq.end()
+    }
 }
 
 /// Text of a message's content: a string as-is; text parts joined with
@@ -49,17 +84,14 @@ pub fn is_dropped(index: usize, role: &str) -> bool {
     index > 0 && is_system_like(role)
 }
 
-/// The comparison form of a message; reasoning, `name`, tool arguments and
-/// part metadata such as `cache_control` are not part of it.
+/// The comparison form of a message; reasoning, `name`, the arguments of
+/// calls with an id, and part metadata such as `cache_control` are not
+/// part of it.
 pub fn normalize(m: &Message) -> NormMessage {
     NormMessage {
         role: m.role.clone(),
         text: content_text(&m.content),
-        calls: m
-            .tool_calls
-            .iter()
-            .map(|c| (c.id.clone(), c.function.name.clone()))
-            .collect(),
+        calls: m.tool_calls.iter().map(NormCall::of).collect(),
         tool_call_id: m.tool_call_id.clone(),
         is_error: m.is_error.unwrap_or(false),
     }
@@ -100,7 +132,7 @@ pub fn kept_prompt(messages: &[Message]) -> Vec<NormMessage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generation::{FunctionCall, ToolCall};
+    use crate::generation::FunctionCall;
     use serde_json::json;
 
     fn msg(v: serde_json::Value) -> Message {
@@ -156,7 +188,14 @@ mod tests {
         ]}));
         let n = normalize(&m);
         assert_eq!(n.text, "");
-        assert_eq!(n.calls, vec![("t1".to_string(), "Bash".to_string())]);
+        assert_eq!(
+            n.calls,
+            vec![NormCall {
+                id: "t1".into(),
+                name: "Bash".into(),
+                arguments: None
+            }]
+        );
     }
 
     #[test]
@@ -278,6 +317,24 @@ mod tests {
             {"type": "text", "text": "see"}, {"type": "image", "source": {}}
         ]})));
         assert_eq!(n.text, "see\n[image]");
+    }
+
+    #[test]
+    fn idless_calls_compare_arguments_by_jcs() {
+        let call = |args: &str| {
+            normalize(&msg(
+                json!({"role": "assistant", "content": null, "tool_calls": [
+                    {"id": "", "type": "function", "function": {"name": "read_file", "arguments": args}}
+                ]}),
+            ))
+        };
+        let a = call(r#"{"path":"a","n":1}"#);
+        assert_eq!(a, call(r#"{ "n": 1.0, "path": "a" }"#));
+        assert_ne!(a, call(r#"{"path":"b","n":1}"#));
+        assert_eq!(
+            String::from_utf8(canonical(&a)).unwrap(),
+            r#"{"calls":[["","read_file","{\"n\":1,\"path\":\"a\"}"]],"role":"assistant","text":""}"#
+        );
     }
 
     #[test]

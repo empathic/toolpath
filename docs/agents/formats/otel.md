@@ -503,8 +503,11 @@ this.
   `serde_json_canonicalizer` that `path-cli` uses for content-addressed
   session ids). The normalized message is
   `{role, text, calls?, tool_call_id?, is_error?}` (`calls` as
-  `[[id, name], …]`; absent keys when empty, `null` or `false`). Ids are
-  JCS-based from 0.1.0.
+  `[[id, name], …]`; absent keys when empty, `null` or `false`). A call
+  with no id is `["", name, arguments]` instead, `arguments` being the JCS
+  text of its parsed arguments: nothing else tells two id-less calls
+  apart, and parsing first keeps a history echo's formatting from
+  forking. Ids are JCS-based from 0.1.0.
   Identical prefixes collapse into one branch; a retry or a compaction
   forks. Ids and step payloads stay the same as a session grows.
 - **Derived session id**: a UUID (version 8) from
@@ -676,7 +679,8 @@ outside it: their positional ids never equal the source's `""`.
   (`{content_hash: text}`); a text no placed step carries is stored on the
   first unplaced generation that does. An assistant step keeps `echo` when
   its history echo's tool arguments differ from the completion's (the
-  echoed raw arguments by call id) or the echo carries any
+  echoed raw arguments by call id; an id-less call whose echo differs
+  forks instead) or the echo carries any
   `reasoning_details` (kept as echoed), even when the arguments match.
   Every turn whose content comes from a skeleton generation carries
   `absent` (`{prompt: true}`, `{completion: true}` or both). A sub-agent's

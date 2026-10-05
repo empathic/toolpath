@@ -44,8 +44,8 @@ pub struct ToolOutcome {
 #[non_exhaustive]
 pub struct Echo {
     /// Raw echoed arguments, only for calls whose parsed arguments differ,
-    /// keyed by call id, or by the positional id `"{turn_id}:{index}"` for
-    /// an id-less call.
+    /// keyed by call id. An id-less call's arguments are part of its turn
+    /// id, so its echo never lands here.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub arguments: BTreeMap<String, Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -86,7 +86,7 @@ pub struct TurnGraph {
 }
 
 /// How history echoed a produced turn, when it differs. Same turn id means
-/// the same `(id, name)` call sequence, so calls pair by position.
+/// the same normalized call sequence, so calls pair by position.
 fn echo_of(produced: &Message, echoed: &Message) -> Option<Echo> {
     let mut arguments = BTreeMap::new();
     for (p, e) in produced.tool_calls.iter().zip(&echoed.tool_calls) {
@@ -785,18 +785,8 @@ mod tests {
         );
     }
 
-    fn anon_call(args: &str) -> ToolCall {
-        ToolCall {
-            id: String::new(),
-            function: FunctionCall {
-                name: "Bash".into(),
-                arguments: json!(args),
-            },
-        }
-    }
-
     #[test]
-    fn echo_pairs_calls_by_position_and_never_keys_on_empty() {
+    fn echo_pairs_calls_by_position() {
         let user = msg(json!({"role": "user", "content": "go"}));
         let g1 = generation(
             "g1",
@@ -806,7 +796,7 @@ mod tests {
                 text: String::new(),
                 reasoning: None,
                 reasoning_details: Vec::new(),
-                tool_calls: vec![anon_call("{\"a\":1}"), anon_call("{\"b\":1}")],
+                tool_calls: vec![call("t1", "{\"a\":1}"), call("t2", "{\"b\":1}")],
             },
         );
         let g2 = generation(
@@ -815,8 +805,8 @@ mod tests {
             vec![
                 user,
                 msg(json!({"role": "assistant", "content": null, "tool_calls": [
-                    {"type": "function", "function": {"name": "Bash", "arguments": "{\"a\":2}"}},
-                    {"type": "function", "function": {"name": "Bash", "arguments": "{\"b\":2}"}}
+                    {"id": "t1", "type": "function", "function": {"name": "Bash", "arguments": "{\"a\":2}"}},
+                    {"id": "t2", "type": "function", "function": {"name": "Bash", "arguments": "{\"b\":2}"}}
                 ]})),
             ],
             Completion {
@@ -828,10 +818,9 @@ mod tests {
         let g = stitch(&s);
         let produced = g.nodes.iter().find(|n| n.producer == Some(0)).unwrap();
         let echo = produced.echo.as_ref().expect("both arguments differ");
-        let keys: Vec<&String> = echo.arguments.keys().collect();
-        let want = [format!("{}:0", produced.id), format!("{}:1", produced.id)];
-        assert_eq!(keys, want.iter().collect::<Vec<_>>());
-        assert_eq!(echo.arguments[&want[1]], json!("{\"b\":2}"));
+        let keys: Vec<&str> = echo.arguments.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["t1", "t2"]);
+        assert_eq!(echo.arguments["t2"], json!("{\"b\":2}"));
     }
 
     #[test]
@@ -1295,7 +1284,7 @@ mod tests {
         let g = stitch(&positional_session(false));
         assert_eq!(
             ids(&g),
-            ["0f1c24458030794d", "cdb1b25b32c0f53b", "44976e496c0c84f4"]
+            ["0f1c24458030794d", "7c1078e6b56b2d8e", "589a6dc5a7a75211"]
         );
         let a1 = &g.nodes[1];
         let call_ids: Vec<&str> = a1
@@ -1304,16 +1293,16 @@ mod tests {
             .iter()
             .map(|c| c.id.as_str())
             .collect();
-        assert_eq!(call_ids, ["cdb1b25b32c0f53b:0", "cdb1b25b32c0f53b:1"]);
-        assert_eq!(a1.results["cdb1b25b32c0f53b:0"].content, "A");
-        assert_eq!(a1.results["cdb1b25b32c0f53b:1"].content, "B");
+        assert_eq!(call_ids, ["7c1078e6b56b2d8e:0", "7c1078e6b56b2d8e:1"]);
+        assert_eq!(a1.results["7c1078e6b56b2d8e:0"].content, "A");
+        assert_eq!(a1.results["7c1078e6b56b2d8e:1"].content, "B");
         assert_eq!(
-            g.links[1].prompt_tip, "989851ecf6fe8eee",
+            g.links[1].prompt_tip, "b664f3f0d520e4af",
             "tool chain ids are unchanged"
         );
         assert_eq!(
-            positional_call_id("cdb1b25b32c0f53b", 1),
-            "cdb1b25b32c0f53b:1"
+            positional_call_id("7c1078e6b56b2d8e", 1),
+            "7c1078e6b56b2d8e:1"
         );
     }
 
@@ -1337,8 +1326,8 @@ mod tests {
         short.messages.pop();
         s.generations.insert(1, short);
         let g = stitch(&s);
-        assert_eq!(g.nodes[1].results["cdb1b25b32c0f53b:0"].content, "A");
-        assert_eq!(g.nodes[1].results["cdb1b25b32c0f53b:1"].content, "B");
+        assert_eq!(g.nodes[1].results["7c1078e6b56b2d8e:0"].content, "A");
+        assert_eq!(g.nodes[1].results["7c1078e6b56b2d8e:1"].content, "B");
     }
 
     #[test]
@@ -1476,8 +1465,11 @@ mod tests {
         assert_eq!(dropped, vec![2]);
     }
 
+    /// An id-less call's arguments are part of its turn id: history that
+    /// echoes different arguments is another turn, and formatting alone is
+    /// not a difference.
     #[test]
-    fn echo_keys_idless_calls_by_positional_id() {
+    fn idless_calls_fork_on_arguments_not_formatting() {
         let mut g1 = gen_(
             "g1",
             1,
@@ -1485,23 +1477,69 @@ mod tests {
             "",
         );
         g1.completion.tool_calls = vec![idless("read_file", "{\"path\": \"a\"}")];
-        let g2 = gen_(
-            "g2",
-            2,
-            vec![
-                msg(json!({"role": "user", "content": "go"})),
-                msg(json!({"role": "assistant", "content": null, "tool_calls": [
-                    {"type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"b\"}"}}]})),
-            ],
-            "ok",
-        );
-        let g = stitch(&Session::new("s".into(), None, vec![g1, g2]));
-        let a = &g.nodes[1];
-        let echo = a.echo.as_ref().expect("arguments differ semantically");
-        assert_eq!(
-            echo.arguments.keys().collect::<Vec<_>>(),
-            [&positional_call_id(&a.id, 0)]
-        );
+        let continued = |args: &str| {
+            gen_(
+                "g2",
+                2,
+                vec![
+                    msg(json!({"role": "user", "content": "go"})),
+                    msg(json!({"role": "assistant", "content": null, "tool_calls": [
+                        {"type": "function", "function": {"name": "read_file", "arguments": args}}]})),
+                ],
+                "ok",
+            )
+        };
+        let same = stitch(&Session::new(
+            "s".into(),
+            None,
+            vec![g1.clone(), continued("{\"path\":\"a\"}")],
+        ));
+        assert_eq!(same.nodes.len(), 3);
+        assert!(same.nodes[1].echoed && same.nodes[1].echo.is_none());
+
+        let other = stitch(&Session::new(
+            "s".into(),
+            None,
+            vec![g1, continued("{\"path\":\"b\"}")],
+        ));
+        assert_eq!(other.nodes.len(), 4);
+        assert!(!other.nodes[1].echoed);
+        assert_eq!(other.nodes[2].producer, None);
+        assert_eq!(other.nodes[2].parent, other.nodes[1].parent);
+    }
+
+    #[test]
+    fn same_prompt_idless_completions_differing_in_arguments_are_two_turns() {
+        let attempt = |id: &str, start: u64, path: &str| {
+            let mut g = gen_(
+                id,
+                start,
+                vec![msg(json!({"role": "user", "content": "go"}))],
+                "",
+            );
+            g.completion.tool_calls =
+                vec![idless("read_file", &format!("{{\"path\":\"{path}\"}}"))];
+            g
+        };
+        let g = stitch(&Session::new(
+            "s".into(),
+            None,
+            vec![attempt("g1", 1, "a"), attempt("g2", 2, "b")],
+        ));
+        assert_eq!(g.nodes.len(), 3);
+        assert_ne!(g.links[0].completion, g.links[1].completion);
+        for (gi, path) in [(0, "a"), (1, "b")] {
+            let n = g
+                .nodes
+                .iter()
+                .find(|n| n.id == g.links[gi].completion)
+                .unwrap();
+            assert_eq!(n.producer, Some(gi));
+            assert_eq!(
+                n.message.tool_calls[0].function.parsed_arguments(),
+                json!({ "path": path })
+            );
+        }
     }
 
     fn fallback(content: &str) -> ToolOutput {
