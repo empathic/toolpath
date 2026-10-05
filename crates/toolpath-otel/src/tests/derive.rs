@@ -121,6 +121,25 @@ fn meta_records_join_keys_cost_harness_and_profile() {
 }
 
 #[test]
+fn one_inferred_harness_drives_meta_producer_and_tool_categories() {
+    for (file, key) in REAL {
+        let s = session(file);
+        let harness =
+            crate::tests::otel::harness::infer_harness(&crate::tests::otel::harness::signals(&s));
+        let p = derive_path(&s, &DeriveConfig::default());
+        assert_eq!(meta(&p)["harness"], harness.as_str(), "{key}");
+        let producer = &p.meta.as_ref().unwrap().extra["producer"]["name"];
+        assert_eq!(producer, crate::provider::producer_name(harness), "{key}");
+        let view = session_to_view(&s);
+        assert_eq!(
+            view.producer.as_ref().map(|p| p.name.as_str()),
+            producer.as_str(),
+            "{key}"
+        );
+    }
+}
+
+#[test]
 fn every_turn_step_carries_retention_extras() {
     for file in CONVERSATIONS {
         let p = derive_path(&session(file), &DeriveConfig::default());

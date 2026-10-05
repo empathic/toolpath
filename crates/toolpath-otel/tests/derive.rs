@@ -95,10 +95,6 @@ fn derive_wraps_one_session_and_derive_graph_keeps_one_path_per_session() {
     let codex = openrouter("codex.ndjson");
     let one = derive(&[&claude], &cfg).unwrap().output;
     assert_eq!(one.paths.len(), 1);
-    assert_eq!(
-        one.meta.as_ref().and_then(|m| m.title.as_deref()),
-        Some("two")
-    );
 
     let g = derive(&[&claude, &codex], &cfg).unwrap().output;
     assert_eq!(g.paths.len(), 2);
@@ -116,6 +112,21 @@ fn derive_wraps_one_session_and_derive_graph_keeps_one_path_per_session() {
         format!("graph-{}", first.path.id.trim_start_matches("path-"))
     );
     assert!(g.graph.id.starts_with("graph-otel-"));
+}
+
+#[test]
+fn derive_keeps_the_title_for_a_single_session() {
+    let cfg = DeriveConfig {
+        title: Some("Release".into()),
+        ..Default::default()
+    };
+    let one = derive(&[&openrouter("claude-code.ndjson")], &cfg)
+        .unwrap()
+        .output;
+    assert_eq!(
+        one.meta.as_ref().and_then(|m| m.title.as_deref()),
+        Some("Release")
+    );
 }
 
 #[test]
@@ -267,10 +278,12 @@ fn same_opening_sessions_without_an_id_get_distinct_path_ids() {
 
     let key =
         |p: &toolpath::v1::Path| p.meta.as_ref().unwrap().extra["otel"]["session_key"].clone();
-    let one = derive_path(&pi[..1], &cfg).unwrap().output;
     let whole = derive_path(&pi, &cfg).unwrap().output;
-    assert_eq!(key(&one), key(&whole));
-    assert_eq!(one.path.id, whole.path.id);
+    for k in 1..pi.len() {
+        let prefix = derive_path(&pi[..k], &cfg).unwrap().output;
+        assert_eq!(key(&prefix), key(&whole), "k={k}");
+        assert_eq!(prefix.path.id, whole.path.id, "k={k}");
+    }
 }
 
 fn attr(k: &str, v: &str) -> Value {
@@ -346,6 +359,19 @@ fn skip_counts_count_each_reason() {
     ]);
     assert_eq!((cut.truncated, cut.total()), (1, 1));
 
+    let missing = skips(&[generation("g1", GOOD), generation("", GOOD)]);
+    assert_eq!((missing.missing_payload, missing.total()), (1, 1));
+
+    let other = serde_json::json!({"resourceSpans": [{"scopeSpans": [{"spans": [
+        {"traceId": "t9", "spanId": "02", "name": "http.request"}
+    ]}]}]});
+    let logs = serde_json::json!({"resourceLogs": [{"scopeLogs": [{"logRecords": [{}]}]}]});
+    let unclaimed = skips(&[generation("g1", GOOD), other, logs]);
+    assert_eq!((unclaimed.unclaimed, unclaimed.total()), (2, 2));
+}
+
+#[test]
+fn a_truncated_generation_marks_a_session_without_a_session_id() {
     let without_session_id = |mut v: Value| {
         let span = &mut v["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
         span["attributes"]
@@ -365,16 +391,6 @@ fn skip_counts_count_each_reason() {
     assert_eq!(idless.skipped.truncated, 1);
     assert_eq!(session_id(&idless.output), None);
     assert_eq!(idless.output.meta.unwrap().extra["otel"]["truncated"], true);
-
-    let missing = skips(&[generation("g1", GOOD), generation("", GOOD)]);
-    assert_eq!((missing.missing_payload, missing.total()), (1, 1));
-
-    let other = serde_json::json!({"resourceSpans": [{"scopeSpans": [{"spans": [
-        {"traceId": "t9", "spanId": "02", "name": "http.request"}
-    ]}]}]});
-    let logs = serde_json::json!({"resourceLogs": [{"scopeLogs": [{"logRecords": [{}]}]}]});
-    let unclaimed = skips(&[generation("g1", GOOD), other, logs]);
-    assert_eq!((unclaimed.unclaimed, unclaimed.total()), (2, 2));
 }
 
 #[test]
