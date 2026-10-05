@@ -2398,4 +2398,77 @@ fn a_continuation_takes_consecutive_sends() {
     }
 }
 
+/// A frozen path of `g1` sent final, then a continuation's first (final)
+/// send with `g2`, which carries a request session id (whole-feed
+/// inference: claude-code). The continuation's `meta.otel.harness`, with
+/// the frozen path's harness passed back as `Remote::harness` or not.
+fn continuation_harness(g1: Generation, g2: Generation) -> Vec<(bool, String)> {
+    let sid = "3f2b6c1e-8a4d-4b2e-9c1a-0d5e6f7a8b9c";
+    let s = |v: Vec<Generation>| {
+        let v = v
+            .into_iter()
+            .map(|mut g| {
+                g.session_id = Some(sid.into());
+                g
+            })
+            .collect();
+        Session::new(sid.into(), Some(sid.into()), v)
+    };
+    let mut frozen = Reader::default();
+    frozen.send(&s(vec![g1.clone()]), true);
+    let frozen_harness = frozen.server.remote(Hint::Exact).harness.unwrap();
+    [true, false]
+        .into_iter()
+        .map(|read_back| {
+            let mut cont = Reader::default();
+            cont.server.base = frozen.stored();
+            cont.server.base_fed = frozen.fed();
+            let mut remote = cont.server.remote(Hint::Exact);
+            remote.harness = read_back.then(|| frozen_harness.clone());
+            let bodies = send(&s(vec![g1.clone(), g2.clone()]), &convo(), &remote, true, 0)
+                .unwrap_or_else(|e| panic!("{read_back}: {e}"));
+            assert!(!step_ids(&bodies.concat()).is_empty(), "{read_back}");
+            cont.apply(bodies).unwrap();
+            let meta = cont.path().meta.unwrap().extra;
+            (
+                read_back,
+                meta["otel"]["harness"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The frozen path settled as pi (its only call uses a pi tool, no
+/// request session id) by a final send before any turn settled; the
+/// continuation, a new request, says claude-code. Its steps keep pi, so
+/// the session's paths never contradict each other.
+#[test]
+fn a_continuation_keeps_a_known_frozen_harness() {
+    let read = call("c1", "read", json!({"path": "a.txt"}));
+    let mut g1 = generation("g1", 1, json!([user("go")]), "");
+    g1.completion.tool_calls = vec![serde_json::from_value(read).unwrap()];
+    let mut g2 = generation("g2", 2, json!([user("other")]), "done");
+    g2.request_session_id = Some("r".into());
+    for (read_back, harness) in continuation_harness(g1, g2) {
+        assert_eq!(harness, "pi", "read back: {read_back}");
+    }
+}
+
+/// The frozen path's harness was `unknown`; the continuation's request
+/// session id refines it to claude-code.
+#[test]
+fn a_continuation_refines_an_unknown_frozen_harness() {
+    let g1 = generation("g1", 1, json!([user("go")]), "a");
+    let mut g2 = generation(
+        "g2",
+        2,
+        json!([user("go"), assistant("a"), user("more")]),
+        "b",
+    );
+    g2.request_session_id = Some("r".into());
+    for (read_back, harness) in continuation_harness(g1, g2) {
+        assert_eq!(harness, "claude-code", "read back: {read_back}");
+    }
+}
+
 mod property;

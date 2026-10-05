@@ -63,7 +63,9 @@ All notable changes to the Toolpath workspace are documented here.
   every send (the first with the frozen path's `fed` and `opened` false):
   the bodies open the continuation path once, hold only the new steps, never
   send or head a frozen id, and their roots name the frozen steps they
-  continue from, so a continuation takes any number of sends. A sent step that would change is
+  continue from, so a continuation takes any number of sends. It keeps the
+  frozen path's harness unless that was `unknown`, which its first send
+  refines from the whole feed. A sent step that would change is
   `OtelError::Delta(DeltaError::Amended)`, a mutation for the store's
   mutation log, never a resend; a `fed` id the records lack is
   `OtelError::FedGenerationMissing`. A session without a client session

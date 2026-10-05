@@ -220,9 +220,9 @@ delegation calls and file changes of a sent step never change. Without it
 the prefix follows from the feed order alone (`meta.otel.generation_ids`),
 with the same answer, and the one-shot derivation of the final feed order
 gets it too. The exception: a `Settle::Final` send before any turn settled
-followed by a late arrival, and a continuation's first send over a path
-sent that way, can decide another harness without it (the call is
-`Amended`). Always pass the stored `meta.otel.harness`.
+followed by a late arrival can decide another harness without it (the call
+is `Amended`). Always pass the stored `meta.otel.harness`. A continuation
+keeps the frozen path's harness (Incremental JSONL, Continuation).
 
 The working directory becomes `path.base`:
 
@@ -1041,7 +1041,18 @@ every turn and is passed once the session is over.
   sub-agent forks off old history), not only the frozen head. `Head`
   always names a step of the new path, never a `base` step. `base` steps
   are checked like stored ones: one the new generations would change is
-  `Amended` (a mutation of the frozen path). Its path id comes from the session key, like the frozen path's;
+  `Amended` (a mutation of the frozen path). The continuation keeps the
+  frozen path's harness, so a session's paths never disagree on tool
+  categories or `producer.name`: the first send passes the frozen
+  `meta.otel.harness` as `harness` (`None` recovers it from the frozen
+  `fed`, as the frozen path's own sends decided it), and the continuation
+  derives with it even when its own generations point at another harness.
+  Only a frozen `unknown` is refined: the first send decides from every
+  generation of the feed (a later request carrying a session id, say), the
+  new path stores that as its `meta.otel.harness`, and its later sends pass
+  it back like any stored harness. The frozen steps are then compared under
+  the refined harness, so a category that only the refinement changes is
+  not `Amended`; the frozen path keeps its own content. Its path id comes from the session key, like the frozen path's;
   set `DeriveConfig::convo.path_id` when both live in one graph. Pathbase
   accepting a continuation root anchored on any frozen step is an open
   point (#486 drops a parent edge it cannot resolve within the path).

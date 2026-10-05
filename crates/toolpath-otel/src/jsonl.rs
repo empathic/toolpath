@@ -4,7 +4,7 @@ use crate::branch::{Branches, classify};
 use crate::derive::{categories, derive_steps, derive_stitched, unplaced_step_ids};
 use crate::error::{OtelError, Result};
 use crate::generation::Generation;
-use crate::harness::SourceHarness;
+use crate::harness::{SourceHarness, infer_harness, signals};
 use crate::record::{GenerationRecord, MessageHash, StoredMessage};
 use crate::session::{Session, derived_key};
 use crate::stitch::{TurnGraph, emitted_turns, stitch, stitch_with_prefix};
@@ -38,6 +38,10 @@ pub struct Remote {
     /// later generation never changes a sent step's tool categories or
     /// marks. `None` (nothing stored yet) decides it from the feed order
     /// ([`derive_path`](crate::derive_path)'s rule, applied to the feed).
+    /// On a continuation's first send, the frozen path's `meta.otel.harness`
+    /// (or `None`, which recovers it from the frozen `fed`): the
+    /// continuation keeps it unless it is `unknown`, which the whole feed
+    /// may refine.
     pub harness: Option<String>,
     /// Every step id of the frozen path the target path continues; empty
     /// for a path that continues none. These steps live in the frozen path:
@@ -88,8 +92,10 @@ pub enum Settle {
 /// nothing new has settled. Sending the same bodies again is harmless.
 ///
 /// To continue a frozen path, pass its step ids as `remote.base` on every
-/// send of the new path: on the first, with the frozen path's `fed` and
-/// `opened` false; later, with the new path's `fed`, `stored` and `opened`.
+/// send of the new path: on the first, with the frozen path's `fed`,
+/// `harness` and `opened` false; later, with the new path's `fed`,
+/// `stored`, `harness` and `opened`. The continuation keeps a known frozen
+/// harness and re-decides an `unknown` one from the whole feed.
 /// The bodies open the new path once, hold only new steps, never a `base`
 /// id, and name `base` steps only as the parents the new steps continue
 /// from, never as `Head`.
@@ -166,19 +172,37 @@ fn send(
     // stored step, never sent, never a head.
     let claimed: HashSet<String> = remote.stored.union(&remote.base).cloned().collect();
     let (graph, held_graph) = stitch_with_prefix(&feed, (!claimed.is_empty()).then_some(held));
+    let stored_harness = match &remote.harness {
+        Some(name) => Some(
+            SourceHarness::from_name(name)
+                .ok_or_else(|| OtelError::UnknownHarness(name.clone()))?,
+        ),
+        None => None,
+    };
     // One harness for every derivation of this call: the stored one, else
     // the one the feed order decides. Without a stored one, the fed
     // generations are compared under the harness they decided, so a
-    // change is reported as `Amended`.
-    let (harness, held_with) = match &remote.harness {
-        Some(name) => {
-            let h = SourceHarness::from_name(name)
-                .ok_or_else(|| OtelError::UnknownHarness(name.clone()))?;
-            (h, h)
-        }
-        None => {
+    // change is reported as `Amended`. A continuation's first send keeps
+    // the frozen path's harness unless that is `unknown`, which the whole
+    // feed may refine; the frozen steps are then compared under the
+    // refined one.
+    let continuing = !remote.opened && !remote.base.is_empty();
+    let (harness, held_with) = match stored_harness {
+        Some(h) if !continuing || h != SourceHarness::Unknown => (h, h),
+        None if !continuing => {
             let first = first_settle(&feed, final_, classifier);
             (first.1, held_harness(&feed, held, first, classifier))
+        }
+        frozen => {
+            let frozen = frozen.unwrap_or_else(|| {
+                let first = first_settle(&feed, final_, classifier);
+                held_harness(&feed, held, first, classifier)
+            });
+            let h = match frozen {
+                SourceHarness::Unknown => infer_harness(&signals(&feed)),
+                known => known,
+            };
+            (h, h)
         }
     };
     let (mut path, branches) = derive_stitched(&feed, &graph, config, harness, classifier);

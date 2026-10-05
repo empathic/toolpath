@@ -210,8 +210,8 @@ for body in &sent.output {
   of it: the first send stores it as `meta.otel.harness`, and a later call
   passes it back as `Remote::harness` (when absent the feed order decides
   it again, with the same answer except after a `Settle::Final` send before
-  any turn settled followed by a late arrival, and for a continuation's
-  first send; always pass the stored harness). `derive_path` applies the same rule, so
+  any turn settled followed by a late arrival; always pass the stored
+  harness). `derive_path` applies the same rule, so
   the last send and the one-shot derivation agree.
 - **Continuing a frozen path.** Pass the frozen path's step ids as `base` on
   every send of the continuation: the first with the frozen path's `fed` and
@@ -219,8 +219,11 @@ for body in &sent.output {
   and `opened` true. The bodies open the new path once and hold only new
   steps; a `base` step is never sent and never the `Head`, only a parent of
   the new steps that continue from it, wherever it sits (a late sub-agent
-  forks off old history). Pathbase anchoring a continuation root on any
-  frozen step is an open point.
+  forks off old history). The first send passes the frozen path's
+  `meta.otel.harness` too: the continuation keeps it, so the session's
+  paths agree on tool categories and `producer.name`, unless it is
+  `unknown`, which the whole feed may refine. Pathbase anchoring a
+  continuation root on any frozen step is an open point.
 - **Resumed sub-agents.** A sub-agent's answer goes out once the turn that
   receives it is seen. A resumed sub-agent (Claude Code `SendMessage`,
   Codex `send_message`) echoes the answer in its next request; that echo
