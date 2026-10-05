@@ -243,8 +243,7 @@ key spellings are canonicalized onto Claude's) and `apply_patch`/`patch`
 text (one change per file, `operation` `add`/`update`/`delete`,
 `rename_to`, `after` for an added file). `NotebookEdit` names its file in
 `notebook_path`, and its `new_source` is the change's `after`. opencode's
-`delete` (and `rm`) gives `operation` `delete`, as `toolpath-opencode`
-does. A MultiEdit-shaped call (an `edits` array) that `toolpath-convo`'s
+`delete` gives `operation` `delete`, as `toolpath-opencode` does. A MultiEdit-shaped call (an `edits` array) that `toolpath-convo`'s
 own fallback reads the same way (Claude key names) is left to that
 fallback, which also records the `edits` array in `structural`; other
 spellings (pi's `oldText`/`newText`, opencode's `filePath`) are

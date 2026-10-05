@@ -95,8 +95,9 @@ pub struct SpanRef<'a> {
     pub span: &'a Span<'a>,
 }
 
-/// Everything in the batch that shares the unit's trace id; empty for an orphan unit with no
-/// trace id. Borrows the walker's per-trace index, so it copies nothing.
+/// Everything in the batch that shares the unit's trace id; empty for an
+/// orphan unit with no trace id. Borrows the walker's per-trace index, so
+/// it copies nothing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TraceView<'a> {
     spans: &'a [SpanRef<'a>],

@@ -128,7 +128,7 @@ fn write_edit(tool: &ToolInvocation) -> Option<FileMutation> {
             get("content").or_else(|| str_field(&tool.input, &["new_source"])),
         ),
     };
-    let operation = matches!(tool.name.as_str(), "delete" | "rm").then(|| "delete".to_string());
+    let operation = (tool.name == "delete").then(|| "delete".to_string());
     Some(FileMutation {
         path: path.to_string(),
         raw_diff: file_write_diff(&tool.name, &canonical, path, None),

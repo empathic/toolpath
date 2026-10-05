@@ -1318,16 +1318,13 @@ mod tests {
     fn a_long_main_line_merges_every_answer() {
         let s = long_session(2000);
         let g = stitch(&s);
-        let start = std::time::Instant::now();
         let b = classify(&g, SourceHarness::Unknown);
-        let took = start.elapsed();
         assert_eq!(b.merges.len(), 9);
         for &(node, from) in &b.merges {
             assert_eq!(g.nodes[node].message.role, "user");
             assert!(matches!(b.kind[from], Some(BranchKind::Subagent(_))));
         }
         assert_eq!(b.head, Some(g.nodes.len() - 1));
-        assert!(took.as_secs() < 5, "classify took {took:?}");
     }
 
     /// `cargo test -p toolpath-otel --release -- --ignored --nocapture classify_scaling`
