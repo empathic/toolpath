@@ -44,8 +44,9 @@ pub struct ToolOutcome {
 #[non_exhaustive]
 pub struct Echo {
     /// Raw echoed arguments, only for calls whose parsed arguments differ,
-    /// keyed by call id. An id-less call's arguments are part of its turn
-    /// id, so its echo never lands here.
+    /// keyed by call id (an id-less call's positional id). An id-less call's
+    /// arguments are part of its turn id, so its echo lands here only when
+    /// it differs in form but not in canonical bytes (`1` echoed as `1.0`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub arguments: BTreeMap<String, Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -92,7 +93,7 @@ pub struct TurnGraph {
 fn echo_of(produced: &Message, echoed: &Message) -> Option<Echo> {
     let mut arguments = BTreeMap::new();
     for (p, e) in produced.tool_calls.iter().zip(&echoed.tool_calls) {
-        if !p.id.is_empty() && p.function.parsed_arguments() != e.function.parsed_arguments() {
+        if p.function.parsed_arguments() != e.function.parsed_arguments() {
             arguments.insert(p.id.clone(), e.function.arguments.clone());
         }
     }
@@ -1524,6 +1525,37 @@ mod tests {
         assert!(!other.nodes[1].echoed);
         assert_eq!(other.nodes[2].producer, None);
         assert_eq!(other.nodes[2].parent, other.nodes[1].parent);
+    }
+
+    /// Canonical bytes make `1` and `1.0` the same turn id while the parsed
+    /// arguments still differ, so an id-less call's echo is kept under its
+    /// positional id.
+    #[test]
+    fn an_idless_call_echoing_an_equal_number_differently_keeps_its_echo() {
+        let mut g1 = gen_(
+            "g1",
+            1,
+            vec![msg(json!({"role": "user", "content": "go"}))],
+            "",
+        );
+        g1.completion.tool_calls = vec![idless("read_file", "{\"n\":1}")];
+        let g2 = gen_(
+            "g2",
+            2,
+            vec![
+                msg(json!({"role": "user", "content": "go"})),
+                msg(json!({"role": "assistant", "content": null, "tool_calls": [
+                    {"type": "function", "function": {"name": "read_file", "arguments": "{\"n\":1.0}"}}]})),
+            ],
+            "ok",
+        );
+        let g = stitch(&Session::new("s".into(), None, vec![g1, g2]));
+        assert_eq!(g.nodes.len(), 3);
+        let produced = &g.nodes[1];
+        let id = positional_call_id(&produced.id, 0);
+        assert_eq!(produced.message.tool_calls[0].id, id);
+        let echo = produced.echo.as_ref().expect("the echo differs in form");
+        assert_eq!(echo.arguments, BTreeMap::from([(id, json!("{\"n\":1.0}"))]));
     }
 
     #[test]

@@ -730,8 +730,11 @@ outside it: their positional ids never equal the source's `""`.
   text stores it once in `dropped_content` (`{content_hash: text}`),
   whether that step is a producing or an unplaced step. An assistant step keeps `echo` when
   its history echo's tool arguments differ from the completion's (the
-  echoed raw arguments by call id; an id-less call whose echo differs
-  forks instead) or the echo carries any
+  echoed raw arguments by call id, an id-less call's by its positional
+  id; an id-less call's arguments are part of its turn id, so its echo
+  is kept only when it differs in form but not in canonical bytes, such
+  as `1` echoed as `1.0`, and any other difference forks) or the echo
+  carries any
   `reasoning_details` (kept as echoed), even when the arguments match.
   Every turn whose content comes from a skeleton generation carries
   `absent` (`{prompt: true}`, `{completion: true}` or both). A sub-agent's
