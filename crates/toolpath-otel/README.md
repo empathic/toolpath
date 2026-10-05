@@ -63,6 +63,7 @@ println!("skipped {}", grouped.skipped.total());
 | `StoredMessage`, `MessageHash` | A prompt message linked to the one before it (`parent`), stored once under its `hash()` |
 | `GenerationBatch` | `records` and `messages` (`BTreeMap<MessageHash, StoredMessage>`) |
 | `Remote` | What the stored path holds: `opened`, `fed` (its `meta.otel.generation_ids`), `stored` (any subset of its step ids), `harness` (its `meta.otel.harness`), `base` (a continuation's frozen step ids) |
+| `SourceHarness` | The agent recorded as `meta.otel.harness`: `as_str` and its inverse `from_name` |
 | `Settle` | `Settled` (default: only turns no later call can change) or `Final` (the session is over) |
 | `BatchLimits`, `Body`, `DeltaError` | Re-exported from `toolpath::v1::jsonl` |
 | `decode_input(bytes, name)` | One file or request body -> its OTLP/JSON bodies (1 GiB decompression budget) |

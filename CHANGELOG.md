@@ -28,6 +28,8 @@ All notable changes to the Toolpath workspace are documented here.
   batch's `SkipCounts`. `derive_session` derives one under its key;
   `derive_path` over its `requests` gives the same document unless the key
   took a `-<n>` collision suffix. `derived_session_id` is public.
+  `SourceHarness` (the agent recorded as `meta.otel.harness`) is public,
+  re-exported with `as_str` and its inverse `from_name`.
 
 ## toolpath-otel 0.1.2 — 2026-10-01
 

@@ -234,12 +234,13 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
                     .as_ref()
                     .and_then(|m| m.extra.get("otel"))
                     .and_then(|o| o.get("harness"))
-                    .and_then(|h| h.as_str());
-                return match recorded {
-                    Some("claude-code") => Some(Harness::Claude),
-                    Some("codex") => Some(Harness::Codex),
-                    Some("opencode") => Some(Harness::Opencode),
-                    Some("pi") => Some(Harness::Pi),
+                    .and_then(|h| h.as_str())
+                    .and_then(toolpath_otel::SourceHarness::from_name);
+                return match recorded? {
+                    toolpath_otel::SourceHarness::ClaudeCode => Some(Harness::Claude),
+                    toolpath_otel::SourceHarness::Codex => Some(Harness::Codex),
+                    toolpath_otel::SourceHarness::Opencode => Some(Harness::Opencode),
+                    toolpath_otel::SourceHarness::Pi => Some(Harness::Pi),
                     _ => None,
                 };
             }

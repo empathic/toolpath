@@ -28,6 +28,7 @@ mod tests;
 
 pub use error::{OtelError, Result};
 pub use group::{SessionRequests, derive_session, group_sessions};
+pub use harness::SourceHarness;
 pub use hash::derived_session_id;
 pub use input::{DecodeLimits, decode_input, decode_input_with_limit, decode_input_with_limits};
 pub use jsonl::{Remote, Settle, derive_jsonl};
