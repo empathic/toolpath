@@ -434,7 +434,6 @@ fn semconv_cut(id: &str, start: u64) -> Value {
 /// order, and a worse-ranked profile's truncated copy of a kept call is a
 /// duplicate, not a truncation, as one read of every delivery has it.
 #[test]
-#[ignore = "P317-S1: owned by fix317/records (record::session_of); derive_path itself depends on delivery order (#315 walker)"]
 fn a_duplicates_truncation_marker_does_not_depend_on_record_order() {
     let requests = [
         request("g1", 10, "s", GOOD, HELLO),
@@ -456,6 +455,15 @@ fn a_duplicates_truncation_marker_does_not_depend_on_record_order() {
             bytes(&read_once.output),
             bytes(&one.output),
             "{order:?}: one read"
+        );
+        assert_eq!(
+            read_once.skipped, one.skipped,
+            "{order:?}: one read's skips"
+        );
+        let whole = crate::read_generations(&arrived, ProfileSelection::Auto).unwrap();
+        assert_eq!(
+            whole.skipped, one.skipped,
+            "{order:?}: read_generations' skips"
         );
         let b = stored(&arrived);
         let rec = from_records(&b, &config);
