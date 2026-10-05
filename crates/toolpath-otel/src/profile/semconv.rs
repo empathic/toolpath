@@ -219,19 +219,14 @@ impl<'a> Lookup<'a> {
 }
 
 /// `gen_ai.response.id`, else `span-<spanId>` for a span unit, else
-/// `log-<traceId>-<spanId>` (lowercased) for an orphan unit. Empty is no id.
+/// `log-<traceId>-<spanId>` for an orphan unit. Empty is no id.
 fn generation_id(lk: &Lookup<'_>, unit: &Unit<'_>) -> Option<String> {
     non_empty(lk.string("gen_ai.response.id")).or_else(|| match unit.span {
         Some(span) => (!span.span_id.is_empty()).then(|| format!("span-{}", span.span_id)),
         None => {
             let r = unit.logs.first()?.record;
-            (!r.trace_id.is_empty() || !r.span_id.is_empty()).then(|| {
-                format!(
-                    "log-{}-{}",
-                    r.trace_id.to_ascii_lowercase(),
-                    r.span_id.to_ascii_lowercase()
-                )
-            })
+            (!r.trace_id.is_empty() || !r.span_id.is_empty())
+                .then(|| format!("log-{}-{}", r.trace_id, r.span_id))
         }
     })
 }
@@ -701,7 +696,7 @@ fn produced_call_ids(r: SpanRef<'_>, trace: &TraceView<'_>) -> Vec<String> {
         .filter(|l| {
             // An id-less span owns no record (an id-less record would match it).
             !r.span.span_id.is_empty()
-                && l.record.span_id.eq_ignore_ascii_case(r.span.span_id)
+                && l.record.span_id == r.span.span_id
                 && l.record.event().is_some_and(is_semconv_event)
         })
         .collect();
@@ -807,7 +802,7 @@ fn tool_results(
 }
 
 /// Trace id and time bounds: the span's, or for an orphan unit the first
-/// record's trace id (lowercased) and the min/max record time.
+/// record's trace id and the min/max record time.
 fn unit_bounds(unit: &Unit<'_>) -> (String, u64, u64) {
     if let Some(span) = unit.span {
         return (
@@ -828,7 +823,7 @@ fn unit_bounds(unit: &Unit<'_>) -> (String, u64, u64) {
     let trace_id = unit
         .logs
         .first()
-        .map(|l| l.record.trace_id.to_ascii_lowercase())
+        .map(|l| l.record.trace_id.to_string())
         .unwrap_or_default();
     (
         trace_id,

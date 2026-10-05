@@ -100,8 +100,7 @@ pub struct SpanRef<'a> {
     pub span: &'a Span<'a>,
 }
 
-/// Everything in the batch that shares the unit's trace id (log record
-/// trace ids compare case-insensitively); empty for an orphan unit with no
+/// Everything in the batch that shares the unit's trace id; empty for an orphan unit with no
 /// trace id. Borrows the walker's per-trace index, so it copies nothing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TraceView<'a> {
@@ -123,16 +122,13 @@ impl<'a> TraceView<'a> {
     }
 }
 
-/// Default partition: by case-insensitive `(traceId, spanId)` in first-seen
+/// Default partition: by `(traceId, spanId)` in first-seen
 /// order; a record with neither forms its own group.
 pub fn default_group_logs<'a>(logs: Vec<LogRef<'a>>) -> Vec<Vec<LogRef<'a>>> {
     let mut groups: Vec<Vec<LogRef<'a>>> = Vec::new();
-    let mut by_key: HashMap<(String, String), usize> = HashMap::new();
+    let mut by_key: HashMap<(&str, &str), usize> = HashMap::new();
     for l in logs {
-        let key = (
-            l.record.trace_id.to_ascii_lowercase(),
-            l.record.span_id.to_ascii_lowercase(),
-        );
+        let key = (&*l.record.trace_id, &*l.record.span_id);
         if key.0.is_empty() && key.1.is_empty() {
             groups.push(vec![l]);
             continue;
@@ -207,8 +203,8 @@ mod tests {
     fn default_log_groups_by_trace_and_span() {
         let (r, s) = (Resource::default(), Scope::default());
         let rec = |t: &'static str, sp: &'static str| LogRecord {
-            trace_id: t,
-            span_id: sp,
+            trace_id: t.into(),
+            span_id: sp.into(),
             ..Default::default()
         };
         let recs = [
@@ -233,10 +229,9 @@ mod tests {
     #[test]
     fn default_log_grouping_ignores_id_case() {
         let (r, s) = (Resource::default(), Scope::default());
-        let rec = |t: &'static str, sp: &'static str| LogRecord {
-            trace_id: t,
-            span_id: sp,
-            ..Default::default()
+        let rec = |t: &str, sp: &str| -> LogRecord<'static> {
+            crate::otlp::test_read::from_value(serde_json::json!({"traceId": t, "spanId": sp}))
+                .unwrap()
         };
         let recs = [
             rec("0af7651916cd43dd8448eb211c80319c", "b7ad6b7169203331"),

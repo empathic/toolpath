@@ -43,14 +43,18 @@ record read for `timeUnixNano`, `observedTimeUnixNano`, `body`,
 What was read but not derived is counted in `SkipCounts` (summed over the
 sessions for a graph; `total()` adds them up): `error_status`,
 `connection_test`, `duplicate`, `truncated` and `missing_payload` per
-skipped generation (the reasons below), and `unclaimed` per span and
-distinct orphan log record no consulted profile claims.
+skipped generation (the reasons below), and `unclaimed` per distinct
+span (once per `(traceId, spanId)`, however often it was delivered; each
+span with no span id counts) and distinct orphan log record no consulted
+profile claims.
 Attribute values and log bodies are OTLP `AnyValue`s (`stringValue`,
 `intValue` as a string or number, `doubleValue`, `boolValue`,
 `arrayValue`, `kvlistValue`, `bytesValue`); an integer attribute also
 reads from a `doubleValue` with no fractional part. Timestamps are
-nanosecond strings (numbers accepted); ids are hex, compared
-case-insensitively where a log record is matched to a span; unknown
+nanosecond strings (numbers accepted); `traceId`, `spanId` and
+`parentSpanId` are hex, lowercased as they are read (OTLP/JSON hex is
+case-insensitive), so every comparison, dedupe key, generation id and
+`Generation.trace_id` sees one spelling; unknown
 fields are ignored. Log records are read as described under Logs; metrics
 are ignored without counting.
 
@@ -347,12 +351,7 @@ A request's `resourceLogs` are read alongside every request's
   (the log data model's older spelling; which one each emitter uses is
   recorded per capture under Event-mode captures).
 - **Correlation:** a record belongs to the span its `(traceId, spanId)`
-  names. Ids are compared case-insensitively (OTLP/JSON hex is
-  case-insensitive): the walker lowercases both sides, and `semconv`'s
-  lookup of a later generation's log-record tool calls (which decides
-  whether an `execute_tool` result belongs to an earlier turn) matches
-  span ids ignoring ASCII case. The `execute_tool` span scan itself
-  compares span ids as delivered. Every span of
+  names, ids lowercased on read like every other. Every span of
   the input is indexed before any record is placed, so a `logs.json` that
   sorts before `traces.json` still correlates.
 - **Where a record goes:**
@@ -370,8 +369,7 @@ A request's `resourceLogs` are read alongside every request's
   they exist only in log records.
 - **Orphans:** offered to the consulted profiles in order; the first whose
   `claims_log` accepts a record takes it, and groups its records with its
-  `group_logs` (default: by `(traceId, spanId)`, ids compared
-  case-insensitively, first-seen order; a record with neither id forms a
+  `group_logs` (default: by `(traceId, spanId)`, first-seen order; a record with neither id forms a
   group of its own). Each
   non-empty group is one unit with no span, taking its resource and scope
   from its first record. Orphan units are processed after every span
@@ -379,7 +377,7 @@ A request's `resourceLogs` are read alongside every request's
   same steps as a span unit except the status gate. Records no profile
   accepts count as `unclaimed`, as unclaimed spans do.
 - **Record dedupe (first in input order wins):** the key is the
-  lowercased `(traceId, spanId)`, `timeUnixNano` (0 when absent), the
+  `(traceId, spanId)`, `timeUnixNano` (0 when absent), the
   event name, and the sha256 of the JCS form of the body and of the
   attributes (a list of `[key, value]` pairs in delivered order). Body and
   attribute values are first converted to plain JSON
@@ -412,15 +410,15 @@ read either). Otherwise they come from the span's events.
 
 **Decisions where the spec is silent.**
 
-1. An orphan unit's trace id is its first record's `traceId`, lowercased.
+1. An orphan unit's trace id is its first record's `traceId`.
    Its start and end are the minimum and maximum over its records of
    `timeUnixNano`, falling back to `observedTimeUnixNano` when
    `timeUnixNano` is 0 or absent. A record with neither time is left out
    of the minimum and maximum (it does not pull the start to 0); both are
    0 only when no record of the unit has a time.
 2. `semconv` identifies an orphan generation without a
-   `gen_ai.response.id` as `log-<traceId>-<spanId>`, both ids lowercased
-   (the same record in any encoding gets one id), taken from
+   `gen_ai.response.id` as `log-<traceId>-<spanId>` (lowercased on read,
+   so the same record in any encoding gets one id), taken from
    the unit's first record. It applies only when the unit has no span and
    that record carries a trace id or a span id; otherwise the unit has no
    generation id and is skipped as `missing-payload`.

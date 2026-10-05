@@ -20,7 +20,8 @@ use std::collections::{HashMap, HashSet};
 pub struct ReadOutcome {
     pub generations: Vec<Generation>,
     pub skipped: Vec<Skipped>,
-    /// Spans no consulted profile claimed or absorbed, plus distinct orphan
+    /// Distinct spans no consulted profile claimed or absorbed (once per
+    /// `(traceId, spanId)`; each id-less span counts), plus distinct orphan
     /// log records no profile claims. Counted, never listed.
     pub unclaimed: usize,
 }
@@ -107,15 +108,13 @@ pub(crate) fn read_with<'a>(
         })
         .collect();
     // TraceView sees each (traceId, spanId) once, first in input order.
-    // Lowercased keys: OTLP/JSON hex ids are case-insensitive.
     let mut by_trace: HashMap<String, Vec<SpanRef<'_>>> = HashMap::new();
     for (i, s) in spans.iter().enumerate() {
-        let key = (s.span.trace_id, s.span.span_id);
-        if !key.1.is_empty() && index.get(&key) != Some(&i) {
+        if !first_copy(s, i, &index) {
             continue;
         }
         by_trace
-            .entry(key.0.to_ascii_lowercase())
+            .entry(s.span.trace_id.to_string())
             .or_default()
             .push(*s);
     }
@@ -125,7 +124,7 @@ pub(crate) fn read_with<'a>(
     for (i, (s, role)) in spans.iter().zip(&roles).enumerate() {
         if let Role::Candidate(_) = role {
             let entry = log_roles
-                .entry(logs::span_key(s.span.trace_id, s.span.span_id))
+                .entry(logs::span_key(&s.span.trace_id, &s.span.span_id))
                 .or_insert_with(|| logs::Role::Units(Vec::new()));
             if let logs::Role::Units(list) = entry {
                 list.push(i);
@@ -135,7 +134,7 @@ pub(crate) fn read_with<'a>(
     for (s, role) in spans.iter().zip(&roles) {
         if *role == Role::Absorbed {
             log_roles
-                .entry(logs::span_key(s.span.trace_id, s.span.span_id))
+                .entry(logs::span_key(&s.span.trace_id, &s.span.span_id))
                 .or_insert(logs::Role::Absorbed);
         }
     }
@@ -147,12 +146,14 @@ pub(crate) fn read_with<'a>(
     } = logs::partition(indexed, &log_roles);
     let (orphan_units, orphan_unclaimed) = logs::orphan_units(orphans, profiles);
     let trace_view = |trace_id: &str| {
-        let key = trace_id.to_ascii_lowercase();
-        TraceView::new(slice_of(&by_trace, &key), slice_of(&all_logs, &key))
+        TraceView::new(slice_of(&by_trace, trace_id), slice_of(&all_logs, trace_id))
     };
 
+    let unclaimed_spans = (0..spans.len())
+        .filter(|&i| roles[i] == Role::Unclaimed && first_copy(&spans[i], i, &index))
+        .count();
     let mut out = ReadOutcome {
-        unclaimed: roles.iter().filter(|r| **r == Role::Unclaimed).count() + orphan_unclaimed,
+        unclaimed: unclaimed_spans + orphan_unclaimed,
         ..Default::default()
     };
     // Generation-id dedupe: the better-ranked profile wins, then the first
@@ -169,7 +170,7 @@ pub(crate) fn read_with<'a>(
             span: Some(s.span),
             logs: unit_logs.remove(&i).unwrap_or_default(),
         };
-        let trace = trace_view(s.span.trace_id);
+        let trace = trace_view(&s.span.trace_id);
         run_unit(
             profiles[rank],
             rank,
@@ -183,7 +184,7 @@ pub(crate) fn read_with<'a>(
 
     for orphan in orphan_units {
         let first = orphan.logs[0];
-        let trace_id = first.record.trace_id;
+        let trace_id = &*first.record.trace_id;
         let trace = if trace_id.is_empty() {
             TraceView::default()
         } else {
@@ -310,10 +311,18 @@ fn span_index<'s>(spans: &'s [SpanRef<'_>]) -> HashMap<(&'s str, &'s str), usize
     let mut index = HashMap::new();
     for (i, s) in spans.iter().enumerate() {
         if !s.span.span_id.is_empty() {
-            index.entry((s.span.trace_id, s.span.span_id)).or_insert(i);
+            index
+                .entry((&*s.span.trace_id, &*s.span.span_id))
+                .or_insert(i);
         }
     }
     index
+}
+
+/// Whether `spans[i]` is the first copy of its `(traceId, spanId)`; a span
+/// with no span id is always its own.
+fn first_copy(s: &SpanRef<'_>, i: usize, index: &HashMap<(&str, &str), usize>) -> bool {
+    s.span.span_id.is_empty() || index.get(&(&*s.span.trace_id, &*s.span.span_id)) == Some(&i)
 }
 
 /// The outermost ancestor of `start` that is a candidate ranked at or
@@ -328,12 +337,12 @@ fn absorbing_ancestor(
     let Role::Candidate(rank) = roles[start] else {
         return None;
     };
-    let trace = spans[start].span.trace_id;
+    let trace = &*spans[start].span.trace_id;
     let mut visited = HashSet::from([start]);
     let mut outermost = None;
     let mut cur = start;
     for _ in 0..MAX_ANCESTOR_DEPTH {
-        let parent = spans[cur].span.parent_span_id;
+        let parent = &*spans[cur].span.parent_span_id;
         if parent.is_empty() {
             return outermost;
         }
@@ -551,6 +560,50 @@ mod tests {
         // Identical records are deduplicated before counting.
         let pair = json!({"resourceLogs": [{"scopeLogs": [{"logRecords": [{}, {}]}]}]});
         assert_eq!(read(&[pair]).unclaimed, 1);
+    }
+
+    #[test]
+    fn a_span_redelivered_in_uppercase_dedupes_and_an_uppercase_parent_absorbs() {
+        let all = Prefix("all", "");
+        let lower = batch(vec![json!({"traceId": "ab", "spanId": "a1", "name": "x"})]);
+        let upper = batch(vec![
+            json!({"traceId": "AB", "spanId": "A1", "name": "x"}),
+            json!({"traceId": "AB", "spanId": "c1", "parentSpanId": "A1", "name": "x"}),
+        ]);
+        let out = read_with(&[lower, upper], &[&all]).unwrap();
+        let ids: Vec<&str> = out.generations.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, ["a1"]);
+        assert_eq!(out.unclaimed, 0);
+        let reasons: Vec<SkipReason> = out.skipped.iter().map(|s| s.reason).collect();
+        assert_eq!(reasons, [SkipReason::Duplicate]);
+    }
+
+    #[test]
+    fn span_ids_and_trace_ids_reach_generations_lowercased() {
+        let chat = |trace: &str, span: &str| {
+            batch(vec![
+                json!({"traceId": trace, "spanId": span, "name": "chat m",
+                "attributes": [attr("gen_ai.operation.name", "chat")]}),
+            ])
+        };
+        let values = [chat("AB01", "C0FFEE"), chat("ab01", "c0ffee")];
+        let out = read_deliveries(&values, ProfileSelection::Semconv).unwrap();
+        assert_eq!(out.generations.len(), 1, "{:?}", out.skipped);
+        assert_eq!(out.generations[0].id, "span-c0ffee");
+        assert_eq!(out.generations[0].trace_id, "ab01");
+    }
+
+    #[test]
+    fn an_unclaimed_span_counts_once_however_often_delivered() {
+        let none = Prefix("none", "claimed");
+        let d = batch(vec![
+            span("u1", "", "x"),
+            json!({"traceId": "T", "spanId": "U1", "name": "x"}),
+            span("", "", "x"),
+            span("", "", "x"),
+        ]);
+        let out = read_with(&[d.clone(), d], &[&none]).unwrap();
+        assert_eq!(out.unclaimed, 1 + 4, "u1 once; each id-less span counts");
     }
 
     /// Test-only profile: claims `unit` spans, absorbs `aux` spans, and

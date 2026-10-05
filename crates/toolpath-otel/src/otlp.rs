@@ -9,6 +9,7 @@
 //! the field list); anything else does not read.
 
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 
 static NULL: Value = Value::Null;
 
@@ -31,6 +32,18 @@ fn fields<'a, const N: usize>(v: &'a Value, names: [&str; N]) -> Option<[Option<
 /// A string field; anything else reads as empty.
 fn string(v: Option<&Value>) -> &str {
     v.and_then(Value::as_str).unwrap_or("")
+}
+
+/// A hex id field (`traceId`, `spanId`, `parentSpanId`), lowercased:
+/// OTLP/JSON hex ids are case-insensitive, so every comparison, key and
+/// derived id downstream sees one spelling. Borrowed unless it had to change.
+fn hex_id(v: Option<&Value>) -> Cow<'_, str> {
+    let s = string(v);
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(s.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(s)
+    }
 }
 
 /// A struct field; missing, `null` or unreadable reads as the default.
@@ -142,10 +155,11 @@ impl<'a> Scope<'a> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Span<'a> {
-    pub trace_id: &'a str,
-    pub span_id: &'a str,
+    /// Lowercased, as are the other ids (see [`hex_id`]).
+    pub trace_id: Cow<'a, str>,
+    pub span_id: Cow<'a, str>,
     /// Empty for a root span.
-    pub parent_span_id: &'a str,
+    pub parent_span_id: Cow<'a, str>,
     pub name: &'a str,
     pub start_time_unix_nano: &'a Value,
     pub end_time_unix_nano: &'a Value,
@@ -154,22 +168,6 @@ pub struct Span<'a> {
     /// `None` when absent or `null` (proto3: unset). Any other value is
     /// kept, so an unreadable status fails closed (see [`Status::is_error`]).
     pub status: Option<Status<'a>>,
-}
-
-impl Default for Span<'_> {
-    fn default() -> Self {
-        Span {
-            trace_id: "",
-            span_id: "",
-            parent_span_id: "",
-            name: "",
-            start_time_unix_nano: &NULL,
-            end_time_unix_nano: &NULL,
-            attributes: Vec::new(),
-            events: Vec::new(),
-            status: None,
-        }
-    }
 }
 
 impl<'a> Span<'a> {
@@ -199,9 +197,9 @@ impl<'a> Span<'a> {
             ],
         )?;
         Some(Span {
-            trace_id: string(trace_id),
-            span_id: string(span_id),
-            parent_span_id: string(parent_span_id),
+            trace_id: hex_id(trace_id),
+            span_id: hex_id(span_id),
+            parent_span_id: hex_id(parent_span_id),
             name: string(name),
             start_time_unix_nano: start.unwrap_or(&NULL),
             end_time_unix_nano: end.unwrap_or(&NULL),
@@ -271,11 +269,13 @@ pub struct LogRecord<'a> {
     pub observed_time_unix_nano: &'a Value,
     pub body: &'a Value,
     pub attributes: Vec<KeyValue<'a>>,
-    pub trace_id: &'a str,
-    pub span_id: &'a str,
+    /// Lowercased, as is `span_id` (see [`hex_id`]).
+    pub trace_id: Cow<'a, str>,
+    pub span_id: Cow<'a, str>,
     pub event_name: &'a str,
 }
 
+#[cfg(test)]
 impl Default for LogRecord<'_> {
     fn default() -> Self {
         LogRecord {
@@ -283,8 +283,8 @@ impl Default for LogRecord<'_> {
             observed_time_unix_nano: &NULL,
             body: &NULL,
             attributes: Vec::new(),
-            trace_id: "",
-            span_id: "",
+            trace_id: Cow::Borrowed(""),
+            span_id: Cow::Borrowed(""),
             event_name: "",
         }
     }
@@ -317,8 +317,8 @@ impl<'a> LogRecord<'a> {
             observed_time_unix_nano: observed.unwrap_or(&NULL),
             body: body.unwrap_or(&NULL),
             attributes: lenient_list(attributes, KeyValue::read),
-            trace_id: string(trace_id),
-            span_id: string(span_id),
+            trace_id: hex_id(trace_id),
+            span_id: hex_id(span_id),
             event_name: string(event_name),
         })
     }
@@ -644,9 +644,22 @@ mod tests {
         let ss = &rs.scope_spans[0];
         assert_eq!((ss.scope.name, ss.scope.version), ("s", "1"));
         let span = &ss.spans[0];
-        assert_eq!((span.span_id, span.parent_span_id), ("a", "p"));
+        assert_eq!((&*span.span_id, &*span.parent_span_id), ("a", "p"));
         assert_eq!(span.events.len(), 1);
         assert_eq!(span.events[0].name, "e");
+    }
+
+    #[test]
+    fn span_hex_ids_read_lowercased() {
+        let span: Span = from_value(serde_json::json!({
+            "traceId": "AB01", "spanId": "Cd02", "parentSpanId": "ef03"
+        }))
+        .unwrap();
+        assert_eq!(
+            (&*span.trace_id, &*span.span_id, &*span.parent_span_id),
+            ("ab01", "cd02", "ef03")
+        );
+        assert!(matches!(span.parent_span_id, Cow::Borrowed(_)));
     }
 
     #[test]
@@ -735,14 +748,18 @@ mod tests {
         assert_eq!(nanos(r.observed_time_unix_nano), Some(6));
         assert_eq!(*r.body, json!({"stringValue": "hi"}));
         assert_eq!(r.attributes.len(), 1);
-        assert_eq!((r.trace_id, r.span_id), ("AB01", "cd02"));
+        assert_eq!((&*r.trace_id, &*r.span_id), ("ab01", "cd02"));
+        assert!(matches!(r.span_id, Cow::Borrowed(_)));
         assert_eq!(r.event_name, "e");
 
         let odd: LogRecord = from_value(json!({
             "traceId": null, "spanId": 7, "eventName": ["x"], "attributes": "nope", "body": null
         }))
         .unwrap();
-        assert_eq!((odd.trace_id, odd.span_id, odd.event_name), ("", "", ""));
+        assert_eq!(
+            (&*odd.trace_id, &*odd.span_id, odd.event_name),
+            ("", "", "")
+        );
         assert!(odd.attributes.is_empty());
         assert!(odd.body.is_null());
     }

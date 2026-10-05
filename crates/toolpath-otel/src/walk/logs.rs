@@ -15,11 +15,11 @@ pub(crate) struct Indexed<'a> {
     pub(crate) order: usize,
 }
 
-/// `(traceId, spanId)` lowercased: OTLP/JSON hex ids are case-insensitive.
+/// `(traceId, spanId)`, already lowercased by the reader.
 pub(crate) type SpanKey = (String, String);
 
 pub(crate) fn span_key(trace_id: &str, span_id: &str) -> SpanKey {
-    (trace_id.to_ascii_lowercase(), span_id.to_ascii_lowercase())
+    (trace_id.to_string(), span_id.to_string())
 }
 
 /// The record dedupe key. Values go through [`any_value_to_json`] first,
@@ -34,7 +34,7 @@ pub(crate) fn dedupe_key(r: &LogRecord) -> (SpanKey, u64, String, String) {
     let body = canonical_json(&any_value_to_json(r.body));
     let attributes = canonical_json(&attributes);
     (
-        span_key(r.trace_id, r.span_id),
+        span_key(&r.trace_id, &r.span_id),
         nanos(r.time_unix_nano).unwrap_or(0),
         r.event().unwrap_or_default().to_string(),
         sha256_hex(&[body.as_bytes(), b"\0", attributes.as_bytes()]),
@@ -69,7 +69,7 @@ pub(crate) fn index_logs<'a>(deliveries: &'a [Delivery<'a>]) -> Vec<Indexed<'a>>
     out
 }
 
-/// Every record with a trace id, by lowercased trace id, in
+/// Every record with a trace id, by trace id, in
 /// `(timeUnixNano, input order)`: what [`TraceView::all_logs`] shows.
 ///
 /// [`TraceView::all_logs`]: crate::profile::TraceView::all_logs
@@ -78,10 +78,7 @@ pub(crate) fn by_trace<'a>(logs: &[Indexed<'a>]) -> HashMap<String, Vec<LogRef<'
     for ix in logs {
         let trace_id = &ix.log.record.trace_id;
         if !trace_id.is_empty() {
-            grouped
-                .entry(trace_id.to_ascii_lowercase())
-                .or_default()
-                .push(*ix);
+            grouped.entry(trace_id.to_string()).or_default().push(*ix);
         }
     }
     grouped
@@ -126,7 +123,7 @@ pub(crate) fn partition<'a>(
         let role = if r.span_id.is_empty() {
             None
         } else {
-            roles.get(&span_key(r.trace_id, r.span_id))
+            roles.get(&span_key(&r.trace_id, &r.span_id))
         };
         match role {
             Some(Role::Units(units)) => {
