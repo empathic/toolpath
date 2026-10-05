@@ -21,8 +21,9 @@ type Homes = BTreeMap<usize, BTreeMap<String, String>>;
 
 pub fn derive_session(session: &Session, config: &DeriveConfig) -> Path {
     let graph = stitch(session);
-    let branches = classify(&graph, infer_harness(&signals(session)));
-    let view = view_from_graph(session, &graph, &branches);
+    let harness = infer_harness(&signals(session));
+    let branches = classify(&graph, harness);
+    let view = view_from_graph(session, &graph, &branches, harness);
     let mut path = toolpath_convo::derive_path(&view, config);
     link_branches(&mut path, &graph, &branches);
     let placed: BTreeSet<usize> = graph.nodes.iter().filter_map(|n| n.producer).collect();
@@ -35,7 +36,9 @@ pub fn derive_session(session: &Session, config: &DeriveConfig) -> Path {
         &branches,
         &homes,
     );
-    stamp_meta(&mut path, session, &graph, &view.id, &placed, &homes);
+    stamp_meta(
+        &mut path, session, harness, &graph, &view.id, &placed, &homes,
+    );
     path
 }
 
@@ -232,6 +235,7 @@ fn absent_flags(g: &Generation) -> Option<Value> {
 fn stamp_meta(
     path: &mut Path,
     session: &Session,
+    harness: SourceHarness,
     graph: &TurnGraph,
     derived_id: &str,
     placed: &BTreeSet<usize>,
@@ -241,10 +245,7 @@ fn stamp_meta(
     let mut m = Map::new();
     let profiles: BTreeSet<&str> = gens.iter().map(Generation::profile_name).collect();
     stamp_profiles(&mut m, &profiles);
-    m.insert(
-        "harness".into(),
-        json!(infer_harness(&signals(session)).as_str()),
-    );
+    m.insert("harness".into(), json!(harness.as_str()));
     stamp_hint_and_missing_continuations(&mut m, gens, graph);
     put(&mut m, "session_id", session.session_id.as_deref());
     m.insert("derived_session_id".into(), json!(derived_id));

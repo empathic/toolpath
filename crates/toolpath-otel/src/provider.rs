@@ -2,10 +2,10 @@
 
 use crate::branch::Branches;
 use crate::generation::{Generation, Usage};
+use crate::harness::SourceHarness;
 use crate::harness::cwd::find_cwd;
 use crate::harness::mutations::file_mutations;
 use crate::harness::tools::tool_category;
-use crate::harness::{SourceHarness, infer_harness, signals};
 use crate::hash::derived_session_id;
 use crate::normalize::{content_text, is_system_like};
 use crate::session::Session;
@@ -24,17 +24,22 @@ pub const PROVIDER: &str = "otel";
 #[cfg(test)]
 pub fn session_to_view(session: &Session) -> ConversationView {
     let graph = crate::stitch::stitch(session);
-    let harness = infer_harness(&signals(session));
-    view_from_graph(session, &graph, &crate::branch::classify(&graph, harness))
+    let harness = crate::harness::infer_harness(&crate::harness::signals(session));
+    view_from_graph(
+        session,
+        &graph,
+        &crate::branch::classify(&graph, harness),
+        harness,
+    )
 }
 
 pub fn view_from_graph(
     session: &Session,
     graph: &TurnGraph,
     branches: &Branches,
+    harness: SourceHarness,
 ) -> ConversationView {
     let gens = &session.generations;
-    let harness = infer_harness(&signals(session));
     let turns: Vec<Turn> = graph
         .nodes
         .iter()
