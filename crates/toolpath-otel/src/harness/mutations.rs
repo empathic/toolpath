@@ -4,8 +4,18 @@
 use serde_json::{Map, Value, json};
 use toolpath_convo::{FileMutation, ToolCategory, ToolInvocation, file_write_diff};
 
-/// Includes the keys convo's fallback reads, so the fallback never fires.
-const PATH_KEYS: [&str; 5] = ["file_path", "path", "filePath", "filename", "file"];
+/// Includes the keys convo's fallback reads, so the fallback fires only for
+/// a call [`fallback_path`] leaves to it. Claude NotebookEdit `notebook_path`.
+const PATH_KEYS: [&str; 6] = [
+    "file_path",
+    "path",
+    "filePath",
+    "filename",
+    "file",
+    "notebook_path",
+];
+/// The keys convo's fallback reads, in its order.
+const FALLBACK_PATH_KEYS: [&str; 4] = ["file_path", "path", "filename", "file"];
 /// Claude `old_string`, opencode `oldString`, pi `oldText`.
 const OLD_KEYS: [&str; 3] = ["old_string", "oldString", "oldText"];
 const NEW_KEYS: [&str; 3] = ["new_string", "newString", "newText"];
@@ -49,7 +59,8 @@ pub fn canonical_input(input: &Value) -> Value {
 }
 
 /// The file mutations one tool call makes, each with `tool_id` set.
-/// Non-FileWrite tools make none.
+/// Non-FileWrite tools, and calls [`fallback_path`] leaves to convo's
+/// fallback, make none.
 pub fn file_mutations(tool: &ToolInvocation) -> Vec<FileMutation> {
     if tool.category != Some(ToolCategory::FileWrite) {
         return Vec::new();
@@ -57,6 +68,7 @@ pub fn file_mutations(tool: &ToolInvocation) -> Vec<FileMutation> {
     // A marker-less patch parses to nothing; still record the file.
     let muts = match patch_text(tool).map(parse_patch) {
         Some(muts) if !muts.is_empty() => muts,
+        _ if fallback_path(tool).is_some() => Vec::new(),
         _ => write_edit(tool).into_iter().collect(),
     };
     muts.into_iter()
@@ -77,22 +89,52 @@ fn patch_text(tool: &ToolInvocation) -> Option<&str> {
     }
 }
 
+/// The path of a MultiEdit-shaped (`edits`) FileWrite call that convo's
+/// fallback reads exactly as [`write_edit`] would. Such a call is left to
+/// the fallback, which also records the structural `edits` array a
+/// `FileMutation` cannot carry.
+pub fn fallback_path(tool: &ToolInvocation) -> Option<&str> {
+    if tool.category != Some(ToolCategory::FileWrite)
+        || patch_text(tool).is_some_and(|p| !parse_patch(p).is_empty())
+    {
+        return None;
+    }
+    let input = &tool.input;
+    input.get("edits")?.as_array()?;
+    let path = str_field(input, &FALLBACK_PATH_KEYS)?;
+    let canonical = canonical_input(input);
+    let get = |k: &str| canonical.get(k).and_then(Value::as_str);
+    let edits_only = (get("old_string").is_none() || get("new_string").is_none())
+        && get("content").is_none()
+        && str_field(input, &["new_source"]).is_none();
+    let same = str_field(input, &PATH_KEYS) == Some(path)
+        && file_write_diff(&tool.name, input, path, None)
+            == file_write_diff(&tool.name, &canonical, path, None);
+    (edits_only && same).then_some(path)
+}
+
 /// Write → `after = content`; Edit → `before = old`, `after = new`;
-/// MultiEdit-shaped (`edits`) → `raw_diff` only; a path with nothing to
-/// write → a path-only mutation.
+/// NotebookEdit → `after = new_source`; MultiEdit-shaped (`edits`) →
+/// `raw_diff` only; a path with nothing to write → a path-only mutation.
+/// opencode `delete` (and `rm`) → operation `delete`, as `toolpath-opencode`.
 fn write_edit(tool: &ToolInvocation) -> Option<FileMutation> {
     let path = str_field(&tool.input, &PATH_KEYS)?;
     let canonical = canonical_input(&tool.input);
     let get = |k: &str| canonical.get(k).and_then(Value::as_str);
     let (before, after) = match (get("old_string"), get("new_string")) {
         (Some(old), Some(new)) => (Some(old), Some(new)),
-        _ => (None, get("content")),
+        _ => (
+            None,
+            get("content").or_else(|| str_field(&tool.input, &["new_source"])),
+        ),
     };
+    let operation = matches!(tool.name.as_str(), "delete" | "rm").then(|| "delete".to_string());
     Some(FileMutation {
         path: path.to_string(),
         raw_diff: file_write_diff(&tool.name, &canonical, path, None),
         before: before.map(str::to_string),
         after: after.map(str::to_string),
+        operation,
         ..Default::default()
     })
 }
@@ -183,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn write_and_edit_equal_the_convo_fallback() {
+    fn write_edit_and_multi_edit_equal_the_convo_fallback() {
         let tools = vec![
             tool(
                 "w",
@@ -195,33 +237,92 @@ mod tests {
                 "Edit",
                 json!({"file_path": "/abs/b.rs", "old_string": "x\n", "new_string": "y\n"}),
             ),
+            tool(
+                "m",
+                "MultiEdit",
+                json!({"file_path": "c.rs", "edits": [{"old_string": "a", "new_string": "b"}]}),
+            ),
         ];
         let muts: Vec<FileMutation> = tools.iter().flat_map(file_mutations).collect();
-        assert_eq!(muts.len(), 2);
+        assert_eq!(muts.len(), 2, "MultiEdit is left to the fallback");
         let config = DeriveConfig::default();
         let ours = derive_path(&view_of(tools.clone(), muts), &config);
         let fallback = derive_path(&view_of(tools, Vec::new()), &config);
+        let ours = serde_json::to_value(&ours.steps).unwrap();
+        assert_eq!(ours, serde_json::to_value(&fallback.steps).unwrap());
+        let multi = &ours[0]["change"]["c.rs"];
         assert_eq!(
-            serde_json::to_value(&ours.steps).unwrap(),
-            serde_json::to_value(&fallback.steps).unwrap()
+            multi["structural"]["edits"],
+            json!([{"old_string": "a", "new_string": "b"}])
+        );
+        assert!(multi["raw"].is_string());
+    }
+
+    #[test]
+    fn multi_edit_is_left_to_the_fallback_only_when_it_reads_the_same() {
+        let claude =
+            json!({"file_path": "c.rs", "edits": [{"old_string": "a", "new_string": "b"}]});
+        let t = tool("m", "MultiEdit", claude);
+        assert_eq!(fallback_path(&t), Some("c.rs"));
+        assert!(file_mutations(&t).is_empty());
+        // The fallback reads neither `filePath` nor pi's `oldText`/`newText`.
+        for input in [
+            json!({"filePath": "c.rs", "edits": [{"old_string": "a", "new_string": "b"}]}),
+            json!({"path": "c.rs", "edits": [{"oldText": "a", "newText": "b"}]}),
+        ] {
+            let t = tool("m", "edit", input.clone());
+            assert_eq!(fallback_path(&t), None, "{input}");
+            let m = file_mutations(&t);
+            assert_eq!(m.len(), 1, "{input}");
+            assert!(m[0].raw_diff.is_some(), "{input}");
+            assert_eq!(
+                (m[0].before.as_deref(), m[0].after.as_deref()),
+                (None, None)
+            );
+        }
+        assert_eq!(
+            fallback_path(&tool(
+                "r",
+                "read",
+                json!({"file_path": "c.rs", "edits": []})
+            )),
+            None
         );
     }
 
     #[test]
-    fn multi_edit_carries_a_raw_diff_and_no_before_after() {
-        let input = json!({"file_path": "c.rs", "edits": [{"old_string": "a", "new_string": "b"}]});
-        let m = file_mutations(&tool("m", "MultiEdit", input.clone()));
+    fn notebook_edit_records_the_notebook_and_its_new_source() {
+        let m = file_mutations(&tool(
+            "n",
+            "NotebookEdit",
+            json!({"notebook_path": "/w/a.ipynb", "cell_id": "c1", "new_source": "print(1)\n", "edit_mode": "replace"}),
+        ));
         assert_eq!(m.len(), 1);
-        assert_eq!(m[0].tool_id.as_deref(), Some("m"));
         assert_eq!(
-            m[0].raw_diff,
-            file_write_diff("MultiEdit", &input, "c.rs", None)
+            (
+                m[0].path.as_str(),
+                m[0].after.as_deref(),
+                m[0].before.as_deref()
+            ),
+            ("/w/a.ipynb", Some("print(1)\n"), None)
         );
-        assert!(m[0].raw_diff.is_some());
+        assert_eq!(m[0].tool_id.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn opencode_delete_is_a_delete_operation() {
+        let t = ToolInvocation {
+            category: tool_category(SourceHarness::Opencode, "delete"),
+            ..tool("d", "delete", json!({"filePath": "/w/gone.txt"}))
+        };
+        let m = file_mutations(&t);
+        assert_eq!(m.len(), 1);
         assert_eq!(
-            (m[0].before.as_deref(), m[0].after.as_deref()),
-            (None, None)
+            (m[0].path.as_str(), m[0].operation.as_deref()),
+            ("/w/gone.txt", Some("delete"))
         );
+        let w = file_mutations(&tool("w", "write", json!({"filePath": "x", "content": ""})));
+        assert_eq!(w[0].operation, None);
     }
 
     #[test]

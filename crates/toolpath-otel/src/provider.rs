@@ -4,7 +4,7 @@ use crate::branch::Branches;
 use crate::generation::{Generation, Usage};
 use crate::harness::SourceHarness;
 use crate::harness::cwd::find_cwd;
-use crate::harness::mutations::file_mutations;
+use crate::harness::mutations::{fallback_path, file_mutations};
 use crate::harness::tools::tool_category;
 use crate::hash::derived_session_id;
 use crate::normalize::{content_text, is_system_like};
@@ -47,9 +47,20 @@ pub fn view_from_graph(
         .map(|(ni, n)| to_turn(n, gens, harness, delegations(n, ni, branches)))
         .collect();
     let mut files_changed: Vec<String> = Vec::new();
-    for m in turns.iter().flat_map(|t| &t.file_mutations) {
-        if !files_changed.contains(&m.path) {
-            files_changed.push(m.path.clone());
+    for t in &turns {
+        let paths = t.tool_uses.iter().flat_map(|u| match fallback_path(u) {
+            Some(p) => vec![p],
+            None => t
+                .file_mutations
+                .iter()
+                .filter(|m| m.tool_id.as_deref() == Some(u.id.as_str()))
+                .map(|m| m.path.as_str())
+                .collect(),
+        });
+        for p in paths {
+            if !files_changed.iter().any(|f| f == p) {
+                files_changed.push(p.to_string());
+            }
         }
     }
     ConversationView {
@@ -343,5 +354,51 @@ mod tests {
         assert_eq!(view.base.and_then(|b| b.working_dir).as_deref(), Some("/w"));
         assert_eq!(view.id, derived_session_id(&s.key));
         assert_eq!(view.provider_id.as_deref(), Some("otel"));
+    }
+
+    #[test]
+    fn a_multi_edit_left_to_the_fallback_keeps_its_edits_and_its_file() {
+        let call = |id: &str, name: &str, args: Value| ToolCall {
+            id: id.into(),
+            function: FunctionCall {
+                name: name.into(),
+                arguments: Value::String(args.to_string()),
+            },
+        };
+        let g = Generation {
+            id: "g1".into(),
+            start_ns: 1_000_000_000,
+            end_ns: 2_000_000_000,
+            messages: vec![Message {
+                role: "user".into(),
+                content: json!("edit"),
+                ..Default::default()
+            }],
+            completion: Completion {
+                tool_calls: vec![
+                    call(
+                        "m",
+                        "MultiEdit",
+                        json!({"file_path": "a.rs", "edits": [{"old_string": "x", "new_string": "y"}]}),
+                    ),
+                    call("w", "Write", json!({"file_path": "b.rs", "content": "b"})),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = Session::new("otel-cluster:0000000000000000".into(), None, vec![g]);
+        let view = session_to_view(&s);
+        assert_eq!(view.files_changed, ["a.rs", "b.rs"]);
+        let path = toolpath_convo::derive_path(&view, &toolpath_convo::DeriveConfig::default());
+        let change = path
+            .steps
+            .iter()
+            .find_map(|s| s.change.get("a.rs"))
+            .unwrap();
+        assert_eq!(
+            change.structural.as_ref().unwrap().extra["edits"],
+            json!([{"old_string": "x", "new_string": "y"}])
+        );
     }
 }

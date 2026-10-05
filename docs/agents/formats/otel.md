@@ -241,7 +241,14 @@ File changes come from edit/write tool calls (`Write`, `Edit`,
 `MultiEdit`, `NotebookEdit`, `write`, `edit`, `write_file`; opencode and pi
 key spellings are canonicalized onto Claude's) and `apply_patch`/`patch`
 text (one change per file, `operation` `add`/`update`/`delete`,
-`rename_to`, `after` for an added file). Files a harness writes through its
+`rename_to`, `after` for an added file). `NotebookEdit` names its file in
+`notebook_path`, and its `new_source` is the change's `after`. opencode's
+`delete` (and `rm`) gives `operation` `delete`, as `toolpath-opencode`
+does. A MultiEdit-shaped call (an `edits` array) that `toolpath-convo`'s
+own fallback reads the same way (Claude key names) is left to that
+fallback, which also records the `edits` array in `structural`; other
+spellings (pi's `oldText`/`newText`, opencode's `filePath`) are
+canonicalized and carry the diff without `edits`. Files a harness writes through its
 shell tool (e.g. Codex `exec_command` running `cat <<'EOF' > file`) are not
 recorded here.
 
