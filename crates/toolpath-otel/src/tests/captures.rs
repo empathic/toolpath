@@ -69,7 +69,8 @@ fn attribute_keys(name: &str) -> BTreeSet<String> {
 fn continuation_traces() -> Vec<Value> {
     let d = continuation_dir();
     assert_eq!(
-        manifest_in(&d)["synthetic"]["label"], "SYNTHETIC",
+        manifest_in(&d)["synthetic"]["label"],
+        "SYNTHETIC",
         "the continuation copy must be labeled"
     );
     traces_in(&d)
@@ -399,7 +400,10 @@ fn system_prompt_placement_is_normalized() {
         let turns = conv(&path(&one_session(&traces_in(&semconv_dir(name)))));
         assert_eq!(
             (turns[0]["role"].as_str(), turns[0]["text"].as_str()),
-            (Some("system"), expected_in(&semconv_dir(name))["system_text"].as_str()),
+            (
+                Some("system"),
+                expected_in(&semconv_dir(name))["system_text"].as_str()
+            ),
             "{name}"
         );
     }
@@ -471,5 +475,16 @@ fn metadata_only_captures_derive_skeleton_paths() {
                 "{name}"
             );
         }
+    }
+}
+
+#[test]
+fn the_shared_readers_name_the_same_capture_directories() {
+    assert_eq!(
+        continuation_dir(),
+        semconv_dir("openai-responses").with_file_name("span-continuation")
+    );
+    for name in SEMCONV {
+        assert!(semconv_dir(name).join("traces.json").is_file(), "{name}");
     }
 }
