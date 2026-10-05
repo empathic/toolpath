@@ -609,7 +609,7 @@ mod tests {
         let none = Prefix("none", "claimed");
         let d = batch(vec![
             span("u1", "", "x"),
-            json!({"traceId": "T", "spanId": "U1", "name": "x"}),
+            span("u1", "", "x"),
             span("", "", "x"),
             span("", "", "x"),
         ]);
