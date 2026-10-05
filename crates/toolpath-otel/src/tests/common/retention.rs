@@ -73,22 +73,20 @@ pub struct Rebuilt {
 }
 
 /// The step holding `gid`'s completion and its producer record: the placed
-/// producer step, else the `unplaced_generations` entry.
+/// producer step, else the unplaced step's record and the step it names.
 fn completion_of<'p>(p: &'p Path, gid: &str) -> Option<(Value, &'p Step)> {
-    if let Some(s) = p
+    let s = p
         .steps
         .iter()
-        .find(|s| otel_extra(p, s).is_some_and(|x| x["generation_id"] == gid))
-    {
-        return Some((otel_extra(p, s).unwrap(), s));
+        .find(|s| otel_extra(p, s).is_some_and(|x| x["generation_id"] == gid))?;
+    let x = otel_extra(p, s).unwrap();
+    match x["completion"].as_str() {
+        None => Some((x, s)),
+        Some(id) => {
+            let completion = p.steps.iter().find(|s| s.step.id == id)?;
+            Some((x, completion))
+        }
     }
-    let e = meta(p)["unplaced_generations"]
-        .as_array()?
-        .iter()
-        .find(|e| e["generation_id"] == gid)?
-        .clone();
-    let id = e["completion"].as_str()?.to_string();
-    Some((e, p.steps.iter().find(|s| s.step.id == id)?))
 }
 
 /// Append one chain step to a rebuilt prompt: its message (when
@@ -140,17 +138,8 @@ pub fn rebuild(p: &Path, gid: &str) -> Rebuilt {
         record.get("absent").is_none(),
         "{gid}: skeleton generations are outside the round-trip"
     );
-    let unplaced = meta(p)["unplaced_generations"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
     let mut dropped_text: HashMap<String, String> = HashMap::new();
-    let records = p
-        .steps
-        .iter()
-        .filter_map(|s| otel_extra(p, s))
-        .chain(unplaced.iter().cloned());
-    for x in records {
+    for x in p.steps.iter().filter_map(|s| otel_extra(p, s)) {
         for (h, t) in x["dropped_content"].as_object().into_iter().flatten() {
             dropped_text.insert(h.clone(), t.as_str().unwrap().to_string());
         }
@@ -300,8 +289,8 @@ pub fn assert_session_retains(s: &Session) -> Retained {
                 tip = chain_id(&tip, &canonical(&normalize(&msg)));
             }
         }
-        // The producer record: the placed step's extras, else the
-        // `unplaced_generations` entry (both carry `prompt_tip`).
+        // The producer record: the placed or unplaced step's extras (both
+        // carry `prompt_tip`).
         assert_eq!(json!(tip), record["prompt_tip"], "{} {}", s.key, g.id);
         checked.generations += 1;
     }

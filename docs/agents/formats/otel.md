@@ -452,6 +452,13 @@ class the source does not report is absent, never zero-filled; a
 generation whose four classes are all zero or absent has no
 `token_usage`.
 
+Every generation's `token_usage` is on exactly one step, so summing
+`token_usage` over a path's steps gives the session total and agrees with
+`cost_usd`. A generation whose completion is already a turn (an identical
+retry: same prompt, same completion) produces no turn of its own; it gets
+an **unplaced step** instead (see Retention), which carries its
+`token_usage`.
+
 The kind (`agent-coding-session/v1.1.0`) does not say whether
 `input_tokens` includes cache, and producers differ (`toolpath-codex`
 passes Codex's inclusive count through). The kind is immutable, so this
@@ -509,7 +516,10 @@ this.
   apart, and parsing first keeps a history echo's formatting from
   forking. Ids are JCS-based from 0.1.0.
   Identical prefixes collapse into one branch; a retry or a compaction
-  forks. Ids and step payloads stay the same as a session grows.
+  forks; a retry with an identical completion adds no turn, only an
+  unplaced step. Ids and step payloads stay the same as a session grows.
+- **Unplaced step ids** are `<completion turn id>~<generation id>`. A turn
+  id is hex, so the two never collide.
 - **Derived session id**: a UUID (version 8) from
   `sha256("toolpath-otel/session\0" ‖ session_key)`, never the harness's own
   id, so the otel view and a harness import of the same session coexist.
@@ -593,6 +603,15 @@ branches. A *thread* is everything below a first user message.
   line's last turn in view order, whatever came later in time. A retry or
   a compaction on the main line still forks, and the abandoned branch is
   an unmarked dead end.
+- **Unplaced step.** A generation whose completion is already a turn
+  (an identical retry) gets a step of its own, `branch = "unplaced"`: an
+  assistant step with empty `text`, the generation's `thinking`,
+  `stop_reason`, actor and `token_usage`, and its per-generation keys (see
+  Retention). Its parent is the parent of the completion turn it repeated,
+  so it is a sibling of that turn: another answer to the same prompt, as a
+  retry with a different completion would be. Nothing descends from it, so
+  it is always a dead end; it is not a turn, so the head, the main line and
+  the other marks never consider it.
 - **Marks never move.** Every mark depends only on turns that come
   before it (in start order, or in feed order for incremental sends) or on
   the step's own data: a thread is matched only to a call before it and
@@ -601,8 +620,8 @@ branches. A *thread* is everything below a first user message.
   already has; it can only add marks and extra parents to new turns.
 
 `toolpath::v1::query::dead_ends` (and `path query`'s `.dead_end`) then
-report only side requests, skeletons, unreturned sub-agents and real
-abandoned attempts; select on `.change[].structural.otel.branch` to tell
+report only side requests, skeletons, unreturned sub-agents, unplaced
+steps and real abandoned attempts; select on `.change[].structural.otel.branch` to tell
 them apart.
 
 ## Tool call ids and results
@@ -632,7 +651,8 @@ delta request's prompt is rebuilt by walking up the first-parent chain from
 its completion step and stopping at the continued generation's completion
 step: the prompt opens with the results for that generation's calls,
 followed by the turns below it, and re-chains from that step to the
-recorded `prompt_tip`. A skeleton generation (one with an `absent` side)
+recorded `prompt_tip`. An unplaced generation's completion step is the
+turn its unplaced step names in `completion`. A skeleton generation (one with an `absent` side)
 has nothing to rebuild and is skipped, but a delta that continues from a
 skeleton still rebuilds from the skeleton's completion. The round trip is
 tested over the M0 OpenRouter fixtures (`src/tests/derive.rs`), their semconv
@@ -656,10 +676,7 @@ outside it: their positional ids never equal the source's `""`.
   generations}` (when any generation is priced; `total`, or a model's
   entry in `by_model`, is `null` when any generation it covers is unpriced,
   since an unknown price is never $0),
-  `providers`, `truncated`, `unplaced_generations` (per generation not
-  placed in the DAG: its per-generation keys as on a producing step, plus
-  `completion`, and `dropped_content` when it is the first home of a
-  dropped text); profile session data
+  `providers`, `truncated`; profile session data
   under `meta.extra.otel.openrouter` (`creator_user_id`, `entity_id`).
 - **Per step**, under the conversation change's `structural.extra.otel`:
   every turn has `content_hash`, `first_generation_id`, `message_role`, and
@@ -674,10 +691,13 @@ outside it: their positional ids never equal the source's `""`.
   `creator_user_id`, `entity_id`, `openrouter_user_id`, `provider_name`,
   `provider_slug`, `upstream_finish_reason`, latencies, `unit_price`,
   `provider_responses`, `request_params` = `rawRequest` minus `messages`,
-  `tools`, `input`, and `tools_digest`). The first placed step that
-  carries a dropped text stores it once in `dropped_content`
-  (`{content_hash: text}`); a text no placed step carries is stored on the
-  first unplaced generation that does. An assistant step keeps `echo` when
+  `tools`, `input`, and `tools_digest`). An unplaced step (see Sub-agents,
+  side requests and the head) carries the same per-generation keys for its
+  generation, plus `completion` (the id of the turn whose completion it
+  repeated) and `branch = "unplaced"`, and none of the per-turn keys. The
+  step of the first generation, in session order, that carries a dropped
+  text stores it once in `dropped_content` (`{content_hash: text}`),
+  whether that step is a producing or an unplaced step. An assistant step keeps `echo` when
   its history echo's tool arguments differ from the completion's (the
   echoed raw arguments by call id; an id-less call whose echo differs
   forks instead) or the echo carries any

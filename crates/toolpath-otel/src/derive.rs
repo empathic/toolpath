@@ -5,13 +5,13 @@ use crate::branch::{BranchKind, Branches, classify};
 use crate::generation::{Cost, Generation};
 use crate::harness::{SourceHarness, infer_harness, signals};
 use crate::profile;
-use crate::provider::{PROVIDER, view_from_graph};
+use crate::provider::{PROVIDER, rfc3339, token_usage, view_from_graph};
 use crate::session::Session;
 use crate::stitch::{Node, TurnGraph, stitch};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use toolpath::v1::Path;
-use toolpath_convo::DeriveConfig;
+use toolpath_convo::{DeriveConfig, Role, Turn};
 
 /// The key under which this crate stamps step extras and path meta.
 pub const EXTRA_KEY: &str = PROVIDER;
@@ -23,11 +23,12 @@ pub fn derive_session(session: &Session, config: &DeriveConfig) -> Path {
     let graph = stitch(session);
     let harness = infer_harness(&signals(session));
     let branches = classify(&graph, harness);
-    let view = view_from_graph(session, &graph, &branches, harness);
+    let mut view = view_from_graph(session, &graph, &branches, harness);
+    let placed: BTreeSet<usize> = graph.nodes.iter().filter_map(|n| n.producer).collect();
+    view.turns.extend(unplaced_turns(session, &graph, &placed));
     let mut path = toolpath_convo::derive_path(&view, config);
     link_branches(&mut path, &graph, &branches);
-    let placed: BTreeSet<usize> = graph.nodes.iter().filter_map(|n| n.producer).collect();
-    let homes = dropped_homes(&graph, &placed);
+    let homes = dropped_homes(&graph);
     stamp_steps(
         &mut path,
         &conversation_key(&view.id),
@@ -36,10 +37,92 @@ pub fn derive_session(session: &Session, config: &DeriveConfig) -> Path {
         &branches,
         &homes,
     );
-    stamp_meta(
-        &mut path, session, harness, &graph, &view.id, &placed, &homes,
+    stamp_unplaced(
+        &mut path,
+        &conversation_key(&view.id),
+        session,
+        &graph,
+        &placed,
+        &homes,
     );
+    stamp_meta(&mut path, session, harness, &graph, &view.id);
     path
+}
+
+/// The step id of unplaced generation `generation_id` whose completion is
+/// turn `completion`. `~` never occurs in a turn id (hex).
+fn unplaced_step_id(completion: &str, generation_id: &str) -> String {
+    format!("{completion}~{generation_id}")
+}
+
+fn unplaced(graph: &TurnGraph, placed: &BTreeSet<usize>) -> impl Iterator<Item = usize> {
+    (0..graph.links.len()).filter(move |gi| !placed.contains(gi))
+}
+
+/// One empty assistant turn per unplaced generation, a sibling of the
+/// completion turn it repeated, so its spend is on a step.
+fn unplaced_turns(session: &Session, graph: &TurnGraph, placed: &BTreeSet<usize>) -> Vec<Turn> {
+    let parents: HashMap<&str, Option<&String>> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n.parent.as_ref()))
+        .collect();
+    unplaced(graph, placed)
+        .map(|gi| {
+            let g = &session.generations[gi];
+            let completion = graph.links[gi].completion.as_str();
+            Turn {
+                id: unplaced_step_id(completion, &g.id),
+                parent_id: parents[completion].cloned(),
+                group_id: None,
+                role: Role::Assistant,
+                timestamp: rfc3339(g.end_ns),
+                text: String::new(),
+                thinking: g.completion.reasoning.clone().filter(|s| !s.is_empty()),
+                tool_uses: Vec::new(),
+                model: g.response_model.clone().or_else(|| g.request_model.clone()),
+                stop_reason: g.finish_reason.clone(),
+                token_usage: token_usage(&g.usage),
+                attributed_token_usage: None,
+                environment: None,
+                delegations: Vec::new(),
+                file_mutations: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+fn stamp_unplaced(
+    path: &mut Path,
+    key: &str,
+    session: &Session,
+    graph: &TurnGraph,
+    placed: &BTreeSet<usize>,
+    homes: &Homes,
+) {
+    let mut extras: HashMap<String, Map<String, Value>> = unplaced(graph, placed)
+        .map(|gi| {
+            let completion = &graph.links[gi].completion;
+            let mut m = generation_extra(gi, &session.generations, graph);
+            m.insert("completion".into(), json!(completion));
+            if let Some(texts) = homes.get(&gi) {
+                m.insert("dropped_content".into(), json!(texts));
+            }
+            m.insert("branch".into(), json!("unplaced"));
+            let id = unplaced_step_id(completion, &session.generations[gi].id);
+            (id, m)
+        })
+        .collect();
+    for step in &mut path.steps {
+        let Some(m) = extras.remove(&step.step.id) else {
+            continue;
+        };
+        if let Some(structural) = step.change.get_mut(key).and_then(|c| c.structural.as_mut()) {
+            structural
+                .extra
+                .insert(EXTRA_KEY.to_string(), Value::Object(m));
+        }
+    }
 }
 
 /// The conversation artifact key convo gives a view: `otel://<derived>`.
@@ -54,14 +137,12 @@ pub fn canonical_step_json(step: &toolpath::v1::Step) -> String {
     crate::hash::canonical_json(&serde_json::to_value(step).expect("Step serializes"))
 }
 
-/// Each dropped text is stored once: on the step of the first placed
-/// generation carrying it, else on the first unplaced generation's meta
-/// entry that carries it.
-fn dropped_homes(graph: &TurnGraph, placed: &BTreeSet<usize>) -> Homes {
+/// Each dropped text is stored once, on the step of the first generation
+/// (placed or unplaced) carrying it.
+fn dropped_homes(graph: &TurnGraph) -> Homes {
     let mut homes = Homes::new();
     let mut stored: BTreeSet<&str> = BTreeSet::new();
-    let unplaced = (0..graph.links.len()).filter(|gi| !placed.contains(gi));
-    for gi in placed.iter().copied().chain(unplaced) {
+    for gi in 0..graph.links.len() {
         for d in &graph.links[gi].dropped {
             if stored.insert(d.content_hash.as_str()) {
                 let text = graph.dropped_content[&d.content_hash].1.clone();
@@ -178,8 +259,8 @@ fn step_extra(
     m
 }
 
-/// Per-request extras of one generation: on its produced step, or in its
-/// `unplaced_generations` entry.
+/// Per-request extras of one generation: on its produced step, or on its
+/// unplaced step.
 fn generation_extra(gi: usize, gens: &[Generation], graph: &TurnGraph) -> Map<String, Value> {
     let g = &gens[gi];
     let link = &graph.links[gi];
@@ -238,8 +319,6 @@ fn stamp_meta(
     harness: SourceHarness,
     graph: &TurnGraph,
     derived_id: &str,
-    placed: &BTreeSet<usize>,
-    homes: &Homes,
 ) {
     let gens = &session.generations;
     let mut m = Map::new();
@@ -279,20 +358,6 @@ fn stamp_meta(
     let providers: BTreeSet<&str> = gens.iter().filter_map(|g| g.provider.as_deref()).collect();
     m.insert("providers".into(), json!(providers));
     m.insert("truncated".into(), json!(session.truncated));
-    let unplaced: Vec<Value> = (0..gens.len())
-        .filter(|gi| !placed.contains(gi))
-        .map(|gi| {
-            let mut e = generation_extra(gi, gens, graph);
-            e.insert("completion".into(), json!(graph.links[gi].completion));
-            if let Some(texts) = homes.get(&gi) {
-                e.insert("dropped_content".into(), json!(texts));
-            }
-            Value::Object(e)
-        })
-        .collect();
-    if !unplaced.is_empty() {
-        m.insert("unplaced_generations".into(), Value::Array(unplaced));
-    }
     for name in &profiles {
         let Some(p) = profile::by_name(name) else {
             continue;

@@ -89,7 +89,12 @@ fn meta_records_join_keys_cost_harness_and_profile() {
         assert_eq!(models, strings(&e["models"]), "{key}");
         assert_eq!(m["client_key"], "fixture key");
         assert_eq!(m["truncated"], false);
-        assert!(m.get("unplaced_generations").is_none(), "{key}");
+        assert!(
+            p.steps
+                .iter()
+                .all(|st| otel_extra(&p, st).is_some_and(|x| x.get("completion").is_none())),
+            "{key}: every generation is placed"
+        );
         // Session-level profile data comes from the raw span attributes.
         let raw = &deliveries(file)[0]["resourceSpans"][0]["scopeSpans"][0]["spans"];
         let root = raw
@@ -267,6 +272,36 @@ fn one_request(id: &str, start: u64, session: &str, prompt: &str, completion: &s
 
 const HI: &str = r#"{"messages":[{"role":"user","content":"hi"}]}"#;
 
+/// [`one_request`] in session `s` reporting `input`/`output` tokens.
+fn used_request(id: &str, start: u64, completion: &str, input: u64, output: u64) -> Value {
+    let mut r = one_request(id, start, "s", HI, completion);
+    let attrs = r["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["attributes"]
+        .as_array_mut()
+        .unwrap();
+    for (k, v) in [
+        ("gen_ai.usage.input_tokens", input),
+        ("gen_ai.usage.output_tokens", output),
+    ] {
+        attrs.push(json!({"key": k, "value": {"intValue": v.to_string()}}));
+    }
+    r
+}
+
+fn step_by_generation<'p>(p: &'p toolpath::v1::Path, gid: &str) -> &'p toolpath::v1::Step {
+    p.steps
+        .iter()
+        .find(|s| otel_extra(p, s).is_some_and(|x| x["generation_id"] == gid))
+        .unwrap_or_else(|| panic!("no step for {gid}"))
+}
+
+/// Σ of one token class over every step's `token_usage`.
+fn step_sum(p: &toolpath::v1::Path, class: &str) -> u64 {
+    p.steps
+        .iter()
+        .filter_map(|s| conv_extra(p, s)?.get("token_usage")?.get(class)?.as_u64())
+        .sum()
+}
+
 #[test]
 fn an_identical_retry_is_recorded_as_unplaced_with_its_extras() {
     let batch = [
@@ -275,17 +310,97 @@ fn an_identical_retry_is_recorded_as_unplaced_with_its_extras() {
     ];
     let (paths, _) =
         derive_paths(&batch, ProfileSelection::Auto, &DeriveConfig::default()).unwrap();
-    let m = meta(&paths[0]);
-    let unplaced = m["unplaced_generations"].as_array().unwrap();
-    assert_eq!(unplaced.len(), 1);
-    assert_eq!(unplaced[0]["generation_id"], "g2");
-    assert_eq!(unplaced[0]["trace_id"], "t-g2");
-    assert!(unplaced[0]["prompt_tip"].is_string() && unplaced[0]["usage"].is_object());
-    let completion = unplaced[0]["completion"].as_str().unwrap();
-    assert!(paths[0].steps.iter().any(|s| s.step.id == completion));
-    let rebuilt = rebuild(&paths[0], "g2").prompt;
+    let p = &paths[0];
+    let m = meta(p);
+    assert!(m.get("unplaced_generations").is_none(), "carried by a step");
+    let completion = step_by_generation(p, "g1");
+    let retry = step_by_generation(p, "g2");
+    let x = otel_extra(p, retry).unwrap();
+    assert_eq!(x["trace_id"], "t-g2");
+    assert!(x["prompt_tip"].is_string() && x["usage"].is_object());
+    assert_eq!(x["completion"], json!(completion.step.id));
+    assert_eq!(x["branch"], "unplaced");
+    assert_eq!(retry.step.id, format!("{}~g2", completion.step.id));
+    assert_eq!(retry.step.parents, completion.step.parents, "a sibling");
+    assert_eq!(conv_extra(p, retry).unwrap()["text"], "");
+    assert_eq!(p.path.head, completion.step.id);
+    let dead: Vec<&str> = toolpath::v1::query::dead_ends(&p.steps, &p.path.head)
+        .into_iter()
+        .map(|s| s.step.id.as_str())
+        .collect();
+    assert_eq!(dead, [retry.step.id.as_str()]);
+    let rebuilt = rebuild(p, "g2").prompt;
     assert_eq!(rebuilt.len(), 1);
     assert_eq!(m["cost_usd"]["total"], 1.0);
+}
+
+#[test]
+fn every_generation_s_tokens_are_on_a_step_with_identical_retries() {
+    // g2 and g3 repeat g1's answer; g4 answers differently.
+    let gens = [
+        ("g1", "hello", 10, 3),
+        ("g2", "hello", 11, 4),
+        ("g3", "hello", 12, 5),
+        ("g4", "bye", 13, 6),
+    ];
+    let request = |i: usize| {
+        let (id, text, input, output) = gens[i];
+        let completion = format!(r#"{{"completion":"{text}"}}"#);
+        used_request(id, 10 * (i as u64 + 1), &completion, input, output)
+    };
+    let cfg = DeriveConfig::default();
+    for retries in [1, 2] {
+        let used: Vec<usize> = (0..=retries).chain([3]).collect();
+        let fed: Vec<Value> = used.iter().map(|&i| request(i)).collect();
+        let (paths, _) = derive_paths(&fed, ProfileSelection::Auto, &cfg).unwrap();
+        let p = &paths[0];
+        let input: u64 = used.iter().map(|&i| gens[i].2).sum();
+        let output: u64 = used.iter().map(|&i| gens[i].3).sum();
+        assert_eq!(step_sum(p, "input_tokens"), input, "{retries} retries");
+        assert_eq!(step_sum(p, "output_tokens"), output, "{retries} retries");
+        let unplaced = p
+            .steps
+            .iter()
+            .filter(|s| otel_extra(p, s).is_some_and(|x| x["branch"] == "unplaced"))
+            .count();
+        assert_eq!(unplaced, retries);
+        assert_eq!(p.path.head, step_by_generation(p, "g4").step.id);
+    }
+}
+
+#[test]
+fn unplaced_steps_are_identical_when_the_session_grows() {
+    let hello = r#"{"completion":"hello"}"#;
+    let batch: Vec<Value> = (0..4u64)
+        .map(|i| used_request(&format!("g{i}"), 10 * (i + 1), hello, 5, i + 1))
+        .collect();
+    let cfg = DeriveConfig::default();
+    let (whole, _) = derive_paths(&batch, ProfileSelection::Auto, &cfg).unwrap();
+    let whole = &whole[0];
+    for k in 1..batch.len() {
+        let (part, _) = derive_paths(&batch[..k], ProfileSelection::Auto, &cfg).unwrap();
+        let part = &part[0];
+        let unplaced = part
+            .steps
+            .iter()
+            .filter(|s| otel_extra(part, s).is_some_and(|x| x["branch"] == "unplaced"));
+        assert_eq!(unplaced.count(), k - 1, "k={k}");
+        // g0's produced turn is still pending (no later prompt echoes it).
+        let produced = step_by_generation(part, "g0").step.id.clone();
+        for step in part.steps.iter().filter(|s| s.step.id != produced) {
+            let later = whole
+                .steps
+                .iter()
+                .find(|s| s.step.id == step.step.id)
+                .unwrap_or_else(|| panic!("k={k}: step {} vanished", step.step.id));
+            assert_eq!(
+                canonical_step_json(step),
+                canonical_step_json(later),
+                "k={k} step {}",
+                step.step.id
+            );
+        }
+    }
 }
 
 #[test]

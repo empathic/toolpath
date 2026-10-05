@@ -203,18 +203,16 @@ fn unplaced_generations_carry_their_per_request_keys() {
     g2.compacted = true;
     g2.completion.reasoning_details = vec![json!({"type": "reasoning", "content": "r"})];
     let d = doc(&Session::new("s".into(), None, vec![g1, g2]));
-    let unplaced = d["meta"]["otel"]["unplaced_generations"]
-        .as_array()
-        .unwrap();
-    assert_eq!(unplaced.len(), 1);
-    assert_eq!(unplaced[0]["generation_id"], "g2");
-    assert_eq!(unplaced[0]["compacted"], true);
+    let ex = otel_extras(&d);
+    let unplaced = producer(&ex, "g2");
+    assert_eq!(unplaced["branch"], "unplaced");
+    assert_eq!(unplaced["compacted"], true);
     assert_eq!(
-        unplaced[0]["reasoning_details"],
+        unplaced["reasoning_details"],
         json!([{"type": "reasoning", "content": "r"}])
     );
     assert!(
-        otel_extras(&d).iter().all(|e| e.get("compacted").is_none()),
+        producer(&ex, "g1").get("compacted").is_none(),
         "g1's producer step keeps only g1's keys"
     );
 }
