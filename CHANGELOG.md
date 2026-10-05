@@ -71,7 +71,10 @@ All notable changes to the Toolpath workspace are documented here.
   `OtelError::FedGenerationMissing`. A session without a client session
   id is keyed by its first fed generation. `OtelError::MixedSessions`
   works as for `derive_path`; `Derived::skipped` counts only duplicate
-  generation ids among the records.
+  generation ids among the records. A meta-only change (a truncation
+  marker arriving after the `Settle::Final` send) still goes out, as a
+  body with no steps. `read_generations` counts per call: a span
+  redelivered across deliveries is `unclaimed` once in each read.
 - **Duplicate copies of a call.** `derive_jsonl` keeps the first record of
   a generation id (records in arrival order), so a copy received later,
   another profile's under `ProfileSelection::Auto`, never changes a sent

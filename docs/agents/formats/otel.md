@@ -871,6 +871,9 @@ record whose prompt chain the store lacks fails derivation with
   `derive_jsonl` keeps the first record, records being in arrival order,
   so a copy received later never replaces one already sent (Feed order,
   not start order). Every other skip is counted by `read_generations`.
+  Its counts are per call: `unclaimed` counts a span once per read, so a
+  span redelivered in separate deliveries counts once in each, and
+  per-delivery counts summed over a session can exceed one read's.
 - **Storage.** Each OpenRouter request repeats the whole history, so raw
   bodies, or records with inline prompts, grow with the square of the
   session. Records plus chained messages grow with its new messages: a
@@ -943,7 +946,11 @@ every turn and is passed once the session is over.
   those stored (another step only while no main-line step is), and the
   real head on the last body. Sending the same bodies again
   is a no-op. No bodies means no turn has settled (a non-final call before
-  any turn is echoed). `PathClose` and path-level signatures are never sent.
+  any turn is echoed). Once the path is opened every call returns at least
+  one body, so a meta-only change goes out with no step to send: a
+  truncation marker that arrives after the `Settle::Final` send still sets
+  the stored `meta.otel.truncated` on the next call. `PathClose` and
+  path-level signatures are never sent.
 - **Feed order, not start order.** The session is derived with the `fed`
   generations first, in that order, then the rest by `(start_ns, id)`.
   OpenRouter delivers a generation when it completes, so concurrent

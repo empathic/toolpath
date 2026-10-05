@@ -2471,4 +2471,52 @@ fn a_continuation_refines_an_unknown_frozen_harness() {
     }
 }
 
+/// A truncation marker for `id` in session `s`, as `read_generations`
+/// records one.
+fn truncation_marker(id: &str) -> GenerationRecord {
+    serde_json::from_value(json!({
+        "format": GenerationRecord::FORMAT,
+        "truncated": {
+            "generation_id": id,
+            "session_id": "s",
+            "profile": crate::profile::openrouter::NAME
+        }
+    }))
+    .unwrap()
+}
+
+fn stored_truncated(r: &Reader) -> Value {
+    r.path().meta.unwrap().extra["otel"]["truncated"].clone()
+}
+
+/// A marker that arrives after the `Settle::Final` send still reaches the
+/// stored meta: every send to an opened path carries the `PathMeta` patch,
+/// with no step left to send too.
+#[test]
+fn a_truncation_marker_after_final_reaches_the_stored_meta() {
+    let g1 = generation("g1", 1, json!([user("go")]), "a");
+    let g2 = generation(
+        "g2",
+        2,
+        json!([user("go"), assistant("a"), user("more")]),
+        "b",
+    );
+    for hint in HINTS {
+        let mut store = BTreeMap::new();
+        let mut records = vec![
+            GenerationRecord::of(g1.clone(), &mut store),
+            GenerationRecord::of(g2.clone(), &mut store),
+        ];
+        let mut r = Reader::new(hint, 0);
+        r.try_send_records(&records, &store, true).unwrap();
+        assert_eq!(stored_truncated(&r), json!(false), "{hint:?}");
+        records.push(truncation_marker("g9"));
+        let lines = r.try_send_records(&records, &store, true).unwrap();
+        if hint == Hint::Exact {
+            assert!(step_ids(&lines).is_empty());
+        }
+        assert_eq!(stored_truncated(&r), json!(true), "{hint:?}");
+    }
+}
+
 mod property;
