@@ -1,5 +1,8 @@
-//! Privacy Mode sessions: with session.id they chain (Layer 1); without, each
-//! request is its own Layer T session (each OpenRouter request is one trace).
+//! OpenRouter Privacy Mode spans that carry a `session.id`. The id is the
+//! session key (docs/agents/formats/otel.md, Sessions and ids), so a
+//! request whose prompt was withheld is a prompt-absent skeleton in the same
+//! session and chains from the previous generation's completion
+//! (otel.md, Skeletons).
 
 use crate::tests::otel::{ProfileSelection, group_sessions, read_deliveries, stitch};
 use serde_json::{Value, json};
