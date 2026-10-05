@@ -157,7 +157,8 @@ pub(crate) struct CompletionParts {
     tools_digest: Option<String>,
 }
 
-/// The completion text parsed whole; `None` when it does not parse.
+/// The completion text parsed whole; `None` when it does not parse as a
+/// JSON object.
 pub(crate) fn completion_whole(raw: &str) -> Option<CompletionParts> {
     let c: Value = serde_json::from_str(raw).ok()?;
     let raw_request = c.get("rawRequest").cloned().unwrap_or(Value::Null);
@@ -175,9 +176,8 @@ pub(crate) fn completion_whole(raw: &str) -> Option<CompletionParts> {
         }
         other => other,
     };
-    let mut fields = match c {
-        Value::Object(o) => o,
-        _ => Map::new(),
+    let Value::Object(mut fields) = c else {
+        return None;
     };
     fields.remove("rawRequest");
     fields.remove("tools");
@@ -484,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_prompt_is_skipped_as_missing_payload() {
+    fn missing_prompt_and_completion_read_as_a_skeleton() {
         let d = delivery(
             json!([attr("gen_ai.response.id", "gen-1")]),
             json!({"code": 1}),
@@ -689,6 +689,26 @@ mod tests {
         let out = read_deliveries(&[d]).unwrap();
         assert!(out.generations.is_empty());
         assert_eq!(out.skipped[0].reason, SkipReason::Truncated);
+    }
+
+    #[test]
+    fn a_completion_that_is_not_an_object_is_truncated_not_empty() {
+        for raw in ["[1]", "\"text\"", "5", "null"] {
+            let d = delivery(
+                json!([
+                    attr("gen_ai.response.id", "gen-7"),
+                    attr(
+                        "gen_ai.prompt",
+                        "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"
+                    ),
+                    attr("gen_ai.completion", raw)
+                ]),
+                json!({"code": 1}),
+            );
+            let out = read_deliveries(&[d]).unwrap();
+            assert!(out.generations.is_empty(), "{raw}: {:?}", out.generations);
+            assert_eq!(out.skipped[0].reason, SkipReason::Truncated, "{raw}");
+        }
     }
 
     #[test]
