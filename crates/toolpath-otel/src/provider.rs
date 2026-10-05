@@ -61,7 +61,7 @@ pub fn view_from_graph(
         provider_id: Some(PROVIDER.to_string()),
         files_changed,
         session_ids: session.session_id.iter().cloned().collect(),
-        base: find_cwd(gens).map(|wd| SessionBase {
+        base: find_cwd(gens, harness).map(|wd| SessionBase {
             working_dir: Some(wd),
             ..Default::default()
         }),
