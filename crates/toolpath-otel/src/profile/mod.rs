@@ -44,8 +44,10 @@ pub trait Profile: Sync {
     /// Generation id and session id, read before the status gate and dedupe.
     ///
     /// Contract: for a unit that `extract` turns into a generation, this
-    /// `generation_id` is `Some` and equals that generation's `id` (the
-    /// walker dedupes on it before extracting). An empty id is `None`.
+    /// `generation_id` is `Some` and equals that generation's `id`, so the
+    /// walker dedupes before extracting (a mismatch is debug-asserted). The
+    /// walker tolerates `None`, deduping only after the extract. An empty
+    /// id is `None`.
     fn identify(&self, unit: &Unit<'_>) -> Ident;
     /// Build the neutral generation, with the read's memos. `Err` only for
     /// a skip.
@@ -153,7 +155,7 @@ pub enum ProfileSelection {
 }
 
 /// Every profile, explicit-only ones (not in [`AUTO`]) included.
-const BUILTIN: &[&dyn Profile] = &[
+pub(crate) const BUILTIN: &[&dyn Profile] = &[
     &openrouter::OpenRouter,
     &semconv::Semconv,
     &openinference::OpenInference,

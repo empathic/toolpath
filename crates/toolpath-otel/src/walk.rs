@@ -261,15 +261,25 @@ fn run_unit<'a>(
     }
     match p.extract(unit, trace, cx) {
         Ok(mut g) => {
+            debug_assert!(
+                ident.generation_id.as_ref().is_none_or(|id| *id == g.id),
+                "Profile::identify contract: {} identified {:?}, extracted {:?}",
+                p.name(),
+                ident.generation_id,
+                g.id
+            );
             g.profile = p.name().to_string();
             // Only after a successful extract, so a truncated first
             // copy never suppresses a good redelivery.
             if let Some((kept_rank, slot, old)) = dedupe.seen.remove(&g.id) {
                 if kept_rank <= rank {
-                    // Same id reached under a different ident key: the
-                    // earlier, at-least-as-good unit stays.
-                    dedupe.seen.insert(g.id.clone(), (kept_rank, slot, old));
-                    out.skipped.push(skip(SkipReason::Duplicate, &ident, false));
+                    // Same id reached with no ident id: the earlier,
+                    // at-least-as-good unit stays.
+                    out.skipped.push(Skipped {
+                        generation_id: Some(g.id.clone()),
+                        ..skip(SkipReason::Duplicate, &ident, false)
+                    });
+                    dedupe.seen.insert(g.id, (kept_rank, slot, old));
                     return;
                 }
                 dedupe.kept[slot] = None;
@@ -607,6 +617,132 @@ mod tests {
         assert_eq!(out.unclaimed, 1 + 4, "u1 once; each id-less span counts");
     }
 
+    /// Test-only profile: identifies nothing, extracts every span as `fixed`.
+    struct NoIdent;
+
+    impl Profile for NoIdent {
+        fn name(&self) -> &'static str {
+            "no-ident"
+        }
+        fn claims(&self, _: &Resource, _: &Scope, _: &Span) -> bool {
+            true
+        }
+        fn identify(&self, _: &Unit<'_>) -> Ident {
+            Ident::default()
+        }
+        fn extract<'a>(
+            &self,
+            _: &Unit<'a>,
+            _: &TraceView<'a>,
+            _cx: &mut ReadCx<'a>,
+        ) -> std::result::Result<Generation, SkipReason> {
+            Ok(Generation {
+                id: "fixed".into(),
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn a_duplicate_found_only_after_extract_names_the_generation_id() {
+        let d = batch(vec![span("s1", "", "x"), span("s2", "", "x")]);
+        let out = read_with(std::iter::once(&d), &[&NoIdent]).unwrap();
+        let ids: Vec<&str> = out.generations.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(ids, ["fixed"]);
+        let skips: Vec<(SkipReason, Option<&str>)> = out
+            .skipped
+            .iter()
+            .map(|s| (s.reason, s.generation_id.as_deref()))
+            .collect();
+        assert_eq!(skips, [(SkipReason::Duplicate, Some("fixed"))]);
+    }
+
+    /// Forwards to a built-in profile and records, per extracted unit,
+    /// `identify`'s generation id beside the generation's.
+    struct Recording(
+        &'static dyn Profile,
+        std::sync::Mutex<Vec<(Option<String>, String)>>,
+    );
+
+    impl Profile for Recording {
+        fn name(&self) -> &'static str {
+            self.0.name()
+        }
+        fn claims(&self, r: &Resource, s: &Scope, span: &Span) -> bool {
+            self.0.claims(r, s, span)
+        }
+        fn absorbs(&self, r: &Resource, s: &Scope, span: &Span) -> bool {
+            self.0.absorbs(r, s, span)
+        }
+        fn pre_skip(&self, unit: &Unit<'_>) -> Option<SkipReason> {
+            self.0.pre_skip(unit)
+        }
+        fn claims_log(&self, r: &Resource, log: &crate::otlp::LogRecord) -> bool {
+            self.0.claims_log(r, log)
+        }
+        fn group_logs<'a>(&self, logs: Vec<profile::LogRef<'a>>) -> Vec<Vec<profile::LogRef<'a>>> {
+            self.0.group_logs(logs)
+        }
+        fn identify(&self, unit: &Unit<'_>) -> Ident {
+            self.0.identify(unit)
+        }
+        fn extract<'a>(
+            &self,
+            unit: &Unit<'a>,
+            trace: &TraceView<'a>,
+            cx: &mut ReadCx<'a>,
+        ) -> std::result::Result<Generation, SkipReason> {
+            let g = self.0.extract(unit, trace, cx)?;
+            let ident = self.0.identify(unit).generation_id;
+            self.1.lock().unwrap().push((ident, g.id.clone()));
+            Ok(g)
+        }
+    }
+
+    /// Every OTLP delivery of every capture fixture.
+    fn capture_deliveries() -> Vec<Value> {
+        let root =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures/otel");
+        let mut dirs = vec![root];
+        let mut out = Vec::new();
+        while let Some(dir) = dirs.pop() {
+            let mut entries: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+            entries.sort();
+            for path in entries {
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                let name = path.file_name().and_then(|n| n.to_str());
+                if !name.is_some_and(|n| n.ends_with(".json") || n.ends_with(".ndjson")) {
+                    continue;
+                }
+                let bytes = std::fs::read(&path).unwrap();
+                if let Ok(values) = crate::tests::otel::decode_input(&bytes, name) {
+                    out.extend(values);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn built_in_profiles_identify_what_they_extract_over_the_captures() {
+        let values = capture_deliveries();
+        for p in profile::BUILTIN {
+            let rec = Recording(*p, Default::default());
+            read_with(&values, &[&rec]).unwrap();
+            let pairs = rec.1.into_inner().unwrap();
+            assert!(!pairs.is_empty(), "{} extracted nothing", p.name());
+            for (ident, id) in pairs {
+                assert_eq!(ident.as_deref(), Some(id.as_str()), "{}", p.name());
+            }
+        }
+    }
+
     /// Test-only profile: claims `unit` spans, absorbs `aux` spans, and
     /// reports how many `aux` spans its `TraceView` shows.
     struct CountAux;
@@ -621,11 +757,8 @@ mod tests {
         fn absorbs(&self, _: &Resource, _: &Scope, span: &Span) -> bool {
             span.name == "aux"
         }
-        fn identify(&self, unit: &Unit<'_>) -> Ident {
-            Ident {
-                generation_id: unit.span.map(|s| s.span_id.to_string()),
-                session_id: None,
-            }
+        fn identify(&self, _: &Unit<'_>) -> Ident {
+            Ident::default()
         }
         fn extract<'a>(
             &self,
