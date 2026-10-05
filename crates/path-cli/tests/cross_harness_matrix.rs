@@ -1208,10 +1208,26 @@ fn u64_at(v: &Value, pointer: &str) -> u64 {
     v.pointer(pointer).and_then(Value::as_u64).unwrap_or(0)
 }
 
-/// Claude's `input_tokens` already excludes cache; one message spans several
-/// lines whose `usage` is a streaming snapshot, so each field takes its
-/// largest value across the message's lines.
-fn claude_prompt_total() -> u64 {
+/// A session's prompt and its cached parts, in tokens.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+struct Prompt {
+    total: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+impl std::ops::AddAssign for Prompt {
+    fn add_assign(&mut self, o: Prompt) {
+        self.total += o.total;
+        self.cache_read += o.cache_read;
+        self.cache_write += o.cache_write;
+    }
+}
+
+/// Claude's `input_tokens` already excludes cache. One message spans several
+/// lines, each repeating its `usage` (a growing snapshot in older Claude Code
+/// versions), so each field takes its largest value across the lines.
+fn claude_prompt() -> Prompt {
     let mut per_message: BTreeMap<String, [u64; 3]> = BTreeMap::new();
     for line in fixture_lines("claude/convo.jsonl") {
         let (Some(id), Some(_)) = (
@@ -1223,8 +1239,8 @@ fn claude_prompt_total() -> u64 {
         let max = per_message.entry(id.to_string()).or_default();
         for (slot, field) in [
             "input_tokens",
-            "cache_creation_input_tokens",
             "cache_read_input_tokens",
+            "cache_creation_input_tokens",
         ]
         .iter()
         .enumerate()
@@ -1232,74 +1248,130 @@ fn claude_prompt_total() -> u64 {
             max[slot] = max[slot].max(u64_at(&line, &format!("/message/usage/{field}")));
         }
     }
-    per_message.values().flatten().sum()
+    let mut p = Prompt::default();
+    for [input, read, write] in per_message.into_values() {
+        p += Prompt {
+            total: input + read + write,
+            cache_read: read,
+            cache_write: write,
+        };
+    }
+    p
 }
 
-/// Codex's `input_tokens` includes `cached_input_tokens`; the last
-/// cumulative `total_token_usage` is the session's prompt.
-fn codex_prompt_total() -> u64 {
-    fixture_lines("codex/convo.jsonl")
+/// Codex's `input_tokens` includes `cached_input_tokens` and, from Codex
+/// 0.145.0, `cache_write_input_tokens`; the last cumulative
+/// `total_token_usage` is the session's.
+fn codex_prompt() -> Prompt {
+    let lines = fixture_lines("codex/convo.jsonl");
+    let total = lines
         .iter()
-        .filter_map(|l| l.pointer("/payload/info/total_token_usage/input_tokens"))
-        .filter_map(Value::as_u64)
-        .last()
-        .expect("codex fixture has a token_count")
+        .filter_map(|l| l.pointer("/payload/info/total_token_usage"))
+        .next_back()
+        .expect("codex fixture has a token_count");
+    Prompt {
+        total: u64_at(total, "/input_tokens"),
+        cache_read: u64_at(total, "/cached_input_tokens"),
+        cache_write: u64_at(total, "/cache_write_input_tokens"),
+    }
 }
 
-/// Gemini's `input` (`promptTokenCount`) includes `cached`. A message
-/// rewritten under the same id counts once.
-fn gemini_prompt_total() -> u64 {
-    let mut per_message: BTreeMap<String, u64> = BTreeMap::new();
+/// Gemini's `input` (`promptTokenCount`) includes `cached`; `tool`
+/// (`toolUsePromptTokenCount`) is prompt outside it. A message rewritten
+/// under the same id counts once.
+fn gemini_prompt() -> Prompt {
+    let mut per_message: BTreeMap<String, Prompt> = BTreeMap::new();
     for line in fixture_lines("gemini/convo.jsonl") {
-        if let (Some(id), Some(input)) = (
-            line.get("id").and_then(Value::as_str),
-            line.pointer("/tokens/input").and_then(Value::as_u64),
-        ) {
-            per_message.insert(id.to_string(), input);
+        if let (Some(id), Some(tokens)) =
+            (line.get("id").and_then(Value::as_str), line.get("tokens"))
+        {
+            per_message.insert(
+                id.to_string(),
+                Prompt {
+                    total: u64_at(tokens, "/input") + u64_at(tokens, "/tool"),
+                    cache_read: u64_at(tokens, "/cached"),
+                    cache_write: 0,
+                },
+            );
         }
     }
-    per_message.values().sum()
+    let mut p = Prompt::default();
+    for m in per_message.into_values() {
+        p += m;
+    }
+    p
 }
 
 /// Copilot's `session.shutdown` reports each model's `inputTokens`, which
 /// includes its cache reads and writes.
-fn copilot_prompt_total() -> u64 {
-    fixture_lines("copilot/convo.jsonl")
-        .iter()
-        .filter_map(|l| l.pointer("/data/modelMetrics").and_then(Value::as_object))
-        .flat_map(|models| models.values())
-        .map(|m| u64_at(m, "/usage/inputTokens"))
-        .sum()
-}
-
-fn prompt_of(u: &Value) -> u64 {
-    ["input_tokens", "cache_read_tokens", "cache_write_tokens"]
-        .iter()
-        .map(|k| u64_at(u, &format!("/{k}")))
-        .sum()
+fn copilot_prompt() -> Prompt {
+    let mut p = Prompt::default();
+    for line in fixture_lines("copilot/convo.jsonl") {
+        let Some(models) = line
+            .pointer("/data/modelMetrics")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for m in models.values() {
+            p += Prompt {
+                total: u64_at(m, "/usage/inputTokens"),
+                cache_read: u64_at(m, "/usage/cacheReadTokens"),
+                cache_write: u64_at(m, "/usage/cacheWriteTokens"),
+            };
+        }
+    }
+    p
 }
 
 /// opencode's `total` is `input + output + reasoning + cache.read +
-/// cache.write`, so the prompt is what `total` holds beyond the output.
-fn opencode_prompt_total() -> u64 {
+/// cache.write`, so the prompt is what `total` holds beyond the output; this
+/// reads opencode's own sum rather than trusting what `input` means.
+fn opencode_prompt() -> Prompt {
     let doc: Value = serde_json::from_str(
         &std::fs::read_to_string(fixtures_dir().join("opencode/convo.json")).expect("fixture read"),
     )
     .expect("opencode fixture parses");
-    doc["messages"]
+    let mut p = Prompt::default();
+    for t in doc["messages"]
         .as_array()
         .expect("opencode messages")
         .iter()
         .filter_map(|m| m.pointer("/info/tokens"))
-        .map(|t| u64_at(t, "/total") - u64_at(t, "/output") - u64_at(t, "/reasoning"))
-        .sum()
+    {
+        let total = t
+            .get("total")
+            .and_then(Value::as_u64)
+            .expect("opencode tokens.total");
+        p += Prompt {
+            total: total
+                .saturating_sub(u64_at(t, "/output"))
+                .saturating_sub(u64_at(t, "/reasoning")),
+            cache_read: u64_at(t, "/cache/read"),
+            cache_write: u64_at(t, "/cache/write"),
+        };
+    }
+    p
 }
 
-/// Σ `input_tokens + cache_read_tokens + cache_write_tokens` over a derived
-/// path's group totals.
-fn derived_prompt_total(view: &ConversationView) -> u64 {
+fn prompt_of(u: &Value) -> Prompt {
+    let (read, write) = (
+        u64_at(u, "/cache_read_tokens"),
+        u64_at(u, "/cache_write_tokens"),
+    );
+    Prompt {
+        total: u64_at(u, "/input_tokens") + read + write,
+        cache_read: read,
+        cache_write: write,
+    }
+}
+
+/// The prompt over a derived path's group totals.
+fn derived_prompt(view: &ConversationView) -> Prompt {
     let doc = derived_document(view);
-    doc.pointer("/paths/0/steps")
+    let mut p = Prompt::default();
+    for u in doc
+        .pointer("/paths/0/steps")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -1308,46 +1380,44 @@ fn derived_prompt_total(view: &ConversationView) -> u64 {
         .filter_map(|c| c.get("structural"))
         .filter(|s| s.get("type").and_then(Value::as_str) == Some("conversation.append"))
         .filter_map(|s| s.get("token_usage"))
-        .map(prompt_of)
-        .sum()
+    {
+        p += prompt_of(u);
+    }
+    p
 }
 
-/// The same sum over the view's session total. Copilot records input and
-/// cache only on `session.shutdown`, which lands in `total_usage` and on no
-/// turn, so a derived Copilot path carries output tokens alone.
-fn session_prompt_total(view: &ConversationView) -> u64 {
+/// The prompt over the view's session total. Copilot records input and cache
+/// only on `session.shutdown`, which lands in `total_usage` and on no turn, so
+/// a derived Copilot path carries output tokens alone (a documented exception
+/// in the kind).
+fn session_prompt(view: &ConversationView) -> Prompt {
     view.total_usage
         .as_ref()
         .map(|u| prompt_of(&serde_json::to_value(u).expect("serialize TokenUsage")))
-        .unwrap_or(0)
+        .unwrap_or_default()
 }
+
+type Derived = fn(&ConversationView) -> Prompt;
+type Source = fn() -> Prompt;
 
 #[test]
 fn token_classes_add_up_to_the_source_prompt() {
-    type Total = fn(&ConversationView) -> u64;
-    let oracles: [(&dyn Harness, Total, fn() -> u64); 5] = [
-        (&ClaudeHarness, derived_prompt_total, claude_prompt_total),
-        (&CodexHarness, derived_prompt_total, codex_prompt_total),
-        (&GeminiHarness, derived_prompt_total, gemini_prompt_total),
-        (&CopilotHarness, session_prompt_total, copilot_prompt_total),
-        (
-            &OpencodeHarness,
-            derived_prompt_total,
-            opencode_prompt_total,
-        ),
+    let oracles: [(&dyn Harness, Derived, Source); 5] = [
+        (&ClaudeHarness, derived_prompt, claude_prompt),
+        (&CodexHarness, derived_prompt, codex_prompt),
+        (&GeminiHarness, derived_prompt, gemini_prompt),
+        (&CopilotHarness, session_prompt, copilot_prompt),
+        (&OpencodeHarness, derived_prompt, opencode_prompt),
     ];
     let mut failures: Vec<String> = Vec::new();
-    for (h, total, oracle) in oracles {
+    for (h, derived, source) in oracles {
         let view = h.load_fixture().expect("fixture on disk");
-        let (derived, source) = (total(&view), oracle());
-        if derived == source {
-            eprintln!("✓ {}: prompt {}", h.name(), source);
+        let (got, want) = (derived(&view), source());
+        if got == want {
+            eprintln!("✓ {}: {:?}", h.name(), want);
         } else {
-            eprintln!("✗ {}: derived {} vs source {}", h.name(), derived, source);
-            failures.push(format!(
-                "{}: input + cache_read + cache_write sums to {derived}, the source's prompt is {source}",
-                h.name()
-            ));
+            eprintln!("✗ {}: derived {:?} vs source {:?}", h.name(), got, want);
+            failures.push(format!("{}: derived {got:?}, source {want:?}", h.name()));
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");

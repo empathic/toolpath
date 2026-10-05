@@ -15,8 +15,8 @@
 //! generic path (base schema only), exactly as the format intends.
 //!
 //! agent-coding-session v1.1.0 and later also carry accounting rules that
-//! JSON Schema cannot express (one group total per run, breakdowns bounded
-//! by their parent); [`validate`] checks those in code.
+//! JSON Schema cannot express (one total per group, breakdowns bounded by
+//! their class); [`validate`] checks those in code.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -93,8 +93,8 @@ pub fn validate(instance: &serde_json::Value) -> anyhow::Result<()> {
                     err.instance_path()
                 ));
             }
-            if has_accounting_rules(kind) {
-                for (pointer, msg) in accounting_violations(path) {
+            if let Some(rule) = group_rule(kind) {
+                for (pointer, msg) in accounting_violations(path, rule) {
                     errors.push(format!("  at /paths/{i}{pointer}: {msg} (kind {kind})"));
                 }
             }
@@ -111,11 +111,30 @@ pub fn validate(instance: &serde_json::Value) -> anyhow::Result<()> {
     }
 }
 
-/// agent-coding-session v1.1.0 and later carry the group accounting rules,
+/// How an agent-coding-session version places a group's `token_usage`.
+#[derive(Clone, Copy, PartialEq)]
+enum GroupRule {
+    /// v1.1.0: on the last step of each run of consecutive steps sharing a
+    /// `group_id`.
+    LastOfRun,
+    /// v1.2.0 and later: on the last step of the `group_id`, wherever its
+    /// steps fall.
+    LastOfGroup,
+}
+
+/// The group rule for agent-coding-session kinds that carry accounting rules,
 /// which are prose in the spec because JSON Schema cannot express them.
-fn has_accounting_rules(kind: &str) -> bool {
-    crate::kinds::parse_kind_uri(kind)
-        .is_some_and(|(name, v)| name == "agent-coding-session" && v.major == 1 && v.minor >= 1)
+fn group_rule(kind: &str) -> Option<GroupRule> {
+    let (name, v) = crate::kinds::parse_kind_uri(kind)?;
+    match (name == "agent-coding-session", v.major, v.minor) {
+        (true, 1, 1) => Some(GroupRule::LastOfRun),
+        (true, 1, m) if m >= 2 => Some(GroupRule::LastOfGroup),
+        _ => None,
+    }
+}
+
+fn escape_pointer(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
 }
 
 /// The `conversation.append` payloads of a step, with the JSON pointer of each.
@@ -128,8 +147,10 @@ fn appends(step: &serde_json::Value) -> Vec<(String, &serde_json::Value)> {
         .filter_map(|(key, c)| {
             let structural = c.get("structural")?;
             (structural.get("type")?.as_str()? == "conversation.append").then(|| {
-                let key = key.replace('~', "~0").replace('/', "~1");
-                (format!("/change/{key}/structural"), structural)
+                (
+                    format!("/change/{}/structural", escape_pointer(key)),
+                    structural,
+                )
             })
         })
         .collect()
@@ -137,11 +158,10 @@ fn appends(step: &serde_json::Value) -> Vec<(String, &serde_json::Value)> {
 
 /// Breaches of the agent-coding-session accounting rules, as
 /// `(pointer within the path, message)`:
-/// - within a run of consecutive steps sharing a `group_id`, only the last
-///   step carries `token_usage`;
-/// - a breakdown's sub-classes sum to no more than their parent class, on
-///   `token_usage` and `attributed_token_usage` alike.
-fn accounting_violations(path: &serde_json::Value) -> Vec<(String, String)> {
+/// - a `group_id`'s `token_usage` sits on one step only, placed by `rule`;
+/// - a breakdown is keyed by one of the four classes, and its sub-classes sum
+///   to no more than that class, on `token_usage` and `attributed_token_usage`.
+fn accounting_violations(path: &serde_json::Value, rule: GroupRule) -> Vec<(String, String)> {
     let Some(steps) = path.get("steps").and_then(|s| s.as_array()) else {
         return Vec::new();
     };
@@ -151,22 +171,35 @@ fn accounting_violations(path: &serde_json::Value) -> Vec<(String, String)> {
             .iter()
             .find_map(|(_, a)| a.get("group_id").and_then(|g| g.as_str()))
     };
+    let mut last_of_group: HashMap<&str, usize> = HashMap::new();
+    for j in 0..steps.len() {
+        if let Some(group) = group_of(j) {
+            last_of_group.insert(group, j);
+        }
+    }
 
     let mut out = Vec::new();
     for (j, payloads) in per_step.iter().enumerate() {
-        if let Some(group) = group_of(j)
-            && j + 1 < steps.len()
-            && group_of(j + 1) == Some(group)
-        {
-            for (pointer, append) in payloads {
-                if append.get("token_usage").is_some() {
-                    out.push((
-                        format!("/steps/{j}{pointer}/token_usage"),
-                        format!(
-                            "token_usage on a step that is not the last of its group_id {group:?} \
-                             run; the group total belongs on the run's last step only"
-                        ),
-                    ));
+        if let Some(group) = group_of(j) {
+            let carries_total = match rule {
+                GroupRule::LastOfRun => j + 1 == steps.len() || group_of(j + 1) != Some(group),
+                GroupRule::LastOfGroup => last_of_group[group] == j,
+            };
+            if !carries_total {
+                let place = match rule {
+                    GroupRule::LastOfRun => "the last step of its run",
+                    GroupRule::LastOfGroup => "the group's last step",
+                };
+                for (pointer, append) in payloads {
+                    if append.get("token_usage").is_some() {
+                        out.push((
+                            format!("/steps/{j}{pointer}/token_usage"),
+                            format!(
+                                "token_usage on a step of group_id {group:?} that is not \
+                                 {place}; the group total belongs there only"
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -183,6 +216,8 @@ fn accounting_violations(path: &serde_json::Value) -> Vec<(String, String)> {
     out
 }
 
+const BREAKDOWN_CLASSES: [&str; 4] = ["input", "output", "cache_read", "cache_write"];
+
 fn breakdown_violations(usage: &serde_json::Value) -> Vec<(String, String)> {
     let Some(breakdowns) = usage.get("breakdowns").and_then(|b| b.as_object()) else {
         return Vec::new();
@@ -190,14 +225,26 @@ fn breakdown_violations(usage: &serde_json::Value) -> Vec<(String, String)> {
     breakdowns
         .iter()
         .filter_map(|(class, inner)| {
-            let parent = usage.get(format!("{class}_tokens"))?.as_u64()?;
-            let sum: u64 = inner.as_object()?.values().filter_map(|n| n.as_u64()).sum();
+            if !BREAKDOWN_CLASSES.contains(&class.as_str()) {
+                return Some((
+                    escape_pointer(class),
+                    format!(
+                        "breakdown key {class:?} is not a class; use one of {}",
+                        BREAKDOWN_CLASSES.join(", ")
+                    ),
+                ));
+            }
+            let field = format!("{class}_tokens");
+            let parent = usage.get(&field).and_then(|v| v.as_u64()).unwrap_or(0);
+            let sum = inner
+                .as_object()?
+                .values()
+                .filter_map(|n| n.as_u64())
+                .fold(0u64, u64::saturating_add);
             (sum > parent).then(|| {
                 (
-                    class.replace('~', "~0").replace('/', "~1"),
-                    format!(
-                        "breakdown sums to {sum}, more than its parent {class}_tokens ({parent})"
-                    ),
+                    escape_pointer(class),
+                    format!("breakdown sums to {sum}, more than its parent {field} ({parent})"),
                 )
             })
         })
@@ -462,16 +509,88 @@ mod tests {
     }
 
     #[test]
-    fn a_group_split_by_another_step_is_two_runs() {
+    fn a_split_group_carries_one_total_from_v1_2_0() {
         let doc = acs_steps(
             ACS_KIND,
+            &[
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+                assistant(Some("msg_2"), Some(usage(3, 1))),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        let msg = validate(&doc)
+            .expect_err("two totals for one group double-count it")
+            .to_string();
+        assert!(
+            msg.contains("/paths/0/steps/0"),
+            "names the early step: {msg}"
+        );
+        assert!(
+            !msg.contains("/paths/0/steps/2"),
+            "the last step is fine: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_split_group_with_its_total_on_its_last_step_is_valid() {
+        let doc = acs_steps(
+            ACS_KIND,
+            &[
+                assistant(Some("msg_1"), None),
+                assistant(Some("msg_2"), Some(usage(3, 1))),
+                assistant(Some("msg_1"), Some(usage(10, 5))),
+            ],
+        );
+        validate(&doc).expect("one total per group, on the group's last step");
+    }
+
+    #[test]
+    fn v1_1_0_keeps_one_total_per_run() {
+        let doc = acs_steps(
+            toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_1_0,
             &[
                 assistant(Some("msg_1"), Some(usage(10, 5))),
                 assistant(None, None),
                 assistant(Some("msg_1"), Some(usage(4, 2))),
             ],
         );
-        validate(&doc).expect("each run of a group carries its own total");
+        validate(&doc).expect("v1.1.0 puts a total on each run's last step");
+    }
+
+    #[test]
+    fn breakdown_of_an_unreported_class_is_rejected() {
+        let u = json!({"input_tokens": 10, "output_tokens": null,
+                       "breakdowns": {"output": {"reasoning": 5}}});
+        let msg = validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("a breakdown cannot exceed an unreported parent")
+            .to_string();
+        assert!(msg.contains("breakdowns/output"), "points at it: {msg}");
+    }
+
+    #[test]
+    fn breakdown_of_a_missing_cache_class_is_rejected() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"cache_write": {"ttl_1h": 7}});
+        validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("cache_write_tokens is absent, so its breakdown exceeds it");
+    }
+
+    #[test]
+    fn breakdown_with_an_unknown_class_is_rejected() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"total": {"x": 1}});
+        let msg = validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("breakdowns are keyed by one of the four classes")
+            .to_string();
+        assert!(msg.contains("breakdowns/total"), "points at it: {msg}");
+    }
+
+    #[test]
+    fn huge_breakdowns_do_not_overflow() {
+        let mut u = usage(10, 5);
+        u["breakdowns"] = json!({"output": {"a": u64::MAX, "b": u64::MAX}});
+        validate(&acs_steps(ACS_KIND, &[assistant(None, Some(u))]))
+            .expect_err("the sum saturates and still exceeds the parent");
     }
 
     #[test]
