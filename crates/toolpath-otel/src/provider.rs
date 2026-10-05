@@ -178,7 +178,7 @@ pub fn token_usage(u: &Usage) -> Option<TokenUsage> {
     }
     let reasoning = match (u.reasoning_tokens, u.output_tokens) {
         (Some(r), Some(o)) => Some(r.min(o)),
-        (r, _) => r,
+        _ => None,
     };
     let mut breakdowns = BTreeMap::new();
     if let Some(r) = clamp(reasoning).filter(|r| *r > 0) {
@@ -263,6 +263,14 @@ mod tests {
                 .breakdowns
                 .is_empty()
         );
+        let no_output = Usage {
+            input_tokens: Some(10),
+            reasoning_tokens: Some(4),
+            ..Default::default()
+        };
+        let u = token_usage(&no_output).unwrap();
+        assert_eq!(u.output_tokens, None);
+        assert!(u.breakdowns.is_empty());
     }
 
     #[test]

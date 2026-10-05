@@ -446,7 +446,8 @@ keys are `input_tokens.cached` and `input_tokens.cache_write` (the
 `input_tokens.cache_write_5m` / `…_1h` split of the writes stays in
 `extra.otel.usage` only. Reasoning tokens (clamped to at most the output
 count) go to `breakdowns["output"]["reasoning"]`, informational and never
-summed. Each count is the generation's own (no cumulative counters); a
+summed; a generation that reports no output count has no breakdown, and
+its reasoning count stays in `extra.otel.usage`. Each count is the generation's own (no cumulative counters); a
 class the source does not report is absent, never zero-filled; a
 generation whose four classes are all zero or absent has no
 `token_usage`.
