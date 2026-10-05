@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use toolpath::v1::jsonl::JsonlLine;
 
+mod regressions;
+
 /// At most `max_steps` steps per body (`0`: no limit).
 fn limits(max_steps: usize) -> BatchLimits {
     BatchLimits::new(None, (max_steps > 0).then_some(max_steps))
