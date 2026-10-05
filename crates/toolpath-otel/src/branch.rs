@@ -62,7 +62,10 @@ pub struct Branches {
     /// `(node, extra parent)`: a sub-agent's last turn joins the delegating
     /// thread at `node`.
     pub merges: Vec<(usize, usize)>,
-    /// The main line's last turn.
+    /// The last unmarked turn in graph order, or the last turn when every
+    /// turn is marked. Unmarked turns are the main line's and any missing
+    /// continuation's tree, plus, while the main line is undecided, every
+    /// tree outside sub-agent threads.
     pub head: Option<usize>,
 }
 
