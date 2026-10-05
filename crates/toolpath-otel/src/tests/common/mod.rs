@@ -92,13 +92,23 @@ pub fn check_snapshot(name: &str, actual: &Value) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/snapshots")
         .join(format!("{name}.json"));
+    check_snapshot_at(
+        &path,
+        actual,
+        std::env::var_os("TOOLPATH_OTEL_BLESS").is_some(),
+    );
+}
+
+/// [`check_snapshot`] against the file at `path`; `bless` rewrites it.
+pub fn check_snapshot_at(path: &std::path::Path, actual: &Value, bless: bool) {
+    let name = path.display();
     let text = format!("{}\n", serde_json::to_string_pretty(actual).unwrap());
-    if std::env::var_os("TOOLPATH_OTEL_BLESS").is_some() {
+    if bless {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &text).unwrap();
+        std::fs::write(path, &text).unwrap();
         return;
     }
-    match std::fs::read_to_string(&path) {
+    match std::fs::read_to_string(path) {
         Ok(want) => assert!(
             want == text,
             "snapshot {name} differs\n--- committed\n{want}\n--- now\n{text}\n\
@@ -107,11 +117,8 @@ pub fn check_snapshot(name: &str, actual: &Value) {
         ),
         Err(_) => {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, &text).unwrap();
-            panic!(
-                "wrote new snapshot {}; review it, commit it, re-run",
-                path.display()
-            );
+            std::fs::write(path, &text).unwrap();
+            panic!("wrote new snapshot {name}; review it, commit it, re-run");
         }
     }
 }

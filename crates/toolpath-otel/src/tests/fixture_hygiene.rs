@@ -40,24 +40,60 @@ fn json(path: PathBuf) -> Value {
     serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
 }
 
-#[test]
-fn fixtures_hold_no_host_paths_names_or_keys() {
+/// The directories the leak scan reads: the fixtures, and the goldens and
+/// snapshots blessed from them.
+fn scan_roots() -> Vec<PathBuf> {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let roots = [
+    vec![
         root().join("semconv"),
         root().join("openinference"),
         root().join("equivalence"),
         root().join("openrouter"),
         crate_dir.join("tests/golden"),
         crate_dir.join("tests/snapshots"),
-    ];
+    ]
+}
+
+/// Every file under `roots`; a missing or empty root fails the scan.
+fn scanned_files(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut all = Vec::new();
-    for dir in &roots {
+    for dir in roots {
         assert!(dir.is_dir(), "{} is missing", dir.display());
         let before = all.len();
         files(dir, &mut all);
         assert!(all.len() > before, "{} is empty", dir.display());
     }
+    all
+}
+
+#[test]
+#[should_panic(expected = "is missing")]
+fn the_leak_scan_fails_on_a_missing_directory() {
+    scanned_files(&[root().join("no-such-fixture-dir")]);
+}
+
+#[test]
+fn the_leak_scan_fails_on_an_empty_directory() {
+    let dir = std::env::temp_dir().join(format!("toolpath-otel-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let scan = std::panic::catch_unwind(|| scanned_files(std::slice::from_ref(&dir)));
+    std::fs::remove_dir(&dir).unwrap();
+    let msg = *scan.unwrap_err().downcast::<String>().unwrap();
+    assert!(msg.ends_with("is empty"), "{msg}");
+}
+
+#[test]
+fn the_leak_scan_covers_the_goldens_and_snapshots() {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let roots = scan_roots();
+    for dir in ["tests/golden", "tests/snapshots"] {
+        assert!(roots.contains(&crate_dir.join(dir)), "{dir} is not scanned");
+    }
+}
+
+#[test]
+fn fixtures_hold_no_host_paths_names_or_keys() {
+    let all = scanned_files(&scan_roots());
     for f in all {
         let text = std::fs::read_to_string(&f).unwrap();
         let name = f.display();

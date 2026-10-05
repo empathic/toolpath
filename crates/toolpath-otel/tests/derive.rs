@@ -74,6 +74,19 @@ fn m0_paths_match_their_goldens() {
 }
 
 #[test]
+fn goldens_are_single_path_documents() {
+    for file in CONVERSATIONS {
+        let text = std::fs::read_to_string(golden(file)).unwrap();
+        let doc = Graph::from_json(&text)
+            .unwrap_or_else(|e| panic!("{file}: golden is not a Toolpath document: {e}"));
+        assert!(
+            doc.single_path().is_some(),
+            "{file}: not a single-path document"
+        );
+    }
+}
+
+#[test]
 fn request_order_does_not_change_the_path() {
     let mut reversed = openrouter("claude-code.ndjson");
     reversed.reverse();

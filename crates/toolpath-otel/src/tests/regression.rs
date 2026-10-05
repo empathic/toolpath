@@ -70,3 +70,19 @@ fn no_existing_input_has_an_unclaimed_span() {
         assert_eq!(read_deliveries(&deliveries(f)).unwrap().unclaimed, 0, "{f}");
     }
 }
+
+#[test]
+fn blessing_rewrites_a_stale_snapshot() {
+    let path =
+        std::env::temp_dir().join(format!("toolpath-otel-bless-{}.json", std::process::id()));
+    std::fs::write(&path, "stale\n").unwrap();
+    let actual = json!({"head": "h"});
+    let blessed = std::panic::catch_unwind(|| check_snapshot_at(&path, &actual, true));
+    let written = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(blessed.is_ok(), "bless must not fail on a stale snapshot");
+    assert_eq!(
+        written,
+        format!("{}\n", serde_json::to_string_pretty(&actual).unwrap())
+    );
+}
