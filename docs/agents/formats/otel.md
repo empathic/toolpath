@@ -809,7 +809,11 @@ counts. `derive_path_from_records(records, messages, config)` and
 `Fn(&MessageHash) -> Option<&StoredMessage>`. A store keeps the records of
 every delivery and adds the messages it lacks by hash, never replacing a
 stored one (two spellings of a number share a hash, below; replacing would
-change steps already derived), instead of the raw bodies.
+change steps already derived), instead of the raw bodies. The store must
+keep every message `read_generations` returns alongside its records,
+including those of a copy derivation may later discard as a duplicate: a
+record whose prompt chain the store lacks fails derivation with
+`OtelError::MessageMissing`, even for a copy that would be discarded.
 
 - **Record (`GenerationRecord`, `FORMAT` 1).** JSON
   `{"format": 1, "generation": {…}, "prompt": "<hash>"}`. `generation` is

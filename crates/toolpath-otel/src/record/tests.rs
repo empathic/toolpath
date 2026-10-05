@@ -841,10 +841,11 @@ fn a_marker_for_a_kept_call_never_marks_the_session_in_any_order() {
     }
 }
 
-/// Every record's prompt must be in the store, a copy derivation will
-/// discard included: the store keeps every message of every batch read.
+/// Pins the store contract (otel.md "Generation records"): a store keeps
+/// every message of every batch read, so a prompt missing even for a copy
+/// derivation would discard is a broken store and fails loudly.
 #[test]
-fn a_discarded_copys_missing_prompt_is_an_error() {
+fn store_contract_a_discarded_copys_missing_prompt_is_an_error() {
     let (or, m1) = gen_record("g", OR, "from the gateway");
     let (sem, _) = gen_record("g", "semconv", "from semconv");
     let store: HashMap<MessageHash, StoredMessage> = [(m1.hash(), m1)].into();
