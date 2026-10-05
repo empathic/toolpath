@@ -2397,3 +2397,5 @@ fn a_continuation_takes_consecutive_sends() {
         }
     }
 }
+
+mod property;
