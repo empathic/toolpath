@@ -1,6 +1,8 @@
-//! Committed OTel fixtures carry no host paths, host names or keys, and every
-//! capture directory has its traces, manifest and oracle.
+//! Committed OTel fixtures, and the goldens and snapshots derived from them,
+//! carry no host paths, host names or keys, and every capture directory has
+//! its traces, manifest and oracle.
 
+use super::common::captures::SEMCONV;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -19,16 +21,11 @@ const CAPTURES: [&str; 10] = [
     "semconv/gemini/event",
 ];
 
-const SEMCONV: [&str; 4] = ["openai-chat", "openai-responses", "anthropic", "gemini"];
-
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures/otel")
 }
 
 fn files(dir: &Path, out: &mut Vec<PathBuf>) {
-    if !dir.exists() {
-        return;
-    }
     for entry in std::fs::read_dir(dir).unwrap() {
         let p = entry.unwrap().path();
         if p.is_dir() {
@@ -45,11 +42,22 @@ fn json(path: PathBuf) -> Value {
 
 #[test]
 fn fixtures_hold_no_host_paths_names_or_keys() {
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let roots = [
+        root().join("semconv"),
+        root().join("openinference"),
+        root().join("equivalence"),
+        root().join("openrouter"),
+        crate_dir.join("tests/golden"),
+        crate_dir.join("tests/snapshots"),
+    ];
     let mut all = Vec::new();
-    for sub in ["semconv", "openinference", "equivalence", "openrouter"] {
-        files(&root().join(sub), &mut all);
+    for dir in &roots {
+        assert!(dir.is_dir(), "{} is missing", dir.display());
+        let before = all.len();
+        files(dir, &mut all);
+        assert!(all.len() > before, "{} is empty", dir.display());
     }
-    assert!(all.len() >= 15, "captures missing: {}", all.len());
     for f in all {
         let text = std::fs::read_to_string(&f).unwrap();
         let name = f.display();

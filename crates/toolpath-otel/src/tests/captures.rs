@@ -3,33 +3,16 @@
 //! the pinned instrumentation diverges from what the mock served, the
 //! divergence itself is pinned so a re-pin fails loudly.
 
+use super::common::captures::{
+    SEMCONV, continuation_dir, expected_in, for_each_span, manifest_in, semconv_dir, traces_in,
+};
 use crate::tests::otel::{
-    CacheBasis, DeriveConfig, Generation, History, ProfileSelection, Session, decode_input,
-    derive_path, group_sessions, read_deliveries, stitch,
+    CacheBasis, DeriveConfig, Generation, History, ProfileSelection, Session, derive_path,
+    group_sessions, read_deliveries, stitch,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
-const SEMCONV: [&str; 4] = ["openai-chat", "openai-responses", "anthropic", "gemini"];
-
-fn dir(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("../../test-fixtures/otel/semconv/{name}/span"))
-}
-fn traces(name: &str) -> Vec<Value> {
-    decode_input(
-        &std::fs::read(dir(name).join("traces.json")).unwrap(),
-        Some("traces.json"),
-    )
-    .unwrap()
-}
-fn expected(name: &str) -> Value {
-    serde_json::from_slice(&std::fs::read(dir(name).join("expected.json")).unwrap()).unwrap()
-}
-fn manifest(name: &str) -> Value {
-    serde_json::from_slice(&std::fs::read(dir(name).join("manifest.json")).unwrap()).unwrap()
-}
 fn gens(values: &[Value]) -> Vec<Generation> {
     let out = read_deliveries(values, ProfileSelection::Auto).unwrap();
     assert!(out.skipped.is_empty(), "{:?}", out.skipped);
@@ -56,18 +39,6 @@ fn conv(p: &Value) -> Vec<Value> {
         .collect()
 }
 
-/// Every span of every delivery, mutably (for the in-memory transformations).
-fn for_each_span(values: &mut [Value], mut f: impl FnMut(&mut Value)) {
-    for d in values {
-        for rs in d["resourceSpans"].as_array_mut().unwrap() {
-            for ss in rs["scopeSpans"].as_array_mut().unwrap() {
-                for sp in ss["spans"].as_array_mut().unwrap() {
-                    f(sp);
-                }
-            }
-        }
-    }
-}
 fn attr<'a>(sp: &'a Value, key: &str) -> Option<&'a Value> {
     sp["attributes"]
         .as_array()?
@@ -77,7 +48,7 @@ fn attr<'a>(sp: &'a Value, key: &str) -> Option<&'a Value> {
 }
 /// Every attribute key any span of the capture carries.
 fn attribute_keys(name: &str) -> BTreeSet<String> {
-    let mut values = traces(name);
+    let mut values = traces_in(&semconv_dir(name));
     let mut keys = BTreeSet::new();
     for_each_span(&mut values, |sp| {
         keys.extend(
@@ -96,18 +67,12 @@ fn attribute_keys(name: &str) -> BTreeSet<String> {
 /// `gen_ai.request.previous_response.id` on a copy, with the value the
 /// client really sent; the real capture is untouched.
 fn continuation_traces() -> Vec<Value> {
-    let d = dir("openai-responses").with_file_name("span-continuation");
-    let m: Value =
-        serde_json::from_slice(&std::fs::read(d.join("manifest.json")).unwrap()).unwrap();
+    let d = continuation_dir();
     assert_eq!(
-        m["synthetic"]["label"], "SYNTHETIC",
+        manifest_in(&d)["synthetic"]["label"], "SYNTHETIC",
         "the continuation copy must be labeled"
     );
-    decode_input(
-        &std::fs::read(d.join("traces.json")).unwrap(),
-        Some("traces.json"),
-    )
-    .unwrap()
+    traces_in(&d)
 }
 
 fn one_session(values: &[Value]) -> Session {
@@ -119,11 +84,11 @@ fn one_session(values: &[Value]) -> Session {
 #[test]
 fn each_capture_imports_as_its_oracle_says() {
     for name in SEMCONV {
-        let exp = expected(name);
+        let exp = expected_in(&semconv_dir(name));
         let values = if name == "openai-responses" {
             continuation_traces()
         } else {
-            traces(name)
+            traces_in(&semconv_dir(name))
         };
         let g = gens(&values);
         assert_eq!(g.len(), 3, "{name}");
@@ -166,8 +131,8 @@ fn each_capture_imports_as_its_oracle_says() {
 
 #[test]
 fn responses_capture_reflects_the_pinned_instrumentation() {
-    let exp = expected("openai-responses");
-    let mut values = traces("openai-responses");
+    let exp = expected_in(&semconv_dir("openai-responses"));
+    let mut values = traces_in(&semconv_dir("openai-responses"));
     let (mut continuation, mut reasoning) = (false, false);
     for_each_span(&mut values, |sp| {
         continuation |= attr(sp, "gen_ai.request.previous_response.id").is_some();
@@ -240,8 +205,8 @@ fn server_side_state_chains_linearly_and_equals_a_full_restatement() {
 fn gemini_idless_calls_get_positional_ids_paired_by_position() {
     // The pinned instrumentation synthesizes "<name>_<index>"; strip those
     // ids to exercise what an id-less emitter sends.
-    let exp = expected("gemini");
-    let mut values = traces("gemini");
+    let exp = expected_in(&semconv_dir("gemini"));
+    let mut values = traces_in(&semconv_dir("gemini"));
     for_each_span(&mut values, |sp| {
         for kv in sp["attributes"].as_array_mut().unwrap() {
             if kv["key"] != "gen_ai.input.messages" && kv["key"] != "gen_ai.output.messages" {
@@ -290,8 +255,8 @@ fn gemini_idless_calls_get_positional_ids_paired_by_position() {
 
 #[test]
 fn cache_tokens_are_additive_whatever_the_emitter_scope() {
-    let exp = expected("anthropic");
-    let g = gens(&traces("anthropic"));
+    let exp = expected_in(&semconv_dir("anthropic"));
+    let g = gens(&traces_in(&semconv_dir("anthropic")));
     for (g, served) in g.iter().zip(exp["usage_served"].as_array().unwrap()) {
         assert_eq!(
             g.usage.input_tokens,
@@ -301,14 +266,14 @@ fn cache_tokens_are_additive_whatever_the_emitter_scope() {
         assert_eq!(g.usage.cache_basis, Some(CacheBasis::Inclusive));
         assert_eq!(g.usage.cached_input_tokens, served["cache_read"].as_u64());
     }
-    let turns = conv(&path(&one_session(&traces("anthropic"))));
+    let turns = conv(&path(&one_session(&traces_in(&semconv_dir("anthropic")))));
     let first = turns.iter().find(|t| t["token_usage"].is_object()).unwrap();
     assert_eq!(first["token_usage"]["input_tokens"], 11);
     assert_eq!(first["token_usage"]["cache_read_tokens"], 7);
     assert_eq!(first["token_usage"]["cache_write_tokens"], 5);
 
-    let chat_exp = expected("openai-chat");
-    let chat = gens(&traces("openai-chat"));
+    let chat_exp = expected_in(&semconv_dir("openai-chat"));
+    let chat = gens(&traces_in(&semconv_dir("openai-chat")));
     assert_eq!(
         chat[0].usage.input_tokens,
         chat_exp["usage_served"][0]["input"].as_u64()
@@ -321,7 +286,7 @@ fn cache_tokens_are_additive_whatever_the_emitter_scope() {
     // pin), whose span shape differs from the 1.2b0 captures. Pinned so a
     // re-pin fails here and the format note is revisited.
     assert_eq!(
-        manifest("openai-chat")["packages"]["opentelemetry-util-genai"],
+        manifest_in(&semconv_dir("openai-chat"))["packages"]["opentelemetry-util-genai"],
         "1.1b0"
     );
     let scope = json!({"name": "opentelemetry.util.genai.handler", "version": "1.1b0"});
@@ -352,8 +317,8 @@ fn cache_tokens_are_additive_whatever_the_emitter_scope() {
 
 #[test]
 fn reasoning_is_retained_and_kept_out_of_the_key() {
-    let exp = expected("anthropic");
-    let s = one_session(&traces("anthropic"));
+    let exp = expected_in(&semconv_dir("anthropic"));
+    let s = one_session(&traces_in(&semconv_dir("anthropic")));
     let first = &s.generations[0];
     assert_eq!(
         first.completion.reasoning.as_deref(),
@@ -377,7 +342,7 @@ fn reasoning_is_retained_and_kept_out_of_the_key() {
             .echoed
     );
     assert!(exp["signature_sent_in_history"].as_bool().unwrap());
-    let text = std::fs::read_to_string(dir("anthropic").join("traces.json")).unwrap();
+    let text = std::fs::read_to_string(semconv_dir("anthropic").join("traces.json")).unwrap();
     assert!(
         !text.contains("sig-fixture-1"),
         "the pinned instrumentation drops signatures"
@@ -385,11 +350,11 @@ fn reasoning_is_retained_and_kept_out_of_the_key() {
     // Hidden reasoning, a count only. The Responses capture carries no
     // count at the pin, so the row runs on Gemini, whose instrumentation
     // reports thoughts and folds them into output.
-    let exp = expected("gemini");
+    let exp = expected_in(&semconv_dir("gemini"));
     let served = &exp["usage_served"][0];
     let thoughts = served["thoughts"].as_u64().unwrap();
     assert_eq!(thoughts, 4);
-    let r = gens(&traces("gemini"));
+    let r = gens(&traces_in(&semconv_dir("gemini")));
     assert_eq!(r[0].usage.reasoning_tokens, Some(thoughts));
     assert_eq!(
         r[0].usage.output_tokens,
@@ -397,7 +362,7 @@ fn reasoning_is_retained_and_kept_out_of_the_key() {
         "google-genai 1.2b0 reports output inclusive of thoughts"
     );
     assert_eq!(r[0].completion.reasoning, None);
-    let turns = conv(&path(&one_session(&traces("gemini"))));
+    let turns = conv(&path(&one_session(&traces_in(&semconv_dir("gemini")))));
     let with: Vec<&Value> = turns
         .iter()
         .filter(|t| t["token_usage"]["breakdowns"].is_object())
@@ -431,10 +396,10 @@ fn a_thought_summary_becomes_thinking() {
 #[test]
 fn system_prompt_placement_is_normalized() {
     for name in ["anthropic", "openai-chat", "gemini"] {
-        let turns = conv(&path(&one_session(&traces(name))));
+        let turns = conv(&path(&one_session(&traces_in(&semconv_dir(name)))));
         assert_eq!(
             (turns[0]["role"].as_str(), turns[0]["text"].as_str()),
-            (Some("system"), expected(name)["system_text"].as_str()),
+            (Some("system"), expected_in(&semconv_dir(name))["system_text"].as_str()),
             "{name}"
         );
     }
@@ -442,8 +407,8 @@ fn system_prompt_placement_is_normalized() {
 
 #[test]
 fn extra_candidates_are_retained_not_turned_into_turns() {
-    let exp = expected("openai-chat");
-    let g = gens(&traces("openai-chat"));
+    let exp = expected_in(&semconv_dir("openai-chat"));
+    let g = gens(&traces_in(&semconv_dir("openai-chat")));
     let alt = &g[2].source_meta["choices"][0]["parts"][0]["content"];
     assert_eq!(alt, &exp["extra_choices"][2][0]);
     assert_eq!(
@@ -461,7 +426,7 @@ fn metadata_only_captures_derive_skeleton_paths() {
         "gen_ai.tool.definitions",
     ];
     for name in SEMCONV {
-        let mut values = traces(name);
+        let mut values = traces_in(&semconv_dir(name));
         for_each_span(&mut values, |sp| {
             sp["attributes"]
                 .as_array_mut()

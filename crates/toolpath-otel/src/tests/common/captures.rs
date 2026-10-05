@@ -31,6 +31,10 @@ pub fn expected_in(dir: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(dir.join("expected.json")).unwrap()).unwrap()
 }
 
+pub fn manifest_in(dir: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap()
+}
+
 /// Every span of every delivery, mutably (for in-memory transformations).
 pub fn for_each_span(values: &mut [Value], mut f: impl FnMut(&mut Value)) {
     for d in values {
