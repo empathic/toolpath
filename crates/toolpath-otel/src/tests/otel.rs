@@ -63,10 +63,9 @@ pub fn derive_paths<'a>(
     let paths = group_sessions(std::mem::take(&mut out.generations))
         .into_iter()
         .map(|mut s| {
-            s.truncated = s.session_id.as_deref().is_some_and(|id| {
-                out.skipped.iter().any(|k| {
-                    k.reason == SkipReason::Truncated && k.session_id.as_deref() == Some(id)
-                })
+            s.truncated = out.skipped.iter().any(|k| {
+                k.reason == SkipReason::Truncated
+                    && (k.session_id.is_none() || k.session_id == s.session_id)
             });
             derive_path(&s, config)
         })

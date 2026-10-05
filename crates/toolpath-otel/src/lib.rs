@@ -152,10 +152,13 @@ pub fn derive_path(requests: &[Value], config: &DeriveConfig) -> Result<Derived<
             ids.into_iter().map(str::to_string).collect(),
         ));
     }
-    let truncated = ids.first().is_some_and(|id| {
-        out.skipped
-            .iter()
-            .any(|s| s.reason == SkipReason::Truncated && s.session_id.as_deref() == Some(id))
+    // Every request belongs to this session by contract, so a truncated
+    // skip without a session id counts too.
+    let truncated = out.skipped.iter().any(|s| {
+        s.reason == SkipReason::Truncated
+            && s.session_id
+                .as_deref()
+                .is_none_or(|id| ids.is_empty() || ids.contains(id))
     });
     let mut session = session::Session::from_generations(out.generations)
         .ok_or(OtelError::NoGenerations { skipped })?;

@@ -317,6 +317,26 @@ fn skip_counts_count_each_reason() {
     ]);
     assert_eq!((cut.truncated, cut.total()), (1, 1));
 
+    let without_session_id = |mut v: Value| {
+        let span = &mut v["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+        span["attributes"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|a| a["key"] != "session.id");
+        v
+    };
+    let idless = derive_path(
+        &[
+            without_session_id(generation("g1", GOOD)),
+            without_session_id(generation("g2", r#"{"messages":[{"role""#)),
+        ],
+        &DeriveConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(idless.skipped.truncated, 1);
+    assert_eq!(session_id(&idless.output), None);
+    assert_eq!(idless.output.meta.unwrap().extra["otel"]["truncated"], true);
+
     let missing = skips(&[generation("g1", GOOD), generation("", GOOD)]);
     assert_eq!((missing.missing_payload, missing.total()), (1, 1));
 
