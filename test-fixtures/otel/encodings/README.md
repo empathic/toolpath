@@ -10,7 +10,7 @@ rules in `crates/toolpath-otel/tests/input.rs`; `binary_input.rs` under
 ## Binary forms
 
 Built from `../openrouter/synthetic-fork.ndjson` (4 deliveries) by the OTel
-fixture tooling (`scripts/otel-fixtures/`, which lands separately). Protobuf
+fixture tooling (`scripts/otel-fixtures/make_binary_encodings.py`). Protobuf
 bytes come from an independent Python encoder that shares no code with the
 Rust crate; zstd comes from the `zstd` CLI (v1.5.7, level 19). The Collector file
 exporter layouts follow opentelemetry-collector-contrib v0.161.0
