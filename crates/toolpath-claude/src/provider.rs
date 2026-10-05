@@ -100,7 +100,8 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let file_mutations = compute_file_mutations(&tool_uses, entry.cwd.as_deref());
 
-    // All-zero top-level usage is a placeholder (see claude-code/usage.md).
+    // Omit all-zero top-level counters, common on synthetic placeholders.
+    // Billed iterations can still be nonzero (see claude-code/usage.md).
     let token_usage = msg
         .usage
         .as_ref()
