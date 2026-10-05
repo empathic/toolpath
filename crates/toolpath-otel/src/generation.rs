@@ -74,16 +74,6 @@ impl Generation {
     pub fn is_delta(&self) -> bool {
         self.history == History::Delta || self.absent.prompt
     }
-
-    /// The profile name used for meta and the extras namespace; an empty
-    /// `profile` (older serializations) reads as `openrouter`.
-    pub fn profile_name(&self) -> &str {
-        if self.profile.is_empty() {
-            crate::profile::openrouter::NAME
-        } else {
-            &self.profile
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -433,7 +423,6 @@ mod tests {
     fn generation_without_optional_keys_reads_with_defaults() {
         let g: Generation = serde_json::from_value(without_optional_keys()).unwrap();
         assert_eq!(g.profile, "");
-        assert_eq!(g.profile_name(), "openrouter");
         assert_eq!(g.continues, None);
         assert_eq!(g.history, History::Full);
         assert_eq!(g.absent, Absent::default());

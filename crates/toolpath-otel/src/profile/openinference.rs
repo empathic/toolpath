@@ -219,7 +219,6 @@ fn extract_span(id: String, resource: &Resource, scope: &Scope, span: &Span) -> 
     let model = string(&span.attributes, "llm.model_name");
     Generation {
         id,
-        profile: NAME.to_string(),
         trace_id: span.trace_id.to_string(),
         start_ns: nanos(span.start_time_unix_nano).unwrap_or(0),
         end_ns: nanos(span.end_time_unix_nano).unwrap_or(0),

@@ -658,10 +658,10 @@ mod tests {
     }
 
     /// Forwards to a built-in profile and records, per extracted unit,
-    /// `identify`'s generation id beside the generation's.
+    /// `identify`'s generation id beside the extracted id and profile.
     struct Recording(
         &'static dyn Profile,
-        std::sync::Mutex<Vec<(Option<String>, String)>>,
+        std::sync::Mutex<Vec<(Option<String>, String, String)>>,
     );
 
     impl Profile for Recording {
@@ -694,7 +694,10 @@ mod tests {
         ) -> std::result::Result<Generation, SkipReason> {
             let g = self.0.extract(unit, trace, cx)?;
             let ident = self.0.identify(unit).generation_id;
-            self.1.lock().unwrap().push((ident, g.id.clone()));
+            self.1
+                .lock()
+                .unwrap()
+                .push((ident, g.id.clone(), g.profile.clone()));
             Ok(g)
         }
     }
@@ -737,9 +740,22 @@ mod tests {
             read_with(&values, &[&rec]).unwrap();
             let pairs = rec.1.into_inner().unwrap();
             assert!(!pairs.is_empty(), "{} extracted nothing", p.name());
-            for (ident, id) in pairs {
+            for (ident, id, _) in pairs {
                 assert_eq!(ident.as_deref(), Some(id.as_str()), "{}", p.name());
             }
+        }
+    }
+
+    #[test]
+    fn only_the_walker_names_a_generations_profile() {
+        let values = capture_deliveries();
+        for p in profile::BUILTIN {
+            let rec = Recording(*p, Default::default());
+            let out = read_with(&values, &[&rec]).unwrap();
+            for (_, id, extracted) in rec.1.into_inner().unwrap() {
+                assert_eq!(extracted, "", "{} set profile on {id}", p.name());
+            }
+            assert!(out.generations.iter().all(|g| g.profile == p.name()));
         }
     }
 

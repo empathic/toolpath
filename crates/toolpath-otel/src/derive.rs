@@ -276,10 +276,7 @@ fn generation_extra(gi: usize, gens: &[Generation], graph: &TurnGraph) -> Map<St
     }
     m.insert("dropped".into(), json!(link.dropped));
     if !g.source_meta.is_empty() {
-        m.insert(
-            g.profile_name().to_string(),
-            Value::Object(g.source_meta.clone()),
-        );
+        m.insert(g.profile.clone(), Value::Object(g.source_meta.clone()));
     }
     if let Some(flags) = absent_flags(g) {
         m.insert("absent".into(), flags);
@@ -322,7 +319,7 @@ fn stamp_meta(
 ) {
     let gens = &session.generations;
     let mut m = Map::new();
-    let profiles: BTreeSet<&str> = gens.iter().map(Generation::profile_name).collect();
+    let profiles: BTreeSet<&str> = gens.iter().map(|g| g.profile.as_str()).collect();
     stamp_profiles(&mut m, &profiles);
     m.insert("harness".into(), json!(harness.as_str()));
     stamp_hint_and_missing_continuations(&mut m, gens, graph);
@@ -366,7 +363,7 @@ fn stamp_meta(
         for k in p.session_meta_keys() {
             let first = gens
                 .iter()
-                .filter(|g| g.profile_name() == *name)
+                .filter(|g| g.profile == *name)
                 .find_map(|g| g.source_meta.get(*k));
             if let Some(v) = first {
                 pm.insert((*k).to_string(), v.clone());

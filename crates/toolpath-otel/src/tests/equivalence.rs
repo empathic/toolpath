@@ -86,9 +86,7 @@ fn reencoded_fixtures_are_read_by_semconv_under_auto() {
         assert!(got.skipped.is_empty(), "{re}: {:?}", got.skipped);
         assert_eq!(got.unclaimed, 0, "{re}");
         assert!(
-            want.generations
-                .iter()
-                .all(|g| g.profile_name() == "openrouter"),
+            want.generations.iter().all(|g| g.profile == "openrouter"),
             "{m0}"
         );
         assert!(

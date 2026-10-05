@@ -929,7 +929,6 @@ fn extract_unit(unit: &Unit<'_>, exclusive: &[&str]) -> Result<Generation, SkipR
     // Struct literal (see `usage`).
     Ok(Generation {
         id,
-        profile: "semconv".to_string(),
         trace_id,
         start_ns,
         end_ns,

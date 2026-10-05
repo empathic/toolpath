@@ -21,8 +21,7 @@ pub const CONNECTION_TEST_SPAN: &str = "openrouter-connection-test";
 pub const TEST_GENERATION_SPAN: &str = "Test Generation";
 
 const SERVICE_NAME: &str = "service.name";
-/// The profile's name; also the name a generation serialized without a
-/// `profile` implies (see `Generation::profile_name`).
+/// The profile's name.
 pub(crate) const NAME: &str = "openrouter";
 const SERVICE: &str = "openrouter";
 const SCOPE: &str = "openrouter";
@@ -422,7 +421,6 @@ fn parse_generation<'a>(
         response_model: a.str("gen_ai.response.model").map(str::to_string),
         provider: a.str("gen_ai.provider.name").map(str::to_string),
         finish_reason: a.str("gen_ai.response.finish_reason").map(str::to_string),
-        profile: String::new(),
         source_meta: meta,
         history: if absent.prompt {
             History::Delta

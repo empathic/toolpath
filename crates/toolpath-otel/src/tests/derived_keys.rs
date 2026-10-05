@@ -1,10 +1,8 @@
 //! Derived-Path keys (docs/agents/formats/otel.md: Retention, Path meta and
 //! Per step).
 
-use super::common::*;
 use crate::tests::otel::{
-    Absent, DeriveConfig, Generation, History, Message, ProfileSelection, Session, derive_path,
-    group_sessions, read_deliveries,
+    Absent, DeriveConfig, Generation, History, Message, Session, derive_path,
 };
 use serde_json::{Value, json};
 
@@ -49,43 +47,6 @@ fn producer<'a>(ex: &'a [Value], gid: &str) -> &'a Value {
     ex.iter()
         .find(|e| e["generation_id"] == gid)
         .unwrap_or_else(|| panic!("no producer step for {gid}"))
-}
-
-#[test]
-fn generations_persisted_without_a_profile_keep_the_openrouter_namespace() {
-    // A generation serialized without `profile` reads back as "".
-    let values = deliveries("claude-code.ndjson");
-    let out = read_deliveries(&values, ProfileSelection::Auto).unwrap();
-    let persisted: Vec<Generation> = out
-        .generations
-        .iter()
-        .map(|g| {
-            let mut v = serde_json::to_value(g).unwrap();
-            v.as_object_mut().unwrap().remove("profile");
-            serde_json::from_value(v).unwrap()
-        })
-        .collect();
-    assert!(persisted.iter().all(|g| g.profile.is_empty()));
-    let key = group_sessions(out.generations.clone())[0].key.clone();
-    let a = doc(&Session::new(
-        key.clone(),
-        persisted[0].session_id.clone(),
-        persisted,
-    ));
-    let b = doc(&Session::new(
-        key,
-        out.generations[0].session_id.clone(),
-        out.generations,
-    ));
-    assert_eq!(a["meta"]["otel"]["profile"], "openrouter");
-    assert!(
-        otel_extras(&a)
-            .iter()
-            .any(|e| e.get("openrouter").is_some())
-    );
-    assert!(otel_extras(&a).iter().all(|e| e.get("").is_none()));
-    assert!(otel_extras(&a).iter().all(|e| e.get("unknown").is_none()));
-    assert_eq!(a, b);
 }
 
 #[test]
