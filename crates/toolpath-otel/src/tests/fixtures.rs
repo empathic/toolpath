@@ -344,7 +344,6 @@ fn openrouter_generations_carry_the_neutral_defaults() {
             assert!(!g.absent.any());
             assert!(g.tool_results.is_empty());
             assert!(!g.compacted);
-            assert_eq!(g.harness_hint, None);
             assert!(g.completion.reasoning_details.is_empty());
         }
     }

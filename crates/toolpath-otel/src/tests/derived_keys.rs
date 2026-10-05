@@ -111,24 +111,13 @@ fn skeleton_turns_carry_absent_and_producer_keys() {
 }
 
 #[test]
-fn missing_continuations_and_unmapped_hints_reach_meta() {
+fn missing_continuations_reach_meta() {
     let mut g = gen_("g1", 1, "semconv", vec![user("more")], "done");
     g.history = History::Delta;
     g.continues = Some("gone".into());
-    g.harness_hint = Some("gemini-cli".into());
     let d = doc(&Session::new("s".into(), None, vec![g]));
     assert_eq!(d["meta"]["otel"]["missing_continuations"], json!(["gone"]));
-    assert_eq!(d["meta"]["otel"]["harness_hint"], "gemini-cli");
     assert_eq!(d["meta"]["otel"]["harness"], "unknown");
-}
-
-#[test]
-fn a_mapped_hint_sets_harness_and_is_not_repeated() {
-    let mut g = gen_("g1", 1, "semconv", vec![user("hi")], "a");
-    g.harness_hint = Some("codex".into());
-    let d = doc(&Session::new("s".into(), None, vec![g]));
-    assert_eq!(d["meta"]["otel"]["harness"], "codex");
-    assert!(d["meta"]["otel"].get("harness_hint").is_none());
 }
 
 #[test]

@@ -322,7 +322,7 @@ fn stamp_meta(
     let profiles: BTreeSet<&str> = gens.iter().map(|g| g.profile.as_str()).collect();
     stamp_profiles(&mut m, &profiles);
     m.insert("harness".into(), json!(harness.as_str()));
-    stamp_hint_and_missing_continuations(&mut m, gens, graph);
+    stamp_missing_continuations(&mut m, graph);
     put(&mut m, "session_id", session.session_id.as_deref());
     m.insert("derived_session_id".into(), json!(derived_id));
     m.insert("session_key".into(), json!(session.key));
@@ -425,20 +425,8 @@ fn stamp_profiles(otel: &mut Map<String, Value>, profiles: &BTreeSet<&str>) {
     }
 }
 
-/// `meta.otel.harness_hint` (the first hint that does not map to a known
-/// harness) and `meta.otel.missing_continuations`.
-fn stamp_hint_and_missing_continuations(
-    otel: &mut Map<String, Value>,
-    gens: &[Generation],
-    graph: &TurnGraph,
-) {
-    if let Some(h) = gens
-        .iter()
-        .filter_map(|g| g.harness_hint.as_deref())
-        .find(|h| SourceHarness::from_hint(h).is_none())
-    {
-        otel.insert("harness_hint".into(), json!(h));
-    }
+/// `meta.otel.missing_continuations`.
+fn stamp_missing_continuations(otel: &mut Map<String, Value>, graph: &TurnGraph) {
     if !graph.missing_continuations.is_empty() {
         otel.insert(
             "missing_continuations".into(),

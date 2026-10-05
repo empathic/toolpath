@@ -33,13 +33,6 @@ impl SourceHarness {
             SourceHarness::Unknown => "unknown",
         }
     }
-
-    /// Exact inverse of [`SourceHarness::as_str`]; `Unknown` is never a hint.
-    pub fn from_hint(hint: &str) -> Option<SourceHarness> {
-        [Self::ClaudeCode, Self::Codex, Self::Opencode, Self::Pi]
-            .into_iter()
-            .find(|h| h.as_str() == hint)
-    }
 }
 
 /// What harness inference looks at.
@@ -52,8 +45,6 @@ pub struct HarnessSignals<'a> {
     /// Text of the first generation's leading system-like message.
     pub system_text: Cow<'a, str>,
     pub tool_names: BTreeSet<&'a str>,
-    /// The first `harness_hint`; wins in `infer_harness` when it maps.
-    pub hint: Option<String>,
 }
 
 pub fn signals(session: &Session) -> HarnessSignals<'_> {
@@ -80,7 +71,6 @@ pub fn signals(session: &Session) -> HarnessSignals<'_> {
             .flat_map(|g| &g.completion.tool_calls)
             .map(|c| c.function.name.as_str())
             .collect(),
-        hint: gens.iter().find_map(|g| g.harness_hint.clone()),
     }
 }
 
@@ -124,12 +114,8 @@ const RULES: [(Rule, SourceHarness); 5] = [
     (pi, SourceHarness::Pi),
 ];
 
-/// A hint that [`SourceHarness::from_hint`] maps wins; else the first
-/// matching rule. An unmapped hint is ignored here (derive keeps it).
+/// The first matching rule.
 pub fn infer_harness(s: &HarnessSignals) -> SourceHarness {
-    if let Some(h) = s.hint.as_deref().and_then(SourceHarness::from_hint) {
-        return h;
-    }
     RULES
         .iter()
         .find(|(rule, _)| rule(s))
@@ -155,7 +141,6 @@ mod tests {
             has_developer: dev,
             system_text: system.into(),
             tool_names: tools.iter().copied().collect(),
-            hint: None,
         }
     }
 
@@ -248,46 +233,5 @@ mod tests {
         let sig = signals(&s);
         assert!(sig.system_text.contains("You are Claude Code"));
         assert_eq!(infer_harness(&sig), SourceHarness::ClaudeCode);
-    }
-
-    #[test]
-    fn from_hint_is_the_exact_inverse_of_as_str() {
-        for h in [
-            SourceHarness::ClaudeCode,
-            SourceHarness::Codex,
-            SourceHarness::Opencode,
-            SourceHarness::Pi,
-        ] {
-            assert_eq!(SourceHarness::from_hint(h.as_str()), Some(h));
-        }
-        assert_eq!(SourceHarness::from_hint("unknown"), None);
-        assert_eq!(SourceHarness::from_hint("gemini-cli"), None);
-        assert_eq!(
-            SourceHarness::from_hint("Claude-Code"),
-            None,
-            "exact, case-sensitive"
-        );
-    }
-
-    #[test]
-    fn a_mapped_hint_wins_over_every_rule() {
-        let g = Generation {
-            session_id: Some("ses_abc".into()), // the opencode rule would match
-            harness_hint: Some("pi".into()),
-            ..Default::default()
-        };
-        let s = Session::new("k".into(), g.session_id.clone(), vec![g]);
-        assert_eq!(infer_harness(&signals(&s)), SourceHarness::Pi);
-    }
-
-    #[test]
-    fn an_unmapped_hint_is_ignored_by_inference() {
-        let g = Generation {
-            session_id: Some("ses_abc".into()),
-            harness_hint: Some("gemini-cli".into()),
-            ..Default::default()
-        };
-        let s = Session::new("k".into(), g.session_id.clone(), vec![g]);
-        assert_eq!(infer_harness(&signals(&s)), SourceHarness::Opencode);
     }
 }

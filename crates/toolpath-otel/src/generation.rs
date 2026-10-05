@@ -63,9 +63,6 @@ pub struct Generation {
     /// The request history was compacted by the client.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacted: bool,
-    /// The telemetry itself names the harness (Tier 3 exporters).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub harness_hint: Option<String>,
 }
 
 impl Generation {
@@ -428,7 +425,6 @@ mod tests {
         assert_eq!(g.absent, Absent::default());
         assert!(g.tool_results.is_empty());
         assert!(!g.compacted);
-        assert_eq!(g.harness_hint, None);
         assert!(g.completion.reasoning_details.is_empty());
         assert_eq!(g.usage.cache_basis, None);
         assert!(!g.is_delta());
@@ -445,7 +441,6 @@ mod tests {
             "absent",
             "tool_results",
             "compacted",
-            "harness_hint",
         ] {
             assert!(v.get(key).is_none(), "{key} serialized at its default");
         }
@@ -472,7 +467,6 @@ mod tests {
             },
         );
         g.compacted = true;
-        g.harness_hint = Some("claude-code".into());
         g.completion.reasoning_details =
             vec![serde_json::json!({"type": "reasoning", "content": "r"})];
         g.usage.cache_basis = Some(CacheBasis::Exclusive);

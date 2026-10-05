@@ -192,14 +192,10 @@ an `unknown` harness gives `otel`. `producer.version` is never set (the
 telemetry carries no harness version). `meta.source` stays `otel`: it names
 the derivation, not the harness. The harness's own deriver may name the
 producer differently: `toolpath-codex` writes Codex's `originator`
-(`codex-tui`, `codex_exec`, …), and `toolpath-pi` sets no producer. A generation's `harness_hint` that names one of these wins
-over the inference. A hint that names none of them is ignored by the
-inference, which falls through to the conversation rules below, and the
-first such hint is kept as `meta.extra.otel.harness_hint`. `gemini-cli` is
-such a hint: `toolpath-otel`'s harness set has no Gemini CLI entry and no
-cwd marker for it, so a Gemini session records whatever the rules find
-(usually `unknown`). No built-in profile sets `harness_hint` yet. The working directory
-becomes `path.base`:
+(`codex-tui`, `codex_exec`, …), and `toolpath-pi` sets no producer.
+`toolpath-otel`'s harness set has no Gemini CLI entry and no cwd marker for
+it, so a Gemini session records whatever the rules find (usually
+`unknown`). The working directory becomes `path.base`:
 
 | Harness | cwd marker |
 |---|---|
@@ -678,7 +674,6 @@ outside it: their positional ids never equal the source's `""`.
 - **Path meta** `meta.extra.otel` (may change as the session grows):
   `profile` (the one profile that read the session; `"mixed"` plus a
   `profiles` list when several did; absent when none), `harness`,
-  `harness_hint` (a hint that names no known harness),
   `missing_continuations` (when any), `session_id`, `derived_session_id`, `session_key`,
   `request_session_id`, `user_id`, `client_key`, `generation_ids`
   (ordered), `trace_ids`, `cost_usd {total, by_model, priced_generations,
