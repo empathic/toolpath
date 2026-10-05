@@ -7,7 +7,7 @@ use crate::normalize::{canonical, completion_message, content_hash, is_dropped, 
 use crate::session::Session;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 #[non_exhaustive]
@@ -117,19 +117,6 @@ fn assign_positional_ids(turn_id: &str, m: &mut Message) {
     }
 }
 
-/// `(node, positional id)` for each of a node's calls that got a positional
-/// id, in call order: what id-less tool messages pair with.
-fn positional_calls(graph: &TurnGraph, ni: usize) -> VecDeque<(usize, String)> {
-    let node = &graph.nodes[ni];
-    node.message
-        .tool_calls
-        .iter()
-        .enumerate()
-        .filter(|(i, c)| c.id == positional_call_id(&node.id, *i))
-        .map(|(_, c)| (ni, c.id.clone()))
-        .collect()
-}
-
 /// Where a generation's chain starts.
 enum Target {
     /// `Full`, or a `Delta` with nothing to continue: the session root.
@@ -159,33 +146,257 @@ fn continuation_target(gens: &[Generation], gi: usize, ids: &HashMap<&str, usize
     Target::Root
 }
 
-/// What stitching one prompt message did, so an identical prompt prefix
-/// that starts from the same chain point can replay it without
-/// normalizing and hashing again.
-struct Replay {
-    /// The chain id after the message (unchanged by a dropped one).
+/// A persistent stack, newest first: clones share their tails.
+#[derive(Debug)]
+struct Link<T> {
+    head: T,
+    tail: Stack<T>,
+}
+
+type Stack<T> = Option<Rc<Link<T>>>;
+
+fn push<T>(stack: &mut Stack<T>, head: T) {
+    let tail = stack.take();
+    *stack = Some(Rc::new(Link { head, tail }));
+}
+
+fn iter<T>(stack: &Stack<T>) -> impl Iterator<Item = &T> {
+    std::iter::successors(stack.as_deref(), |l| l.tail.as_deref()).map(|l| &l.head)
+}
+
+/// The walk state after some prompt messages: everything stitching the
+/// next message reads besides the graph. Cheap to clone, so a trie node
+/// keeps the cursor its prefix leaves behind.
+#[derive(Debug, Clone)]
+struct Cursor {
+    /// Chain id of the last kept message.
     prev: Rc<str>,
-    /// Content hash of a dropped message.
-    dropped: Option<String>,
-    /// Node of a turn message.
-    node: Option<usize>,
+    /// Id of the last turn message.
+    prev_turn: Option<Rc<str>>,
+    /// The latest turn, whose id-less calls id-less tool messages pair
+    /// with, and how many of them have been taken.
+    pending: Option<usize>,
+    popped: usize,
+    /// The prompt's dropped messages so far.
+    dropped: Stack<Dropped>,
+    /// Each turn so far with the ids of its calls: a call id binds to the
+    /// latest turn carrying it.
+    calls: Stack<(usize, Vec<String>)>,
+}
+
+impl Cursor {
+    fn new(prev: &str) -> Self {
+        Cursor {
+            prev: prev.into(),
+            prev_turn: None,
+            pending: None,
+            popped: 0,
+            dropped: None,
+            calls: None,
+        }
+    }
+
+    /// The cursor just after turn `ni`, of id `id`, whose message is `m`.
+    fn enter_turn(&mut self, ni: usize, id: &str, m: &Message) {
+        let ids = m
+            .tool_calls
+            .iter()
+            .filter(|c| !c.id.is_empty())
+            .map(|c| c.id.clone())
+            .collect();
+        push(&mut self.calls, (ni, ids));
+        self.pending = Some(ni);
+        self.popped = 0;
+        self.prev = id.into();
+        self.prev_turn = Some(id.into());
+    }
+
+    /// The turn node call id `id` binds to.
+    fn call(&self, id: &str) -> Option<usize> {
+        iter(&self.calls)
+            .find(|(_, ids)| ids.iter().any(|c| c == id))
+            .map(|(ni, _)| *ni)
+    }
+
+    /// The next of the latest turn's id-less calls, as `(node, positional id)`.
+    fn pop_pending(&mut self, graph: &TurnGraph) -> Option<(usize, String)> {
+        let ni = self.pending?;
+        let node = &graph.nodes[ni];
+        let hit = node
+            .message
+            .tool_calls
+            .iter()
+            .enumerate()
+            .filter(|(i, c)| c.id == positional_call_id(&node.id, *i))
+            .nth(self.popped)
+            .map(|(_, c)| (ni, c.id.clone()));
+        self.popped += 1;
+        hit
+    }
+
+    /// Stitch prompt message `mi` of generation `gi`, `m`, whose effective
+    /// index is `base + mi`.
+    fn step(&mut self, st: &mut Stitcher, gi: usize, mi: usize, base: usize, m: &Message) {
+        let norm = normalize(m);
+        if is_dropped(base + mi, &m.role) {
+            let h = content_hash(&norm);
+            st.graph
+                .dropped_content
+                .entry(h.clone())
+                .or_insert((gi, norm.text.clone()));
+            push(
+                &mut self.dropped,
+                Dropped {
+                    index: mi,
+                    role: m.role.clone(),
+                    content_hash: h,
+                },
+            );
+            return;
+        }
+        let id = chain_id(&self.prev, &canonical(&norm));
+        if m.role == "tool" {
+            let tcid = m.tool_call_id.as_deref().unwrap_or("");
+            let hit = if tcid.is_empty() {
+                self.pop_pending(&st.graph)
+            } else {
+                self.call(tcid).map(|ni| (ni, tcid.to_string()))
+            };
+            if let Some((ni, key)) = hit {
+                st.graph.nodes[ni]
+                    .results
+                    .entry(key)
+                    .or_insert(ToolOutcome {
+                        content: norm.text.clone(),
+                        is_error: norm.is_error,
+                    });
+            }
+            self.prev = id.into();
+            return;
+        }
+        let ni = match st.index.get(&id) {
+            Some(&ni) => {
+                let node = &mut st.graph.nodes[ni];
+                if node.producer.is_some() && !node.echoed && m.role == "assistant" {
+                    node.echo = echo_of(&node.message, m);
+                    node.echoed = true;
+                }
+                ni
+            }
+            None => st.add_node(&id, self, m.clone(), content_hash(&norm), gi, None),
+        };
+        self.enter_turn(ni, &id, m);
+    }
+}
+
+/// The graph under construction and its id index.
+#[derive(Clone)]
+struct Stitcher<'s> {
+    session: &'s Session,
+    root: String,
+    graph: TurnGraph,
+    index: HashMap<String, usize>,
+    /// Generation id → its first index in the session.
+    first_index: HashMap<&'s str, usize>,
+}
+
+impl<'s> Stitcher<'s> {
+    fn new(session: &'s Session) -> Self {
+        let mut first_index = HashMap::new();
+        for (i, g) in session.generations.iter().enumerate() {
+            first_index.entry(g.id.as_str()).or_insert(i);
+        }
+        Stitcher {
+            session,
+            root: root_id(&session.key),
+            graph: TurnGraph {
+                nodes: Vec::new(),
+                links: Vec::new(),
+                dropped_content: BTreeMap::new(),
+                missing_continuations: Vec::new(),
+            },
+            index: HashMap::new(),
+            first_index,
+        }
+    }
+
+    /// Where generation `gi`'s chain starts, and `base`, the effective
+    /// index of its first message. A Delta with a found target sits after
+    /// its completion, so all its system-like messages drop.
+    fn start(&mut self, gi: usize) -> (Cursor, usize) {
+        match continuation_target(&self.session.generations, gi, &self.first_index) {
+            Target::Found(tj) => {
+                let tip = &self.graph.links[tj].completion;
+                let ni = self.index[tip];
+                let mut cursor = Cursor::new(tip);
+                cursor.enter_turn(ni, tip, &self.graph.nodes[ni].message);
+                (cursor, 1)
+            }
+            Target::Missing(id) => {
+                if !self.graph.missing_continuations.contains(&id) {
+                    self.graph.missing_continuations.push(id);
+                }
+                (Cursor::new(&self.root), 0)
+            }
+            Target::Root => (Cursor::new(&self.root), 0),
+        }
+    }
+
+    /// A new turn node under `cursor`'s last turn; id-less calls get their
+    /// positional ids, which never enter canonical bytes.
+    fn add_node(
+        &mut self,
+        id: &str,
+        cursor: &Cursor,
+        mut message: Message,
+        content_hash: String,
+        gi: usize,
+        producer: Option<usize>,
+    ) -> usize {
+        assign_positional_ids(id, &mut message);
+        self.graph.nodes.push(Node {
+            id: id.to_string(),
+            parent: cursor.prev_turn.as_deref().map(str::to_string),
+            message,
+            content_hash,
+            first_generation: gi,
+            producer,
+            results: BTreeMap::new(),
+            echo: None,
+            echoed: false,
+        });
+        let ni = self.graph.nodes.len() - 1;
+        self.index.insert(id.to_string(), ni);
+        ni
+    }
+
+    /// Map generation `gi`'s completion to its turn, after its prompt
+    /// left `cursor`.
+    fn complete(&mut self, gi: usize, cursor: Cursor) {
+        let cm = completion_message(&self.session.generations[gi].completion);
+        let norm = normalize(&cm);
+        let id = chain_id(&cursor.prev, &canonical(&norm));
+        if !self.index.contains_key(&id) {
+            self.add_node(&id, &cursor, cm, content_hash(&norm), gi, Some(gi));
+        }
+        let mut dropped: Vec<Dropped> = iter(&cursor.dropped).cloned().collect();
+        dropped.reverse();
+        self.graph.links.push(GenerationLinks {
+            prompt_tip: cursor.prev.to_string(),
+            completion: id,
+            dropped,
+        });
+    }
 }
 
 const NONE: usize = usize::MAX;
 
 /// One prompt prefix: its last message, at `(generation, index)` in the
-/// first prompt that reached it, what stitching that message did, and
-/// what stitching the whole prefix leaves behind.
+/// first prompt that reached it, and the cursor stitching the prefix
+/// leaves behind.
 struct TrieNode {
-    parent: usize,
     at: (usize, usize),
-    replay: Replay,
-    /// The nearest node, this one included, whose message is a turn.
-    turn: usize,
-    /// Id-less tool messages since `turn` (since the start without one).
-    popped: usize,
-    /// The nearest node, this one included, whose message was dropped.
-    dropped: usize,
+    cursor: Cursor,
     first_child: usize,
     next_sibling: usize,
 }
@@ -194,38 +405,29 @@ struct TrieNode {
 /// start `(prev, base)`: a later prompt replays the longest prefix it
 /// shares with any earlier one. One node per distinct prompt prefix, so it
 /// is never larger than the session's prompts.
+#[derive(Default)]
 struct Trie {
     nodes: Vec<TrieNode>,
     roots: HashMap<(Rc<str>, usize), usize>,
 }
 
 impl Trie {
-    fn root(&mut self, start: &str, base: usize) -> usize {
-        let key = (Rc::from(start), base);
-        if let Some(&r) = self.roots.get(&key) {
-            return r;
-        }
-        let r = self.nodes.len();
-        self.nodes.push(TrieNode {
-            parent: NONE,
-            at: (NONE, NONE),
-            replay: Replay {
-                prev: key.0.clone(),
-                dropped: None,
-                node: None,
-            },
-            turn: NONE,
-            popped: 0,
-            dropped: NONE,
-            first_child: NONE,
-            next_sibling: NONE,
-        });
-        self.roots.insert(key, r);
-        r
-    }
-
-    /// The deepest node under `root` on `prompt`'s path, and its depth.
-    fn longest(&self, session: &Session, root: usize, gi: usize) -> (usize, usize) {
+    /// The cursor after the longest stitched prefix of generation `gi`'s
+    /// prompt from `start`, the trie node of that prefix, and its length.
+    ///
+    /// Same start and messages, same effect: everything a replayed message
+    /// would add to the graph is already there. This holds because
+    /// `normalize`/`is_dropped` read only `(message, base + mi)`, a
+    /// cursor's start is a function of `(prev, base)`, and a node's
+    /// `producer`/`message` never change after it is created.
+    fn restore(
+        &mut self,
+        session: &Session,
+        gi: usize,
+        start: Cursor,
+        base: usize,
+    ) -> (Cursor, usize, usize) {
+        let root = self.root(start, base);
         let prompt = &session.generations[gi].messages;
         let (mut cur, mut depth) = (root, 0);
         while depth < prompt.len() {
@@ -236,7 +438,23 @@ impl Trie {
             };
             (cur, depth) = (c, depth + 1);
         }
-        (cur, depth)
+        (self.nodes[cur].cursor.clone(), cur, depth)
+    }
+
+    fn root(&mut self, start: Cursor, base: usize) -> usize {
+        let key = (start.prev.clone(), base);
+        if let Some(&r) = self.roots.get(&key) {
+            return r;
+        }
+        let r = self.nodes.len();
+        self.nodes.push(TrieNode {
+            at: (NONE, NONE),
+            cursor: start,
+            first_child: NONE,
+            next_sibling: NONE,
+        });
+        self.roots.insert(key, r);
+        r
     }
 
     fn child(&self, parent: usize, mut same: impl FnMut((usize, usize)) -> bool) -> Option<usize> {
@@ -250,66 +468,17 @@ impl Trie {
         None
     }
 
-    /// Add `replay`, the stitching of prompt message `at` (an id-less
-    /// tool message when `idless`), under `parent`.
-    fn push(&mut self, parent: usize, at: (usize, usize), replay: Replay, idless: bool) -> usize {
+    /// Add prompt message `at`, which left `cursor`, under `parent`.
+    fn push(&mut self, parent: usize, at: (usize, usize), cursor: Cursor) -> usize {
         let n = self.nodes.len();
-        let p = &mut self.nodes[parent];
-        let next_sibling = std::mem::replace(&mut p.first_child, n);
-        let (turn, popped, dropped) = if replay.dropped.is_some() {
-            (p.turn, p.popped, n)
-        } else if replay.node.is_some() {
-            (n, 0, p.dropped)
-        } else {
-            (p.turn, p.popped + usize::from(idless), p.dropped)
-        };
+        let next_sibling = std::mem::replace(&mut self.nodes[parent].first_child, n);
         self.nodes.push(TrieNode {
-            parent,
             at,
-            replay,
-            turn,
-            popped,
-            dropped,
+            cursor,
             first_child: NONE,
             next_sibling,
         });
         n
-    }
-
-    /// The `Dropped` entries of the prefix ending at `n`, in prompt order.
-    fn dropped(&self, session: &Session, mut n: usize) -> Vec<Dropped> {
-        let mut out = Vec::new();
-        while n != NONE {
-            let node = &self.nodes[n];
-            let (g, i) = node.at;
-            out.push(Dropped {
-                index: i,
-                role: session.generations[g].messages[i].role.clone(),
-                content_hash: node.replay.dropped.clone().expect("a dropped message"),
-            });
-            n = self.nodes[node.parent].dropped;
-        }
-        out.reverse();
-        out
-    }
-
-    /// The turn node the prefix ending at `n` binds call id `id` to: its
-    /// latest turn message carrying a call with that id.
-    fn call(&self, session: &Session, n: usize, id: &str) -> Option<usize> {
-        let mut t = self.nodes[n].turn;
-        while t != NONE {
-            let node = &self.nodes[t];
-            let (g, i) = node.at;
-            if session.generations[g].messages[i]
-                .tool_calls
-                .iter()
-                .any(|c| c.id == id)
-            {
-                return node.replay.node;
-            }
-            t = self.nodes[node.parent].turn;
-        }
-        None
     }
 }
 
@@ -319,212 +488,24 @@ pub fn stitch(session: &Session) -> TurnGraph {
 }
 
 fn stitch_impl(session: &Session, replay: bool) -> TurnGraph {
-    let root = root_id(&session.key);
-    let mut graph = TurnGraph {
-        nodes: Vec::new(),
-        links: Vec::new(),
-        dropped_content: BTreeMap::new(),
-        missing_continuations: Vec::new(),
-    };
-    let mut index: HashMap<String, usize> = HashMap::new();
-    let mut first_index: HashMap<&str, usize> = HashMap::new();
-    for (i, g) in session.generations.iter().enumerate() {
-        first_index.entry(g.id.as_str()).or_insert(i);
-    }
-    let mut trie = Trie {
-        nodes: Vec::new(),
-        roots: HashMap::new(),
-    };
+    let mut st = Stitcher::new(session);
+    let mut trie = Trie::default();
     for (gi, generation) in session.generations.iter().enumerate() {
-        let target = continuation_target(&session.generations, gi, &first_index);
-        let tip_node = match target {
-            Target::Found(tj) => Some(index[&graph.links[tj].completion]),
-            _ => None,
-        };
-        let tip_calls: Vec<String> = tip_node.map_or_else(Vec::new, |ni| {
-            graph.nodes[ni]
-                .message
-                .tool_calls
-                .iter()
-                .filter(|c| !c.id.is_empty())
-                .map(|c| c.id.clone())
-                .collect()
-        });
-        // The most recent turn's id-less calls, for id-less tool messages.
-        let mut pending: VecDeque<(usize, String)> = VecDeque::new();
-        // `base`: effective index of the first message. A Delta with a found
-        // target sits after its completion, so all its system-like messages drop.
-        let (mut prev, mut prev_turn, base) = match target {
-            Target::Found(tj) => {
-                let tip = graph.links[tj].completion.clone();
-                pending = positional_calls(&graph, index[&tip]);
-                (tip.clone(), Some(tip), 1)
-            }
-            Target::Missing(id) => {
-                if !graph.missing_continuations.contains(&id) {
-                    graph.missing_continuations.push(id);
-                }
-                (root.clone(), None, 0)
-            }
-            Target::Root => (root.clone(), None, 0),
-        };
-
-        // Same start and messages, same effect: everything a replayed
-        // message would add to the graph is already there. This holds
-        // because `normalize`/`is_dropped` read only `(message, base + mi)`,
-        // and a node's `producer`/`message` never change after it is created.
-        // What the prefix leaves behind is read off its last trie node.
-        let r = if replay { trie.root(&prev, base) } else { NONE };
-        let (mut cur, reused) = if replay {
-            trie.longest(session, r, gi)
+        let (start, base) = st.start(gi);
+        let (mut cursor, mut cur, reused) = if replay {
+            trie.restore(session, gi, start, base)
         } else {
-            (NONE, 0)
+            (start, NONE, 0)
         };
-        let shared = cur;
-        let mut dropped = Vec::new();
-        if reused > 0 {
-            let end = &trie.nodes[cur];
-            if end.turn != NONE {
-                let t = &trie.nodes[end.turn];
-                pending = positional_calls(&graph, t.replay.node.expect("a turn"));
-                prev_turn = Some(t.replay.prev.to_string());
-            }
-            pending.drain(..end.popped.min(pending.len()));
-            prev = end.replay.prev.to_string();
-            dropped = trie.dropped(session, end.dropped);
-        }
-        // A call id binds to its latest turn: one after the replayed prefix
-        // (`calls`), else one in it, else the tip.
-        let mut calls: HashMap<&str, usize> = HashMap::new();
-        let call = |calls: &HashMap<&str, usize>, trie: &Trie, id: &str| {
-            if let Some(&ni) = calls.get(id) {
-                return Some(ni);
-            }
-            if shared != NONE
-                && let Some(ni) = trie.call(session, shared, id)
-            {
-                return Some(ni);
-            }
-            tip_node.filter(|_| tip_calls.iter().any(|c| c == id))
-        };
-
         for (mi, m) in generation.messages.iter().enumerate().skip(reused) {
-            let norm = normalize(m);
-            if is_dropped(base + mi, &m.role) {
-                let h = content_hash(&norm);
-                graph
-                    .dropped_content
-                    .entry(h.clone())
-                    .or_insert((gi, norm.text.clone()));
-                if cur != NONE {
-                    let replay = Replay {
-                        prev: prev.as_str().into(),
-                        dropped: Some(h.clone()),
-                        node: None,
-                    };
-                    cur = trie.push(cur, (gi, mi), replay, false);
-                }
-                dropped.push(Dropped {
-                    index: mi,
-                    role: m.role.clone(),
-                    content_hash: h,
-                });
-                continue;
-            }
-            let id = chain_id(&prev, &canonical(&norm));
-            if m.role == "tool" {
-                let tcid = m.tool_call_id.as_deref().unwrap_or("");
-                let hit = if tcid.is_empty() {
-                    pending.pop_front()
-                } else {
-                    call(&calls, &trie, tcid).map(|ni| (ni, tcid.to_string()))
-                };
-                if let Some((ni, key)) = hit {
-                    graph.nodes[ni].results.entry(key).or_insert(ToolOutcome {
-                        content: norm.text.clone(),
-                        is_error: norm.is_error,
-                    });
-                }
-                if cur != NONE {
-                    let replay = Replay {
-                        prev: id.as_str().into(),
-                        dropped: None,
-                        node: None,
-                    };
-                    cur = trie.push(cur, (gi, mi), replay, tcid.is_empty());
-                }
-                prev = id;
-                continue;
-            }
-            let ni = match index.get(&id) {
-                Some(&ni) => {
-                    let node = &mut graph.nodes[ni];
-                    if node.producer.is_some() && !node.echoed && m.role == "assistant" {
-                        node.echo = echo_of(&node.message, m);
-                        node.echoed = true;
-                    }
-                    ni
-                }
-                None => {
-                    let mut message = m.clone();
-                    assign_positional_ids(&id, &mut message);
-                    graph.nodes.push(Node {
-                        id: id.clone(),
-                        parent: prev_turn.clone(),
-                        message,
-                        content_hash: content_hash(&norm),
-                        first_generation: gi,
-                        producer: None,
-                        results: BTreeMap::new(),
-                        echo: None,
-                        echoed: false,
-                    });
-                    index.insert(id.clone(), graph.nodes.len() - 1);
-                    graph.nodes.len() - 1
-                }
-            };
-            for c in m.tool_calls.iter().filter(|c| !c.id.is_empty()) {
-                calls.insert(&c.id, ni);
-            }
-            // A user or system turn has no id-less calls, so it clears the queue.
-            pending = positional_calls(&graph, ni);
+            cursor.step(&mut st, gi, mi, base, m);
             if cur != NONE {
-                let replay = Replay {
-                    prev: id.as_str().into(),
-                    dropped: None,
-                    node: Some(ni),
-                };
-                cur = trie.push(cur, (gi, mi), replay, false);
+                cur = trie.push(cur, (gi, mi), cursor.clone());
             }
-            prev_turn = Some(id.clone());
-            prev = id;
         }
-
-        let mut cm = completion_message(&generation.completion);
-        let norm = normalize(&cm);
-        let id = chain_id(&prev, &canonical(&norm));
-        if !index.contains_key(&id) {
-            // After the id: positional ids never enter canonical bytes.
-            assign_positional_ids(&id, &mut cm);
-            graph.nodes.push(Node {
-                id: id.clone(),
-                parent: prev_turn,
-                message: cm,
-                content_hash: content_hash(&norm),
-                first_generation: gi,
-                producer: Some(gi),
-                results: BTreeMap::new(),
-                echo: None,
-                echoed: false,
-            });
-            index.insert(id.clone(), graph.nodes.len() - 1);
-        }
-        graph.links.push(GenerationLinks {
-            prompt_tip: prev,
-            completion: id,
-            dropped,
-        });
+        st.complete(gi, cursor);
     }
+    let mut graph = st.graph;
     add_fallback_results(&mut graph, session);
     graph
 }
@@ -610,6 +591,39 @@ mod tests {
                 assert_eq!(got, want, "{} prefix {k}", s.key);
             }
         }
+    }
+
+    /// The cursor a trie node restores is the one stepping its prefix
+    /// again from the same start leaves.
+    #[test]
+    fn a_restored_cursor_equals_stepping_the_prefix() {
+        let mut replayed = 0;
+        for s in fixture_sessions() {
+            let mut st = Stitcher::new(&s);
+            let mut trie = Trie::default();
+            for (gi, generation) in s.generations.iter().enumerate() {
+                let (start, base) = st.start(gi);
+                let (mut cursor, mut cur, reused) = trie.restore(&s, gi, start.clone(), base);
+                let mut scratch = st.clone();
+                let mut stepped = start;
+                for (mi, m) in generation.messages[..reused].iter().enumerate() {
+                    stepped.step(&mut scratch, gi, mi, base, m);
+                }
+                assert_eq!(
+                    format!("{cursor:?}"),
+                    format!("{stepped:?}"),
+                    "{} generation {gi}",
+                    s.key
+                );
+                replayed += reused;
+                for (mi, m) in generation.messages.iter().enumerate().skip(reused) {
+                    cursor.step(&mut st, gi, mi, base, m);
+                    cur = trie.push(cur, (gi, mi), cursor.clone());
+                }
+                st.complete(gi, cursor);
+            }
+        }
+        assert!(replayed > 0);
     }
 
     #[test]
