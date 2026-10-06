@@ -350,17 +350,26 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// pre-bake the header into the http client and hand it via
 /// `Client::new_with_client`.
 fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_client::Client> {
-    pathbase_client_with_timeout(base_url, token, std::time::Duration::from_secs(30))
+    let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
+    pathbase_client_from(builder, base_url, token)
 }
 
-fn pathbase_client_with_timeout(
+/// The streamed upload's client: a 4 MiB body on a slow uplink has no
+/// sensible total deadline, so this one bounds the connect and each read
+/// instead.
+fn batch_client(base_url: &str, token: &str) -> Result<pathbase_client::Client> {
+    let builder = reqwest::Client::builder()
+        .connect_timeout(BATCH_CONNECT_TIMEOUT)
+        .read_timeout(BATCH_READ_TIMEOUT);
+    pathbase_client_from(builder, base_url, Some(token))
+}
+
+fn pathbase_client_from(
+    builder: reqwest::ClientBuilder,
     base_url: &str,
     token: Option<&str>,
-    timeout: std::time::Duration,
 ) -> Result<pathbase_client::Client> {
-    let mut builder = reqwest::Client::builder()
-        .user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")))
-        .timeout(timeout);
+    let mut builder = builder.user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")));
     if let Some(t) = token {
         let mut headers = reqwest::header::HeaderMap::new();
         let mut auth = reqwest::header::HeaderValue::from_str(&format!("Bearer {t}"))
@@ -535,7 +544,8 @@ fn relogin_message(base_url: &str) -> String {
 /// above which an authed upload is streamed at all.
 pub(crate) const BATCH_BUDGET: usize = 4 * 1024 * 1024;
 
-const BATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const BATCH_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const BATCH_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 const BATCH_RETRIES: u32 = 3;
 #[cfg(not(test))]
 const RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(1);
@@ -702,9 +712,13 @@ impl BatchFailure {
 
     fn describe(&self) -> String {
         match self {
-            BatchFailure::Transport(e) if e.is_timeout() => {
-                format!("request timed out after {}s", BATCH_TIMEOUT.as_secs())
+            BatchFailure::Transport(e) if e.is_connect() && e.is_timeout() => {
+                format!("no connection after {}s", BATCH_CONNECT_TIMEOUT.as_secs())
             }
+            BatchFailure::Transport(e) if e.is_timeout() => format!(
+                "no data from the server for {}s",
+                BATCH_READ_TIMEOUT.as_secs()
+            ),
             BatchFailure::Transport(e) => reqwest_hint(e),
             BatchFailure::Status(code, msg) if msg.is_empty() => format!("HTTP {code}"),
             BatchFailure::Status(code, msg) => format!("HTTP {code}: {msg}"),
@@ -777,7 +791,7 @@ pub(crate) fn graphs_post_streamed(
     let created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
     let graph_id = uuid::Uuid::parse_str(&created.id).context("graph id is not a UUID")?;
 
-    let client = pathbase_client_with_timeout(base_url, Some(token), BATCH_TIMEOUT)?;
+    let client = batch_client(base_url, token)?;
     match stream_paths(&client, owner, repo, &graph_id, doc, budget) {
         Ok(()) => Ok(created),
         Err(e) => {
