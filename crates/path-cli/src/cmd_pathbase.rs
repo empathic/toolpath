@@ -588,10 +588,10 @@ fn pack_batches(jsonl: &str, step_ids: &[&str], budget: usize) -> Vec<Batch> {
             batches.push(std::mem::take(&mut cur));
         }
         cur.body.push_str(unit);
-        if let Some((id, len)) = step {
-            if cur.largest_step.as_ref().is_none_or(|(_, l)| len > *l) {
-                cur.largest_step = Some((id.to_string(), len));
-            }
+        if let Some((id, len)) = step
+            && cur.largest_step.as_ref().is_none_or(|(_, l)| len > *l)
+        {
+            cur.largest_step = Some((id.to_string(), len));
         }
     }
     if !cur.body.is_empty() {
