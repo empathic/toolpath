@@ -342,7 +342,7 @@ for body in &sent.output {
 | Generation repeating an existing turn (identical retry) | A dead-end step marked `extra.otel.branch = "unplaced"` that carries its tokens |
 | Call whose content was not captured (skeleton) | Steps marked `extra.otel.branch = "skeleton"` and `extra.otel.absent` |
 | Write, edit, `NotebookEdit`, `apply_patch` and opencode `delete` tool calls | `change[file]` file changes |
-| Heredoc writes and `apply_patch` heredocs in shell calls | `change[file]` file changes with `extra.otel` `source` (`shell-heredoc`, `shell-apply-patch`), `outcome` and `executions[]`; a target that cannot be resolved is an attempt in the step's `extra.otel.unresolved_shell_writes` |
+| Heredoc writes and `apply_patch` heredocs in shell calls | `change[file]` file changes with `extra.otel` `source` (`shell-heredoc`, `shell-apply-patch`), `outcome` and `executions[]`; a target that cannot be resolved, and each target of a write form not modeled (`cmd > f`, `… \| tee f`), is an attempt in the step's `extra.otel.unresolved_shell_writes` |
 | Token usage | `token_usage` on the step, additive: `input_tokens` excludes cache reads and writes (`cache_read_tokens`, `cache_write_tokens`); the source's convention is `extra.otel.usage.cache_basis` |
 | Cost | Per-call `extra.otel.cost`; `meta.otel.cost_usd` totals are `null` when any call is unpriced |
 | Working directory from the inferred harness's own cwd marker (the system prompt; Codex's `<environment_context>` user message) | `path.base.uri` |

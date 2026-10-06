@@ -713,27 +713,38 @@ leading `~`, a glob `*`/`?`/`[`, or a brace `{`, all outside quotes) or
 relative in an uncertain directory — is never a file change and never a
 guessed path. It is recorded as an attempt on the step's conversation change,
 in `structural.extra.otel.unresolved_shell_writes[]`, and so is each file of a
-shell patch whose path cannot be resolved:
+shell patch whose path cannot be resolved. So is each file a command writes
+in a form this reader does not model (`ShellItem::Unmodeled`: two heredocs on
+one `cat`, a heredoc piped into `tee`, extra redirects, an env-prefixed
+command, or any other command with an output redirect to a file, such as
+`echo hi > f` or `make 2> err.log`): one attempt per target (each output
+redirect to a file on any descriptor, `>&FILE` included, and each `tee` file
+argument; targets under `/dev/` and descriptor duplications are not files),
+never a change and never its content:
 
 | Key | Value |
 |---|---|
 | `tool_id`, `tool` | the shell call |
 | `path_as_written` | the target as the script names it (quotes removed; for a patch, the path inside it) |
-| `reason` | `not_literal`, `unknown_dir` (a directory change in the script), `unknown_workdir` (the call names a directory this reader does not read), or `shell_dir_moved` (earlier `Bash` calls may have left the shell elsewhere) |
-| `likely_path` | for `shell_dir_moved` with a tracked directory other than the working directory: the target under it, relative to the working directory (`sub/f.txt`); where the file is if the `cd`s persisted, which the trace cannot confirm. Absent when the target climbs above that directory |
-| `via` | `cat`/`tee`, or the patch command |
+| `reason` | `not_literal`, `unknown_dir` (a directory change in the script), `unknown_workdir` (the call names a directory this reader does not read), `shell_dir_moved` (earlier `Bash` calls may have left the shell elsewhere), or `unmodeled` |
+| `path` | an unmodeled target's change key, when it is literal in a known directory: absolute, or relative only while the call's relative targets resolve (never after `shell_dir_moved` or `unknown_workdir` would apply) |
+| `likely_path` | for `shell_dir_moved` with a tracked directory other than the working directory, and for an unmodeled relative target there: the target under it, relative to the working directory (`sub/f.txt`); where the file is if the `cd`s persisted, which the trace cannot confirm. Absent when the target climbs above that directory |
+| `via` | `cat`/`tee`, or the patch command; `redirect`/`tee` for an unmodeled target |
+| `command` | an unmodeled target's command word |
 | `outcome`, `outcome_basis`, `exit_code`, `success_may_hide_exit_1` | as for executions below |
 | `sole_command`, `implied_by_success` | as for executions below |
-| `redirect`, `body` | a heredoc write's `write`/`append` and body as written |
+| `redirect`, `body` | a heredoc write's `write`/`append` and body as written; an unmodeled target's `write`/`append`, with no body |
 | `operation` | a patch file's `add`/`update`/`delete` |
 
 After a non-literal target every tracked file's content is forgotten; after
-an unresolved literal one, the files it names.
+an unresolved literal one, the files it names; after an unmodeled command,
+the files its text names and each resolved target.
 
 A script using a subshell, command substitution, backquotes, a group or a
-compound command (`if`, `for`, `{ …; }`) records nothing, and neither does
-any other command (`echo > f`, `sed -i`, `python - <<EOF`, an env-prefixed
-`cat`, an extra redirect such as `2>/dev/null`). So Claude Code's
+compound command (`if`, `for`, `{ …; }`) records nothing and is not searched
+for targets, and any other command writing no file through a redirect or
+`tee` records nothing either (`sed -i`, `python - <<EOF`,
+`cmd > /dev/null 2>&1`). So Claude Code's
 `git commit -m "$(cat <<'EOF' … EOF)"` writes no file. The body is recorded
 as written: an unquoted tag's `$`, backquote and `\` are not expanded.
 

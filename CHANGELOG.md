@@ -29,15 +29,23 @@ All notable changes to the Toolpath workspace are documented here.
   earlier generation leaves it unknown. A write whose target cannot be
   resolved is recorded as an attempt in the step's
   `extra.otel.unresolved_shell_writes`, with its reason and outcome, never
-  as a change. `apply_patch` text, from the tool or a shell, is read by
-  `toolpath_convo::shell_writes::parse_patch`; the crate's own V4A parser
-  is gone, and a file header with an empty path is no longer a change.
+  as a change. So is each file a shell command writes in a form the
+  reader does not model (`cat > f <<A <<B`, `cat <<EOF | tee f`,
+  `cmd > f`): reason `unmodeled`, `via` `redirect` or `tee`, the
+  resolved `path` when it has one (a `likely_path` where a relative
+  target would be `shell_dir_moved`), and the call's outcome; it is never
+  a change, and it forgets the file. `apply_patch` text, from the tool
+  or a shell, is read by `toolpath_convo::shell_writes::parse_patch`; the
+  crate's own V4A parser is gone, and a file header with an empty path is
+  no longer a change.
   `derive_jsonl` keeps every sent step final: a turn also waits for an
   unanswered call from an earlier generation that may move a persistent
-  shell. Sessions without shell writes derive as before. A `NotebookEdit`
-  (one cell) or a `MultiEdit` left to `toolpath-convo`'s fallback forgets
-  the file's known content, and such a fallback call takes over a shell
-  write to its file earlier in the turn. Requires `toolpath-convo` 0.11.2.
+  shell. Sessions whose shell calls write no file (no heredoc write,
+  patch, or output redirect or `tee` to a file) derive as before. A
+  `NotebookEdit` (one cell) or a `MultiEdit` left to `toolpath-convo`'s
+  fallback forgets the file's known content, and such a fallback call
+  takes over a shell write to its file earlier in the turn. Requires
+  `toolpath-convo` 0.11.2.
 
 ## toolpath-convo 0.11.2 — 2026-10-01
 

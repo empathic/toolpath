@@ -10,8 +10,8 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use toolpath_convo::shell_writes::{
-    HeredocPatch, HeredocWrite, ParsedScript, ScriptDir, ShellItem, StatusLink, Unresolvable,
-    normalize_path as normalize,
+    HeredocPatch, HeredocWrite, ParsedScript, ScriptDir, ShellItem, StatusLink, UnmodeledTarget,
+    UnmodeledWrite, Unresolvable, normalize_path as normalize,
 };
 use toolpath_convo::{FileMutation, ToolCategory, ToolInvocation, ToolResult, unified_diff};
 
@@ -420,9 +420,34 @@ fn items(
                 forget_mentioned(known, text);
                 forget_mentioned(&mut script, text);
             }
+            ShellItem::Unmodeled(u) => {
+                forget_mentioned(known, &u.command);
+                forget_mentioned(&mut script, &u.command);
+                for t in &u.targets {
+                    let path = unmodeled_path(call, t);
+                    if let Some(p) = &path {
+                        let key = track_key(p, call.cwd);
+                        known.remove(&key);
+                        script.remove(&key);
+                    } else if !t.literal {
+                        known.clear();
+                        script.clear();
+                    }
+                    unresolved.push(unmodeled_attempt(call, u, t, path));
+                }
+            }
             _ => {}
         }
     }
+}
+
+/// The change key of an unmodeled target, when it resolves.
+fn unmodeled_path(c: &Call, t: &UnmodeledTarget) -> Option<String> {
+    let r = t.resolved.as_deref()?;
+    if c.relative_unresolved.is_some() && !r.starts_with('/') {
+        return None;
+    }
+    Some(resolve(r, c.workdir, c.cwd).0)
 }
 
 /// Applies Claude Code's reset note, if the result mentions one: the shell
@@ -702,6 +727,37 @@ fn write_attempt(c: &Call, w: &HeredocWrite, reason: &str) -> Value {
     {
         m.insert("likely_path".into(), json!(p));
     }
+    Value::Object(m)
+}
+
+fn unmodeled_attempt(
+    c: &Call,
+    u: &UnmodeledWrite,
+    t: &UnmodeledTarget,
+    path: Option<String>,
+) -> Value {
+    let via = if t.tee { "tee" } else { "redirect" };
+    let mut m = attempt(c, &t.path, Unresolvable::Unmodeled.as_str(), via);
+    match path {
+        Some(p) => {
+            m.insert("path".into(), json!(p));
+        }
+        None => {
+            if c.relative_unresolved == Some(DIR_MOVED)
+                && let Some(p) = t.resolved.as_deref().and_then(|r| c.likely(r))
+            {
+                m.insert("likely_path".into(), json!(p));
+            }
+        }
+    }
+    if let Some(program) = &u.program {
+        m.insert("command".into(), json!(program));
+    }
+    m.insert(
+        "redirect".into(),
+        json!(if t.append { "append" } else { "write" }),
+    );
+    link_fields(&mut m, u.status_link);
     Value::Object(m)
 }
 
@@ -1888,6 +1944,73 @@ mod tests {
             serde_json::to_value(&want).unwrap()
         );
         assert!(t.stamps.is_empty());
+    }
+
+    #[test]
+    fn unmodeled_shell_writes_are_recorded_as_unresolved_attempts() {
+        let mut known = Known::from([
+            ("/w/f.txt".to_string(), Rc::from("old\n")),
+            ("/w/keep".to_string(), Rc::from("k\n")),
+        ]);
+        let t = run(
+            &[
+                exec("two", "cat > f.txt <<A <<B\none\nA\ntwo\nB", Some(OK)),
+                exec(
+                    "tee",
+                    "cat <<'EOF' | tee -a /w/log.md\nhello\nEOF",
+                    Some(FAIL),
+                ),
+            ],
+            &mut known,
+        );
+        assert!(t.mutations.is_empty() && t.stamps.is_empty());
+        assert_eq!(
+            t.unresolved,
+            vec![
+                json!({
+                    "tool_id": "two", "tool": "exec_command", "path_as_written": "f.txt",
+                    "path": "f.txt", "reason": "unmodeled", "via": "redirect",
+                    "command": "cat", "redirect": "write",
+                    "outcome": "success", "outcome_basis": "exit_code", "exit_code": 0,
+                    "sole_command": true, "implied_by_success": true
+                }),
+                json!({
+                    "tool_id": "tee", "tool": "exec_command", "path_as_written": "/w/log.md",
+                    "path": "/w/log.md", "reason": "unmodeled", "via": "tee",
+                    "command": "tee", "redirect": "append",
+                    "outcome": "failure", "outcome_basis": "exit_code", "exit_code": 1,
+                    "sole_command": false, "implied_by_success": false
+                }),
+            ]
+        );
+        assert!(!known.contains_key("/w/f.txt"));
+        assert!(known.contains_key("/w/keep"));
+
+        let t = run(&[exec("n", "make > \"$LOG\"", Some(OK))], &mut known);
+        assert_eq!(t.unresolved[0]["path_as_written"], "$LOG");
+        assert!(t.unresolved[0].get("path").is_none());
+        assert!(known.is_empty());
+    }
+
+    #[test]
+    fn an_unmodeled_relative_write_after_a_cd_records_a_likely_path_not_a_path() {
+        let mut state = ShellState::default();
+        run_state(&[bash("b1", "cd sub")], &mut state);
+        assert_eq!(state.dir, at("/w/sub"));
+        let t = run_state(
+            &[bash("b2", "cat <<'EOF' | tee f.txt /w/abs.md\nx\nEOF")],
+            &mut state,
+        );
+        assert!(t.mutations.is_empty(), "{:?}", t.mutations);
+        assert_eq!(t.unresolved.len(), 2, "{:?}", t.unresolved);
+        let rel = &t.unresolved[0];
+        assert_eq!(rel["reason"], "unmodeled");
+        assert_eq!(rel["path_as_written"], "f.txt");
+        assert!(rel.get("path").is_none(), "{rel}");
+        assert_eq!(rel["likely_path"], "sub/f.txt");
+        let abs = &t.unresolved[1];
+        assert_eq!(abs["path"], "/w/abs.md");
+        assert!(abs.get("likely_path").is_none(), "{abs}");
     }
 }
 
