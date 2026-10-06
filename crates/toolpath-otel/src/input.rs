@@ -322,12 +322,12 @@ fn decode_body(
             }
             other => other,
         })?;
-        if named || carries_resources(&value) {
+        if named || carries_records(&value) {
             Ok(vec![value])
         } else {
             Err(OtelError::NotOtlpBody(format!(
-                "content-sniffed as protobuf, but the body carries no resourceSpans or \
-                 resourceLogs entry; not JSON either ({json_error})"
+                "content-sniffed as protobuf, but the body carries no span or log record; \
+                 not JSON either ({json_error})"
             )))
         }
     }
@@ -340,6 +340,27 @@ fn decode_body(
             Err(OtelError::Json(json_error))
         }
     }
+}
+
+/// Arbitrary bytes often decode as a request of empty resource entries, so
+/// a body read by content must carry a span or log record.
+#[cfg(feature = "protobuf")]
+fn carries_records(value: &Value) -> bool {
+    let has = |signal: &str, scopes: &str, records: &str| {
+        value
+            .get(signal)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|r| r.get(scopes)?.as_array())
+            .flatten()
+            .any(|s| {
+                s.get(records)
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| !a.is_empty())
+            })
+    };
+    has("resourceSpans", "scopeSpans", "spans") || has("resourceLogs", "scopeLogs", "logRecords")
 }
 
 fn carries_resources(value: &Value) -> bool {
@@ -670,7 +691,7 @@ mod compression_tests {
         {
             assert_eq!(
                 named.unwrap(),
-                vec![serde_json::json!({"resourceSpans": []})]
+                vec![serde_json::json!({"resourceSpans": [{}]})]
             );
             assert!(
                 matches!(sniffed, Err(OtelError::NotOtlpBody(_))),

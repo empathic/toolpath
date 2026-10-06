@@ -46,6 +46,8 @@ const _: () = assert!(deepest_level(MAX_ANY_DEPTH + 1) > PROST_RECURSION_LIMIT);
 ///
 /// The two requests are wire-compatible, so traces are tried first and
 /// accepted only if every span has a 16-byte trace id and 8-byte span id.
+/// A request with no span or log record is the same bytes for both, and
+/// reads as traces, its resources and scopes kept.
 ///
 /// # Errors
 ///
@@ -62,7 +64,6 @@ pub(crate) fn decode_protobuf_within(bytes: &[u8], entries: &mut Entries) -> Res
     charge_protobuf(bytes, entries)?;
     let (traces_err, wire_valid_traces) = match ExportTraceServiceRequest::decode(bytes) {
         Ok(req) => match bad_span(&req) {
-            None if spans(&req).next().is_none() => return Ok(json!({"resourceSpans": []})),
             None => return Ok(traces_json(&req)),
             Some(why) => (why, true),
         },

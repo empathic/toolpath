@@ -216,7 +216,7 @@ fn sniffed_binary_with_no_resources_is_an_error() {
     let bytes = [0x68, 0x05];
     let err = decode_input(&bytes, Some("notes.txt")).unwrap_err();
     assert!(
-        matches!(&err, OtelError::NotOtlpBody(m) if m.contains("no resourceSpans or resourceLogs entry") && m.contains("not JSON either")),
+        matches!(&err, OtelError::NotOtlpBody(m) if m.contains("no span or log record") && m.contains("not JSON either")),
         "{err:?}"
     );
     assert!(err.is_not_otlp());

@@ -70,14 +70,26 @@ fn a_body_only_log_record_never_decodes_as_traces() {
 #[test]
 fn an_empty_request_is_empty_traces() {
     assert_eq!(decode_protobuf(&[]).unwrap(), json!({"resourceSpans": []}));
-    // Resources and scopes but no leaves: both decodes succeed, traces wins.
-    let no_leaves = encode_protobuf(&json!({"resourceLogs": [{
-        "resource": {"attributes": [{"key": "a", "value": {"stringValue": "b"}}]},
-        "scopeLogs": [{"scope": {"name": "s"}}]}]}))
-    .unwrap();
+}
+
+/// Without a span or log record the two requests are the same bytes, so
+/// the signal reads as traces; the resources and scopes are kept.
+#[test]
+fn a_request_without_records_keeps_its_resources_and_scopes() {
+    let resource = json!({"attributes": [{"key": "a", "value": {"stringValue": "b"}}]});
+    let scope = json!({"name": "s", "version": "1"});
+    let logs = json!({"resourceLogs": [{"resource": resource, "scopeLogs": [{"scope": scope}]}]});
+    let bytes = encode_protobuf(&logs).unwrap();
+    let traces =
+        json!({"resourceSpans": [{"resource": resource, "scopeSpans": [{"scope": scope}]}]});
+    assert_eq!(encode_protobuf(&traces).unwrap(), bytes);
+    let decoded = decode_protobuf(&bytes).unwrap();
+    assert_eq!(decoded, traces);
+    assert_eq!(encode_protobuf(&decoded).unwrap(), bytes);
+    let resource_only = json!({"resourceLogs": [{"resource": resource}]});
     assert_eq!(
-        decode_protobuf(&no_leaves).unwrap(),
-        json!({"resourceSpans": []})
+        decode_protobuf(&encode_protobuf(&resource_only).unwrap()).unwrap(),
+        json!({"resourceSpans": [{"resource": resource}]})
     );
 }
 

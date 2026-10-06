@@ -122,7 +122,7 @@ build. Per file:
 | More than 4 nested compression layers (`MAX_LAYERS`) (gzip or zstd, in any mix, a compressed frame included), or more decompressed bytes across all layers and frames of the file than the limit (1 GiB, `MAX_DECOMPRESSED`, or the caller's with `decode_input_with_limit`) | error `cannot decompress: more than N nested compression layers` (`OtelError::Decompress`) / `cannot decompress: decompressed output exceeds <cap>` (`OtelError::TooLarge { limit }`, the limit in use, in exact binary units; `OtelError::is_too_large` is true, also when the overrun happens inside a Collector frame, and the error carries no `frame i:`, since the budget belongs to the whole input) |
 | A protobuf body that decodes on the wire as neither request | not an OTLP request: `not an OTLP request: not an OTLP traces request (…); not an OTLP logs request (…)`, followed by `; not JSON either (…)` when the name has no protobuf extension |
 | A protobuf body that is a traces request on the wire, with a span whose `trace_id` is not 16 bytes or whose `span_id` is not 8 (and that is no logs request) | error `OTLP protobuf: not an OTLP traces request (…); not an OTLP logs request (…)`; the traces reason names the span and both lengths |
-| A body read by content (no protobuf extension) that decodes as a request with no `resourceSpans` or `resourceLogs` entry | not an OTLP request: `not an OTLP request: content-sniffed as protobuf, but the body carries no resourceSpans or resourceLogs entry; not JSON either (…)` |
+| A body read by content (no protobuf extension) that decodes as a request with no span or log record | not an OTLP request: `not an OTLP request: content-sniffed as protobuf, but the body carries no span or log record; not JSON either (…)` |
 | Frames that do not tile a file whose complete first frame is an OTLP request (one starting with `0x00`, or with a first frame of 16 MiB or more), cut short later | error `OTLP file framing: frame i is cut short: n of its 4 length bytes` / `OTLP file framing: frame i declares N bytes but M remain`. Starting with `0x00`, a first frame this build cannot read (``input needs the `…` feature`` for a frame starting `0x0a` or with compression magic, or over a limit) counts as OTLP too. Not starting with `0x00`, a file cut short inside such a first frame cannot be told from a stray body and is read as rule 6 |
 | Frames that do not tile a file starting with `0x00` whose first frame is cut short or is no OTLP request (a `.DS_Store`, UTF-16BE JSON, a lone `0x00`) | not an OTLP request: `not an OTLP request: a leading 0x00 byte, but no Collector frame holding an OTLP request (OTLP file framing: …)` |
 | A zero-length frame | error `OTLP file framing: frame i is empty` |
@@ -162,8 +162,11 @@ Feature `protobuf`.
   If the traces decode succeeds on the wire but fails the id check and
   the logs decode fails, the body is a malformed traces request
   (`OtelError::Protobuf`): `OTLP protobuf: not an OTLP traces request (…); not an OTLP logs request (…)`.
-  A request with no spans (and so no log records either) is
-  `{"resourceSpans":[]}`. The rule is sound because a log record's field
+  A request with no span or log record is the same bytes as either
+  signal, so it reads as traces with its resources and scopes kept
+  (`{"resourceLogs":[{"resource":{…}}]}` decodes as
+  `{"resourceSpans":[{"resource":{…}}]}`, which encodes to the same
+  bytes); an empty request is `{"resourceSpans":[]}`. The rule is sound because a log record's field
   1 (`fixed64`) or field 2 (varint) fails the traces decode on wire type,
   and a body-only record decodes as a span with an empty `trace_id`, which
   fails the id check.
@@ -252,11 +255,11 @@ The OpenTelemetry Collector file exporter's layouts, from
    ``input needs the `protobuf` feature`` for a `.pb`/`.binpb`/`.protobuf`
    name (any case), else the JSON error. With it on, bytes that are no
    OTLP request on the wire are `not an OTLP request: …`, and so is a body
-   read by content (no protobuf extension) that carries no
-   `resourceSpans`/`resourceLogs` entry, not an empty delivery, because
-   protobuf skips unknown fields and arbitrary bytes often decode as an
-   empty request. A named `.binpb` holding an empty request reads as an
-   empty delivery.
+   read by content (no protobuf extension) that carries no span or log
+   record, not a delivery without records, because protobuf skips
+   unknown fields and arbitrary bytes often decode as an empty request or
+   one of empty resource entries. A named `.binpb` holding such a request
+   reads as that delivery.
 
 ### Limits
 
