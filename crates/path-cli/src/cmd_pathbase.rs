@@ -455,6 +455,9 @@ pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<An
         Err(pathbase_client::Error::CommunicationError(e)) => {
             bail!("anon upload failed: {}", reqwest_hint(&e))
         }
+        Err(pathbase_client::Error::InvalidResponsePayload(_, _)) => {
+            bail!("anon upload failed: {}", older_server_message(base_url))
+        }
         Err(e) => Err(anyhow!("anon upload failed: {}", full_chain(&e))),
     }
 }
@@ -523,11 +526,26 @@ pub(crate) fn graphs_post(
         Err(pathbase_client::Error::CommunicationError(e)) => {
             bail!("upload to {owner}/{repo} failed: {}", reqwest_hint(&e))
         }
+        Err(pathbase_client::Error::InvalidResponsePayload(_, _)) => {
+            bail!(
+                "upload to {owner}/{repo} failed: {}",
+                older_server_message(base_url)
+            )
+        }
         Err(e) => Err(anyhow!(
             "upload to {owner}/{repo} failed: {}",
             full_chain(&e)
         )),
     }
+}
+
+/// A graph response that does not decode comes from a server predating
+/// the fields this client requires.
+fn older_server_message(base_url: &str) -> String {
+    format!(
+        "the server at {base_url} runs an older Pathbase this path-cli does not support; \
+         upgrade the server or use path-cli 0.28"
+    )
 }
 
 fn relogin_message(base_url: &str) -> String {
@@ -767,10 +785,8 @@ where
 /// the rest append to it (`append_graph_path_steps`).
 ///
 /// If any batch fails, the partly uploaded graph is deleted (best effort)
-/// before the error is returned. A `404` or `405` on a path's first batch
-/// means the server lacks the batch routes; the whole document is then
-/// sent with [`graphs_post`] instead. `$ref` path entries are skipped;
-/// callers route documents containing them to [`graphs_post`].
+/// before the error is returned. `$ref` path entries are skipped; callers
+/// route documents containing them to [`graphs_post`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn graphs_post_streamed(
     base_url: &str,
@@ -797,14 +813,6 @@ pub(crate) fn graphs_post_streamed(
         Err(e) => {
             let _ = block_on(client.delete_graph(owner, repo, &graph_id));
             match (&e.failure, e.largest_step) {
-                (BatchFailure::Status(404 | 405, _), _) if e.opening_path => {
-                    eprintln!(
-                        "note: {base_url} does not support streamed upload; \
-                         sending the document in one request"
-                    );
-                    let json = serde_json::to_string(doc).context("serialize graph")?;
-                    graphs_post(base_url, token, owner, repo, name, &json, public)
-                }
                 (BatchFailure::Status(401, _), _) => bail!(relogin_message(base_url)),
                 (BatchFailure::Status(413, _), Some((id, len))) => bail!(
                     "upload to {owner}/{repo} failed (HTTP 413): step {id} is {len} bytes, \
@@ -820,8 +828,6 @@ struct StreamError {
     failure: BatchFailure,
     /// Largest step of the failing batch.
     largest_step: Option<(String, usize)>,
-    /// The failing request was a path's first batch (`open_graph_path`).
-    opening_path: bool,
 }
 
 fn stream_paths(
@@ -872,7 +878,6 @@ fn stream_paths(
             let stream_error = |failure| StreamError {
                 failure,
                 largest_step: batch.largest_step.clone(),
-                opening_path: bi == 0,
             };
             if bi == 0 {
                 let opened = post_batch(|| {
@@ -1373,6 +1378,29 @@ pub(crate) mod tests {
             req.contains(r#""document":{"graph":{"id":"g"},"paths":[]}"#),
             "got: {req}"
         );
+    }
+
+    #[test]
+    fn graphs_post_names_an_older_server_when_the_response_lacks_mutability() {
+        let older = graph_document_json().replace(r#""mutability": "mutable","#, "");
+        let server = MockServer::start("HTTP/1.1 201 Created", Box::leak(older.into_boxed_str()));
+        let base = server.base();
+        let err = graphs_post(
+            &base,
+            "tok",
+            "alex",
+            "pathstash",
+            None,
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!("{base} runs an older Pathbase")),
+            "{msg}"
+        );
+        assert!(msg.contains("path-cli 0.28"), "{msg}");
     }
 
     #[test]
@@ -2049,38 +2077,9 @@ pub(crate) mod tests {
         assert!(msg.contains(&format!("step s2 is {size} bytes")), "{msg}");
         assert_eq!(server.requests().len(), 3);
     }
-    #[test]
-    fn graphs_post_streamed_falls_back_when_the_open_route_is_missing() {
-        let path = stream_path(8, 200);
-        let server = MockServer::start_sequence(vec![
-            ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 405 Method Not Allowed", String::new()),
-            ("HTTP/1.1 204 No Content", String::new()),
-            ("HTTP/1.1 201 Created", graph_document_json()),
-        ]);
-        let created = post_streamed(&server, &path, 1000).unwrap();
-        assert_eq!(created.id, TEST_UUID);
-
-        let reqs = server.requests();
-        assert_eq!(reqs.len(), 4);
-        assert_eq!(
-            request_line(&reqs[2]),
-            format!("DELETE {GRAPH_ROUTE} HTTP/1.1")
-        );
-        assert_eq!(
-            request_line(&reqs[3]),
-            "POST /api/v1/u/alex/repos/pathstash/graphs HTTP/1.1"
-        );
-        let full: serde_json::Value = serde_json::from_str(&request_body(&reqs[3])).unwrap();
-        assert_eq!(full["name"], "big");
-        assert_eq!(
-            full["document"],
-            serde_json::to_value(toolpath::v1::Graph::from_path(path)).unwrap()
-        );
-    }
 
     #[test]
-    fn graphs_post_streamed_does_not_fall_back_on_a_400_from_open() {
+    fn graphs_post_streamed_reports_a_400_from_open() {
         let path = stream_path(8, 200);
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
@@ -2102,7 +2101,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn graphs_post_streamed_does_not_fall_back_on_a_404_from_a_later_batch() {
+    fn graphs_post_streamed_reports_a_404_from_a_later_batch() {
         let path = stream_path(8, 200);
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
