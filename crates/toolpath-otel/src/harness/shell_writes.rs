@@ -98,7 +98,10 @@ pub type Stamps = BTreeMap<String, Value>;
 /// The result of [`turn_writes`].
 #[derive(Debug, Default)]
 pub struct TurnWrites {
-    /// In tool-call order; paths from shell writes appear once per turn.
+    /// Not in tool-call order: a path's shell writes fold into one
+    /// mutation at its first write, carrying its last call's `tool_id`
+    /// (an observed write taking it over keeps that place).
+    /// `derive_path` orders mutations by their call.
     pub mutations: Vec<FileMutation>,
     /// `extra.otel` for the inferred changes.
     pub stamps: Stamps,

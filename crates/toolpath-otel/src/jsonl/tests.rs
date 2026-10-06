@@ -3134,6 +3134,58 @@ fn a_shell_write_after_a_fallback_multi_edit_keeps_its_change_and_stamps() {
     assert_eq!(otel["executions"][0]["tool_id"], "b1");
 }
 
+/// Two shell writes to one file fold into one mutation listed at the
+/// first with the second's `tool_id`; an Edit and a later fallback
+/// MultiEdit to another file sit between them. The fallback's change is
+/// the file's last, so it wins.
+#[test]
+fn a_folded_shell_write_listed_first_does_not_drag_a_later_fallback_ahead() {
+    let sys = json!({"role": "system", "content": "Primary working directory: /w"});
+    let write = |body: &str| json!({"command": format!("cat > p.rs <<'EOF'\n{body}\nEOF")});
+    let edit = json!({"file_path": "q.rs", "old_string": "a", "new_string": "b"});
+    let multi = json!({"file_path": "q.rs", "edits": [{"old_string": "b", "new_string": "c"}]});
+    let call = |id: &str, name: &str, args: Value| json!({"id": id, "type": "function", "function": {"name": name, "arguments": args.to_string()}});
+    let calls = json!([
+        call("sh-1", "Bash", write("one")),
+        call("ed-2", "Edit", edit),
+        call("me-3", "MultiEdit", multi),
+        call("sh-4", "Bash", write("two")),
+    ]);
+    let echo = json!({"role": "assistant", "content": "", "tool_calls": calls.clone()});
+    let answer = |id: &str| json!({"role": "tool", "tool_call_id": id, "content": "ok"});
+    let mut g1 = generation("g1", 1, json!([sys, user("go")]), "");
+    g1.completion.tool_calls = serde_json::from_value(calls).unwrap();
+    let g2 = generation(
+        "g2",
+        2,
+        json!([
+            sys,
+            user("go"),
+            echo,
+            answer("sh-1"),
+            answer("ed-2"),
+            answer("me-3"),
+            answer("sh-4")
+        ]),
+        "done",
+    );
+    let path = derive_path(&session(vec![g1, g2]));
+    let change = |file: &str| {
+        let s = path
+            .steps
+            .iter()
+            .find_map(|s| s.change.get(file))
+            .unwrap_or_else(|| panic!("a change to {file}"));
+        s.structural.as_ref().unwrap().extra.clone()
+    };
+    let q = change("q.rs");
+    assert_eq!(q.get("tool_id"), Some(&json!("me-3")), "{q:?}");
+    assert_eq!(q.get("tool"), Some(&json!("MultiEdit")), "{q:?}");
+    let p = change("p.rs");
+    assert_eq!(p.get("tool_id"), Some(&json!("sh-4")), "{p:?}");
+    assert_eq!(p.get("after"), Some(&json!("two\n")), "{p:?}");
+}
+
 mod property;
 
 /// The categories of the tool calls in the steps `lines` send.
