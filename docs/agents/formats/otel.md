@@ -305,9 +305,13 @@ same entries zstd-compress about 12,000 to 1. Measured peaks (macOS,
 | 90 KB zstd of 1 GiB of `0a 00` (or of the JSON above) | about 57 GB, extrapolated (not run) | rejected, 2.15 GB (the decompressed buffer) |
 | Largest admitted: 1,048,000 empty attributes as protobuf (2 MB) | — | 1.55 GB |
 | Largest admitted: 1,048,000 `{"key":""}` attributes as JSON (11.5 MB) | — | 756 MB |
+| 33 KB zstd: those 1,048,000 protobuf attributes, then 1 GiB of an unknown field | — | 3.49 GB |
+| 64 MiB of zero bytes (16 Mi empty Collector frames) | 268 MB of heap: every frame was collected before the first was refused | `frame 0 is empty`, no allocation |
 
 So at the defaults the decoded tree costs at most about 1.6 GB, on top
-of up to about 2 GiB of decompression buffers. Real telemetry holds far
+of up to about 2 GiB of decompression buffers: about 3.5 GB for one
+input at worst. Frames are checked to tile the input and then read one
+at a time, never collected. Real telemetry holds far
 fewer entries per byte (65 to 130 bytes of OTLP/JSON per entry in the
 fixtures; protobuf takes roughly a third of the bytes), so the cap binds
 on about 100 MB of JSON or 40 MB of protobuf; such a caller raises

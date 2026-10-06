@@ -374,38 +374,52 @@ fn carries_resources(value: &Value) -> bool {
 
 /// Collector frames (4-byte big-endian length, then the bytes) that must
 /// tile the input. Checked slicing: a bad length is an error, never a panic.
-fn split_frames(bytes: &[u8]) -> Result<Vec<&[u8]>> {
-    let mut frames = Vec::new();
+/// Nothing is collected: four zero bytes are a frame.
+fn split_frames(bytes: &[u8]) -> Result<Frames<'_>> {
+    let mut i = 0;
     let mut rest = bytes;
     while !rest.is_empty() {
         let Some((head, tail)) = rest.split_first_chunk::<4>() else {
             return Err(OtelError::Framing(format!(
-                "frame {} is cut short: {} of its 4 length bytes",
-                frames.len(),
+                "frame {i} is cut short: {} of its 4 length bytes",
                 rest.len()
             )));
         };
         let len = u32::from_be_bytes(*head);
-        let Some((body, after)) = usize::try_from(len)
+        let Some((_, after)) = usize::try_from(len)
             .ok()
             .and_then(|n| tail.split_at_checked(n))
         else {
             return Err(OtelError::Framing(format!(
-                "frame {} declares {len} bytes but {} remain",
-                frames.len(),
+                "frame {i} declares {len} bytes but {} remain",
                 tail.len()
             )));
         };
-        frames.push(body);
+        i += 1;
         rest = after;
     }
-    Ok(frames)
+    Ok(Frames(bytes))
+}
+
+/// Frames [`split_frames`] found to tile their input.
+struct Frames<'a>(&'a [u8]);
+
+impl<'a> Iterator for Frames<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<&'a [u8]> {
+        let (head, tail) = self.0.split_first_chunk::<4>()?;
+        let n = usize::try_from(u32::from_be_bytes(*head)).ok()?;
+        let (body, rest) = tail.split_at_checked(n)?;
+        self.0 = rest;
+        Some(body)
+    }
 }
 
 /// One decompressed-output budget and one entry budget run across all
 /// frames.
 fn decode_frames(
-    frames: Vec<&[u8]>,
+    frames: Frames<'_>,
     depth: usize,
     cap: u64,
     budget: u64,
@@ -413,7 +427,7 @@ fn decode_frames(
 ) -> Result<Vec<Value>> {
     let mut left = budget;
     let mut out = Vec::new();
-    for (i, frame) in frames.into_iter().enumerate() {
+    for (i, frame) in frames.enumerate() {
         if frame.is_empty() {
             return Err(OtelError::Framing(format!("frame {i} is empty")));
         }
@@ -543,15 +557,17 @@ mod tests {
     #[test]
     fn frames_must_tile_the_input() {
         assert_eq!(
-            split_frames(&[0, 0, 0, 1, 7, 0, 0, 0, 0]).unwrap(),
+            split_frames(&[0, 0, 0, 1, 7, 0, 0, 0, 0])
+                .unwrap()
+                .collect::<Vec<_>>(),
             vec![&[7u8][..], &[][..]]
         );
-        let err = split_frames(&[0, 0, 0, 1, 7, 0, 0]).unwrap_err();
+        let err = split_frames(&[0, 0, 0, 1, 7, 0, 0]).map(drop).unwrap_err();
         assert!(
             matches!(&err, OtelError::Framing(m) if m == "frame 1 is cut short: 2 of its 4 length bytes"),
             "{err:?}"
         );
-        let err = split_frames(&[0, 0, 0, 5, 1, 2]).unwrap_err();
+        let err = split_frames(&[0, 0, 0, 5, 1, 2]).map(drop).unwrap_err();
         assert!(
             matches!(&err, OtelError::Framing(m) if m == "frame 0 declares 5 bytes but 2 remain"),
             "{err:?}"
