@@ -70,7 +70,8 @@ impl DecodeLimits {
 /// # Errors
 ///
 /// `NotOtlp`/`NotOtlpBody` ([`OtelError::is_not_otlp`]) when the input is
-/// not OTLP at all; any other error is OTLP that is malformed, cut short,
+/// not OTLP at all (a file led by `0x00` included, unless its first frame
+/// is an OTLP request); any other error is OTLP that is malformed, cut short,
 /// more than 4 compression layers deep, or needs a feature. More than
 /// 1 GiB decompressed is [`OtelError::TooLarge`], more than 1,048,576
 /// entries ([`DecodeLimits::entries`]) is [`OtelError::TooManyEntries`]
@@ -129,7 +130,15 @@ fn decode_layer(
         return Err(OtelError::NotOtlp);
     }
     if bytes[0] == 0x00 {
-        return decode_frames(split_frames(bytes)?, depth, cap, budget, entries);
+        return match split_frames(bytes) {
+            Ok(frames) => decode_frames(frames, depth, cap, budget, entries),
+            Err(framing) if first_frame_may_be_otlp(bytes, depth, cap, budget, *entries) => {
+                Err(framing)
+            }
+            Err(framing) => Err(OtelError::NotOtlpBody(format!(
+                "a leading 0x00 byte, but no Collector frame holding an OTLP request ({framing})"
+            ))),
+        };
     }
     match decode_text(bytes, entries) {
         Err(OtelError::Json(why)) if !looks_like_json(bytes) => match split_frames(bytes) {
@@ -150,21 +159,54 @@ fn first_frame_is_otlp(
     depth: usize,
     cap: u64,
     budget: u64,
-    mut entries: Entries,
+    entries: Entries,
 ) -> bool {
-    let Some((head, tail)) = bytes.split_first_chunk::<4>() else {
-        return false;
-    };
-    let Some(frame) = usize::try_from(u32::from_be_bytes(*head))
+    first_frame(bytes).is_some_and(|frame| {
+        decode_first_frame(frame, depth, cap, budget, entries)
+            .is_ok_and(|values| values.iter().any(carries_resources))
+    })
+}
+
+/// Rule 3's tie-break: as rule 5's, but a first frame this build cannot
+/// read (a feature it lacks, or over a limit) may be OTLP too.
+fn first_frame_may_be_otlp(
+    bytes: &[u8],
+    depth: usize,
+    cap: u64,
+    budget: u64,
+    entries: Entries,
+) -> bool {
+    first_frame(bytes).is_some_and(|frame| {
+        match decode_first_frame(frame, depth, cap, budget, entries) {
+            Ok(values) => values.iter().any(carries_resources),
+            Err(OtelError::FeatureDisabled(_)) => {
+                frame.starts_with(&[0x0a])
+                    || frame.starts_with(&GZIP_MAGIC)
+                    || frame.starts_with(&ZSTD_MAGIC)
+            }
+            Err(e) => e.is_too_large(),
+        }
+    })
+}
+
+/// The complete, non-empty first frame, if the input has one.
+fn first_frame(bytes: &[u8]) -> Option<&[u8]> {
+    let (head, tail) = bytes.split_first_chunk::<4>()?;
+    usize::try_from(u32::from_be_bytes(*head))
         .ok()
         .and_then(|n| tail.get(..n))
-    else {
-        return false;
-    };
+        .filter(|frame| !frame.is_empty())
+}
+
+fn decode_first_frame(
+    frame: &[u8],
+    depth: usize,
+    cap: u64,
+    budget: u64,
+    mut entries: Entries,
+) -> Result<Vec<Value>> {
     let mut left = budget;
-    !frame.is_empty()
-        && decode_frame(frame, depth, cap, &mut left, &mut entries)
-            .is_ok_and(|values| values.iter().any(carries_resources))
+    decode_frame(frame, depth, cap, &mut left, &mut entries)
 }
 
 /// One compression layer: `None` without compression magic, else the

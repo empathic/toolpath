@@ -626,3 +626,48 @@ fn the_entry_cap_leaves_the_fixtures_alone() {
         );
     }
 }
+
+/// A `.DS_Store` header: frame 0 is one byte (`B`), frame 1 declares far
+/// more than remains.
+const DS_STORE: [u8; 16] = [
+    0x00, 0x00, 0x00, 0x01, 0x42, 0x75, 0x64, 0x31, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x08, 0x00,
+];
+
+fn utf16be(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_be_bytes).collect()
+}
+
+#[test]
+fn a_zero_led_file_whose_first_frame_is_not_otlp_is_not_otlp() {
+    for (what, bytes) in [
+        (".DS_Store", DS_STORE.to_vec()),
+        ("UTF-16BE JSON", utf16be(r#"{"resourceSpans":[]}"#)),
+        ("a lone 0x00", vec![0x00]),
+    ] {
+        let err = decode_input(&bytes, None).unwrap_err();
+        assert!(err.is_not_otlp(), "{what}: {err:?}");
+        assert!(
+            err.to_string()
+                .starts_with("not an OTLP request: a leading 0x00 byte"),
+            "{what}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_zero_led_file_whose_first_frame_is_otlp_is_a_framing_error() {
+    let body = br#"{"resourceSpans":[{}]}"#;
+    let mut bytes = (body.len() as u32).to_be_bytes().to_vec();
+    bytes.extend(body);
+    assert_eq!(
+        decode_input(&bytes, None).unwrap(),
+        vec![json!({"resourceSpans": [{}]})]
+    );
+    bytes.extend([0xff, 0xff]);
+    let err = decode_input(&bytes, None).unwrap_err();
+    assert!(
+        matches!(&err, OtelError::Framing(m) if m == "frame 1 is cut short: 2 of its 4 length bytes"),
+        "{err:?}"
+    );
+    assert!(!err.is_not_otlp());
+}

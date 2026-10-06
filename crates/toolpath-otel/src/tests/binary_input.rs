@@ -166,18 +166,27 @@ fn the_error_contract_holds() {
     );
 }
 
+/// Cut short after a complete OTLP frame 0: framing gone wrong. Cut short
+/// before frame 0 is complete: nothing shows it is OTLP, so not OTLP.
 #[test]
 fn truncated_or_overlong_frames_are_framing_errors() {
     let body = encode_protobuf(&source()[0]).unwrap();
     let whole = [frame(&body), frame(&body)].concat();
-    for cut in [whole.len() - 1, body.len() + 4 + 2, 3] {
+    for cut in [whole.len() - 1, body.len() + 4 + 2] {
         let err = decode_input(&whole[..cut], None).unwrap_err();
         assert!(matches!(err, OtelError::Framing(_)), "cut {cut}: {err:?}");
+    }
+    for cut in [3, body.len()] {
+        let err = decode_input(&whole[..cut], None).unwrap_err();
+        assert!(
+            matches!(&err, OtelError::NotOtlpBody(m) if m.starts_with("a leading 0x00 byte")),
+            "cut {cut}: {err:?}"
+        );
     }
     // A length prefix far past the end (16 MiB - 1 declared, 3 bytes present).
     let err = decode_input(&[0x00, 0xff, 0xff, 0xff, 1, 2, 3], None).unwrap_err();
     assert!(
-        matches!(&err, OtelError::Framing(m) if m.contains("declares 16777215 bytes")),
+        matches!(&err, OtelError::NotOtlpBody(m) if m.contains("declares 16777215 bytes")),
         "{err:?}"
     );
 }

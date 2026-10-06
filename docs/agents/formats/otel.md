@@ -105,7 +105,8 @@ A delivery is a JSON object holding at least one of `resourceSpans`,
 `resourceLogs`, `resourceMetrics` (an array or `null`). Anything else is
 **not OTLP**. Two results mean the input is not OTLP at all: *not OTLP*
 (`OtelError::NotOtlp`) and *not an OTLP request* (`OtelError::NotOtlpBody`,
-bytes that are no OTLP protobuf request); `OtelError::is_not_otlp` is true
+bytes that are no OTLP protobuf request, nor Collector frames whose first
+frame is one); `OtelError::is_not_otlp` is true
 for both, so a caller reading a directory can skip such a file. Every
 other error is OTLP that is malformed, cut short or unreadable in this
 build. Per file:
@@ -122,7 +123,8 @@ build. Per file:
 | A protobuf body that decodes on the wire as neither request | not an OTLP request: `not an OTLP request: not an OTLP traces request (…); not an OTLP logs request (…)`, followed by `; not JSON either (…)` when the name has no protobuf extension |
 | A protobuf body that is a traces request on the wire, with a span whose `trace_id` is not 16 bytes or whose `span_id` is not 8 (and that is no logs request) | error `OTLP protobuf: not an OTLP traces request (…); not an OTLP logs request (…)`; the traces reason names the span and both lengths |
 | A body read by content (no protobuf extension) that decodes as a request with no `resourceSpans` or `resourceLogs` entry | not an OTLP request: `not an OTLP request: content-sniffed as protobuf, but the body carries no resourceSpans or resourceLogs entry; not JSON either (…)` |
-| Frames that do not tile a file starting with `0x00`, or that do not tile a file whose complete first frame is an OTLP request (a first frame of 16 MiB or more, cut short later) | error `OTLP file framing: frame i is cut short: n of its 4 length bytes` / `OTLP file framing: frame i declares N bytes but M remain`. A file cut short inside such a first frame cannot be told from a stray body and is read as rule 6 |
+| Frames that do not tile a file whose complete first frame is an OTLP request (one starting with `0x00`, or with a first frame of 16 MiB or more), cut short later | error `OTLP file framing: frame i is cut short: n of its 4 length bytes` / `OTLP file framing: frame i declares N bytes but M remain`. Starting with `0x00`, a first frame this build cannot read (``input needs the `…` feature`` for a frame starting `0x0a` or with compression magic, or over a limit) counts as OTLP too. Not starting with `0x00`, a file cut short inside such a first frame cannot be told from a stray body and is read as rule 6 |
+| Frames that do not tile a file starting with `0x00` whose first frame is cut short or is no OTLP request (a `.DS_Store`, UTF-16BE JSON, a lone `0x00`) | not an OTLP request: `not an OTLP request: a leading 0x00 byte, but no Collector frame holding an OTLP request (OTLP file framing: …)` |
 | A zero-length frame | error `OTLP file framing: frame i is empty` |
 | A frame that fails to decode | the frame's error; `not OTLP/JSON`, `OTLP protobuf` and `cannot decompress` messages are prefixed `frame i: `, while ``input needs the `…` feature`` carries no frame index (a JSON frame that is not OTLP: `not OTLP/JSON: frame i: not an OTLP object`; a frame that is no OTLP request: `OTLP protobuf: frame i: not an OTLP traces request (…); …`, an error, never skipped) |
 
@@ -221,7 +223,10 @@ The OpenTelemetry Collector file exporter's layouts, from
 3. First byte `0x00` → Collector frames. An OTLP protobuf body never
    starts with `0x00` (it starts with field 1's tag `0x0a`, or is empty),
    and JSON never does. The frames must tile the input exactly, else
-   `OTLP file framing: …`. A frame may be zstd- or gzip-compressed (the
+   `OTLP file framing: …` when the first frame is complete and decodes as
+   an OTLP request carrying a resource entry (rule 5's tie-break, also
+   met by a first frame this build cannot read), and not an OTLP request
+   otherwise: other binary files start with `0x00` too. A frame may be zstd- or gzip-compressed (the
    Collector writes zstd; a layer, within
    the same bounds), then JSON text (first byte `{` or `[`, read as a
    JSON body or JSON lines; a non-OTLP frame is
