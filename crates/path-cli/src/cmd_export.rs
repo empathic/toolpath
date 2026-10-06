@@ -2078,19 +2078,15 @@ mod tests {
 
     #[test]
     fn pathbase_over_budget_document_is_streamed() {
-        use crate::cmd_pathbase::tests::{MockServer, graph_document_json};
+        use crate::cmd_pathbase::tests::{
+            MockServer, graph_document_json, path_opened, steps_appended,
+        };
         let mut doc = make_path_doc();
         pad_first_step(&mut doc, crate::cmd_pathbase::BATCH_BUDGET);
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
-            (
-                "HTTP/1.1 201 Created",
-                r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":2,"head":"step-002"}"#.to_string(),
-            ),
-            (
-                "HTTP/1.1 200 OK",
-                r#"{"inserted":1,"head":"step-002"}"#.to_string(),
-            ),
+            ("HTTP/1.1 201 Created", path_opened(1, None)),
+            ("HTTP/1.1 200 OK", steps_appended(1, Some("step-002"))),
         ]);
         authed_upload(server.base(), &doc).unwrap();
 
