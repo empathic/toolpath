@@ -814,10 +814,20 @@ pub(crate) fn graphs_post_streamed(
             let _ = block_on(client.delete_graph(owner, repo, &graph_id));
             match (&e.failure, e.largest_step) {
                 (BatchFailure::Status(401, _), _) => bail!(relogin_message(base_url)),
-                (BatchFailure::Status(413, _), Some((id, len))) => bail!(
-                    "upload to {owner}/{repo} failed (HTTP 413): step {id} is {len} bytes, \
-                     larger than the server accepts in one request"
-                ),
+                (BatchFailure::Status(413, _), Some((id, len))) => {
+                    let step_alone = if len * 2 > e.body_len {
+                        format!("; step {id} itself is too large for one request")
+                    } else {
+                        String::new()
+                    };
+                    bail!(
+                        "upload to {owner}/{repo} failed (HTTP 413): batch {} of path {} is {} bytes \
+                         (largest step {id}: {len} bytes); the server refused it as too large{step_alone}",
+                        e.batch_no,
+                        e.path_id,
+                        e.body_len
+                    )
+                }
                 _ => bail!("upload to {owner}/{repo} failed: {}", e.failure.describe()),
             }
         }
@@ -826,7 +836,10 @@ pub(crate) fn graphs_post_streamed(
 
 struct StreamError {
     failure: BatchFailure,
-    /// Largest step of the failing batch.
+    /// The failing batch, for the 413 message.
+    path_id: String,
+    batch_no: usize,
+    body_len: usize,
     largest_step: Option<(String, usize)>,
 }
 
@@ -877,6 +890,9 @@ fn stream_paths(
             );
             let stream_error = |failure| StreamError {
                 failure,
+                path_id: path.path.id.clone(),
+                batch_no: bi + 1,
+                body_len: batch.body.len(),
                 largest_step: batch.largest_step.clone(),
             };
             if bi == 0 {
@@ -2053,19 +2069,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn graphs_post_streamed_413_names_the_step_and_its_size() {
+    fn graphs_post_streamed_413_names_the_batch_and_its_largest_step() {
         let mut path = stream_path(3, 50);
         path.steps[2] = toolpath::v1::Step::new("s2", "human:alex", "2024-01-01T00:00:00Z")
             .with_parent("s1")
             .with_raw_change("src/main.rs", "y".repeat(5000));
-        let size = path
-            .to_jsonl_string()
-            .unwrap()
-            .lines()
-            .find(|l| l.contains(r#""id":"s2""#))
-            .unwrap()
-            .len()
-            + 1;
+        let batches = pack(&path, BATCH_BUDGET);
+        assert_eq!(batches.len(), 1);
+        let body_len = batches[0].body.len();
+        let (_, step_len) = batches[0].largest_step.clone().unwrap();
+        assert!(step_len * 2 > body_len);
+
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
             ("HTTP/1.1 413 Payload Too Large", String::new()),
@@ -2074,8 +2088,41 @@ pub(crate) mod tests {
         let err = post_streamed(&server, &path, BATCH_BUDGET).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("HTTP 413"), "{msg}");
-        assert!(msg.contains(&format!("step s2 is {size} bytes")), "{msg}");
+        assert!(
+            msg.contains(&format!(
+                "batch 1 of path p is {body_len} bytes (largest step s2: {step_len} bytes)"
+            )),
+            "{msg}"
+        );
+        assert!(msg.contains("step s2 itself is too large"), "{msg}");
         assert_eq!(server.requests().len(), 3);
+    }
+
+    #[test]
+    fn graphs_post_streamed_413_on_a_normal_batch_does_not_blame_the_step() {
+        let path = stream_path(12, 50);
+        let batches = pack(&path, 1000);
+        let body_len = batches[1].body.len();
+        let (step_id, step_len) = batches[1].largest_step.clone().unwrap();
+        assert!(step_len * 2 < body_len);
+
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            ("HTTP/1.1 413 Payload Too Large", String::new()),
+            ("HTTP/1.1 204 No Content", String::new()),
+        ]);
+        let err = post_streamed(&server, &path, 1000).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!(
+                "batch 2 of path p is {body_len} bytes (largest step {step_id}: {step_len} bytes); \
+                 the server refused it as too large"
+            )),
+            "{msg}"
+        );
+        assert!(!msg.contains("itself is too large"), "{msg}");
+        assert_eq!(server.requests().len(), 4);
     }
 
     #[test]
