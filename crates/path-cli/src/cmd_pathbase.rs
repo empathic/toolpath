@@ -683,6 +683,11 @@ impl BatchFailure {
                     error_message(&body).unwrap_or_else(|| short_body(&body)),
                 )
             }
+            Error::ResponseBodyError(e) => BatchFailure::Transport(e),
+            Error::InvalidResponsePayload(body, _) => BatchFailure::Other(format!(
+                "unexpected response body: {}",
+                short_body(&String::from_utf8_lossy(&body))
+            )),
             e => BatchFailure::Other(full_chain(&e)),
         }
     }
@@ -1198,6 +1203,17 @@ pub(crate) mod tests {
         /// Serve `responses` in order, one connection each. An empty status
         /// line closes that connection without responding.
         pub(crate) fn start_sequence(responses: Vec<(&'static str, String)>) -> Self {
+            Self::start_raw(
+                responses
+                    .into_iter()
+                    .map(|(status_line, body)| Self::response(status_line, &body))
+                    .collect(),
+            )
+        }
+
+        /// Write each response verbatim, one connection each. An empty
+        /// response closes that connection without writing.
+        pub(crate) fn start_raw(responses: Vec<String>) -> Self {
             use std::net::TcpListener;
 
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1205,9 +1221,9 @@ pub(crate) mod tests {
             let thread = std::thread::spawn(move || {
                 responses
                     .into_iter()
-                    .map(|(status_line, body)| {
+                    .map(|response| {
                         let (stream, _addr) = listener.accept().unwrap();
-                        Self::serve(stream, status_line, &body)
+                        Self::serve(stream, &response)
                     })
                     .collect()
             });
@@ -1217,7 +1233,18 @@ pub(crate) mod tests {
             }
         }
 
-        fn serve(mut stream: std::net::TcpStream, status_line: &str, body: &str) -> Vec<u8> {
+        /// A complete JSON response, or nothing for an empty status line.
+        pub(crate) fn response(status_line: &str, body: &str) -> String {
+            if status_line.is_empty() {
+                return String::new();
+            }
+            format!(
+                "{status_line}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
+
+        fn serve(mut stream: std::net::TcpStream, response: &str) -> Vec<u8> {
             use std::io::{BufRead, BufReader, Write};
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut req = Vec::new();
@@ -1250,11 +1277,7 @@ pub(crate) mod tests {
                 req.extend_from_slice(&body_buf);
             }
 
-            if !status_line.is_empty() {
-                let response = format!(
-                    "{status_line}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
+            if !response.is_empty() {
                 let _ = stream.write_all(response.as_bytes());
                 let _ = stream.flush();
             }
@@ -1909,6 +1932,25 @@ pub(crate) mod tests {
             );
             assert_eq!(request_body(req), request_body(&reqs[1]));
         }
+    }
+
+    #[test]
+    fn graphs_post_streamed_retries_a_response_cut_before_its_body() {
+        let path = stream_path(2, 50);
+        let headers_only = MockServer::response("HTTP/1.1 201 Created", PATH_OPENED)
+            .split_once("\r\n\r\n")
+            .map(|(head, _)| format!("{head}\r\n\r\n"))
+            .unwrap();
+        let server = MockServer::start_raw(vec![
+            MockServer::response("HTTP/1.1 201 Created", &graph_document_json()),
+            headers_only,
+            MockServer::response("HTTP/1.1 201 Created", PATH_OPENED),
+        ]);
+        post_streamed(&server, &path, BATCH_BUDGET).unwrap();
+
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 3);
+        assert_eq!(request_body(&reqs[2]), request_body(&reqs[1]));
     }
 
     #[test]
