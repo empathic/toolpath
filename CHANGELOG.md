@@ -25,7 +25,10 @@ All notable changes to the Toolpath workspace are documented here.
   relative after a directory change the reader cannot follow) is never a
   change or a guessed path: it is recorded as an attempt in the step's
   conversation change, `structural.extra.codex.unresolved_shell_writes`.
-  Relative paths resolve against `exec_command_end.cwd`, the call's
+  So is each file a shell command writes in a form the reader does not
+  model (`cat > f <<A <<B`, `cat <<EOF | tee f`, `cmd > f`): reason
+  `unmodeled`, the resolved `path` when it has one, and the call's
+  outcome; it is never a change, and it forgets the file. Relative paths resolve against `exec_command_end.cwd`, the call's
   `workdir` or the turn's cwd, so keys are absolute like
   `patch_apply_end`'s. Appends diff against content known from earlier
   writes that are known to have happened, and are structural-only
@@ -62,9 +65,15 @@ All notable changes to the Toolpath workspace are documented here.
   (`python3 -c …` is never read as shell). Unquoted heredoc bodies join
   `\`-newline lines before the terminator test, and `\r` is a word
   character, as in bash. Conservative: a script with a subshell, command
-  substitution, backquotes, a group or a compound command is one `Other`,
-  as is any write form it cannot follow exactly (extra redirects,
-  env-prefixed commands). Additive; `FileMutation` is unchanged.
+  substitution, backquotes, a group or a compound command is one `Other`.
+  A split command that plainly writes files in a form the reader does not
+  follow (two heredocs on one `cat`, a heredoc piped into `tee`, extra
+  redirects, an env-prefixed command, `echo … > f`, `make 2> err.log`) is
+  `Unmodeled`: its `UnmodeledTarget`s (each output redirect to a file, any
+  descriptor, and each `tee` file argument; `/dev/` targets excluded), as
+  written and resolved where literal, never their content; its reason
+  string is `Unresolvable::Unmodeled` (`unmodeled`). Additive;
+  `FileMutation` is unchanged.
 - **`toolpath-convo`** (0.11.2): `shell_writes::parse_patch(patch)` reads
   the files of a V4A patch (Codex's `apply_patch` format) as `PatchFile`s:
   `op` (`PatchOp::{Add, Update, Delete}`), `path`, `move_to` and an added

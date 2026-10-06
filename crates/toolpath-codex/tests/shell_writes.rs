@@ -228,3 +228,20 @@ fn a_later_write_beats_an_earlier_patch_when_a_folded_write_is_listed_first() {
     assert_eq!(q["after"], "three\n");
     assert_eq!(extra(&step.change["/tmp/sw/p.txt"])["tool_id"], "c4");
 }
+
+#[test]
+fn an_unmodeled_shell_write_is_recorded_on_its_turn() {
+    let p = derived("shell-writes-order.jsonl");
+    let attempts: Vec<&Value> = p
+        .steps
+        .iter()
+        .flat_map(|s| s.change.values())
+        .filter_map(|c| extra(c).get("codex")?.get("unresolved_shell_writes"))
+        .flat_map(|v| v.as_array().unwrap())
+        .collect();
+    assert_eq!(attempts.len(), 1, "{attempts:?}");
+    assert_eq!(attempts[0]["tool_id"], "c5");
+    assert_eq!(attempts[0]["reason"], "unmodeled");
+    assert_eq!(attempts[0]["path"], "/tmp/sw/r.txt");
+    assert_eq!(attempts[0]["via"], "tee");
+}

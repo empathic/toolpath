@@ -114,7 +114,13 @@ program is one `ShellItem::Other`. It is pure and conservative: anything
 it cannot follow exactly (subshells, command substitution, compound
 commands) is reported as `ShellItem::Other`, and a write whose target
 cannot be resolved as `ShellItem::Unresolved` with its reason, never
-guessed at. What an item means for a file change, and what outcome the
+guessed at. A command that plainly writes files in a form it does not
+follow (`cat > f <<A <<B`, `cat <<EOF | tee f`, `echo hi > f`,
+`make 2> err.log`) is `ShellItem::Unmodeled`, listing each target (output
+redirects to a file on any descriptor and `tee` file arguments, not
+`/dev/` paths) as written and, when literal in a known directory,
+resolved; never its content. A script it does not split is not searched
+for targets. What an item means for a file change, and what outcome the
 call had, is up to the provider.
 
 Simple commands are split at `&&`, `||`, `;`, `|`, `&` and newlines, and

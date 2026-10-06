@@ -11,5 +11,7 @@
 {"timestamp": "2026-09-29T12:00:11.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c3", "output": "ok"}}
 {"timestamp": "2026-09-29T12:00:12.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\": \"cat <<'EOF' > p.txt\\nfour\\nEOF\", \"workdir\": \"/tmp/sw\"}", "call_id": "c4"}}
 {"timestamp": "2026-09-29T12:00:13.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c4", "output": "Chunk ID: c0ffee\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n"}}
+{"timestamp": "2026-09-29T12:00:30.000Z", "type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\": \"cat <<'EOF' | tee r.txt\\nhi\\nEOF\", \"workdir\": \"/tmp/sw\"}", "call_id": "c5"}}
+{"timestamp": "2026-09-29T12:00:31.000Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c5", "output": "Chunk ID: c0ffee\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n"}}
 {"timestamp": "2026-09-29T12:00:14.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "done"}], "phase": "final_answer"}}
 {"timestamp": "2026-09-29T12:00:15.000Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "t1"}}

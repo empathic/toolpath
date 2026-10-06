@@ -675,7 +675,21 @@ Every recognized write is recorded, whatever its outcome:
   `tool_id`, `tool`, `path_as_written`, `reason`
   (`not_literal`/`unknown_dir`), `via`, the outcome keys below,
   `sole_command`, `implied_by_success`, and `redirect`/`body` for a write
-  or `operation` for a patch file. Codex shells start every call afresh,
+  or `operation` for a patch file.
+- a command that plainly writes a file in a form the reader does not
+  model (`ShellItem::Unmodeled`: two heredocs on one `cat`, a heredoc
+  piped into `tee`, extra redirects, an env-prefixed command, or any
+  other command with an output redirect to a file, such as
+  `echo hi > f` or `make 2> err.log`) is an attempt in the same list, one
+  per target (each output redirect to a file on any descriptor, `>&FILE`
+  included, and each `tee` file argument; targets under `/dev/` and
+  descriptor duplications are not files), never a change: `reason`
+  `unmodeled`, `via` `redirect` or `tee`, `command` (the command word),
+  `path` (resolved and absolute) when the target is literal in a known
+  directory, `path_as_written`, `redirect` (`write`/`append`), the outcome
+  keys and `sole_command`/`implied_by_success`. A script the reader does
+  not split (a subshell, a substitution, a compound command) is not
+  searched for targets. Codex shells start every call afresh,
   so a directory change never carries over from an earlier call.
 
 Each inferred change carries `structural.extra.codex`:
@@ -733,7 +747,7 @@ content as last written by a heredoc write or patch add earlier in the
 session that is known to have happened (its call succeeded and
 `implied_by_success` holds; a `patch_apply_end` add with `success`); a
 write not known to have happened, a patch update, delete or move, an
-unresolved target naming the file, any other shell command naming it,
+unresolved or unmodeled target naming the file, any other shell command naming it,
 and any other tool without `patch_apply_end` changes naming it (read,
 search and network tools aside) forget it. A non-literal target, a
 file-writing tool naming no path (`write_file`, `edit`, `replace`,
@@ -995,7 +1009,7 @@ The mapping below is what the provider actually emits. Source:
 | `event_msg.patch_apply_end.changes[<file>]` | sibling `ArtifactChange` on the tool-call's turn with the unified diff as `raw` and `codex.{add,update,delete}` as `structural` |
 | heredoc write in `exec_command` / `shell` / `shell_command` | `file.write` on the call's turn, `structural.extra.codex.source = "shell-heredoc"` (see [Shell writes](#shell-writes)) |
 | `apply_patch` in a shell call with no `patch_apply_end` | `file.write` per patched file, `structural.extra.codex.source = "shell-apply-patch"` |
-| shell write whose target cannot be resolved | attempt in the step's conversation change, `structural.extra.codex.unresolved_shell_writes[]` |
+| shell write whose target cannot be resolved, or in a form not modeled | attempt in the step's conversation change, `structural.extra.codex.unresolved_shell_writes[]` |
 | `event_msg.token_count.info.total_token_usage` | cumulative; differenced per step → `Turn.attributed_token_usage`, summed per round → `Turn.token_usage` (round's final turn) + `ConversationView.total_usage` |
 | `event_msg.token_count.info.total_token_usage.reasoning_output_tokens` (⊆ output, cumulative) | differenced per step → `breakdowns["output"]["reasoning"]` on `attributed_token_usage`; summed per round onto `token_usage` (informational, never summed into the total) |
 | `event_msg` non-turn types (`task_started`, `task_complete`, `user_message`, `agent_message`, etc.) | `ConversationView.events` as typed `ConversationEvent`s |

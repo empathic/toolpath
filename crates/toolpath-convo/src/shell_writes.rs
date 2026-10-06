@@ -1,7 +1,9 @@
 //! Heredoc file writes and `apply_patch` heredocs read from a shell script's
 //! text. Nothing is executed; anything not followed exactly is
 //! [`ShellItem::Other`], and a write whose target cannot be resolved is
-//! [`ShellItem::Unresolved`], never a guessed path.
+//! [`ShellItem::Unresolved`], never a guessed path. A command that plainly
+//! writes a file through a redirect or `tee` in a form not followed is
+//! [`ShellItem::Unmodeled`]: its targets, never its content.
 
 /// The command a heredoc write went through.
 #[non_exhaustive]
@@ -58,6 +60,8 @@ pub enum Unresolvable {
     NotLiteral,
     /// A relative target after a directory change that cannot be followed.
     UnknownDir,
+    /// A write form this reader does not model ([`ShellItem::Unmodeled`]).
+    Unmodeled,
 }
 
 impl Unresolvable {
@@ -66,6 +70,7 @@ impl Unresolvable {
         match self {
             Unresolvable::NotLiteral => "not_literal",
             Unresolvable::UnknownDir => "unknown_dir",
+            Unresolvable::Unmodeled => "unmodeled",
         }
     }
 }
@@ -107,6 +112,39 @@ pub struct UnresolvedWrite {
     /// The write, its `path` being the target as written (quotes removed).
     pub write: HeredocWrite,
     pub reason: Unresolvable,
+}
+
+/// A file an unmodeled command writes.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmodeledTarget {
+    /// The target as written, quotes removed.
+    pub path: String,
+    /// No expansion, glob or brace in the target.
+    pub literal: bool,
+    /// The target with the script's literal `cd`s folded in, normalized;
+    /// `None` when it is not literal or the directory is unknown.
+    pub resolved: Option<String>,
+    /// `>>`, `&>>` or `tee -a`.
+    pub append: bool,
+    /// A `tee` file argument rather than a redirect.
+    pub tee: bool,
+}
+
+/// A simple command that writes files through redirects (`>`, `>>`, `>|`,
+/// `&>`, `&>>`, `>&FILE`, any descriptor) or `tee` file arguments, in a
+/// form this reader does not model. Targets under `/dev/` are not files.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnmodeledWrite {
+    /// The command as [`ShellItem::Other`] would hold it.
+    pub command: String,
+    /// The command word, when it has one.
+    pub program: Option<String>,
+    /// In the order written.
+    pub targets: Vec<UnmodeledTarget>,
+    /// What the script's exit status says about this command.
+    pub status_link: StatusLink,
 }
 
 /// A patch fed to `apply_patch` (or `applypatch`), through a heredoc or
@@ -233,6 +271,8 @@ pub enum ShellItem {
     Unresolved(UnresolvedWrite),
     /// An `apply_patch` heredoc.
     Patch(HeredocPatch),
+    /// A command that writes files in a form not followed.
+    Unmodeled(UnmodeledWrite),
     /// Any other simple command as text (words, redirect targets, heredoc
     /// bodies); an unsplit script is one `Other` holding all of it.
     Other(String),
@@ -278,6 +318,14 @@ impl ParsedScript {
     pub fn unresolved(&self) -> impl Iterator<Item = &UnresolvedWrite> {
         self.items.iter().filter_map(|i| match i {
             ShellItem::Unresolved(u) => Some(u),
+            _ => None,
+        })
+    }
+
+    /// The commands writing files in a form not followed, in order.
+    pub fn unmodeled(&self) -> impl Iterator<Item = &UnmodeledWrite> {
+        self.items.iter().filter_map(|i| match i {
+            ShellItem::Unmodeled(u) => Some(u),
             _ => None,
         })
     }
@@ -881,7 +929,15 @@ fn classify(command: &str, cmds: &[Simple], docs: &[Heredoc]) -> ParsedScript {
                 }
                 None => match heredoc_patch(s, docs, &dir, link) {
                     Some(p) => ShellItem::Patch(p),
-                    None => ShellItem::Other(s.text(docs)),
+                    None => match unmodeled_targets(s, &dir) {
+                        targets if targets.is_empty() => ShellItem::Other(s.text(docs)),
+                        targets => ShellItem::Unmodeled(UnmodeledWrite {
+                            command: s.text(docs),
+                            program: command_word(s).map(|w| w.text.clone()),
+                            targets,
+                            status_link: link,
+                        }),
+                    },
                 },
             };
             items.push(item);
@@ -1460,6 +1516,57 @@ fn heredoc_write(s: &Simple, docs: &[Heredoc], link: StatusLink) -> Option<(Here
     Some((write, target.literal))
 }
 
+/// The files a command not otherwise modeled writes: output redirects to
+/// a file, and `tee`'s file arguments.
+fn unmodeled_targets(s: &Simple, dir: &ScriptDir) -> Vec<UnmodeledTarget> {
+    let target = |w: &Word, append: bool, tee: bool| {
+        let device = w.literal && w.text.starts_with("/dev/");
+        (!w.text.is_empty() && !device).then(|| UnmodeledTarget {
+            path: w.text.clone(),
+            literal: w.literal,
+            resolved: w.literal.then(|| resolve(dir, &w.text)).flatten(),
+            append,
+            tee,
+        })
+    };
+    let mut out = Vec::new();
+    let words = s.words.iter().skip_while(|w| is_assignment(&w.text));
+    let mut words = words.peekable();
+    if words.next_if(|w| w.literal && w.text == "tee").is_some() {
+        let mut flags = true;
+        let mut files = Vec::new();
+        let mut append = false;
+        for w in words {
+            match w.text.as_str() {
+                "--" if flags => flags = false,
+                "--append" if flags => append = true,
+                f if flags && f.starts_with('-') && f.len() > 1 => {
+                    append |= !f.starts_with("--") && f.contains('a');
+                }
+                _ => files.push(w),
+            }
+        }
+        out.extend(files.into_iter().filter_map(|w| target(w, append, true)));
+    }
+    for r in &s.redirs {
+        let append = match r.op {
+            ">" | ">|" | "&>" => false,
+            ">>" | "&>>" => true,
+            ">&" if !r
+                .target
+                .text
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '-') =>
+            {
+                false
+            }
+            _ => continue,
+        };
+        out.extend(target(&r.target, append, false));
+    }
+    out
+}
+
 /// `apply_patch <<TAG` / `applypatch <<TAG` with no other word, redirect or
 /// here-string.
 fn heredoc_patch(
@@ -1723,14 +1830,144 @@ mod tests {
 
     #[test]
     fn other_items_carry_their_words_targets_and_bodies() {
-        let p = parse_script("python3 wc.py > out.txt && python3 - <<'EOF'\nimport wc\nEOF");
+        let p = parse_script("python3 wc.py < in.txt && python3 - <<'EOF'\nimport wc\nEOF");
         assert_eq!(
             p.items,
             vec![
-                ShellItem::Other("python3 wc.py >out.txt".into()),
+                ShellItem::Other("python3 wc.py <in.txt".into()),
                 ShellItem::Other("python3 - import wc\n".into()),
             ]
         );
+    }
+
+    fn unmodeled(cmd: &str) -> Vec<UnmodeledWrite> {
+        parse_script(cmd).unmodeled().cloned().collect()
+    }
+
+    fn targets(cmd: &str) -> Vec<(String, Option<String>, bool, bool)> {
+        unmodeled(cmd)
+            .into_iter()
+            .flat_map(|u| u.targets)
+            .map(|t| (t.path, t.resolved, t.append, t.tee))
+            .collect()
+    }
+
+    fn t(
+        path: &str,
+        resolved: Option<&str>,
+        append: bool,
+        tee: bool,
+    ) -> (String, Option<String>, bool, bool) {
+        (path.into(), resolved.map(Into::into), append, tee)
+    }
+
+    #[test]
+    fn a_cat_with_two_heredocs_is_an_unmodeled_write() {
+        let cmd = "cat > f.txt <<A <<B\none\nA\ntwo\nB";
+        let p = parse_script(cmd);
+        assert_eq!(p.writes().count() + p.unresolved().count(), 0);
+        let u = unmodeled(cmd);
+        assert_eq!(u.len(), 1, "{p:?}");
+        assert_eq!(u[0].program.as_deref(), Some("cat"));
+        assert_eq!(u[0].status_link, StatusLink::Sole);
+        assert_eq!(u[0].command, "cat >f.txt one\n two\n");
+        assert_eq!(targets(cmd), vec![t("f.txt", Some("f.txt"), false, false)]);
+    }
+
+    #[test]
+    fn a_heredoc_piped_into_tee_is_an_unmodeled_write() {
+        let cmd = "cat <<'EOF' | tee -a out/log.md\nhello\nEOF";
+        let p = parse_script(cmd);
+        assert_eq!(p.items[0], ShellItem::Other("cat hello\n".into()));
+        let u = unmodeled(cmd);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u[0].program.as_deref(), Some("tee"));
+        assert_eq!(u[0].status_link, StatusLink::Independent);
+        assert_eq!(
+            targets(cmd),
+            vec![t("out/log.md", Some("out/log.md"), true, true)]
+        );
+    }
+
+    #[test]
+    fn unmodeled_targets_are_every_file_a_redirect_or_tee_writes() {
+        for (cmd, want) in [
+            (
+                "echo hi > f.txt",
+                vec![t("f.txt", Some("f.txt"), false, false)],
+            ),
+            (
+                "printf x >> f.txt",
+                vec![t("f.txt", Some("f.txt"), true, false)],
+            ),
+            (
+                "cargo test &> log.txt 2>&1",
+                vec![t("log.txt", Some("log.txt"), false, false)],
+            ),
+            (
+                "make 2>> err.log >&2",
+                vec![t("err.log", Some("err.log"), true, false)],
+            ),
+            (
+                "make >&build.log",
+                vec![t("build.log", Some("build.log"), false, false)],
+            ),
+            (
+                "cmd >| /abs/x",
+                vec![t("/abs/x", Some("/abs/x"), false, false)],
+            ),
+            (
+                "tee a.txt -ia -- -b.txt <<EOF\nx\nEOF",
+                vec![
+                    t("a.txt", Some("a.txt"), true, true),
+                    t("-b.txt", Some("-b.txt"), true, true),
+                ],
+            ),
+            (
+                "tee f.txt <<EOF > out.log\nx\nEOF",
+                vec![
+                    t("f.txt", Some("f.txt"), false, true),
+                    t("out.log", Some("out.log"), false, false),
+                ],
+            ),
+            (
+                "cat <<EOF > f.txt 2>/dev/null\nx\nEOF",
+                vec![t("f.txt", Some("f.txt"), false, false)],
+            ),
+            (
+                "FOO=1 cat > f.txt <<EOF\nx\nEOF",
+                vec![t("f.txt", Some("f.txt"), false, false)],
+            ),
+            ("cmd > \"$OUT\"", vec![t("$OUT", None, false, false)]),
+            ("cd $D && cmd > f", vec![t("f", None, false, false)]),
+            (
+                "cd sub && cmd > ../f",
+                vec![t("../f", Some("f"), false, false)],
+            ),
+        ] {
+            assert_eq!(targets(cmd), want, "{cmd:?}");
+        }
+        for cmd in [
+            "ls -la",
+            "cat wc.py",
+            "cmd > /dev/null 2>&1",
+            "cmd >&2",
+            "cmd 2>&-",
+            "tee <<EOF\nx\nEOF",
+            "sort < in.txt",
+            "sudo tee f.txt <<EOF\nx\nEOF",
+            "(echo hi > f.txt)",
+            "if true; then echo hi > f.txt; fi",
+            "cat > f.txt <<EOF\nx\nEOF",
+            "cat > $OUT <<EOF\nx\nEOF",
+        ] {
+            assert!(
+                unmodeled(cmd).is_empty(),
+                "{cmd:?}: {:?}",
+                parse_script(cmd)
+            );
+        }
+        assert_eq!(Unresolvable::Unmodeled.as_str(), "unmodeled");
     }
 
     #[test]

@@ -39,7 +39,7 @@ documents so every Codex-assisted change has a traceable origin.
 | `response_item.function_call` + `function_call_output` paired by `call_id` | `Turn.tool_uses[].{input,result}` |
 | `response_item.custom_tool_call` (e.g. `apply_patch`) | same, with raw `input` string preserved |
 | `event_msg.patch_apply_end.changes[file]` | Sibling `ArtifactChange` on that step with `raw = unified_diff` |
-| shell call writing a file (`cat <<EOF > f`, `apply_patch <<EOF`, `shell ["apply_patch", …]`) | `file.write` on that step with `structural.codex = {source, outcome, executions}`; unresolvable targets in the step's `structural.codex.unresolved_shell_writes` |
+| shell call writing a file (`cat <<EOF > f`, `apply_patch <<EOF`, `shell ["apply_patch", …]`) | `file.write` on that step with `structural.codex = {source, outcome, executions}`; unresolvable targets and unmodeled write forms (`cmd > f`, `… | tee f`) in the step's `structural.codex.unresolved_shell_writes` |
 | Other `event_msg` types | `ConversationEvent` on the `ConversationView` |
 
 ## Usage
