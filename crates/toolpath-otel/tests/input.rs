@@ -3,7 +3,9 @@
 use serde_json::{Value, json};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use toolpath_otel::{OtelError, decode_input, decode_input_with_limit};
+use toolpath_otel::{
+    DecodeLimits, OtelError, decode_input, decode_input_with_limit, decode_input_with_limits,
+};
 
 fn otel_fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures/otel")
@@ -470,5 +472,157 @@ fn compressed_input_without_the_feature_ignores_the_limit() {
                 "{limit}: {r:?}"
             );
         }
+    }
+}
+
+/// `decode_input`'s entry cap.
+const MAX_ENTRIES: u64 = 1 << 20;
+
+fn too_many(err: &OtelError, limit: u64) -> bool {
+    matches!(err, OtelError::TooManyEntries { limit: l } if *l == limit)
+        && err.is_too_large()
+        && !err.is_not_otlp()
+        && err.to_string() == format!("decoded input exceeds {limit} entries")
+}
+
+fn entries(n: u64) -> DecodeLimits {
+    DecodeLimits::default().with_entries(n)
+}
+
+/// `{"resourceSpans":[{},{},…]}`: one entry for the array, one per element.
+fn empty_resources_json(elements: u64) -> Vec<u8> {
+    let mut s = br#"{"resourceSpans":["#.to_vec();
+    for i in 0..elements {
+        s.extend_from_slice(if i == 0 { b"{}" } else { b",{}" });
+    }
+    s.extend_from_slice(b"]}");
+    s
+}
+
+/// A protobuf request of `n` empty resource entries (`0a 00` each).
+#[cfg(feature = "protobuf")]
+fn empty_resources_pb(n: u64) -> Vec<u8> {
+    [0x0a, 0x00].repeat(n as usize)
+}
+
+#[test]
+fn an_empty_resource_spans_json_bomb_is_refused_by_the_entry_cap() {
+    let err = decode_input(&empty_resources_json(MAX_ENTRIES), None)
+        .map(|v| v.len())
+        .unwrap_err();
+    assert!(too_many(&err, MAX_ENTRIES), "{err:?}");
+}
+
+#[cfg(feature = "protobuf")]
+#[test]
+fn an_empty_resource_spans_protobuf_bomb_is_refused_by_the_entry_cap() {
+    let bomb = empty_resources_pb(MAX_ENTRIES + 1);
+    for name in [None, Some("bomb.binpb")] {
+        let err = decode_input(&bomb, name).map(|v| v.len()).unwrap_err();
+        assert!(too_many(&err, MAX_ENTRIES), "{name:?}: {err:?}");
+    }
+    let err = toolpath_otel::decode_protobuf(&bomb).map(drop).unwrap_err();
+    assert!(too_many(&err, MAX_ENTRIES), "{err:?}");
+}
+
+/// The decompression-bomb shape: a few KiB of zstd far below the byte
+/// limit, expanding to millions of entries.
+#[cfg(all(feature = "protobuf", feature = "compression"))]
+#[test]
+fn a_compressed_entry_bomb_is_refused_within_the_byte_limit() {
+    let bomb = zstd(&empty_resources_pb(MAX_ENTRIES + 1));
+    assert!(bomb.len() < 1 << 20, "{}", bomb.len());
+    let err = decode_input(&bomb, Some("bomb.binpb.zst"))
+        .map(|v| v.len())
+        .unwrap_err();
+    assert!(too_many(&err, MAX_ENTRIES), "{err:?}");
+    let json = zstd(&empty_resources_json(MAX_ENTRIES));
+    let err = decode_input(&json, None).map(|v| v.len()).unwrap_err();
+    assert!(too_many(&err, MAX_ENTRIES), "{err:?}");
+}
+
+#[test]
+fn a_caller_entry_cap_is_exact() {
+    let json = empty_resources_json(3);
+    assert_eq!(
+        decode_input_with_limits(&json, None, entries(4)).unwrap(),
+        vec![json!({"resourceSpans": [{}, {}, {}]})]
+    );
+    let err = decode_input_with_limits(&json, None, entries(3)).unwrap_err();
+    assert!(too_many(&err, 3), "{err:?}");
+    // Nested objects count, scalars and strings do not.
+    let attr = text(
+        r#"{"resourceSpans":[{"resource":{"attributes":[{"key":"[{,}]","value":{"intValue":"1"}}]}}]}"#,
+    );
+    assert!(decode_input_with_limits(&attr, None, entries(6)).is_ok());
+    let err = decode_input_with_limits(&attr, None, entries(5)).unwrap_err();
+    assert!(too_many(&err, 5), "{err:?}");
+}
+
+#[cfg(feature = "protobuf")]
+#[test]
+fn a_caller_entry_cap_is_exact_for_protobuf() {
+    let pb = empty_resources_pb(3);
+    assert!(decode_input_with_limits(&pb, Some("x.binpb"), entries(3)).is_ok());
+    let err = decode_input_with_limits(&pb, Some("x.binpb"), entries(2)).unwrap_err();
+    assert!(too_many(&err, 2), "{err:?}");
+}
+
+#[test]
+fn one_entry_budget_spans_lines_and_frames() {
+    let lines = [empty_resources_json(1), empty_resources_json(1)].join(&b'\n');
+    assert_eq!(
+        decode_input_with_limits(&lines, None, entries(4))
+            .unwrap()
+            .len(),
+        2
+    );
+    let err = decode_input_with_limits(&lines, None, entries(3)).unwrap_err();
+    assert!(too_many(&err, 3), "{err:?}");
+    let frame = |b: &[u8]| [(b.len() as u32).to_be_bytes().to_vec(), b.to_vec()].concat();
+    let framed = [
+        frame(&empty_resources_json(1)),
+        frame(&empty_resources_json(1)),
+    ]
+    .concat();
+    assert_eq!(
+        decode_input_with_limits(&framed, None, entries(4))
+            .unwrap()
+            .len(),
+        2
+    );
+    let err = decode_input_with_limits(&framed, None, entries(3)).unwrap_err();
+    assert!(too_many(&err, 3), "{err:?}");
+}
+
+#[test]
+fn the_entry_cap_leaves_the_fixtures_alone() {
+    let unbounded = DecodeLimits::default().with_entries(u64::MAX);
+    let mut names = vec!["body.json", "lines.jsonl", "crlf-bom.jsonl"];
+    if cfg!(feature = "compression") {
+        names.extend([
+            "body.json.gz",
+            "two-members.jsonl.gz",
+            "synthetic-fork.ndjson.zst",
+        ]);
+    }
+    if cfg!(feature = "protobuf") {
+        names.extend(["synthetic-fork-first.binpb", "synthetic-fork-frames.pb"]);
+    }
+    if cfg!(all(feature = "protobuf", feature = "compression")) {
+        names.extend([
+            "synthetic-fork-frames-zstd.pb",
+            "synthetic-fork-frames.pb.zst",
+            "synthetic-fork-first.binpb.zst",
+            "synthetic-fork-json-frames-zstd.pb",
+        ]);
+    }
+    for name in names {
+        let bytes = encoding(name);
+        assert_eq!(
+            decode_input(&bytes, Some(name)).unwrap(),
+            decode_input_with_limits(&bytes, Some(name), unbounded).unwrap(),
+            "{name}"
+        );
     }
 }

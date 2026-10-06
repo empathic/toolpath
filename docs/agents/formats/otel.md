@@ -65,6 +65,7 @@ are ignored without counting.
 ```rust
 pub fn decode_input(bytes: &[u8], name: Option<&str>) -> Result<Vec<serde_json::Value>>
 pub fn decode_input_with_limit(bytes: &[u8], name: Option<&str>, limit: u64) -> Result<Vec<serde_json::Value>>
+pub fn decode_input_with_limits(bytes: &[u8], name: Option<&str>, limits: DecodeLimits) -> Result<Vec<serde_json::Value>>
 pub fn decode_protobuf(bytes: &[u8]) -> Result<serde_json::Value>      // feature `protobuf`
 pub fn encode_protobuf(delivery: &serde_json::Value) -> Result<Vec<u8>> // feature `protobuf`
 ```
@@ -116,6 +117,7 @@ build. Per file:
 | JSON lines mixing OTLP and non-OTLP values | error `not OTLP/JSON: line N: not an OTLP object`; the whole file fails, because skipping part of a file would drop data silently |
 | JSON text (first non-whitespace byte `{` or `[`) that is neither one JSON value nor all-lines JSON | error `not OTLP/JSON: line N: <JSON parser message>` |
 | gzip or zstd without the `compression` feature / a bad gzip or zstd stream | error ``input needs the `compression` feature, which this build does not have`` / `cannot decompress: …` (`cannot decompress: zstd: …` for zstd) |
+| More entries than the cap (1,048,576, `MAX_ENTRIES`, or the caller's `DecodeLimits::entries`) across the input (see Limits) | error `decoded input exceeds N entries` (`OtelError::TooManyEntries { limit }`; `is_too_large` is true; no `frame i:`) |
 | More than 4 nested compression layers (`MAX_LAYERS`) (gzip or zstd, in any mix, a compressed frame included), or more decompressed bytes across all layers and frames of the file than the limit (1 GiB, `MAX_DECOMPRESSED`, or the caller's with `decode_input_with_limit`) | error `cannot decompress: more than N nested compression layers` (`OtelError::Decompress`) / `cannot decompress: decompressed output exceeds <cap>` (`OtelError::TooLarge { limit }`, the limit in use, in exact binary units; `OtelError::is_too_large` is true, also when the overrun happens inside a Collector frame, and the error carries no `frame i:`, since the budget belongs to the whole input) |
 | A protobuf body that decodes on the wire as neither request | not an OTLP request: `not an OTLP request: not an OTLP traces request (…); not an OTLP logs request (…)`, followed by `; not JSON either (…)` when the name has no protobuf extension |
 | A protobuf body that is a traces request on the wire, with a span whose `trace_id` is not 16 bytes or whose `span_id` is not 8 (and that is no logs request) | error `OTLP protobuf: not an OTLP traces request (…); not an OTLP logs request (…)`; the traces reason names the span and both lengths |
@@ -251,14 +253,61 @@ The OpenTelemetry Collector file exporter's layouts, from
    empty request. A named `.binpb` holding an empty request reads as an
    empty delivery.
 
-The limit bounds the decompressed bytes, not the allocation: each layer is read into a growing buffer, so peak memory is
-roughly twice the limit for the largest layer, plus the input and any outer
-layer still held during a nested read; `ruzstd`'s decoding window is not
-counted. On wasm32 (the site build) an allocation that large can abort
-the process rather than fail with `cannot decompress`. The default,
-1 GiB, is the same on every target; a caller decoding
-untrusted bodies (a hosted ingest) passes its own, smaller limit to
-`decode_input_with_limit`. zstd frame checksums are not verified.
+### Limits
+
+`DecodeLimits { decompressed, entries }` (`Default`: 1 GiB and
+1,048,576 = 2^20, `MAX_DECOMPRESSED` and `MAX_ENTRIES`;
+`with_decompressed`, `with_entries`) bounds one input.
+`decode_input_with_limit(bytes, name, limit)` sets only `decompressed`.
+
+- **Decompressed bytes** (`OtelError::TooLarge`): each layer is read into
+  a growing buffer, so this part of peak memory is roughly twice the
+  limit for the largest layer, plus the input and any outer layer still
+  held during a nested read; `ruzstd`'s decoding window is not counted.
+  Uncompressed input is not counted.
+- **Entries** (`OtelError::TooManyEntries`, `decoded input exceeds N entries`):
+  what decoding would build is counted *before* it is built, across
+  every frame, line and delivery of the input. JSON text is scanned
+  (strings skipped): an entry is every array element, and every object
+  or array that is an object member's value. A protobuf body is walked on
+  the wire under the request schema: an entry is every element of a
+  repeated field (resource and scope entries, spans, log records, events,
+  links, attributes, array and kvlist values, entity refs and their key
+  strings) and every nested message (a resource, a scope, a status, an
+  `AnyValue`); unknown fields are skipped, and the walk stops where prost
+  would fail. The body is walked as both requests and the larger count is
+  charged, since the signal is only chosen after decoding. Text that
+  fails to parse as JSON (it may be protobuf) is not charged. The
+  delivery itself is free.
+
+The byte limit alone does not bound memory: a decoded entry costs up to
+about 1.5 KB (a protobuf attribute is a prost `KeyValue` and then a
+one-member JSON object, a `BTreeMap` leaf) and may take 2 bytes on the
+wire, so before the entry cap a 64 MiB protobuf body of empty
+`resourceSpans` entries (`0a 00` repeated) peaked at 3.56 GB, and the
+same entries zstd-compress about 12,000 to 1. Measured peaks (macOS,
+`peak memory footprint`, release build), at the defaults:
+
+| Input | Before the entry cap | With it |
+|---|---|---|
+| 64 MiB protobuf, `0a 00` repeated (empty resource entries) | 3.56 GB | rejected, 69 MB (the input) |
+| 64 MiB protobuf, one resource of empty attributes | 2.22 GB | rejected, 69 MB |
+| 64 MiB JSON, `{"resourceSpans":[{},{},…]}` | 787 MB | rejected, 69 MB |
+| 64 MiB JSON, one resource of `{"key":""}` attributes | 4.38 GB | rejected, 69 MB |
+| 90 KB zstd of 1 GiB of `0a 00` (or of the JSON above) | about 57 GB, extrapolated (not run) | rejected, 2.15 GB (the decompressed buffer) |
+| Largest admitted: 1,048,000 empty attributes as protobuf (2 MB) | — | 1.55 GB |
+| Largest admitted: 1,048,000 `{"key":""}` attributes as JSON (11.5 MB) | — | 756 MB |
+
+So at the defaults the decoded tree costs at most about 1.6 GB, on top
+of up to about 2 GiB of decompression buffers. Real telemetry holds far
+fewer entries per byte (65 to 130 bytes of OTLP/JSON per entry in the
+fixtures; protobuf takes roughly a third of the bytes), so the cap binds
+on about 100 MB of JSON or 40 MB of protobuf; such a caller raises
+`entries`. On wasm32 (the site build) an allocation that
+large can abort the process rather than fail with `cannot decompress`.
+The defaults are the same on every target; a caller decoding untrusted
+bodies (a hosted ingest) passes smaller ones to
+`decode_input_with_limits`. zstd frame checksums are not verified.
 
 ## Walker
 

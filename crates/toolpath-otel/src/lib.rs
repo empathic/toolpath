@@ -2,6 +2,7 @@
 
 mod branch;
 mod derive;
+mod entries;
 mod error;
 mod generation;
 mod harness;
@@ -25,7 +26,7 @@ mod walk;
 mod tests;
 
 pub use error::{OtelError, Result};
-pub use input::{decode_input, decode_input_with_limit};
+pub use input::{DecodeLimits, decode_input, decode_input_with_limit, decode_input_with_limits};
 pub use jsonl::{Remote, Settle, derive_jsonl};
 pub use profile::ProfileSelection;
 #[cfg(feature = "protobuf")]

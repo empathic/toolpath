@@ -63,6 +63,7 @@ println!("skipped {}", derived.skipped.total());
 | `BatchLimits`, `Body`, `DeltaError` | Re-exported from `toolpath::v1::jsonl` |
 | `decode_input(bytes, name)` | One file or request body -> its OTLP/JSON bodies (1 GiB decompression budget) |
 | `decode_input_with_limit(bytes, name, limit)` | `decode_input` under the caller's decompression budget |
+| `decode_input_with_limits(bytes, name, limits)` / `DecodeLimits` | `decode_input` under the caller's decompression budget and entry cap (`decompressed`, `entries`; `Default` is 1 GiB and 1,048,576) |
 | `decode_protobuf(bytes)` / `encode_protobuf(value)` | One OTLP protobuf request <-> canonical OTLP/JSON (feature `protobuf`) |
 | `DeriveConfig` | `profile`, an optional graph `title`, the shared `convo` derivation options (a `toolpath_convo::DeriveConfig`: toolpath-convo is a public dependency, so a breaking toolpath-convo release is a breaking release here), and `tool_category`, the caller's tool classifier (`with_tool_category(f)` sets it) |
 | `ToolClassifier` | Wraps `Fn(harness, tool_name) -> Option<ToolCategory>`; `harness` is the inferred harness id (`claude-code`, `codex`, `opencode`, `pi`, `unknown`) |
@@ -71,7 +72,7 @@ println!("skipped {}", derived.skipped.total());
 | `SkipCounts` | Telemetry read but not derived, by reason, and `total()` |
 | `OtelError` | `NotOtlp`, `NoGenerations { skipped }`, `MixedSessions(ids)`, `FedGenerationMissing(id)`, `UnknownHarness(name)`, `MessageMissing(hash)`, `Delta(DeltaError)`, and the transport errors below |
 | `OtelError::is_not_otlp()` | Input that is not OTLP at all (a file to skip), as opposed to malformed OTLP |
-| `OtelError::is_too_large()` | Input over the decompression budget, as opposed to corrupt compressed data |
+| `OtelError::is_too_large()` | Input over the decompression budget or the entry cap, as opposed to corrupt data |
 
 ## Features
 
@@ -93,11 +94,14 @@ nested layers. The content decides the decoding; `name` only enables
 file-extension rules (`.pb`, `.binpb`, `.gz`, `.zst`).
 
 Decompressed output is capped by **one budget** across every layer and
-frame of the input. A service decoding untrusted bodies passes its own to
-`decode_input_with_limit`; going over is `OtelError::TooLarge { limit }`
-(`is_too_large()`), which an HTTP caller maps to `413 Payload Too Large`.
-Other transport errors: `Json`, `Decompress`, `NotOtlpBody`, `Protobuf`,
-`Framing`.
+frame of the input, and the decoded tree by **one entry cap** (array
+and repeated-field elements, and nested objects, counted before they are
+built). A service decoding untrusted bodies passes its own to
+`decode_input_with_limit` or `decode_input_with_limits`; going over is
+`OtelError::TooLarge { limit }` or `OtelError::TooManyEntries { limit }`
+(both `is_too_large()`), which an HTTP caller maps to
+`413 Payload Too Large`. Other transport errors: `Json`, `Decompress`,
+`NotOtlpBody`, `Protobuf`, `Framing`.
 
 ## Sessions
 

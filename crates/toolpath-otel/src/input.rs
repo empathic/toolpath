@@ -1,12 +1,13 @@
 //! Input bytes → OTLP/JSON deliveries: decompress, split Collector frames
 //! and JSON lines, decode protobuf bodies, shape-check. Reads no attribute key.
 
+use crate::entries::{Entries, charge_json};
 use crate::error::{OtelError, Result};
 use crate::otlp::is_otlp;
 use serde_json::Value;
 
 #[cfg(feature = "protobuf")]
-use crate::protojson::decode_protobuf;
+use crate::protojson::decode_protobuf_within;
 
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
@@ -17,6 +18,46 @@ pub(crate) const MAX_LAYERS: usize = 4;
 /// frames of one input, to refuse decompression bombs. Bounds output, not
 /// peak allocation.
 pub(crate) const MAX_DECOMPRESSED: u64 = 1 << 30;
+/// [`decode_input`]'s limit on decoded entries across all frames and
+/// deliveries of one input, so a small input cannot expand into an
+/// unbounded tree.
+pub(crate) const MAX_ENTRIES: u64 = 1 << 20;
+
+/// The bounds [`decode_input_with_limits`] decodes one input within.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodeLimits {
+    /// Decompressed bytes, across every compression layer and Collector
+    /// frame (default 1 GiB).
+    pub decompressed: u64,
+    /// Entries decoded, across every frame and delivery (default
+    /// 1,048,576): each element of a JSON array or protobuf repeated field,
+    /// and each object or message nested as a field's value.
+    pub entries: u64,
+}
+
+impl Default for DecodeLimits {
+    fn default() -> Self {
+        DecodeLimits {
+            decompressed: MAX_DECOMPRESSED,
+            entries: MAX_ENTRIES,
+        }
+    }
+}
+
+impl DecodeLimits {
+    /// These limits with `decompressed` bytes.
+    pub fn with_decompressed(mut self, decompressed: u64) -> Self {
+        self.decompressed = decompressed;
+        self
+    }
+
+    /// These limits with `entries` entries.
+    pub fn with_entries(mut self, entries: u64) -> Self {
+        self.entries = entries;
+        self
+    }
+}
 
 /// Decode one input file (or request body) into OTLP/JSON request bodies,
 /// the input [`derive_path`](crate::derive_path) takes: one JSON body, JSON
@@ -31,20 +72,42 @@ pub(crate) const MAX_DECOMPRESSED: u64 = 1 << 30;
 /// `NotOtlp`/`NotOtlpBody` ([`OtelError::is_not_otlp`]) when the input is
 /// not OTLP at all; any other error is OTLP that is malformed, cut short,
 /// more than 4 compression layers deep, or needs a feature. More than
-/// 1 GiB decompressed is [`OtelError::TooLarge`] ([`OtelError::is_too_large`]).
+/// 1 GiB decompressed is [`OtelError::TooLarge`], more than 1,048,576
+/// entries ([`DecodeLimits::entries`]) is [`OtelError::TooManyEntries`]
+/// (both [`OtelError::is_too_large`]).
 pub fn decode_input(bytes: &[u8], name: Option<&str>) -> Result<Vec<Value>> {
-    decode_input_with_limit(bytes, name, MAX_DECOMPRESSED)
+    decode_input_with_limits(bytes, name, DecodeLimits::default())
 }
 
 /// [`decode_input`] with `limit` in place of its 1 GiB: one
 /// budget of decompressed bytes shared by every compression layer and
-/// Collector frame of the input.
+/// Collector frame of the input. The entry cap stays the default.
 ///
 /// # Errors
 ///
 /// As [`decode_input`]; going over `limit` is [`OtelError::TooLarge`].
 pub fn decode_input_with_limit(bytes: &[u8], name: Option<&str>, limit: u64) -> Result<Vec<Value>> {
-    decode_layer(bytes, name, 0, limit, limit)
+    decode_input_with_limits(
+        bytes,
+        name,
+        DecodeLimits::default().with_decompressed(limit),
+    )
+}
+
+/// [`decode_input`] within `limits`.
+///
+/// # Errors
+///
+/// As [`decode_input`]; going over `limits.decompressed` is
+/// [`OtelError::TooLarge`], over `limits.entries`
+/// [`OtelError::TooManyEntries`].
+pub fn decode_input_with_limits(
+    bytes: &[u8],
+    name: Option<&str>,
+    limits: DecodeLimits,
+) -> Result<Vec<Value>> {
+    let cap = limits.decompressed;
+    decode_layer(bytes, name, 0, cap, cap, &mut Entries::new(limits.entries))
 }
 
 /// `budget` is the decompressed output still allowed; `cap` is the whole
@@ -55,23 +118,26 @@ fn decode_layer(
     depth: usize,
     cap: u64,
     budget: u64,
+    entries: &mut Entries,
 ) -> Result<Vec<Value>> {
     if let Some((inner, suffix)) = decompress(bytes, depth, cap, budget)? {
         let len = inner.len() as u64;
         let inner_name = name.map(|n| n.strip_suffix(suffix).unwrap_or(n));
-        return decode_layer(&inner, inner_name, depth + 1, cap, budget - len);
+        return decode_layer(&inner, inner_name, depth + 1, cap, budget - len, entries);
     }
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Err(OtelError::NotOtlp);
     }
     if bytes[0] == 0x00 {
-        return decode_frames(split_frames(bytes)?, depth, cap, budget);
+        return decode_frames(split_frames(bytes)?, depth, cap, budget, entries);
     }
-    match decode_text(bytes) {
+    match decode_text(bytes, entries) {
         Err(OtelError::Json(why)) if !looks_like_json(bytes) => match split_frames(bytes) {
-            Ok(frames) => decode_frames(frames, depth, cap, budget),
-            Err(framing) if first_frame_is_otlp(bytes, depth, cap, budget) => Err(framing),
-            Err(_) => decode_body(bytes, name, why),
+            Ok(frames) => decode_frames(frames, depth, cap, budget, entries),
+            Err(framing) if first_frame_is_otlp(bytes, depth, cap, budget, *entries) => {
+                Err(framing)
+            }
+            Err(_) => decode_body(bytes, name, why, entries),
         },
         other => other,
     }
@@ -79,7 +145,13 @@ fn decode_layer(
 
 /// Rule 5's tie-break: a complete OTLP first frame means a Collector file
 /// cut short after frame 0, so the framing error stands.
-fn first_frame_is_otlp(bytes: &[u8], depth: usize, cap: u64, budget: u64) -> bool {
+fn first_frame_is_otlp(
+    bytes: &[u8],
+    depth: usize,
+    cap: u64,
+    budget: u64,
+    mut entries: Entries,
+) -> bool {
     let Some((head, tail)) = bytes.split_first_chunk::<4>() else {
         return false;
     };
@@ -91,7 +163,7 @@ fn first_frame_is_otlp(bytes: &[u8], depth: usize, cap: u64, budget: u64) -> boo
     };
     let mut left = budget;
     !frame.is_empty()
-        && decode_frame(frame, depth, cap, &mut left)
+        && decode_frame(frame, depth, cap, &mut left, &mut entries)
             .is_ok_and(|values| values.iter().any(carries_resources))
 }
 
@@ -193,11 +265,16 @@ fn has_protobuf_extension(name: Option<&str>) -> bool {
 
 /// Rule 6. A body sniffed by content repeats `json_error`, since the file
 /// may be broken JSON rather than protobuf.
-fn decode_body(bytes: &[u8], name: Option<&str>, json_error: String) -> Result<Vec<Value>> {
+fn decode_body(
+    bytes: &[u8],
+    name: Option<&str>,
+    json_error: String,
+    entries: &mut Entries,
+) -> Result<Vec<Value>> {
     let named = has_protobuf_extension(name);
     #[cfg(feature = "protobuf")]
     {
-        let value = decode_protobuf(bytes).map_err(|e| match e {
+        let value = decode_protobuf_within(bytes, entries).map_err(|e| match e {
             OtelError::NotOtlpBody(m) if !named => {
                 OtelError::NotOtlpBody(format!("{m}; not JSON either ({json_error})"))
             }
@@ -214,7 +291,7 @@ fn decode_body(bytes: &[u8], name: Option<&str>, json_error: String) -> Result<V
     }
     #[cfg(not(feature = "protobuf"))]
     {
-        let _ = bytes;
+        let _ = (bytes, entries);
         if named {
             Err(OtelError::FeatureDisabled("protobuf"))
         } else {
@@ -262,33 +339,48 @@ fn split_frames(bytes: &[u8]) -> Result<Vec<&[u8]>> {
     Ok(frames)
 }
 
-/// One decompressed-output budget runs across all frames.
-fn decode_frames(frames: Vec<&[u8]>, depth: usize, cap: u64, budget: u64) -> Result<Vec<Value>> {
+/// One decompressed-output budget and one entry budget run across all
+/// frames.
+fn decode_frames(
+    frames: Vec<&[u8]>,
+    depth: usize,
+    cap: u64,
+    budget: u64,
+    entries: &mut Entries,
+) -> Result<Vec<Value>> {
     let mut left = budget;
     let mut out = Vec::new();
     for (i, frame) in frames.into_iter().enumerate() {
         if frame.is_empty() {
             return Err(OtelError::Framing(format!("frame {i} is empty")));
         }
-        out.extend(decode_frame(frame, depth, cap, &mut left).map_err(|e| in_frame(i, e))?);
+        out.extend(
+            decode_frame(frame, depth, cap, &mut left, entries).map_err(|e| in_frame(i, e))?,
+        );
     }
     Ok(out)
 }
 
-fn decode_frame(frame: &[u8], depth: usize, cap: u64, budget: &mut u64) -> Result<Vec<Value>> {
+fn decode_frame(
+    frame: &[u8],
+    depth: usize,
+    cap: u64,
+    budget: &mut u64,
+    entries: &mut Entries,
+) -> Result<Vec<Value>> {
     if let Some((inner, _)) = decompress(frame, depth, cap, *budget)? {
         *budget -= inner.len() as u64;
-        return decode_frame(&inner, depth + 1, cap, budget);
+        return decode_frame(&inner, depth + 1, cap, budget, entries);
     }
     if looks_like_json(frame) {
-        return match decode_text(frame) {
+        return match decode_text(frame, entries) {
             Err(OtelError::NotOtlp) => Err(OtelError::Json("not an OTLP object".into())),
             other => other,
         };
     }
     #[cfg(feature = "protobuf")]
     {
-        decode_protobuf(frame).map(|v| vec![v])
+        decode_protobuf_within(frame, entries).map(|v| vec![v])
     }
     #[cfg(not(feature = "protobuf"))]
     {
@@ -309,11 +401,27 @@ fn in_frame(i: usize, e: OtelError) -> OtelError {
 }
 
 /// One JSON value or JSON lines; [`decode_layer`] decides whether a `Json`
-/// error stands or the bytes are protobuf.
-fn decode_text(bytes: &[u8]) -> Result<Vec<Value>> {
+/// error stands or the bytes are protobuf. Entries are charged only for
+/// text that decodes; over the cap, text that may be protobuf is a `Json`
+/// error, so it is still tried as protobuf.
+fn decode_text(bytes: &[u8], entries: &mut Entries) -> Result<Vec<Value>> {
     let text =
         std::str::from_utf8(bytes).map_err(|e| OtelError::Json(format!("not UTF-8 text: {e}")))?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut charged = *entries;
+    charge_json(text.as_bytes(), &mut charged).map_err(|e| {
+        if looks_like_json(bytes) {
+            e
+        } else {
+            OtelError::Json(e.to_string())
+        }
+    })?;
+    let values = parse_text(text)?;
+    *entries = charged;
+    Ok(values)
+}
+
+fn parse_text(text: &str) -> Result<Vec<Value>> {
     if let Ok(v) = serde_json::from_str::<Value>(text) {
         return if is_otlp(&v) {
             Ok(vec![v])
@@ -347,6 +455,13 @@ mod tests {
     fn the_default_limit_is_one_gib_and_four_layers() {
         assert_eq!(MAX_DECOMPRESSED, 1 << 30);
         assert_eq!(MAX_LAYERS, 4);
+        assert_eq!(MAX_ENTRIES, 1 << 20);
+        assert_eq!(
+            DecodeLimits::default(),
+            DecodeLimits::default()
+                .with_decompressed(MAX_DECOMPRESSED)
+                .with_entries(MAX_ENTRIES)
+        );
     }
 
     #[test]

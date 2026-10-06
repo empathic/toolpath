@@ -1,7 +1,9 @@
 //! OTLP protobuf ⇄ canonical OTLP/JSON (feature `protobuf`).
 
+use crate::entries::{Entries, charge_protobuf};
 use crate::error::{OtelError, Result};
 use crate::hash::hex;
+use crate::input::MAX_ENTRIES;
 use crate::proto::opentelemetry::proto::collector::logs::v1::ExportLogsServiceRequest;
 use crate::proto::opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest;
 use crate::proto::opentelemetry::proto::common::v1 as common;
@@ -48,8 +50,16 @@ const _: () = assert!(deepest_level(MAX_ANY_DEPTH + 1) > PROST_RECURSION_LIMIT);
 /// # Errors
 ///
 /// [`OtelError::NotOtlpBody`] when the bytes are neither request;
-/// [`OtelError::Protobuf`] for a traces request with a bad span id.
+/// [`OtelError::Protobuf`] for a traces request with a bad span id;
+/// [`OtelError::TooManyEntries`] for a request of more than 1,048,576
+/// entries (see [`DecodeLimits`](crate::DecodeLimits)).
 pub fn decode_protobuf(bytes: &[u8]) -> Result<Value> {
+    decode_protobuf_within(bytes, &mut Entries::new(MAX_ENTRIES))
+}
+
+/// [`decode_protobuf`], charging `entries` before prost builds anything.
+pub(crate) fn decode_protobuf_within(bytes: &[u8], entries: &mut Entries) -> Result<Value> {
+    charge_protobuf(bytes, entries)?;
     let (traces_err, wire_valid_traces) = match ExportTraceServiceRequest::decode(bytes) {
         Ok(req) => match bad_span(&req) {
             None if spans(&req).next().is_none() => return Ok(json!({"resourceSpans": []})),

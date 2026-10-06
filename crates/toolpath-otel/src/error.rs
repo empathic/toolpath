@@ -54,6 +54,14 @@ pub enum OtelError {
         /// The decompressed-size cap, in bytes.
         limit: u64,
     },
+    /// Decoding the input, across all its frames and deliveries, would
+    /// build more than `limit` entries (array elements, repeated-field
+    /// elements and nested objects).
+    #[error("decoded input exceeds {limit} entries")]
+    TooManyEntries {
+        /// The entry cap.
+        limit: u64,
+    },
     /// Input that needs a crate feature this build lacks
     /// (`"compression"`, `"protobuf"`).
     #[error("input needs the `{0}` feature, which this build does not have")]
@@ -80,10 +88,13 @@ impl OtelError {
         matches!(self, OtelError::NotOtlp | OtelError::NotOtlpBody(_))
     }
 
-    /// The input is over the decompressed-size limit, as opposed to
-    /// compressed data that is corrupt.
+    /// The input is over the decompressed-size limit or the entry cap, as
+    /// opposed to data that is corrupt.
     pub fn is_too_large(&self) -> bool {
-        matches!(self, OtelError::TooLarge { .. })
+        matches!(
+            self,
+            OtelError::TooLarge { .. } | OtelError::TooManyEntries { .. }
+        )
     }
 }
 
@@ -119,6 +130,7 @@ mod tests {
         assert!(OtelError::NotOtlp.is_not_otlp());
         assert!(OtelError::NotOtlpBody("x".into()).is_not_otlp());
         assert!(!OtelError::TooLarge { limit: 1 }.is_not_otlp());
+        assert!(!OtelError::TooManyEntries { limit: 1 }.is_not_otlp());
         for e in others() {
             assert!(!e.is_not_otlp(), "{e:?}");
         }
@@ -127,6 +139,7 @@ mod tests {
     #[test]
     fn only_too_large_is_too_large() {
         assert!(OtelError::TooLarge { limit: 1 }.is_too_large());
+        assert!(OtelError::TooManyEntries { limit: 1 }.is_too_large());
         assert!(!OtelError::NotOtlp.is_too_large());
         assert!(!OtelError::NotOtlpBody("x".into()).is_too_large());
         for e in others() {
