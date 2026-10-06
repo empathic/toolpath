@@ -1189,7 +1189,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: line 1 is not a `PathOpen`, a line is malformed (the message names its 1-based number), or the body leaves the path without a head naming a stored step. `invalid_document`: a `Step` line reuses a stored step ID with a different payload. Nothing is written.",
+            "description": "`bad_request`: line 1 is not a `PathOpen`, or a line is malformed (the message names its 1-based number). `invalid_document`: a `Step` line reuses a stored step ID with a different payload. Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1699,7 +1699,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: a line is malformed (the message names its 1-based number), is a `PathOpen`, names a step that is not stored, or the body leaves the path without a head naming a stored step. `invalid_document`: a `Step` line reuses a stored step ID with a different payload. Nothing is written.",
+            "description": "`bad_request`: a line is malformed (the message names its 1-based number), is a `PathOpen`, or names a step that is not stored. `invalid_document`: a `Step` line reuses a stored step ID with a different payload. Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2047,13 +2047,13 @@
       "AppendStepsResponse": {
         "type": "object",
         "required": [
-          "inserted",
-          "head"
+          "inserted"
         ],
         "properties": {
           "head": {
             "type": "string",
-            "description": "The path's head step ID after the lines were applied."
+            "description": "The path's head step ID after the lines were applied; `null` until a\n`Head` line is stored.",
+            "nullable": true
           },
           "inserted": {
             "type": "integer",
@@ -2418,13 +2418,13 @@
         "type": "object",
         "required": [
           "path_id",
-          "inserted",
-          "head"
+          "inserted"
         ],
         "properties": {
           "head": {
             "type": "string",
-            "description": "The path's head step ID after the lines were applied."
+            "description": "The path's head step ID after the lines were applied; `null` until a\n`Head` line is stored.",
+            "nullable": true
           },
           "inserted": {
             "type": "integer",

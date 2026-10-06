@@ -15,10 +15,10 @@ All notable changes to the Toolpath workspace are documented here.
   several requests instead of one. The CLI creates the graph with
   `paths: []`, then sends each path as batches of RFC-jsonl lines of at
   most 4 MiB: the first batch to `POST …/graphs/{id}/paths`, the rest to
-  `POST …/graphs/{id}/paths/{path_id}/steps`. Every batch but the last
-  ends with an added `Head` line, so the stored path is valid after each
-  request. A step's signatures travel with the step, a step larger than
-  the budget is sent alone, and steps are sent parents-first. A batch
+  `POST …/graphs/{id}/paths/{path_id}/steps`. The batches concatenate to
+  the document's RFC-jsonl serialization; the CLI adds no lines of its
+  own. A step's signatures travel with the step, a step larger than the
+  budget is sent alone, and steps are sent parents-first. A batch
   that fails with a transport error or a 5xx is retried up to 3 times;
   on any other failure the partly uploaded graph is deleted and the
   error is reported (a 413 names the step and its size). Documents at or
