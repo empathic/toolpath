@@ -1878,11 +1878,20 @@ pub(crate) mod tests {
         text.split_once("\r\n\r\n").unwrap().1.to_string()
     }
 
-    const PATH_OPENED: &str =
-        r#"{"path_id":"11111111-1111-1111-1111-111111111111","inserted":1,"head":"s0"}"#;
-    const STEPS_APPENDED: &str = r#"{"inserted":1,"head":"s1"}"#;
+    const PATH_ID: &str = "11111111-1111-1111-1111-111111111111";
     const GRAPH_ROUTE: &str =
         "/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
+
+    /// The server's answer to a path's first batch: the steps it newly
+    /// stored (none for a replayed body) and the head, `null` until the
+    /// batch with the `Head` line.
+    pub(crate) fn path_opened(inserted: usize, head: Option<&str>) -> String {
+        serde_json::json!({"path_id": PATH_ID, "inserted": inserted, "head": head}).to_string()
+    }
+
+    pub(crate) fn steps_appended(inserted: usize, head: Option<&str>) -> String {
+        serde_json::json!({"inserted": inserted, "head": head}).to_string()
+    }
 
     fn post_streamed(
         server: &MockServer,
@@ -1908,11 +1917,18 @@ pub(crate) mod tests {
         let batches = pack(&path, 1000);
         assert!(batches.len() >= 3);
 
+        let last = batches.len() - 1;
         let mut responses = vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            (
+                "HTTP/1.1 201 Created",
+                path_opened(step_lines(&batches[0]), None),
+            ),
         ];
-        responses.extend((2..=batches.len()).map(|_| ("HTTP/1.1 200 OK", STEPS_APPENDED.into())));
+        responses.extend(batches[1..].iter().enumerate().map(|(i, b)| {
+            let head = (i + 1 == last).then_some("s7");
+            ("HTTP/1.1 200 OK", steps_appended(step_lines(b), head))
+        }));
         let server = MockServer::start_sequence(responses);
 
         let created = post_streamed(&server, &path, 1000).unwrap();
@@ -1957,7 +1973,7 @@ pub(crate) mod tests {
         path.steps.swap(1, 2);
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            ("HTTP/1.1 201 Created", path_opened(3, Some("s2"))),
         ]);
         post_streamed(&server, &path, BATCH_BUDGET).unwrap();
 
@@ -1977,7 +1993,7 @@ pub(crate) mod tests {
                 "HTTP/1.1 503 Service Unavailable",
                 r#"{"error":"busy"}"#.into(),
             ),
-            ("HTTP/1.1 200 OK", PATH_OPENED.to_string()),
+            ("HTTP/1.1 200 OK", path_opened(0, Some("s1"))),
         ]);
         post_streamed(&server, &path, BATCH_BUDGET).unwrap();
 
@@ -1995,14 +2011,15 @@ pub(crate) mod tests {
     #[test]
     fn graphs_post_streamed_retries_a_response_cut_before_its_body() {
         let path = stream_path(2, 50);
-        let headers_only = MockServer::response("HTTP/1.1 201 Created", PATH_OPENED)
-            .split_once("\r\n\r\n")
-            .map(|(head, _)| format!("{head}\r\n\r\n"))
-            .unwrap();
+        let headers_only =
+            MockServer::response("HTTP/1.1 201 Created", &path_opened(2, Some("s1")))
+                .split_once("\r\n\r\n")
+                .map(|(head, _)| format!("{head}\r\n\r\n"))
+                .unwrap();
         let server = MockServer::start_raw(vec![
             MockServer::response("HTTP/1.1 201 Created", &graph_document_json()),
             headers_only,
-            MockServer::response("HTTP/1.1 201 Created", PATH_OPENED),
+            MockServer::response("HTTP/1.1 201 Created", &path_opened(0, Some("s1"))),
         ]);
         post_streamed(&server, &path, BATCH_BUDGET).unwrap();
 
@@ -2041,9 +2058,10 @@ pub(crate) mod tests {
     #[test]
     fn graphs_post_streamed_deletes_graph_after_a_400() {
         let path = stream_path(8, 200);
+        let opened = path_opened(step_lines(&pack(&path, 1000)[0]), None);
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            ("HTTP/1.1 201 Created", opened),
             (
                 "HTTP/1.1 400 Bad Request",
                 r#"{"code":"bad_request","error":"line 2: malformed Step"}"#.into(),
@@ -2108,7 +2126,10 @@ pub(crate) mod tests {
 
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            (
+                "HTTP/1.1 201 Created",
+                path_opened(step_lines(&batches[0]), None),
+            ),
             ("HTTP/1.1 413 Payload Too Large", String::new()),
             ("HTTP/1.1 204 No Content", String::new()),
         ]);
@@ -2150,9 +2171,10 @@ pub(crate) mod tests {
     #[test]
     fn graphs_post_streamed_reports_a_404_from_a_later_batch() {
         let path = stream_path(8, 200);
+        let opened = path_opened(step_lines(&pack(&path, 1000)[0]), None);
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            ("HTTP/1.1 201 Created", opened),
             (
                 "HTTP/1.1 404 Not Found",
                 r#"{"code":"not_found","error":"no such path"}"#.into(),
@@ -2169,7 +2191,7 @@ pub(crate) mod tests {
         let path = stream_path(2, 50);
         let server = MockServer::start_sequence(vec![
             ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 201 Created", PATH_OPENED.to_string()),
+            ("HTTP/1.1 201 Created", path_opened(2, Some("s1"))),
         ]);
         let doc = toolpath::v1::Graph::from_path(path);
         graphs_post_streamed(
