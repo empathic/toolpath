@@ -1822,7 +1822,7 @@ mod tests {
 
     #[test]
     fn claude_code_commit_message_heredoc_writes_nothing() {
-        let cmd = "cd /work/project && git add wc.py test_wc.py && git commit -m \"$(cat <<'EOF'\nAdd word counting CLI and tests\n\nCo-Authored-By: Claude Code <dev@example.com>\nEOF\n)\"";
+        let cmd = "cd /work/project && git add wc.py test_wc.py && git commit -m \"$(cat <<'EOF'\nAdd word counting CLI and tests\n\nSigned-off-by: Example Dev <dev@example.com>\nEOF\n)\"";
         let p = parse_script(cmd);
         assert_eq!(p.writes().count(), 0);
         assert_eq!(p.items, vec![ShellItem::Other(cmd.into())]);
