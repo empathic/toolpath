@@ -27,6 +27,7 @@ These are sanitized OpenRouter Broadcast deliveries (OTLP/HTTP JSON). They were 
   Identical originals map to identical stubs, so prefix stitching still holds.
 - **The real task prompt is unchanged:** "Create wc.py …".
 - **Paths:** the run directory became `/work/project`, and the home directory became `/home/user`. Names and emails became `Dev User` / `dev@example.com`.
+- **Commit trailer:** the co-author trailer line in the recorded `git commit` command became `Signed-off-by: Dev User <dev@example.com>`.
 - **Attribution:** user, device and entity ids were replaced with fixed fakes. `api_key_name` became `"fixture key"`.
 - **`gen_ai.completion.tools` was dropped.** `rawRequest` is reduced to its keys (values `<omitted>`), except `session_id` and a faked `user`.
 

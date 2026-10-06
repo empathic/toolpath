@@ -614,7 +614,7 @@
                   },
                   "echo": {
                     "arguments": {
-                      "toolu_bdrk_01RJ5YAprPSPoVfqQVNnddT2": "{\"command\":\"git add wc.py test_wc.py && git commit -m \\\"$(cat <<'EOF'\\nAdd word counting CLI and tests\\n\\n- wc.py: CLI that counts whitespace-separated words in a file\\n- test_wc.py: unittest for the word counter function\\nCo-Authored-By: Claude Code <dev@example.com>\\nEOF\\n)\\\"\",\"description\":\"Commit the new files\"}"
+                      "toolu_bdrk_01RJ5YAprPSPoVfqQVNnddT2": "{\"command\":\"git add wc.py test_wc.py && git commit -m \\\"$(cat <<'EOF'\\nAdd word counting CLI and tests\\n\\n- wc.py: CLI that counts whitespace-separated words in a file\\n- test_wc.py: unittest for the word counter function\\nSigned-off-by: Dev User <dev@example.com>\\nEOF\\n)\\\"\",\"description\":\"Commit the new files\"}"
                     },
                     "reasoning_details": [
                       {
@@ -709,7 +709,7 @@
                     "category": "shell",
                     "id": "toolu_bdrk_01RJ5YAprPSPoVfqQVNnddT2",
                     "input": {
-                      "command": "cd /work/project && git add wc.py test_wc.py && git commit -m \"$(cat <<'EOF'\nAdd word counting CLI and tests\n\n- wc.py: CLI that counts whitespace-separated words in a file\n- test_wc.py: unittest for the word counter function\nCo-Authored-By: Claude Code <dev@example.com>\nEOF\n)\"",
+                      "command": "cd /work/project && git add wc.py test_wc.py && git commit -m \"$(cat <<'EOF'\nAdd word counting CLI and tests\n\n- wc.py: CLI that counts whitespace-separated words in a file\n- test_wc.py: unittest for the word counter function\nSigned-off-by: Dev User <dev@example.com>\nEOF\n)\"",
                       "description": "Commit the new files"
                     },
                     "name": "Bash",
