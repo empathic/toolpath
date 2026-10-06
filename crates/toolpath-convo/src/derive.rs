@@ -259,8 +259,10 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         // via `file_write_change`.
         //
         // Both kinds are applied in tool-call order, so the last write to
-        // a path wins and keeps its own call's attribution. Mutations not
-        // naming a call of this turn stay where the provider put them.
+        // a path wins and keeps its own call's attribution. Providers may
+        // list a folded mutation at its path's first touch, so mutations
+        // are ordered by their call first; one naming no call of this turn
+        // keeps its place right after the mutation listed before it.
         let attributed: std::collections::HashSet<String> = turn
             .file_mutations
             .iter()
@@ -270,9 +272,20 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         for (i, t) in turn.tool_uses.iter().enumerate() {
             tool_pos.entry(t.id.as_str()).or_insert(i);
         }
-        let mut next_fallback = 0;
+        let call_pos =
+            |fm: &crate::FileMutation| fm.tool_id.as_deref().and_then(|id| tool_pos.get(id));
+        let mut ordered: Vec<(usize, &crate::FileMutation)> = Vec::new();
+        let mut key = 0;
         for fm in &turn.file_mutations {
-            if let Some(&pos) = fm.tool_id.as_deref().and_then(|id| tool_pos.get(id)) {
+            if let Some(&pos) = call_pos(fm) {
+                key = pos;
+            }
+            ordered.push((key, fm));
+        }
+        ordered.sort_by_key(|(k, _)| *k);
+        let mut next_fallback = 0;
+        for (_, fm) in ordered {
+            if let Some(&pos) = call_pos(fm) {
                 while next_fallback < pos {
                     insert_fallback_write(&mut step, &turn.tool_uses[next_fallback], &attributed);
                     next_fallback += 1;
@@ -1801,5 +1814,78 @@ mod tests {
         assert_eq!(extra["tool_id"], "edit-2");
         assert_eq!(extra["tool"], "MultiEdit");
         assert!(raw.is_some_and(|r| r.contains("+earlier")));
+    }
+
+    fn q_edit(id: &str) -> crate::FileMutation {
+        crate::FileMutation {
+            path: "q.rs".into(),
+            tool_id: Some(id.into()),
+            raw_diff: Some("@@ -1 +1 @@\n-a\n+edited".into()),
+            ..Default::default()
+        }
+    }
+
+    fn q_multi_edit(id: &str) -> ToolInvocation {
+        fw_tool(
+            "MultiEdit",
+            id,
+            serde_json::json!({
+                "file_path": "q.rs",
+                "edits": [{"old_string": "edited", "new_string": "multi"}],
+            }),
+        )
+    }
+
+    #[test]
+    fn a_folded_mutation_listed_first_does_not_drag_later_fallbacks_ahead() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![
+            shell_tool("sh-1"),
+            fw_tool("Edit", "ed-2", serde_json::json!({"file_path": "q.rs"})),
+            q_multi_edit("me-3"),
+            shell_tool("sh-4"),
+        ];
+        // A provider folding both heredocs into p.rs's first-touch entry.
+        turn.file_mutations = vec![supplied_write("sh-4"), q_edit("ed-2")];
+        let path = derive_path(&view_with(vec![turn]), &DeriveConfig::default());
+        let q = &path.steps[0].change["q.rs"];
+        let extra = &q.structural.as_ref().unwrap().extra;
+        assert_eq!(extra["tool_id"], "me-3");
+        assert!(q.raw.as_deref().is_some_and(|r| r.contains("+multi")));
+        assert_eq!(
+            path.steps[0].change["p.rs"]
+                .structural
+                .as_ref()
+                .unwrap()
+                .extra["tool_id"],
+            "sh-4"
+        );
+    }
+
+    #[test]
+    fn a_mutation_naming_no_call_follows_the_mutation_before_it() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![q_multi_edit("me-1"), shell_tool("sh-2")];
+        let orphan = crate::FileMutation {
+            tool_id: None,
+            ..q_edit("x")
+        };
+        turn.file_mutations = vec![orphan.clone(), supplied_write("sh-2")];
+        let path = derive_path(&view_with(vec![turn.clone()]), &DeriveConfig::default());
+        let extra = &path.steps[0].change["q.rs"]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+        assert_eq!(
+            extra["tool_id"], "me-1",
+            "leading orphan goes before every call"
+        );
+
+        turn.file_mutations = vec![supplied_write("sh-2"), orphan];
+        let path = derive_path(&view_with(vec![turn]), &DeriveConfig::default());
+        let q = &path.steps[0].change["q.rs"];
+        assert!(!q.structural.as_ref().unwrap().extra.contains_key("tool_id"));
+        assert!(q.raw.as_deref().is_some_and(|r| r.contains("+edited")));
     }
 }

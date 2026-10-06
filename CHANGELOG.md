@@ -77,8 +77,12 @@ All notable changes to the Toolpath workspace are documented here.
   their call's position in `tool_uses`, so the last write to a path wins
   with its own call's `tool_id` and `tool`. Before, every synthesized
   change was applied after all `file_mutations`, so an earlier unsupplied
-  write overwrote a later supplied one. Mutations naming no call of the
-  turn keep their place in `file_mutations`.
+  write overwrote a later supplied one. `file_mutations` need not be in
+  call order (a provider folding repeated writes to one path lists the
+  entry at its first touch with its last call's `tool_id`): they are
+  stably ordered by their call's position first, and a mutation naming
+  no call of the turn stays right after the mutation listed before it
+  (first, when none is).
 
 ## path-cli 0.29.0 — 2026-09-29
 

@@ -214,3 +214,17 @@ fn existing_fixtures_carry_no_codex_stamp() {
         }
     }
 }
+
+#[test]
+fn a_later_write_beats_an_earlier_patch_when_a_folded_write_is_listed_first() {
+    let p = derived("shell-writes-order.jsonl");
+    let step = p
+        .steps
+        .iter()
+        .find(|s| s.change.contains_key("/tmp/sw/q.txt"))
+        .unwrap();
+    let q = extra(&step.change["/tmp/sw/q.txt"]);
+    assert_eq!(q["tool_id"], "c3");
+    assert_eq!(q["after"], "three\n");
+    assert_eq!(extra(&step.change["/tmp/sw/p.txt"])["tool_id"], "c4");
+}
