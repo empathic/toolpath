@@ -550,25 +550,15 @@ struct Batch {
     largest_step: Option<(String, usize)>,
 }
 
-fn head_line(step_id: &str) -> String {
-    let line = toolpath::v1::jsonl::JsonlLine::Head(toolpath::v1::jsonl::HeadBody {
-        step_id: step_id.to_string(),
-    });
-    let mut s = serde_json::to_string(&line).expect("serialize Head line");
-    s.push('\n');
-    s
-}
-
 /// Split the output of `Path::to_jsonl_writer` into request bodies of at
 /// most `budget` bytes, cut at line boundaries. `step_ids` are the ids of
-/// the `Step` lines in order.
+/// the `Step` lines in order. The bodies concatenate back to the input;
+/// nothing is added.
 ///
-/// A step and its `Signature` lines are never separated. Every non-final
-/// batch ends with an added `Head` line naming its last step, so the server
-/// holds a valid path after each request. A batch is only closed once it
-/// contains a step, which keeps `PathOpen` and the `ActorDef` lines with
-/// the first step. A step larger than the budget is sent in a batch of its
-/// own, over budget.
+/// A step and its `Signature` lines are never separated. A batch is only
+/// closed once it contains a step, which keeps `PathOpen` and the
+/// `ActorDef` lines with the first step. A step larger than the budget is
+/// sent in a batch of its own, over budget.
 fn pack_batches(jsonl: &str, step_ids: &[&str], budget: usize) -> Vec<Batch> {
     const STEP: &str = r#"{"Step":"#;
     const STEP_SIGNATURE: &str = r#"{"Signature":{"target":"step:"#;
@@ -576,7 +566,6 @@ fn pack_batches(jsonl: &str, step_ids: &[&str], budget: usize) -> Vec<Batch> {
 
     let mut batches = Vec::new();
     let mut cur = Batch::default();
-    let mut last_step: Option<&str> = None;
     let mut ids = step_ids.iter().copied();
     let mut rest = jsonl;
     while !rest.is_empty() {
@@ -594,17 +583,12 @@ fn pack_batches(jsonl: &str, step_ids: &[&str], budget: usize) -> Vec<Batch> {
         let (unit, tail) = rest.split_at(end);
         rest = tail;
 
-        if let Some(last) = last_step {
-            let head = head_line(step.map_or(last, |(id, _)| id));
-            if cur.body.len() + unit.len() + head.len() > budget {
-                cur.body.push_str(&head_line(last));
-                batches.push(std::mem::take(&mut cur));
-                last_step = None;
-            }
+        let has_step = cur.largest_step.is_some();
+        if has_step && cur.body.len() + unit.len() > budget {
+            batches.push(std::mem::take(&mut cur));
         }
         cur.body.push_str(unit);
         if let Some((id, len)) = step {
-            last_step = Some(id);
             if cur.largest_step.as_ref().is_none_or(|(_, l)| len > *l) {
                 cur.largest_step = Some((id.to_string(), len));
             }
@@ -1706,36 +1690,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn pack_batches_concatenation_reads_back_to_the_path() {
+    fn pack_batches_concatenation_is_the_writer_output() {
         let path = stream_path(12, 200);
         let batches = pack(&path, 1000);
         assert!(batches.len() > 3, "got {} batches", batches.len());
         for b in &batches {
             assert!(b.body.len() <= 1000, "batch is {} bytes", b.body.len());
+            assert!(b.body.ends_with('\n'));
         }
 
         let all: String = batches.iter().map(|b| b.body.as_str()).collect();
-        let read = toolpath::v1::Path::from_jsonl_str(&all).unwrap();
-        assert_eq!(
-            serde_json::to_value(&read).unwrap(),
-            serde_json::to_value(&path).unwrap()
-        );
-    }
-
-    #[test]
-    fn pack_batches_every_prefix_has_a_stored_head() {
-        let path = stream_path(12, 200);
-        let batches = pack(&path, 1000);
-        let mut prefix = String::new();
-        for b in &batches {
-            prefix.push_str(&b.body);
-            let read = toolpath::v1::Path::from_jsonl_str(&prefix).unwrap();
-            assert_eq!(
-                read.path.head,
-                read.steps.last().unwrap().step.id,
-                "head should name the last step sent so far"
-            );
-        }
+        assert_eq!(all, path.to_jsonl_string().unwrap());
     }
 
     #[test]
@@ -1755,7 +1720,7 @@ pub(crate) mod tests {
         let (id, len) = big.largest_step.clone().unwrap();
         assert_eq!(id, "s3");
         assert_eq!(len, big.body.lines().next().unwrap().len() + 1);
-        assert!(big.body.ends_with(&head_line("s3")));
+        assert_eq!(big.body.lines().count(), 1);
 
         let all: String = batches.iter().map(|b| b.body.as_str()).collect();
         let read = toolpath::v1::Path::from_jsonl_str(&all).unwrap();
@@ -1770,7 +1735,7 @@ pub(crate) mod tests {
             jsonl.lines().find(|l| l.contains(needle)).unwrap().len() + 1
         };
         // Room for s1's step line and one signature, but not both signatures.
-        let budget = line_len(r#""id":"s1""#) + line_len("step-a") + head_line("s1").len() + 10;
+        let budget = line_len(r#""id":"s1""#) + line_len("step-a") + 10;
         let batches = pack(&path, budget);
 
         let with_s1 = batches
