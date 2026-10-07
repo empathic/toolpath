@@ -10,9 +10,10 @@ All notable changes to the Toolpath workspace are documented here.
   path has the parent step as its implicit parent. The path is a
   continuation when `parent.step` is the parent path's head and a fork
   when it is any other step; nothing is declared. `PathOpen` carries
-  it in JSONL. `Path::with_parent` and `Parent::new` build it. The
-  `toolpath:` base URI form and `Base::toolpath` are deprecated in
-  favour of `parent`. The RFC states the first-parent convention:
+  it in JSONL. `Path::with_parent` and `Parent::new` build it. `base` keeps its
+  meaning as the artifact state the work started from, the
+  `toolpath:<path-id>/<step-id>` form included; a path may carry both
+  `base` and `parent`. The RFC states the first-parent convention:
   `step.parents[0]` is the main line and further parents are branches
   merging in, which is how a delegated subagent appears inside its
   parent path. `PathIdentity` struct literals must initialise the new
