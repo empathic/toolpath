@@ -88,6 +88,7 @@ impl ConversationReader {
         let mut started_at = None;
         let mut last_activity = None;
         let mut first_user_message: Option<String> = None;
+        let mut cwd: Option<String> = None;
 
         for line in reader.lines() {
             let line = line?;
@@ -100,6 +101,9 @@ impl ConversationReader {
             {
                 if entry.message.is_some() {
                     message_count += 1;
+                }
+                if cwd.is_none() {
+                    cwd = entry.cwd.clone().filter(|c| !c.is_empty());
                 }
 
                 // Skip tool-result-only user entries — `Message::text()`
@@ -136,6 +140,7 @@ impl ConversationReader {
             started_at,
             last_activity,
             first_user_message,
+            cwd,
         })
     }
 
@@ -328,6 +333,7 @@ mod tests {
         assert_eq!(meta.message_count, 2);
         assert_eq!(meta.session_id, "session-1");
         assert_eq!(meta.project_path, "/Users/alex/Devel/myproject");
+        assert_eq!(meta.cwd.as_deref(), Some("/Users/ben/elsewhere"));
         assert!(meta.started_at.is_some());
         assert!(meta.last_activity.is_some());
     }
