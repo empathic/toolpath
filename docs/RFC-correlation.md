@@ -555,6 +555,11 @@ independent validation, signature verification, and query operations.
 DAG, ancestor queries, or dead-end detection. They're hyperlinks — typed
 pointers that add meaning without altering structure.
 
+Lineage between paths — one path continuing or forking from a step in
+another — is `path.parent` (see the base RFC, *Path Parent*), not a
+`meta.refs` entry. Refs stay for soft correlation: the same change seen
+from two sources, a session that produced a branch.
+
 ### Why infer direction?
 
 Requiring users to manually specify "this Claude session produced that git
