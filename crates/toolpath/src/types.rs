@@ -124,14 +124,18 @@ pub struct PathIdentity {
     /// (e.g. `toolpath://archive/release-v2`, `https://...`, `file:///...`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_ref: Option<String>,
-    /// The step in another path that this path continues from. Every root
+    /// The step in another path that this path descends from. Every root
     /// step of this path (a step with no `parents`) has `parent.step` as
     /// its implicit parent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<Parent>,
 }
 
-/// Lineage: the step in another path that a path continues from.
+/// Lineage: the step in another path that a path descends from.
+///
+/// Whether the path is a continuation or a fork is read off `step`: it is
+/// a continuation when `step` is the parent path's `head`, a fork when
+/// `step` is any other step of the parent path. Nothing is declared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Parent {
     /// The document holding the parent path. Same URI forms as `$ref`
@@ -141,20 +145,6 @@ pub struct Parent {
     pub path: String,
     /// Toolpath id of the step this path's root steps descend from.
     pub step: String,
-    /// How this path relates to `step`.
-    pub relation: Relation,
-}
-
-/// How a path relates to its [`Parent`] step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Relation {
-    /// The same work, resumed after the parent path froze. The parent step
-    /// is on the parent path's main line; a parent path has at most one
-    /// continuation.
-    Continuation,
-    /// New work rooted at an older step of the parent path.
-    Fork,
 }
 
 /// Root context for a path: the repository or directory state the work ran
@@ -479,7 +469,7 @@ impl Path {
         }
     }
 
-    /// Name the step in another path that this path continues from.
+    /// Name the step in another path that this path descends from.
     pub fn with_parent(mut self, parent: Parent) -> Self {
         self.path.parent = Some(parent);
         self
@@ -487,29 +477,13 @@ impl Path {
 }
 
 impl Parent {
-    /// A continuation: the same work, resumed from `step` of the path
-    /// `path` in the document at `uri`.
-    pub fn continuation(
-        uri: impl Into<String>,
-        path: impl Into<String>,
-        step: impl Into<String>,
-    ) -> Self {
+    /// The step `step` of the path `path` in the document at `uri`. A client
+    /// resuming a session passes the parent path's head.
+    pub fn new(uri: impl Into<String>, path: impl Into<String>, step: impl Into<String>) -> Self {
         Self {
             uri: uri.into(),
             path: path.into(),
             step: step.into(),
-            relation: Relation::Continuation,
-        }
-    }
-
-    /// A fork: new work rooted at `step` of the path `path` in the document
-    /// at `uri`.
-    pub fn fork(uri: impl Into<String>, path: impl Into<String>, step: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            path: path.into(),
-            step: step.into(),
-            relation: Relation::Fork,
         }
     }
 }
@@ -661,36 +635,28 @@ mod tests {
 
     #[test]
     fn test_parent_roundtrip() {
-        let parent =
-            Parent::continuation("https://pathbase.dev/u/org/repo/graphs/5b4e", "p1", "s17");
+        let parent = Parent::new("https://pathbase.dev/u/org/repo/graphs/5b4e", "p1", "s17");
         let json = serde_json::to_string(&parent).unwrap();
         assert_eq!(
             json,
-            r#"{"uri":"https://pathbase.dev/u/org/repo/graphs/5b4e","path":"p1","step":"s17","relation":"continuation"}"#
+            r#"{"uri":"https://pathbase.dev/u/org/repo/graphs/5b4e","path":"p1","step":"s17"}"#
         );
         let parsed: Parent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, parent);
-
-        let fork = Parent::fork("file:///archive/p1.path.json", "p1", "s3");
-        let json = serde_json::to_string(&fork).unwrap();
-        assert!(json.contains(r#""relation":"fork""#));
-        let parsed: Parent = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, fork);
-    }
-
-    #[test]
-    fn test_parent_unknown_relation_rejected() {
-        let json = r#"{"uri":"file:///p.json","path":"p1","step":"s1","relation":"resume"}"#;
-        assert!(serde_json::from_str::<Parent>(json).is_err());
-        // Case matters: the wire form is lowercase.
-        let json = r#"{"uri":"file:///p.json","path":"p1","step":"s1","relation":"Fork"}"#;
-        assert!(serde_json::from_str::<Parent>(json).is_err());
     }
 
     #[test]
     fn test_parent_fields_required() {
-        let json = r#"{"uri":"file:///p.json","path":"p1","relation":"fork"}"#;
-        assert!(serde_json::from_str::<Parent>(json).is_err());
+        for json in [
+            r#"{"path":"p1","step":"s1"}"#,
+            r#"{"uri":"file:///p.json","step":"s1"}"#,
+            r#"{"uri":"file:///p.json","path":"p1"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Parent>(json).is_err(),
+                "{json} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -707,16 +673,14 @@ mod tests {
 
     #[test]
     fn test_path_with_parent_roundtrip() {
-        let p = Path::new("p2", Some(Base::vcs("github:org/repo", "abc")), "s9").with_parent(
-            Parent::continuation("s3://bucket/p1.path.json", "p1", "s17"),
-        );
+        let p = Path::new("p2", Some(Base::vcs("github:org/repo", "abc")), "s9")
+            .with_parent(Parent::new("s3://bucket/p1.path.json", "p1", "s17"));
         let json = serde_json::to_string(&p).unwrap();
         let parsed: Path = serde_json::from_str(&json).unwrap();
         let parent = parsed.path.parent.expect("parent survives the round trip");
         assert_eq!(parent.uri, "s3://bucket/p1.path.json");
         assert_eq!(parent.path, "p1");
         assert_eq!(parent.step, "s17");
-        assert_eq!(parent.relation, Relation::Continuation);
     }
 
     #[test]

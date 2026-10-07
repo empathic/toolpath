@@ -1182,7 +1182,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc")),
                 head: "s1".into(),
                 graph_ref: None,
-                parent: Some(Parent::continuation(
+                parent: Some(Parent::new(
                     "https://pathbase.dev/u/org/repo/graphs/5b4e",
                     "p1",
                     "s17",

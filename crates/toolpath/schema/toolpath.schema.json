@@ -337,7 +337,7 @@
 
     "parent": {
       "type": "object",
-      "description": "The step in another path that this path continues from. Every root step of this path (a step with no parents) has `step` as its implicit parent.",
+      "description": "The step in another path that this path descends from. Every root step of this path (a step with no parents) has `step` as its implicit parent. The path is a continuation when `step` is the parent path's head and a fork when it is any other step of that path.",
       "properties": {
         "uri": {
           "type": "string",
@@ -355,14 +355,9 @@
         "step": {
           "type": "string",
           "description": "Toolpath id of the step this path's root steps descend from."
-        },
-        "relation": {
-          "type": "string",
-          "enum": ["continuation", "fork"],
-          "description": "How this path relates to the step: 'continuation' is the same work resumed after the parent path froze (the step is on the parent's main line; one continuation per parent path); 'fork' is new work rooted at an older step."
         }
       },
-      "required": ["uri", "path", "step", "relation"],
+      "required": ["uri", "path", "step"],
       "additionalProperties": false
     },
 
