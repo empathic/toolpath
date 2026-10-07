@@ -26,7 +26,7 @@
           },
           "change": {
             "src/lib.rs": {
-              "raw": "@@ -27,0 +28,6 @@\n+impl Default for Config {\n+    fn default() -> Self {\n+        Self::from_env()\n+    }\n+}\n"
+              "raw": "@@ -27,0 +28,3 @@\n+impl Default for Config {\n+    fn default() -> Self { Self::from_env() }\n+}\n"
             }
           },
           "meta": {
@@ -114,7 +114,7 @@
           },
           "change": {
             "src/lib.rs": {
-              "raw": "@@ -28,6 +28,6 @@\n impl Default for Config {\n-    fn default() -> Self {\n-        Self::from_env()\n-    }\n+    fn default() -> Self {\n+        Self::from_env()\n+    }\n }\n"
+              "raw": "@@ -28,3 +28,5 @@\n impl Default for Config {\n-    fn default() -> Self { Self::from_env() }\n+    fn default() -> Self {\n+        Self::from_env()\n+    }\n }\n"
             }
           },
           "meta": {
