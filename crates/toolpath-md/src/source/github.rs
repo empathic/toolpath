@@ -88,6 +88,7 @@ mod tests {
                 base: None,
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2],
             meta: Some(PathMeta {

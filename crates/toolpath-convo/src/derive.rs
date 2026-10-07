@@ -469,6 +469,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
             base,
             head,
             graph_ref: None,
+            parent: None,
         },
         steps,
         meta: Some(meta),

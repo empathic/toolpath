@@ -230,6 +230,7 @@ fn test_cli_project_command() {
             base: None,
             head: "step-002".to_string(),
             graph_ref: None,
+            parent: None,
         },
         steps: vec![init_step, append_step],
         meta: None,
