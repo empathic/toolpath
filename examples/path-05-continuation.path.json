@@ -14,8 +14,7 @@
         "parent": {
           "uri": "file:///home/alex/.toolpath/path-02-local-session.path.json",
           "path": "path-session-xyz",
-          "step": "step-003",
-          "relation": "continuation"
+          "step": "step-003"
         }
       },
       "steps": [

@@ -621,7 +621,7 @@ A path collects steps and provides context. Paths live inside `Graph.paths`:
 The path provides:
 - **base**: The repository state the work ran against (repo + ref + branch)
 - **head**: Current tip of the active path
-- **parent**: The step in another path this path continues from (see [Path Parent](#path-parent))
+- **parent**: The step in another path this path descends from (see [Path Parent](#path-parent))
 - **steps**: All steps including dead ends (step-001a has no descendants)
 - **meta**: Path-level metadata including `kind` (see [Document Kind](#document-kind)), actors, and signatures
 
@@ -690,8 +690,8 @@ MUST use [`path.parent`](#path-parent) instead.
 
 ### Path Parent
 
-`path.parent` names the step in another, frozen path that this path
-continues from. Every root step of this path (a step with no `parents`) has
+`path.parent` names the step in another path that this path descends
+from. Every root step of this path (a step with no `parents`) has
 `parent.step` as its implicit parent; a reader composing the two paths
 restores that edge.
 
@@ -704,32 +704,38 @@ restores that edge.
     "parent": {
       "uri": "https://pathbase.dev/u/org/repo/graphs/5b4e…",
       "path": "p1",
-      "step": "s17",
-      "relation": "continuation"
+      "step": "s17"
     }
   }
 }
 ```
 
-| Field      | Description                                                              |
-| ---------- | ------------------------------------------------------------------------ |
-| `uri`      | The document holding the parent path. Same URI forms as `$ref`, no fragment. |
-| `path`     | Id of the parent path in that document. Required even for a single-path document, so a reader can check it. |
-| `step`     | Id of the step this path's root steps descend from.                      |
-| `relation` | `continuation` or `fork`. Unknown values are rejected.                   |
+| Field  | Description                                                              |
+| ------ | ------------------------------------------------------------------------ |
+| `uri`  | The document holding the parent path. Same URI forms as `$ref`, no fragment. |
+| `path` | Id of the parent path in that document. Required even for a single-path document, so a reader can check it. |
+| `step` | Id of the step this path's root steps descend from.                      |
 
-All four fields are required.
+All three fields are required.
 
-| `relation`     | Meaning                                                                 |
-| -------------- | ----------------------------------------------------------------------- |
-| `continuation` | The same work, resumed after the parent path froze. `step` is on the parent path's main line (its head's [first-parent](#first-parent) chain). A parent path has at most one continuation. |
-| `fork`         | New work rooted at an older step of the parent path. `step` is any step in it. Unlimited. |
+Whether the path is a continuation or a fork is not declared; it follows
+from `parent.step`:
 
-The writer declares the relation; a reader cannot derive it. A derived
-session often ends with trailing steps after its last turn, so a genuine
-resume names an ancestor of the parent's head and looks like a fork from
-structure alone. Handoff to another harness and compaction (a new segment
-opening with a summary of the old) are both `continuation`.
+| Term             | Definition                                                            |
+| ---------------- | --------------------------------------------------------------------- |
+| **continuation** | `parent.step` is the parent path's `head`: this path picks up where the parent ended. |
+| **fork**         | `parent.step` is any other step of the parent path: new work rooted in its history. |
+
+Several paths may be rooted at the same head, and each is a continuation;
+which of them a viewer follows is a presentation choice outside this
+format. Handoff to another harness and compaction (a new segment opening
+with a summary of the old) are ordinary continuations. A client resuming
+a session sets `parent.step` to the parent's head, even when a deriver
+placed trailing steps after the session's last turn.
+
+A reader classifies against the parent path's `head` as it stands. The
+parent document is expected not to change once another path descends
+from it.
 
 `parent` is lineage; `base` is where the work ran. A continuation usually
 carries both. Soft correlation between paths — the same change seen from
