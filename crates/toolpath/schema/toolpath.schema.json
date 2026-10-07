@@ -281,12 +281,12 @@
 
     "base": {
       "type": "object",
-      "description": "Root context for a path. The URI identifies the origin (repository, filesystem, or another toolpath document); all other fields are optional.",
+      "description": "Root context for a path: the repository or directory state the work ran against. The URI identifies the origin; all other fields are optional.",
       "properties": {
         "uri": {
           "type": "string",
-          "description": "Origin identifier: a repository (e.g., 'github:org/repo'), a filesystem location (e.g., 'file:///path/to/repo'), or another toolpath step ('toolpath:path-id/step-id').",
-          "examples": ["github:org/repo", "svn://server/repo", "file:///path/to/repo", "toolpath:path-main/step-005"]
+          "description": "Origin identifier: a repository (e.g., 'github:org/repo') or a filesystem location (e.g., 'file:///path/to/repo'). The 'toolpath:path-id/step-id' form is deprecated; lineage belongs in the path's `parent`.",
+          "examples": ["github:org/repo", "svn://server/repo", "file:///path/to/repo"]
         },
         "ref": {
           "type": "string",
@@ -326,9 +326,43 @@
             "toolpath://archive/release-v2",
             "https://archive.example.com/graphs/release-v2.json"
           ]
+        },
+        "parent": {
+          "$ref": "#/$defs/parent"
         }
       },
       "required": ["id", "head"],
+      "additionalProperties": false
+    },
+
+    "parent": {
+      "type": "object",
+      "description": "The step in another path that this path continues from. Every root step of this path (a step with no parents) has `step` as its implicit parent.",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "description": "The document holding the parent path. Same URI forms as $ref, no fragment.",
+          "examples": [
+            "https://pathbase.dev/u/org/repo/graphs/5b4e",
+            "s3://bucket/sessions/p1.path.json",
+            "file:///archive/p1.path.json"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "description": "Toolpath id of the parent path within that document."
+        },
+        "step": {
+          "type": "string",
+          "description": "Toolpath id of the step this path's root steps descend from."
+        },
+        "relation": {
+          "type": "string",
+          "enum": ["continuation", "fork"],
+          "description": "How this path relates to the step: 'continuation' is the same work resumed after the parent path froze (the step is on the parent's main line; one continuation per parent path); 'fork' is new work rooted at an older step."
+        }
+      },
+      "required": ["uri", "path", "step", "relation"],
       "additionalProperties": false
     },
 
