@@ -36,6 +36,7 @@ fn main() {
 
     downgrade_to_oas_30(&mut spec);
     rewrite_ndjson_request_bodies(&mut spec);
+    relax_graph_mutability(&mut spec);
     unlink_descriptions(&mut spec);
 
     let spec: openapiv3::OpenAPI =
@@ -78,6 +79,17 @@ fn rewrite_ndjson_request_bodies(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// The server requires `Graph.mutability`, but this client never reads it,
+/// and a graph response from a server that predates the field must still
+/// decode: that is how an upload reaches the batch routes, where a `404`
+/// tells path-cli to fall back to the single request. Make the field
+/// optional for generation only.
+fn relax_graph_mutability(spec: &mut Value) {
+    if let Some(Value::Array(required)) = spec.pointer_mut("/components/schemas/Graph/required") {
+        required.retain(|v| v.as_str() != Some("mutability"));
     }
 }
 

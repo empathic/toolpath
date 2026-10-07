@@ -24,14 +24,20 @@ All notable changes to the Toolpath workspace are documented here.
   error is reported (a 413 names the batch, its size, and its largest
   step). Documents at or under 4 MiB, documents containing a `$ref`
   path entry or a path with no steps, and anonymous uploads still use
-  the single request. A server older than this release's Pathbase is
-  reported as such; upgrade it or use path-cli 0.28.
+  the single request. When the server answers `404` or `405` to a
+  path's first batch it does not serve the batch routes: the CLI
+  deletes the empty graph, prints a note, and sends the whole document
+  in one request as before. A server older than this release's
+  Pathbase (no `Graph.mutability`) takes that fallback. The batch
+  requests are sent with reqwest directly (`Content-Type:
+  application/x-ndjson`, 30 s connect and 120 s read timeouts) so the
+  status of a response with an undecodable body is kept.
 - **`pathbase-client`** (0.2.1): regenerate from the Pathbase branch
   that adds streamed upload. New operations `open_graph_path`
   (`POST …/graphs/{id}/paths`) and `append_graph_path_steps`
   (`POST …/graphs/{id}/paths/{path_id}/steps`, replacing the old
   bare-steps body and full-path response), plus `get_graph_path_stats`,
-  `Graph.mutability` (required: `mutable` or `frozen`),
+  `Graph.mutability` (`mutable` or `frozen`),
   `User.kind`/`User.auth_methods`, `Repo.associated_url`, the
   `write_to_frozen` and `invalid_document` error codes, and `409` on
   path update/delete.
@@ -40,8 +46,10 @@ All notable changes to the Toolpath workspace are documented here.
   cannot name `x-ndjson`; the batch handlers read the raw body without
   checking the header) and strips rustdoc link brackets from
   descriptions. `scripts/refresh-pathbase-openapi.sh` no longer drops
-  `x-ndjson` operations. Because `mutability` is required, this release
-  targets a server with Pathbase #486 deployed.
+  `x-ndjson` operations. `build.rs` makes `Graph.mutability` optional
+  at generation time so an older server's response decodes. New
+  `encode_segment` percent-encodes a path segment the way the generated
+  operations do.
 
 ## path-cli 0.28.0 — 2026-09-16
 

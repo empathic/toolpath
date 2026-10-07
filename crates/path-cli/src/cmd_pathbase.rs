@@ -354,14 +354,77 @@ fn pathbase_client(base_url: &str, token: Option<&str>) -> Result<pathbase_clien
     pathbase_client_from(builder, base_url, token)
 }
 
-/// The streamed upload's client: a 4 MiB body on a slow uplink has no
-/// sensible total deadline, so this one bounds the connect and each read
-/// instead.
-fn batch_client(base_url: &str, token: &str) -> Result<pathbase_client::Client> {
-    let builder = reqwest::Client::builder()
-        .connect_timeout(BATCH_CONNECT_TIMEOUT)
-        .read_timeout(BATCH_READ_TIMEOUT);
-    pathbase_client_from(builder, base_url, Some(token))
+/// The streamed upload's client. The batch requests go through reqwest
+/// directly: the generated client drops the status of a response whose
+/// body it cannot decode, and a server without the batch routes answers
+/// `404` with an empty body, which is exactly the status that selects the
+/// single-request fallback. A 4 MiB body on a slow uplink has no sensible
+/// total deadline, so this client bounds the connect and each read instead.
+struct BatchClient {
+    http: reqwest::Client,
+    base_url: String,
+}
+
+impl BatchClient {
+    fn new(base_url: &str, token: &str) -> Result<Self> {
+        let builder = reqwest::Client::builder()
+            .connect_timeout(BATCH_CONNECT_TIMEOUT)
+            .read_timeout(BATCH_READ_TIMEOUT);
+        Ok(Self {
+            http: http_client(builder, Some(token))?,
+            base_url: base_url.trim_end_matches('/').to_string(),
+        })
+    }
+
+    /// `POST …/graphs/{id}/paths`: open a path from its first batch.
+    fn open_route(&self, owner: &str, repo: &str, graph_id: &uuid::Uuid) -> String {
+        use pathbase_client::encode_segment;
+        format!(
+            "{}/api/v1/u/{}/repos/{}/graphs/{graph_id}/paths",
+            self.base_url,
+            encode_segment(owner),
+            encode_segment(repo)
+        )
+    }
+
+    /// `POST …/graphs/{id}/paths/{path_id}/steps`: append a later batch.
+    fn steps_route(
+        &self,
+        owner: &str,
+        repo: &str,
+        graph_id: &uuid::Uuid,
+        path_id: &uuid::Uuid,
+    ) -> String {
+        format!("{}/{path_id}/steps", self.open_route(owner, repo, graph_id))
+    }
+
+    /// Send one batch body and decode a 2xx response as `T`.
+    async fn send<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &str,
+    ) -> std::result::Result<T, BatchFailure> {
+        let response = self
+            .http
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+            .body(body.to_owned())
+            .send()
+            .await
+            .map_err(BatchFailure::Transport)?;
+        let status = response.status();
+        let text = response.text().await.map_err(BatchFailure::Transport)?;
+        if status.is_success() {
+            serde_json::from_str(&text).map_err(|_| {
+                BatchFailure::Other(format!("unexpected response body: {}", short_body(&text)))
+            })
+        } else {
+            Err(BatchFailure::Status(
+                status.as_u16(),
+                error_message(&text).unwrap_or_else(|| short_body(&text)),
+            ))
+        }
+    }
 }
 
 fn pathbase_client_from(
@@ -369,6 +432,11 @@ fn pathbase_client_from(
     base_url: &str,
     token: Option<&str>,
 ) -> Result<pathbase_client::Client> {
+    let client = http_client(builder, token)?;
+    Ok(pathbase_client::Client::new_with_client(base_url, client))
+}
+
+fn http_client(builder: reqwest::ClientBuilder, token: Option<&str>) -> Result<reqwest::Client> {
     let mut builder = builder.user_agent(concat!("path-cli/", env!("CARGO_PKG_VERSION")));
     if let Some(t) = token {
         let mut headers = reqwest::header::HeaderMap::new();
@@ -378,8 +446,7 @@ fn pathbase_client_from(
         headers.insert(reqwest::header::AUTHORIZATION, auth);
         builder = builder.default_headers(headers);
     }
-    let client = builder.build().context("build pathbase http client")?;
-    Ok(pathbase_client::Client::new_with_client(base_url, client))
+    builder.build().context("build pathbase http client")
 }
 
 /// Decode a toolpath JSON string into the typed `ToolpathDocument` the
@@ -455,9 +522,6 @@ pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<An
         Err(pathbase_client::Error::CommunicationError(e)) => {
             bail!("anon upload failed: {}", reqwest_hint(&e))
         }
-        Err(pathbase_client::Error::InvalidResponsePayload(_, _)) => {
-            bail!("anon upload failed: {}", older_server_message(base_url))
-        }
         Err(e) => Err(anyhow!("anon upload failed: {}", full_chain(&e))),
     }
 }
@@ -526,26 +590,11 @@ pub(crate) fn graphs_post(
         Err(pathbase_client::Error::CommunicationError(e)) => {
             bail!("upload to {owner}/{repo} failed: {}", reqwest_hint(&e))
         }
-        Err(pathbase_client::Error::InvalidResponsePayload(_, _)) => {
-            bail!(
-                "upload to {owner}/{repo} failed: {}",
-                older_server_message(base_url)
-            )
-        }
         Err(e) => Err(anyhow!(
             "upload to {owner}/{repo} failed: {}",
             full_chain(&e)
         )),
     }
-}
-
-/// A graph response that does not decode comes from a server predating
-/// the fields this client requires.
-fn older_server_message(base_url: &str) -> String {
-    format!(
-        "the server at {base_url} runs an older Pathbase this path-cli does not support; \
-         upgrade the server or use path-cli 0.28"
-    )
 }
 
 fn relogin_message(base_url: &str) -> String {
@@ -693,33 +742,6 @@ enum BatchFailure {
 }
 
 impl BatchFailure {
-    async fn from_client_error(
-        e: pathbase_client::Error<pathbase_client::types::ApiErrorResponse>,
-    ) -> Self {
-        use pathbase_client::Error;
-        match e {
-            Error::CommunicationError(e) => BatchFailure::Transport(e),
-            Error::ErrorResponse(resp) => {
-                let code = resp.status().as_u16();
-                BatchFailure::Status(code, resp.into_inner().error)
-            }
-            Error::UnexpectedResponse(resp) => {
-                let code = resp.status().as_u16();
-                let body = resp.text().await.unwrap_or_default();
-                BatchFailure::Status(
-                    code,
-                    error_message(&body).unwrap_or_else(|| short_body(&body)),
-                )
-            }
-            Error::ResponseBodyError(e) => BatchFailure::Transport(e),
-            Error::InvalidResponsePayload(body, _) => BatchFailure::Other(format!(
-                "unexpected response body: {}",
-                short_body(&String::from_utf8_lossy(&body))
-            )),
-            e => BatchFailure::Other(full_chain(&e)),
-        }
-    }
-
     fn retryable(&self) -> bool {
         match self {
             BatchFailure::Transport(_) => true,
@@ -748,24 +770,14 @@ impl BatchFailure {
 /// Run one batch request, retrying transport errors and 5xx responses.
 /// Both batch routes are idempotent for a replayed body, so a retry after
 /// a lost response is safe.
-fn post_batch<T, Fut>(send: impl Fn() -> Fut) -> std::result::Result<T, BatchFailure>
-where
-    Fut: std::future::Future<
-            Output = std::result::Result<
-                pathbase_client::ResponseValue<T>,
-                pathbase_client::Error<pathbase_client::types::ApiErrorResponse>,
-            >,
-        >,
-{
+fn post_batch<T: serde::de::DeserializeOwned>(
+    client: &BatchClient,
+    url: &str,
+    body: &str,
+) -> std::result::Result<T, BatchFailure> {
     let mut retries = 0;
     loop {
-        let result = block_on(async {
-            match send().await {
-                Ok(v) => Ok(v.into_inner()),
-                Err(e) => Err(BatchFailure::from_client_error(e).await),
-            }
-        });
-        match result {
+        match block_on(client.send(url, body)) {
             Err(f) if f.retryable() && retries < BATCH_RETRIES => {
                 retries += 1;
                 eprintln!(
@@ -781,8 +793,9 @@ where
 
 /// Upload a graph too large for one request: create it with `paths: []`,
 /// then send each inline path as batches of RFC-jsonl lines of at most
-/// `budget` bytes. The first batch of a path opens it (`open_graph_path`);
-/// the rest append to it (`append_graph_path_steps`).
+/// `budget` bytes. The first batch of a path opens it
+/// ([`BatchClient::open_route`]); the rest append to it
+/// ([`BatchClient::steps_route`]).
 ///
 /// If any batch fails, the partly uploaded graph is deleted (best effort)
 /// before the error is returned. A `404` or `405` on a path's first batch
@@ -809,11 +822,13 @@ pub(crate) fn graphs_post_streamed(
     let created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
     let graph_id = uuid::Uuid::parse_str(&created.id).context("graph id is not a UUID")?;
 
-    let client = batch_client(base_url, token)?;
+    let client = BatchClient::new(base_url, token)?;
     match stream_paths(&client, owner, repo, &graph_id, doc, budget) {
         Ok(()) => Ok(created),
         Err(e) => {
-            let _ = block_on(client.delete_graph(owner, repo, &graph_id));
+            if let Ok(typed) = pathbase_client(base_url, Some(token)) {
+                let _ = block_on(typed.delete_graph(owner, repo, &graph_id));
+            }
             match (&e.failure, e.largest_step) {
                 (BatchFailure::Status(404 | 405, _), _) if e.opening_path => {
                     eprintln!(
@@ -851,12 +866,12 @@ struct StreamError {
     batch_no: usize,
     body_len: usize,
     largest_step: Option<(String, usize)>,
-    /// The failing request was a path's first batch (`open_graph_path`).
+    /// The failing request was a path's first batch (the open route).
     opening_path: bool,
 }
 
 fn stream_paths(
-    client: &pathbase_client::Client,
+    client: &BatchClient,
     owner: &str,
     repo: &str,
     graph_id: &uuid::Uuid,
@@ -909,22 +924,14 @@ fn stream_paths(
                 opening_path: bi == 0,
             };
             if bi == 0 {
-                let opened = post_batch(|| {
-                    client.open_graph_path(owner, repo, graph_id, batch.body.clone())
-                })
-                .map_err(stream_error)?;
+                let url = client.open_route(owner, repo, graph_id);
+                let opened: pathbase_client::types::OpenPathResponse =
+                    post_batch(client, &url, &batch.body).map_err(stream_error)?;
                 path_id = opened.path_id;
             } else {
-                post_batch(|| {
-                    client.append_graph_path_steps(
-                        owner,
-                        repo,
-                        graph_id,
-                        &path_id,
-                        batch.body.clone(),
-                    )
-                })
-                .map_err(stream_error)?;
+                let url = client.steps_route(owner, repo, graph_id, &path_id);
+                let _: pathbase_client::types::AppendStepsResponse =
+                    post_batch(client, &url, &batch.body).map_err(stream_error)?;
             }
         }
     }
@@ -1407,29 +1414,6 @@ pub(crate) mod tests {
             req.contains(r#""document":{"graph":{"id":"g"},"paths":[]}"#),
             "got: {req}"
         );
-    }
-
-    #[test]
-    fn graphs_post_names_an_older_server_when_the_response_lacks_mutability() {
-        let older = graph_document_json().replace(r#""mutability": "mutable","#, "");
-        let server = MockServer::start("HTTP/1.1 201 Created", Box::leak(older.into_boxed_str()));
-        let base = server.base();
-        let err = graphs_post(
-            &base,
-            "tok",
-            "alex",
-            "pathstash",
-            None,
-            r#"{"graph":{"id":"g"},"paths":[]}"#,
-            false,
-        )
-        .unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains(&format!("{base} runs an older Pathbase")),
-            "{msg}"
-        );
-        assert!(msg.contains("path-cli 0.28"), "{msg}");
     }
 
     #[test]
@@ -1966,7 +1950,10 @@ pub(crate) mod tests {
         );
         for (req, batch) in reqs[1..].iter().zip(&batches) {
             let head = String::from_utf8_lossy(req).to_lowercase();
-            assert!(head.contains("content-type: text/plain"), "{head}");
+            assert!(
+                head.contains("content-type: application/x-ndjson"),
+                "{head}"
+            );
             assert!(head.contains("authorization: bearer tok"), "{head}");
             assert_eq!(request_body(req), batch.body);
         }
@@ -2186,6 +2173,27 @@ pub(crate) mod tests {
         assert_eq!(
             full["document"],
             serde_json::to_value(toolpath::v1::Graph::from_path(path)).unwrap()
+        );
+    }
+
+    #[test]
+    fn graphs_post_streamed_falls_back_on_a_server_without_mutability() {
+        let path = stream_path(8, 200);
+        let older = graph_document_json().replace(r#""mutability": "mutable","#, "");
+        assert!(!older.contains("mutability"));
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", older.clone()),
+            ("HTTP/1.1 404 Not Found", String::new()),
+            ("HTTP/1.1 204 No Content", String::new()),
+            ("HTTP/1.1 201 Created", older),
+        ]);
+        let created = post_streamed(&server, &path, 1000).unwrap();
+        assert_eq!(created.id, TEST_UUID);
+        let reqs = server.requests();
+        assert_eq!(reqs.len(), 4);
+        assert_eq!(
+            request_line(&reqs[3]),
+            "POST /api/v1/u/alex/repos/pathstash/graphs HTTP/1.1"
         );
     }
 
