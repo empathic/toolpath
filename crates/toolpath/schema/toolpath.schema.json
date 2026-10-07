@@ -281,12 +281,12 @@
 
     "base": {
       "type": "object",
-      "description": "Root context for a path: the repository or directory state the work ran against. The URI identifies the origin; all other fields are optional.",
+      "description": "Root context for a path: the state of the artifacts the work started from. The URI identifies the origin; all other fields are optional. Lineage between paths is the path's `parent`; a path may carry both.",
       "properties": {
         "uri": {
           "type": "string",
-          "description": "Origin identifier: a repository (e.g., 'github:org/repo') or a filesystem location (e.g., 'file:///path/to/repo'). The 'toolpath:path-id/step-id' form is deprecated; lineage belongs in the path's `parent`.",
-          "examples": ["github:org/repo", "svn://server/repo", "file:///path/to/repo"]
+          "description": "Origin identifier: a repository (e.g., 'github:org/repo'), a filesystem location (e.g., 'file:///path/to/repo'), or, for a project tracked in Toolpath rather than a VCS, the step whose output the work started from ('toolpath:path-id/step-id').",
+          "examples": ["github:org/repo", "svn://server/repo", "file:///path/to/repo", "toolpath:path-main/step-005"]
         },
         "ref": {
           "type": "string",
