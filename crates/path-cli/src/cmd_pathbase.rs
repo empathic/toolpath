@@ -611,6 +611,43 @@ fn relogin_message(base_url: &str) -> String {
 /// above which an authed upload is streamed at all.
 pub(crate) const BATCH_BUDGET: usize = 4 * 1024 * 1024;
 
+/// Post an authed graph the way its size demands: one request when
+/// `body` fits in [`BATCH_BUDGET`], else [`graphs_post_streamed`]. The
+/// streamed routes take inline paths with at least one step; any other
+/// document goes up in one request whatever its size. Every authed
+/// upload — `export pathbase`, `share`, `share --all` — comes through
+/// here, so they stream and fall back alike.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn upload_graph(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    name: Option<&str>,
+    doc: &toolpath::v1::Graph,
+    body: &str,
+    public: bool,
+) -> Result<CreatedGraph> {
+    let streamable = doc.paths.iter().all(|p| match p {
+        toolpath::v1::PathOrRef::Path(p) => !p.steps.is_empty(),
+        toolpath::v1::PathOrRef::Ref(_) => false,
+    });
+    if body.len() <= BATCH_BUDGET || !streamable {
+        graphs_post(base_url, token, owner, repo, name, body, public)
+    } else {
+        graphs_post_streamed(
+            base_url,
+            token,
+            owner,
+            repo,
+            name,
+            doc,
+            public,
+            BATCH_BUDGET,
+        )
+    }
+}
+
 const BATCH_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const BATCH_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 const BATCH_RETRIES: u32 = 3;
@@ -1571,7 +1608,7 @@ pub(crate) mod tests {
     // TOOLPATH_CONFIG_DIR + a tempdir-credentials file to drive the
     // logged-in path through the same MockServer used elsewhere.
 
-    fn write_credentials(dir: &std::path::Path, url: &str) {
+    pub(crate) fn write_credentials(dir: &std::path::Path, url: &str) {
         let creds = StoredSession {
             url: url.to_string(),
             token: "tok".into(),
@@ -1585,7 +1622,7 @@ pub(crate) mod tests {
         store_session(&dir.join(crate::config::CREDENTIALS_FILE_NAME), &creds).unwrap();
     }
 
-    fn me_response_body(username: &str) -> String {
+    pub(crate) fn me_response_body(username: &str) -> String {
         // The generated User type requires id (uuid), username, created_at,
         // updated_at. Mock the bare minimum that parses cleanly.
         format!(

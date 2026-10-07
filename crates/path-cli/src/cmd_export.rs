@@ -912,9 +912,7 @@ pub(crate) fn run_pathbase_inner(
     body: &str,
     summary_source: &str,
 ) -> Result<()> {
-    use crate::cmd_pathbase::{
-        AuthMode, BATCH_BUDGET, anon_graphs_post, graphs_post, graphs_post_streamed, repos_post,
-    };
+    use crate::cmd_pathbase::{AuthMode, anon_graphs_post, repos_post, upload_graph};
     use pathbase_client::types::Visibility;
 
     // Validate locally so we give a clean error rather than relying on
@@ -958,34 +956,16 @@ pub(crate) fn run_pathbase_inner(
     };
 
     let name = args.name.or_else(|| Some(derive_name(&doc)));
-    // The streamed routes take inline paths with at least one step; any
-    // other document goes up in one request whatever its size.
-    let streamable = doc.paths.iter().all(|p| match p {
-        toolpath::v1::PathOrRef::Path(p) => !p.steps.is_empty(),
-        toolpath::v1::PathOrRef::Ref(_) => false,
-    });
-    let created = if body.len() <= BATCH_BUDGET || !streamable {
-        graphs_post(
-            &base_url,
-            &token,
-            &owner,
-            &repo,
-            name.as_deref(),
-            body,
-            args.public,
-        )?
-    } else {
-        graphs_post_streamed(
-            &base_url,
-            &token,
-            &owner,
-            &repo,
-            name.as_deref(),
-            &doc,
-            args.public,
-            BATCH_BUDGET,
-        )?
-    };
+    let created = upload_graph(
+        &base_url,
+        &token,
+        &owner,
+        &repo,
+        name.as_deref(),
+        &doc,
+        body,
+        args.public,
+    )?;
 
     // The visibility we surface is what the server actually applied,
     // not what we requested. If server-side policy ever clamps the
