@@ -80,6 +80,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc")),
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2, s3],
             meta: None,
