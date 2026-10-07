@@ -18,6 +18,17 @@ All notable changes to the Toolpath workspace are documented here.
   merging in, which is how a delegated subagent appears inside its
   parent path. `PathIdentity` struct literals must initialise the new
   field.
+- **`toolpath-md`** (0.8.0): the path header, transcript header and
+  front matter print `path.parent` (document, path, step) after the
+  base, so a rendered continuation shows what it resumed from.
+- **`toolpath-dot`** (0.6.0): the path layout draws a `PARENT` node
+  into each root step the way it draws `BASE`.
+- Cascading minor bumps for the dependency on the new `toolpath 0.8`
+  major, with no source changes of their own: `toolpath-convo` 0.12.0,
+  `toolpath-git` 0.7.0, `toolpath-github` 0.7.0, `toolpath-gemini`
+  0.7.0, `toolpath-codex` 0.7.0, `toolpath-copilot` 0.2.0,
+  `toolpath-opencode` 0.6.0, `toolpath-cursor` 0.3.0, `toolpath-pi`
+  0.7.0.
 
 ## path-cli 0.29.0 — 2026-09-29
 
