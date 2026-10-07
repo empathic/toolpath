@@ -149,7 +149,7 @@ pub mod v1 {
     pub use crate::types::{
         ActorDefinition, ArtifactChange, Base, Graph, GraphIdentity, GraphMeta, Identity, Key,
         PATH_KIND_AGENT_CODING_SESSION, PATH_KIND_AGENT_CODING_SESSION_V1_0_0, Parent, Path,
-        PathIdentity, PathMeta, PathOrRef, PathRef, Ref, Relation, Signature, Step, StepIdentity,
-        StepMeta, StructuralChange, VcsSource,
+        PathIdentity, PathMeta, PathOrRef, PathRef, Ref, Signature, Step, StepIdentity, StepMeta,
+        StructuralChange, VcsSource,
     };
 }

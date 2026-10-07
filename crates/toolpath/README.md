@@ -60,9 +60,10 @@ let path = Path::new(
     "step-001",
 );
 
-// Continue from a step in another path's document
+// Continue from another path's head (a continuation); naming any
+// other step of that path makes this path a fork of it
 let resumed = Path::new("path-pr-42-resumed", None, "step-002")
-    .with_parent(Parent::continuation(
+    .with_parent(Parent::new(
         "file:///archive/path-pr-42.path.json",
         "path-pr-42",
         "step-001",

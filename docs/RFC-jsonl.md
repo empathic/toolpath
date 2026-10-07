@@ -177,7 +177,7 @@ path-level metadata known at open time.
   "id": "pr-42",
   "base": {"uri": "github:org/repo", "ref": "abc123"},
   "graph_ref": "toolpath://archive/release-v2",
-  "parent": {"uri": "https://pathbase.dev/u/org/repo/graphs/5b4e", "path": "pr-41", "step": "s17", "relation": "continuation"},
+  "parent": {"uri": "https://pathbase.dev/u/org/repo/graphs/5b4e", "path": "pr-41", "step": "s17"},
   "meta": {
     "title": "Add email validation",
     "source": "github:myorg/myrepo/pull/42",
@@ -193,7 +193,7 @@ path-level metadata known at open time.
 | `id` | yes | `PathIdentity.id`. |
 | `base` | no | `PathIdentity.base` — same shape as canonical JSON. |
 | `graph_ref` | no | `$ref`-style URL naming a graph this path belongs to. See *Schema Change*. |
-| `parent` | no | `PathIdentity.parent` — the step in another path this path continues from, same shape as canonical JSON. |
+| `parent` | no | `PathIdentity.parent` — the step in another path this path descends from, same shape as canonical JSON. |
 | `meta` | no | Initial `PathMeta` excluding `actors` and `signatures` (those have dedicated line kinds). |
 
 ### `Step`
