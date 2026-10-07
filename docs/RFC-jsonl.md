@@ -177,6 +177,7 @@ path-level metadata known at open time.
   "id": "pr-42",
   "base": {"uri": "github:org/repo", "ref": "abc123"},
   "graph_ref": "toolpath://archive/release-v2",
+  "parent": {"uri": "https://pathbase.dev/u/org/repo/graphs/5b4e", "path": "pr-41", "step": "s17", "relation": "continuation"},
   "meta": {
     "title": "Add email validation",
     "source": "github:myorg/myrepo/pull/42",
@@ -192,6 +193,7 @@ path-level metadata known at open time.
 | `id` | yes | `PathIdentity.id`. |
 | `base` | no | `PathIdentity.base` — same shape as canonical JSON. |
 | `graph_ref` | no | `$ref`-style URL naming a graph this path belongs to. See *Schema Change*. |
+| `parent` | no | `PathIdentity.parent` — the step in another path this path continues from, same shape as canonical JSON. |
 | `meta` | no | Initial `PathMeta` excluding `actors` and `signatures` (those have dedicated line kinds). |
 
 ### `Step`
@@ -303,7 +305,7 @@ How a reader produces a canonical `{"Path": {...}}` document from a
 
 ```
 state:
-  path_id, base, graph_ref     ← from PathOpen
+  path_id, base, graph_ref, parent  ← from PathOpen
   path_meta                    ← PathOpen.meta or empty; actors={}, signatures=[]
   steps = []                   (in arrival order)
   step_index = {}              (step.id → &steps[i])
@@ -337,6 +339,7 @@ on EOF:
       "id": path_id,
       "base": base,
       "graph_ref": graph_ref,
+      "parent": parent,
       "head": head
     },
     "steps": steps,
@@ -358,6 +361,7 @@ emit PathOpen {
   id: path.id,
   base: path.base,
   graph_ref: path.graph_ref,
+  parent: path.parent,
   meta: {                        # path.meta minus actors, signatures
     title, source, intent, refs, extra
   }
@@ -405,7 +409,7 @@ Every canonical JSON field has a corresponding line kind:
 
 | Canonical field | Line kind |
 | --------------- | --------- |
-| `path.id`, `path.base`, `path.graph_ref` | `PathOpen` |
+| `path.id`, `path.base`, `path.graph_ref`, `path.parent` | `PathOpen` |
 | `path.head` | `Head` (or inferred) |
 | `path.meta.title` / `source` / `intent` / `refs` / `extra` | `PathOpen.meta` or `PathMeta` |
 | `path.meta.actors` entries | `ActorDef` |
