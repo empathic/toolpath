@@ -2,6 +2,30 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.30.0 — 2026-10-07
+
+- **`path-cli`** (0.30.0): the sync manifest records where each
+  session's path lives remotely. A record sits under the path's own URL
+  (`<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>`) on the
+  session's manifest entry and holds how many steps of the derive the
+  remote has, the id of the last of them, the head the remote was last
+  told, and the local source's stamp at the time. `path share` and
+  `p export pathbase` write one after a successful upload (for a cache
+  id, against the session the entry was derived from; anonymous uploads
+  included); `path resume <pathbase url>` writes one on the session it
+  projects, after one request for the graph's path listing, which
+  supplies the server id the fetched document does not carry. Sync and
+  import keep the records when they rewrite a session's fingerprint.
+  Nothing reads them yet; incremental append and `share --all` will.
+  Manifests without the field load unchanged.
+- **`pathbase-client`** (0.2.2): regenerate from the Pathbase branch
+  whose `POST /graphs` answers `GraphCreatedResponse`: an empty
+  `document` and `paths[]` naming each stored path's `path.id` and
+  `server_id`, for the anonymous route too. `build.rs` makes `paths`
+  and `TracePath.mutability` optional at generation time, as it does
+  `Graph.mutability`, so an older server's response still decodes.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
