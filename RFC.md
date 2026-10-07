@@ -64,17 +64,17 @@ Current approaches to tracking code changes have significant gaps:
 
 ### Vocabulary
 
-| Term             | Meaning                                             |
-| ---------------- | --------------------------------------------------- |
-| **step**         | A single change to artifact(s)                      |
-| **path**         | Collection of steps with a base context             |
-| **graph**        | Collection of paths (release, project, etc.)        |
-| **base**         | The root context (repo, commit) a path branches from|
-| **head**         | The current tip of the active path                  |
-| **parent**       | The step in another path a path continues from      |
-| **continuation** | A path resuming the same work its parent path left  |
-| **dead end**     | Abandoned branch in the path tree                   |
-| **fork**         | Where paths diverge                                 |
+| Term             | Meaning                                                              |
+| ---------------- | -------------------------------------------------------------------- |
+| **step**         | A single change to artifact(s)                                       |
+| **path**         | Collection of steps with a base context                              |
+| **graph**        | Collection of paths (release, project, etc.)                         |
+| **base**         | The artifact state a path started from (repo + ref, or a step)       |
+| **head**         | The current tip of the active path                                   |
+| **parent**       | The step in another path a path descends from                        |
+| **continuation** | A path whose parent step is the parent path's head                   |
+| **fork**         | A path whose parent step is any other step of the parent path        |
+| **dead end**     | Abandoned branch in the path tree                                    |
 
 ### Three Core Objects
 
