@@ -2,6 +2,22 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.8.0 — 2026-10-07
+
+- **`toolpath`** (0.8.0): `PathIdentity.parent` names the step in
+  another path that a path continues from: the document `uri`, the
+  parent `path` and `step` ids, and a `relation` of `continuation` (the
+  same work, resumed after the parent path froze; one per parent path)
+  or `fork` (new work rooted at an older step). Every root step of the
+  path has the parent step as its implicit parent. `PathOpen` carries
+  it in JSONL. `Path::with_parent`, `Parent::continuation` and
+  `Parent::fork` build it. The `toolpath:` base URI form and
+  `Base::toolpath` are deprecated in favour of `parent`. The RFC states
+  the first-parent convention: `step.parents[0]` is the main line and
+  further parents are branches merging in, which is how a delegated
+  subagent appears inside its parent path. `PathIdentity` struct
+  literals must initialise the new field.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
