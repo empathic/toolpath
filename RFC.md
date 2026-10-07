@@ -619,7 +619,7 @@ A path collects steps and provides context. Paths live inside `Graph.paths`:
 ```
 
 The path provides:
-- **base**: The repository state the work ran against (repo + ref + branch)
+- **base**: The artifact state the work started from (repo + ref + branch, or a step)
 - **head**: Current tip of the active path
 - **parent**: The step in another path this path descends from (see [Path Parent](#path-parent))
 - **steps**: All steps including dead ends (step-001a has no descendants)
@@ -627,10 +627,10 @@ The path provides:
 
 ### Base Context
 
-The `path.base` object anchors the path to the repository or directory
-state the work ran against. The `uri` field identifies the origin; all
-other fields are optional. Lineage between paths is a different fact and
-lives in [`path.parent`](#path-parent).
+The `path.base` object records the state of the artifacts the work
+started from. The `uri` field identifies the origin; all other fields are
+optional. Lineage between paths is a different fact and lives in
+[`path.parent`](#path-parent); a path may carry both.
 
 | Field    | Description                                              |
 | -------- | -------------------------------------------------------- |
@@ -660,10 +660,11 @@ without pinning a particular state.
 `branch` records the branch the path was opened against, when one
 exists. Independent of `ref`: both, either, or neither may appear.
 
-#### Toolpath Base (deprecated)
+#### Toolpath Base
 
-A base whose `uri` is `toolpath:<path-id>/<step-id>` names a step in
-another path within the same graph:
+For a project whose artifacts are tracked in Toolpath rather than in a
+VCS, the state the work started from is a step. A base whose `uri` is
+`toolpath:<path-id>/<step-id>` names it:
 
 ```json
 {
@@ -673,9 +674,14 @@ another path within the same graph:
 }
 ```
 
-This form is deprecated. It says nothing about how the two paths relate,
-and it occupies the field that should record the repository state. Writers
-MUST use [`path.parent`](#path-parent) instead.
+The `toolpath:` URI format is:
+- `toolpath:<path-id>/<step-id>` - the artifact state produced by a step in a path
+
+This is the Toolpath analogue of `github:org/repo` plus `ref`. When using
+a toolpath URI, the `ref` field is omitted. This enables pure Toolpath
+documents without VCS backing, and lets a path start from a state that
+occurs between VCS commits. It says nothing about which earlier work this
+path descends from; that is [`path.parent`](#path-parent).
 
 #### Local/Filesystem Base
 
@@ -737,10 +743,14 @@ A reader classifies against the parent path's `head` as it stands. The
 parent document is expected not to change once another path descends
 from it.
 
-`parent` is lineage; `base` is where the work ran. A continuation usually
-carries both. Soft correlation between paths — the same change seen from
-two sources, say — stays in `meta.refs` (see
-[Correlation RFC](docs/RFC-correlation.md)); it creates no edges.
+`parent` is lineage; `base` is the artifact state the work started from.
+The two answer different questions and a path may carry both. Three
+things are easy to confuse: branching inside a path is `step.parents`;
+the artifact state a path started from is `base`, the `toolpath:` form
+included; descent from work in another document is `parent`. Soft
+correlation between paths — the same change seen from two sources, say —
+stays in `meta.refs` (see [Correlation RFC](docs/RFC-correlation.md)); it
+creates no edges.
 
 ### Graph Object
 

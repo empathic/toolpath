@@ -147,15 +147,15 @@ pub struct Parent {
     pub step: String,
 }
 
-/// Root context for a path: the repository or directory state the work ran
-/// against.
+/// Root context for a path: the state of the artifacts the work started
+/// from. Lineage between paths is [`PathIdentity::parent`]; a path may
+/// carry both.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Base {
-    /// Origin identifier: repo (e.g., "github:org/repo") or filesystem
-    /// location ("file:///…").
-    ///
-    /// The `toolpath:path-id/step-id` form, naming a step in another path,
-    /// is deprecated: lineage belongs in [`PathIdentity::parent`].
+    /// Origin identifier: a repo (e.g., "github:org/repo"), a filesystem
+    /// location ("file:///…"), or, for a project tracked in Toolpath
+    /// rather than a VCS, the step whose output the work started from
+    /// ("toolpath:path-id/step-id").
     pub uri: String,
     /// State identifier the origin uses to name a specific reproducible
     /// state — commit hash, revision number, tag, changeset ID, etc.
@@ -498,11 +498,8 @@ impl Base {
         }
     }
 
-    /// Create a `toolpath:` base reference naming another path's step.
-    #[deprecated(
-        since = "0.8.0",
-        note = "name the step in `PathIdentity::parent` instead"
-    )]
+    /// Create a `toolpath:` base: the artifact state produced by a step of
+    /// another path, for a project tracked in Toolpath rather than a VCS.
     pub fn toolpath(path_id: impl Into<String>, step_id: impl Into<String>) -> Self {
         Self {
             uri: format!("toolpath:{}/{}", path_id.into(), step_id.into()),
@@ -623,7 +620,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_base_toolpath_constructor() {
         let toolpath_base = Base::toolpath("path-main", "step-005");
         assert_eq!(toolpath_base.uri, "toolpath:path-main/step-005");
