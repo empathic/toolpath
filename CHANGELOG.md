@@ -2,6 +2,34 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.8.0 — 2026-10-07
+
+- **`toolpath`** (0.8.0): `PathIdentity.parent` names the step in
+  another path that a path descends from: the document `uri` and the
+  parent `path` and `step` ids, all required. Every root step of the
+  path has the parent step as its implicit parent. The path is a
+  continuation when `parent.step` is the parent path's head and a fork
+  when it is any other step; nothing is declared. `PathOpen` carries
+  it in JSONL. `Path::with_parent` and `Parent::new` build it. `base` keeps its
+  meaning as the artifact state the work started from, the
+  `toolpath:<path-id>/<step-id>` form included; a path may carry both
+  `base` and `parent`. The RFC states the first-parent convention:
+  `step.parents[0]` is the main line and further parents are branches
+  merging in, which is how a delegated subagent appears inside its
+  parent path. `PathIdentity` struct literals must initialise the new
+  field.
+- **`toolpath-md`** (0.8.0): the path header, transcript header and
+  front matter print `path.parent` (document, path, step) after the
+  base, so a rendered continuation shows what it resumed from.
+- **`toolpath-dot`** (0.6.0): the path layout draws a `PARENT` node
+  into each root step the way it draws `BASE`.
+- Cascading minor bumps for the dependency on the new `toolpath 0.8`
+  major, with no source changes of their own: `toolpath-convo` 0.12.0,
+  `toolpath-git` 0.7.0, `toolpath-github` 0.7.0, `toolpath-gemini`
+  0.7.0, `toolpath-codex` 0.7.0, `toolpath-copilot` 0.2.0,
+  `toolpath-opencode` 0.6.0, `toolpath-cursor` 0.3.0, `toolpath-pi`
+  0.7.0.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

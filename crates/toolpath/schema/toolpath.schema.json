@@ -281,11 +281,11 @@
 
     "base": {
       "type": "object",
-      "description": "Root context for a path. The URI identifies the origin (repository, filesystem, or another toolpath document); all other fields are optional.",
+      "description": "Root context for a path: the state of the artifacts the work started from. The URI identifies the origin; all other fields are optional. Lineage between paths is the path's `parent`; a path may carry both.",
       "properties": {
         "uri": {
           "type": "string",
-          "description": "Origin identifier: a repository (e.g., 'github:org/repo'), a filesystem location (e.g., 'file:///path/to/repo'), or another toolpath step ('toolpath:path-id/step-id').",
+          "description": "Origin identifier: a repository (e.g., 'github:org/repo'), a filesystem location (e.g., 'file:///path/to/repo'), or, for a project tracked in Toolpath rather than a VCS, the step whose output the work started from ('toolpath:path-id/step-id').",
           "examples": ["github:org/repo", "svn://server/repo", "file:///path/to/repo", "toolpath:path-main/step-005"]
         },
         "ref": {
@@ -326,9 +326,38 @@
             "toolpath://archive/release-v2",
             "https://archive.example.com/graphs/release-v2.json"
           ]
+        },
+        "parent": {
+          "$ref": "#/$defs/parent"
         }
       },
       "required": ["id", "head"],
+      "additionalProperties": false
+    },
+
+    "parent": {
+      "type": "object",
+      "description": "The step in another path that this path descends from. Every root step of this path (a step with no parents) has `step` as its implicit parent. The path is a continuation when `step` is the parent path's head and a fork when it is any other step of that path.",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "description": "The document holding the parent path. Same URI forms as $ref, no fragment.",
+          "examples": [
+            "https://pathbase.dev/u/org/repo/graphs/5b4e",
+            "s3://bucket/sessions/p1.path.json",
+            "file:///archive/p1.path.json"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "description": "Toolpath id of the parent path within that document."
+        },
+        "step": {
+          "type": "string",
+          "description": "Toolpath id of the step this path's root steps descend from."
+        }
+      },
+      "required": ["uri", "path", "step"],
       "additionalProperties": false
     },
 

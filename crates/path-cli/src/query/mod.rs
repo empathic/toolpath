@@ -538,6 +538,7 @@ mod tests {
                 base: Some(Base::vcs("file:///work/repo", "abc")),
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2, s2a, s3],
             meta: Some(PathMeta {

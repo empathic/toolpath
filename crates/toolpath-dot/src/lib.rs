@@ -95,6 +95,20 @@ pub fn render_path(path: &Path, options: &RenderOptions) -> String {
         ));
     }
 
+    // Add parent node: the step in another document the root steps descend from
+    if let Some(parent) = &path.path.parent {
+        let parent_label = format!(
+            "<<b>PARENT</b><br/><font point-size=\"10\">{}</font><br/><font point-size=\"9\" color=\"#666666\">{} @ {}</font>>",
+            escape_html(&parent.uri),
+            escape_html(&parent.path),
+            escape_html(&parent.step)
+        );
+        dot.push_str(&format!(
+            "  \"__parent__\" [label={}, shape=ellipse, style=filled, fillcolor=\"#e0e0e0\"];\n",
+            parent_label
+        ));
+    }
+
     // Add step nodes
     for step in &path.steps {
         let label = format_step_label_html(step, options);
@@ -126,9 +140,12 @@ pub fn render_path(path: &Path, options: &RenderOptions) -> String {
     // Add edges
     for step in &path.steps {
         if step.step.parents.is_empty() {
-            // Root step - connect to base
+            // Root step - connect to base and parent
             if path.path.base.is_some() {
                 dot.push_str(&format!("  \"__base__\" -> \"{}\";\n", step.step.id));
+            }
+            if path.path.parent.is_some() {
+                dot.push_str(&format!("  \"__parent__\" -> \"{}\";\n", step.step.id));
             }
         } else {
             for parent in &step.step.parents {
@@ -486,8 +503,8 @@ pub fn escape_html(s: &str) -> String {
 mod tests {
     use super::*;
     use toolpath::v1::{
-        Base, Graph, GraphIdentity, GraphMeta, Path, PathIdentity, PathMeta, PathOrRef, PathRef,
-        Step,
+        Base, Graph, GraphIdentity, GraphMeta, Parent, Path, PathIdentity, PathMeta, PathOrRef,
+        PathRef, Step,
     };
 
     fn make_step(id: &str, actor: &str, parents: &[&str]) -> Step {
@@ -663,6 +680,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc123")),
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2],
             meta: Some(PathMeta {
@@ -685,6 +703,36 @@ mod tests {
     }
 
     #[test]
+    fn test_render_path_with_parent() {
+        let s1 = make_step("s1", "agent:claude", &[]);
+        let s2 = make_step("s2", "agent:claude", &["s1"]);
+        let mut path = Path::new("p2", Some(Base::vcs("github:org/repo", "abc123")), "s2")
+            .with_parent(Parent::new("file:///archive/p1.path.json", "p1", "s17"));
+        path.steps.extend([s1, s2]);
+        let dot = render_path(&path, &RenderOptions::default());
+
+        assert!(
+            dot.contains("\"__parent__\" ["),
+            "parent node missing:\n{dot}"
+        );
+        assert!(dot.contains("file:///archive/p1.path.json"));
+        assert!(dot.contains("p1 @ s17"));
+        // Only the root step descends from the parent; base is still drawn.
+        assert!(dot.contains("\"__parent__\" -> \"s1\";"));
+        assert!(!dot.contains("\"__parent__\" -> \"s2\";"));
+        assert!(dot.contains("\"__base__\" -> \"s1\";"));
+    }
+
+    #[test]
+    fn test_render_path_without_parent_has_no_parent_node() {
+        let s1 = make_step("s1", "human:alex", &[]);
+        let mut path = Path::new("p1", None, "s1");
+        path.steps.push(s1);
+        let dot = render_path(&path, &RenderOptions::default());
+        assert!(!dot.contains("__parent__"));
+    }
+
+    #[test]
     fn test_render_path_dead_end_highlighting() {
         let s1 = make_step("s1", "human:alex", &[]);
         let s2 = make_step("s2", "agent:claude", &["s1"]);
@@ -696,6 +744,7 @@ mod tests {
                 base: None,
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2, s2a, s3],
             meta: None,
@@ -719,6 +768,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -741,6 +791,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -766,6 +817,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc123")),
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2],
             meta: Some(PathMeta {
@@ -781,6 +833,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc123")),
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s3],
             meta: Some(PathMeta {
@@ -841,6 +894,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![make_step("s1", "human:alex", &[])],
             meta: None,
@@ -861,6 +915,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -871,6 +926,7 @@ mod tests {
                 base: None,
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s3],
             meta: None,

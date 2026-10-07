@@ -31,7 +31,7 @@ Graph                           -- the root type of every Toolpath document
   meta?: GraphMeta
 
 Path
-  path: PathIdentity { id, base?, head }
+  path: PathIdentity { id, base?, head, graph_ref?, parent? }
   steps: Vec<Step>
   meta?: PathMeta
 
@@ -44,7 +44,7 @@ Step
 ## Building documents
 
 ```rust
-use toolpath::v1::{Step, Path, Base, ArtifactChange};
+use toolpath::v1::{Step, Path, Base, Parent, ArtifactChange};
 
 // Build a step
 let step = Step::new("step-001", "human:alex", "2026-01-29T10:00:00Z")
@@ -60,8 +60,14 @@ let path = Path::new(
     "step-001",
 );
 
-// Branch from another path's step
-let base = Base::toolpath("path-main", "step-005");
+// Continue from another path's head (a continuation); naming any
+// other step of that path makes this path a fork of it
+let resumed = Path::new("path-pr-42-resumed", None, "step-002")
+    .with_parent(Parent::new(
+        "file:///archive/path-pr-42.path.json",
+        "path-pr-42",
+        "step-001",
+    ));
 ```
 
 ## Query operations
@@ -103,6 +109,7 @@ let path = Path {
         base: None,
         head: "s1".into(),
         graph_ref: None,
+        parent: None,
     },
     steps: vec![step],
     meta: None,

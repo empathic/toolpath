@@ -124,13 +124,37 @@ pub struct PathIdentity {
     /// (e.g. `toolpath://archive/release-v2`, `https://...`, `file:///...`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_ref: Option<String>,
+    /// The step in another path that this path descends from. Every root
+    /// step of this path (a step with no `parents`) has `parent.step` as
+    /// its implicit parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<Parent>,
 }
 
-/// Root context for a path
+/// Lineage: the step in another path that a path descends from.
+///
+/// Whether the path is a continuation or a fork is read off `step`: it is
+/// a continuation when `step` is the parent path's `head`, a fork when
+/// `step` is any other step of the parent path. Nothing is declared.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Parent {
+    /// The document holding the parent path. Same URI forms as `$ref`
+    /// (`https://…`, `s3://…`, `file:///…`, `toolpath://…`), no fragment.
+    pub uri: String,
+    /// Toolpath id of the parent path within that document.
+    pub path: String,
+    /// Toolpath id of the step this path's root steps descend from.
+    pub step: String,
+}
+
+/// Root context for a path: the state of the artifacts the work started
+/// from. Lineage between paths is [`PathIdentity::parent`]; a path may
+/// carry both.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Base {
-    /// Origin identifier: repo (e.g., "github:org/repo"), filesystem
-    /// location ("file:///…"), or another toolpath step
+    /// Origin identifier: a repo (e.g., "github:org/repo"), a filesystem
+    /// location ("file:///…"), or, for a project tracked in Toolpath
+    /// rather than a VCS, the step whose output the work started from
     /// ("toolpath:path-id/step-id").
     pub uri: String,
     /// State identifier the origin uses to name a specific reproducible
@@ -438,9 +462,28 @@ impl Path {
                 base,
                 head: head.into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: Vec::new(),
             meta: None,
+        }
+    }
+
+    /// Name the step in another path that this path descends from.
+    pub fn with_parent(mut self, parent: Parent) -> Self {
+        self.path.parent = Some(parent);
+        self
+    }
+}
+
+impl Parent {
+    /// The step `step` of the path `path` in the document at `uri`. A client
+    /// resuming a session passes the parent path's head.
+    pub fn new(uri: impl Into<String>, path: impl Into<String>, step: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            path: path.into(),
+            step: step.into(),
         }
     }
 }
@@ -455,7 +498,8 @@ impl Base {
         }
     }
 
-    /// Create a toolpath base reference (branching from another path's step)
+    /// Create a `toolpath:` base: the artifact state produced by a step of
+    /// another path, for a project tracked in Toolpath rather than a VCS.
     pub fn toolpath(path_id: impl Into<String>, step_id: impl Into<String>) -> Self {
         Self {
             uri: format!("toolpath:{}/{}", path_id.into(), step_id.into()),
@@ -573,11 +617,66 @@ mod tests {
         assert_eq!(vcs_base.uri, "github:org/repo");
         assert_eq!(vcs_base.ref_str, Some("abc123".to_string()));
         assert_eq!(vcs_base.branch, None);
+    }
 
+    #[test]
+    fn test_base_toolpath_constructor() {
         let toolpath_base = Base::toolpath("path-main", "step-005");
         assert_eq!(toolpath_base.uri, "toolpath:path-main/step-005");
         assert_eq!(toolpath_base.ref_str, None);
         assert_eq!(toolpath_base.branch, None);
+    }
+
+    // ── Parent ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parent_roundtrip() {
+        let parent = Parent::new("https://pathbase.dev/u/org/repo/graphs/5b4e", "p1", "s17");
+        let json = serde_json::to_string(&parent).unwrap();
+        assert_eq!(
+            json,
+            r#"{"uri":"https://pathbase.dev/u/org/repo/graphs/5b4e","path":"p1","step":"s17"}"#
+        );
+        let parsed: Parent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, parent);
+    }
+
+    #[test]
+    fn test_parent_fields_required() {
+        for json in [
+            r#"{"path":"p1","step":"s1"}"#,
+            r#"{"uri":"file:///p.json","step":"s1"}"#,
+            r#"{"uri":"file:///p.json","path":"p1"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Parent>(json).is_err(),
+                "{json} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_path_parent_absent_is_none_and_not_serialized() {
+        let p = Path::new("p1", None, "s1");
+        assert!(p.path.parent.is_none());
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("parent"));
+
+        let parsed: Path =
+            serde_json::from_str(r#"{"path":{"id":"p1","head":"s1"},"steps":[]}"#).unwrap();
+        assert!(parsed.path.parent.is_none());
+    }
+
+    #[test]
+    fn test_path_with_parent_roundtrip() {
+        let p = Path::new("p2", Some(Base::vcs("github:org/repo", "abc")), "s9")
+            .with_parent(Parent::new("s3://bucket/p1.path.json", "p1", "s17"));
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: Path = serde_json::from_str(&json).unwrap();
+        let parent = parsed.path.parent.expect("parent survives the round trip");
+        assert_eq!(parent.uri, "s3://bucket/p1.path.json");
+        assert_eq!(parent.path, "p1");
+        assert_eq!(parent.step, "s17");
     }
 
     #[test]
@@ -636,6 +735,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc")),
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,

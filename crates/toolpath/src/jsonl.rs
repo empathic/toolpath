@@ -44,6 +44,7 @@
 //!         base: Some(Base::vcs("github:org/repo", "abc")),
 //!         head: "s1".into(),
 //!         graph_ref: None,
+//!         parent: None,
 //!     },
 //!     steps: vec![step],
 //!     meta: None,
@@ -55,8 +56,8 @@
 //! ```
 
 use crate::types::{
-    ActorDefinition, Base, Graph, Path, PathIdentity, PathMeta, PathOrRef, Ref, Signature, Step,
-    StepMeta,
+    ActorDefinition, Base, Graph, Parent, Path, PathIdentity, PathMeta, PathOrRef, Ref, Signature,
+    Step, StepMeta,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -90,6 +91,8 @@ pub struct PathOpenBody {
     pub base: Option<Base>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<Parent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<PathOpenMeta>,
 }
@@ -336,7 +339,7 @@ impl Path {
         let mut lines_iter = reader.lines().enumerate();
 
         // Line 1 MUST be PathOpen.
-        let (path_id, base, graph_ref, mut path_meta) = loop {
+        let (path_id, base, graph_ref, parent, mut path_meta) = loop {
             match lines_iter.next() {
                 None => return Err(JsonlError::Empty),
                 Some((idx, io_res)) => {
@@ -362,7 +365,7 @@ impl Path {
                                 meta.refs = m.refs;
                                 meta.extra = m.extra;
                             }
-                            break (po.id, po.base, po.graph_ref, meta);
+                            break (po.id, po.base, po.graph_ref, po.parent, meta);
                         }
                         ParsedLine::Known(_) | ParsedLine::Unknown { .. } => {
                             return Err(JsonlError::FirstLineNotPathOpen { line_num });
@@ -432,6 +435,7 @@ impl Path {
                 base,
                 head,
                 graph_ref,
+                parent,
             },
             steps,
             meta,
@@ -592,6 +596,7 @@ impl Path {
             id: self.path.id.clone(),
             base: self.path.base.clone(),
             graph_ref: self.path.graph_ref.clone(),
+            parent: self.path.parent.clone(),
             meta: open_meta,
         });
         write_line(w, &open)?;
@@ -985,6 +990,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![make_step("s1", None)],
             meta: None,
@@ -1021,6 +1027,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![make_step("s1", None)],
             meta: Some(meta),
@@ -1055,6 +1062,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -1086,6 +1094,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc123")),
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![make_step("s1", None), make_step("s2", Some("s1"))],
             meta: None,
@@ -1114,6 +1123,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc123")),
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![make_step("s1", None)],
             meta: Some(PathMeta {
@@ -1144,6 +1154,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -1157,6 +1168,25 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: Some("toolpath://archive/release-v2".into()),
+                parent: None,
+            },
+            steps: vec![make_step("s1", None)],
+            meta: None,
+        }
+    }
+
+    fn path_with_parent() -> Path {
+        Path {
+            path: PathIdentity {
+                id: "p2".into(),
+                base: Some(Base::vcs("github:org/repo", "abc")),
+                head: "s1".into(),
+                graph_ref: None,
+                parent: Some(Parent::new(
+                    "https://pathbase.dev/u/org/repo/graphs/5b4e",
+                    "p1",
+                    "s17",
+                )),
             },
             steps: vec![make_step("s1", None)],
             meta: None,
@@ -1170,6 +1200,7 @@ mod tests {
                 base: None,
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![
                 make_step("s1", None),
@@ -1213,6 +1244,20 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_parent() {
+        let p = path_with_parent();
+        let jsonl = p.to_jsonl_string().unwrap();
+        let first = jsonl.lines().next().unwrap();
+        assert!(
+            first.contains(r#""parent":{"#),
+            "PathOpen carries parent: {first}"
+        );
+        let back = Path::from_jsonl_str(&jsonl).unwrap();
+        assert_eq!(back.path.parent, p.path.parent);
+        assert_eq!(canonical_json(&p), canonical_json(&back));
+    }
+
+    #[test]
     fn roundtrip_description() {
         let mut step = make_step("s1", None);
         step.meta = Some(StepMeta {
@@ -1225,6 +1270,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: Some(PathMeta {
@@ -1281,6 +1327,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![make_step("s1", None)],
             meta: Some(PathMeta {
@@ -1304,6 +1351,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![make_step("s1", None)],
             meta: Some(PathMeta {
