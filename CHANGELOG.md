@@ -10,6 +10,46 @@ All notable changes to the Toolpath workspace are documented here.
   with lanes, filters on `/`, and resumes the chosen session in its
   source harness and its own directory.
 - **`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
+- **`path-cli`** (0.29.0): authenticated uploads (`path share`,
+  `p export pathbase`) of a document larger than 4 MiB are sent as
+  several requests instead of one. The CLI creates the graph with
+  `paths: []`, then sends each path as batches of RFC-jsonl lines of at
+  most 4 MiB: the first batch to `POST …/graphs/{id}/paths`, the rest to
+  `POST …/graphs/{id}/paths/{path_id}/steps`. The batches concatenate to
+  the document's RFC-jsonl serialization; the CLI adds no lines of its
+  own. A step's signatures travel with the step, a step larger than the
+  budget is sent alone, and steps are sent parents-first. A batch
+  that fails with a transport error or a 5xx is retried up to 3 times;
+  on any other failure the partly uploaded graph is deleted and the
+  error is reported (a 413 names the batch, its size, and its largest
+  step). Documents at or under 4 MiB, documents containing a `$ref`
+  path entry or a path with no steps, and anonymous uploads still use
+  the single request. When the server answers `404` or `405` to a
+  path's first batch it does not serve the batch routes: the CLI
+  deletes the empty graph, prints a note, and sends the whole document
+  in one request as before. A server older than this release's
+  Pathbase (no `Graph.mutability`) takes that fallback. The batch
+  requests are sent with reqwest directly (`Content-Type:
+  application/x-ndjson`, 30 s connect and 120 s read timeouts) so the
+  status of a response with an undecodable body is kept.
+- **`pathbase-client`** (0.2.1): regenerate from the Pathbase branch
+  that adds streamed upload. New operations `open_graph_path`
+  (`POST …/graphs/{id}/paths`) and `append_graph_path_steps`
+  (`POST …/graphs/{id}/paths/{path_id}/steps`, replacing the old
+  bare-steps body and full-path response), plus `get_graph_path_stats`,
+  `Graph.mutability` (`mutable` or `frozen`),
+  `User.kind`/`User.auth_methods`, `Repo.associated_url`, the
+  `write_to_frozen` and `invalid_document` error codes, and `409` on
+  path update/delete.
+  The committed spec keeps the server's `application/x-ndjson` bodies
+  and doc links; `build.rs` maps `x-ndjson` to `text/plain` (progenitor
+  cannot name `x-ndjson`; the batch handlers read the raw body without
+  checking the header) and strips rustdoc link brackets from
+  descriptions. `scripts/refresh-pathbase-openapi.sh` no longer drops
+  `x-ndjson` operations. `build.rs` makes `Graph.mutability` optional
+  at generation time so an older server's response decodes. New
+  `encode_segment` percent-encodes a path segment the way the generated
+  operations do.
 
 ## path-cli 0.28.0 — 2026-09-16
 
