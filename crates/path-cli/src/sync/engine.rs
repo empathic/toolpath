@@ -44,6 +44,117 @@ pub(crate) struct SyncRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) size: Option<u64>,
     pub(crate) synced_at: DateTime<Utc>,
+    /// Where this artifact has been uploaded, keyed by remote (see
+    /// [`remote_key`]). Only authed uploads are recorded — anonymous
+    /// ones have no repo to key on and cannot be listed later.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) remotes: BTreeMap<String, RemoteState>,
+}
+
+/// The key an upload destination is recorded under:
+/// `<server>/u/<owner>/<name>`, built from the destination the client
+/// resolved — never from a URL the server echoed, which may spell the
+/// host differently. Scheme and host are lower-cased and a trailing
+/// slash on the server is dropped, so the same destination always
+/// yields the same key.
+pub(crate) fn remote_key(base_url: &str, owner: &str, name: &str) -> String {
+    let server = base_url.trim_end_matches('/');
+    let host_end = server
+        .find("://")
+        .map(|i| {
+            server[i + 3..]
+                .find('/')
+                .map_or(server.len(), |j| i + 3 + j)
+        })
+        .unwrap_or(server.len());
+    let (authority, path) = server.split_at(host_end);
+    format!("{}{path}/u/{owner}/{name}", authority.to_ascii_lowercase())
+}
+
+/// This artifact's state on one remote: the graph currently receiving
+/// its steps and the source fingerprint the server last acknowledged,
+/// so a later run can tell "unchanged since" from "changed since".
+/// `share` creates a graph per upload and records the newest; bringing
+/// that graph up to date with a changed source is `path sync`'s job,
+/// which will add its own fields here (state, head) as it lands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RemoteState {
+    pub(crate) graph_id: String,
+    pub(crate) url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) modified: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) size: Option<u64>,
+    pub(crate) uploaded_at: DateTime<Utc>,
+}
+
+/// What the manifest knows about an artifact relative to one remote.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum UploadState<'a> {
+    /// No upload recorded for this remote.
+    New,
+    /// Uploaded, and the source fingerprint still matches.
+    Uploaded(&'a RemoteState),
+    /// Uploaded, but the source has changed since (or freshness is
+    /// unknowable — no stamp on either side).
+    Changed(&'a RemoteState),
+}
+
+/// The artifact's upload state on `remote` (a [`remote_key`]), judged
+/// against the current source stamp. Only a real, matching stamp can
+/// vouch for "unchanged"; a `None` stamp on either side reads as
+/// changed.
+pub(crate) fn upload_state<'a>(
+    manifest: &'a Manifest,
+    artifact_type: ArtifactType,
+    id: &str,
+    remote: &str,
+    current: sources::Stamp,
+) -> UploadState<'a> {
+    let Some(rec) = manifest
+        .get(artifact_type.name())
+        .and_then(|records| records.get(id))
+        .and_then(|rec| rec.remotes.get(remote))
+    else {
+        return UploadState::New;
+    };
+    let (modified, size) = current;
+    if (rec.modified.is_some() || rec.size.is_some())
+        && rec.modified == modified
+        && rec.size == size
+    {
+        UploadState::Uploaded(rec)
+    } else {
+        UploadState::Changed(rec)
+    }
+}
+
+/// Record a successful upload to `remote` (a [`remote_key`]),
+/// replacing any prior state there. Creates a known-but-uncached
+/// record when the artifact has none yet (e.g. a `--no-cache` share).
+pub(crate) fn record_upload(
+    config_dir: &Path,
+    artifact_type: ArtifactType,
+    id: &str,
+    path: Option<&str>,
+    remote: &str,
+    state: RemoteState,
+) -> Result<()> {
+    update_manifest(config_dir, |manifest| {
+        let rec = manifest
+            .entry(artifact_type.name().to_string())
+            .or_default()
+            .entry(id.to_string())
+            .or_insert_with(|| SyncRecord {
+                path: path.map(str::to_string),
+                cache_id: None,
+                modified: None,
+                size: None,
+                synced_at: Utc::now(),
+                remotes: BTreeMap::new(),
+            });
+        rec.remotes.insert(remote.to_string(), state);
+    })
 }
 
 /// The sync manifest: artifact type (`"claude"`, `"codex"`, …) →
@@ -153,6 +264,17 @@ fn newest_first(artifacts: &[ArtifactRef]) -> Vec<&ArtifactRef> {
     order
 }
 
+/// Replace `id`'s record, carrying over its remotes — sync and
+/// import rewrite the source fingerprint, never what was uploaded.
+fn put_record(records: &mut BTreeMap<String, SyncRecord>, id: String, mut rec: SyncRecord) {
+    if rec.remotes.is_empty()
+        && let Some(prev) = records.get_mut(&id)
+    {
+        rec.remotes = std::mem::take(&mut prev.remotes);
+    }
+    records.insert(id, rec);
+}
+
 /// Merge staged records into the manifest under the lock and clear
 /// the stage.
 fn flush_writes(
@@ -165,10 +287,10 @@ fn flush_writes(
     let batch = std::mem::take(pending);
     update_manifest(config_dir, move |manifest| {
         for (name, records) in batch {
-            manifest
-                .entry(name.to_string())
-                .or_default()
-                .extend(records);
+            let target = manifest.entry(name.to_string()).or_default();
+            for (id, rec) in records {
+                put_record(target, id, rec);
+            }
         }
     })
 }
@@ -241,6 +363,7 @@ fn sync_artifacts(
                             modified: artifact.modified,
                             size: artifact.size,
                             synced_at: Utc::now(),
+                            remotes: BTreeMap::new(),
                         },
                     );
                     unflushed += 1;
@@ -276,6 +399,7 @@ fn sync_artifacts(
                         modified: artifact.modified,
                         size: artifact.size,
                         synced_at: Utc::now(),
+                        remotes: BTreeMap::new(),
                     },
                 );
                 unflushed += 1;
@@ -310,19 +434,20 @@ pub(crate) fn record_artifact(
 ) -> Result<()> {
     let config_dir = config.config_dir()?;
     update_manifest(&config_dir, |manifest| {
-        manifest
-            .entry(artifact.artifact_type.name().to_string())
-            .or_default()
-            .insert(
-                artifact.id.clone(),
-                SyncRecord {
-                    path: artifact.path.clone(),
-                    cache_id: Some(cache_id.to_string()),
-                    modified: artifact.modified,
-                    size: artifact.size,
-                    synced_at: Utc::now(),
-                },
-            );
+        put_record(
+            manifest
+                .entry(artifact.artifact_type.name().to_string())
+                .or_default(),
+            artifact.id.clone(),
+            SyncRecord {
+                path: artifact.path.clone(),
+                cache_id: Some(cache_id.to_string()),
+                modified: artifact.modified,
+                size: artifact.size,
+                synced_at: Utc::now(),
+                remotes: BTreeMap::new(),
+            },
+        );
     })
 }
 
@@ -350,25 +475,17 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
         })
 }
 
-/// The cache entry for an artifact, when the manifest says it is
-/// materialized and a fresh stat shows its source unchanged since —
-/// i.e. re-deriving would reproduce the cached doc byte-for-byte.
-/// Used by `share` to upload straight from the cache. The stat
-/// targets one artifact directly — no enumeration of its siblings.
-///
-/// Transitional: loads a [`Config`] per call. New code takes the
-/// config directory as a parameter.
-pub(crate) fn fresh_cache_id(
-    bundle: &HarnessBundle,
+/// [`fresh_cache_id`] against a manifest and stamp the caller already
+/// holds — for callers that process many artifacts and must not reload
+/// the manifest or re-stat the source per artifact.
+pub(crate) fn fresh_cache_id_in(
+    manifest: &Manifest,
     artifact_type: ArtifactType,
-    project: Option<&str>,
     id: &str,
+    (modified, size): sources::Stamp,
 ) -> Option<String> {
-    let config_dir = Config::load().ok()?.config_dir().ok()?;
-    let manifest = load_manifest(&config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
     let cache_id = rec.cache_id.clone()?;
-    let (modified, size) = sources::source_for(bundle, artifact_type)?.stamp(project, id)?;
     // None stamps mean freshness is unknowable; only a real,
     // matching stamp can vouch for the cache entry.
     ((rec.modified.is_some() || rec.size.is_some())
@@ -475,6 +592,26 @@ mod tests {
     use crate::config::{CONFIG_DIR_ENV, TEST_ENV_LOCK};
     use std::path::Path;
 
+    /// The cache entry for an artifact, when the manifest says it is
+    /// materialized and a fresh stat shows its source unchanged since —
+    /// i.e. re-deriving would reproduce the cached doc byte-for-byte.
+    /// Used by `share` to upload straight from the cache. The stat
+    /// targets one artifact directly — no enumeration of its siblings.
+    ///
+    /// Transitional: loads a [`Config`] per call. New code takes the
+    /// config directory as a parameter.
+    fn fresh_cache_id(
+        bundle: &HarnessBundle,
+        artifact_type: ArtifactType,
+        project: Option<&str>,
+        id: &str,
+    ) -> Option<String> {
+        let config_dir = Config::load().ok()?.config_dir().ok()?;
+        let manifest = load_manifest(&config_dir).ok()?;
+        let stamp = sources::source_for(bundle, artifact_type)?.stamp(project, id)?;
+        fresh_cache_id_in(&manifest, artifact_type, id, stamp)
+    }
+
     /// Run `f` with `$TOOLPATH_CONFIG_DIR` pinned to `<tempdir>/.toolpath`;
     /// `f` receives the tempdir root for building provider fixtures and
     /// the config directory itself. The variable stays set because
@@ -495,6 +632,146 @@ mod tests {
             }
         }
         result
+    }
+
+    fn remote_state(graph_id: &str) -> RemoteState {
+        RemoteState {
+            graph_id: graph_id.to_string(),
+            url: format!("https://a/u/me/x/graphs/{graph_id}"),
+            modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
+            size: Some(10),
+            uploaded_at: "2026-01-02T00:00:00Z".parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn remote_key_normalizes_server_and_keeps_repo_case() {
+        let want = "https://pb.example:8443/u/Me/Repo";
+        assert_eq!(remote_key("https://pb.example:8443", "Me", "Repo"), want);
+        assert_eq!(remote_key("https://pb.example:8443/", "Me", "Repo"), want);
+        assert_eq!(remote_key("HTTPS://PB.Example:8443", "Me", "Repo"), want);
+        assert_eq!(
+            remote_key("https://host/prefix/", "o", "r"),
+            "https://host/prefix/u/o/r"
+        );
+        assert_eq!(
+            remote_key("localhost:3000", "o", "r"),
+            "localhost:3000/u/o/r"
+        );
+    }
+
+    #[test]
+    fn record_upload_creates_and_replaces_per_remote() {
+        with_cfg(|_, cfg| {
+            let put = |path: Option<&str>, remote: &str, st: RemoteState| {
+                record_upload(cfg, ArtifactType::Claude, "s1", path, remote, st).unwrap()
+            };
+            put(Some("/p"), "https://a/u/me/x", remote_state("g1"));
+            put(None, "https://a/u/me/y", remote_state("g2"));
+            put(None, "https://a/u/me/x", remote_state("g3"));
+            let m = load_manifest(cfg).unwrap();
+            let rec = &m["claude"]["s1"];
+            assert_eq!(rec.path.as_deref(), Some("/p"));
+            assert_eq!(rec.cache_id, None, "known but not materialized");
+            let got: Vec<(&str, &str)> = rec
+                .remotes
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.graph_id.as_str()))
+                .collect();
+            assert_eq!(
+                got,
+                [("https://a/u/me/x", "g3"), ("https://a/u/me/y", "g2")]
+            );
+        });
+    }
+
+    #[test]
+    fn sync_and_import_writes_keep_upload_history() {
+        with_cfg(|_, cfg| {
+            record_upload(
+                cfg,
+                ArtifactType::Claude,
+                "s1",
+                None,
+                "https://a/u/me/x",
+                remote_state("g1"),
+            )
+            .unwrap();
+            let artifact = ArtifactRef {
+                artifact_type: ArtifactType::Claude,
+                id: "s1".into(),
+                path: Some("/p".into()),
+                modified: Some("2026-03-01T00:00:00Z".parse().unwrap()),
+                size: Some(99),
+            };
+            let config = Config::load().unwrap();
+            record_artifact(&config, &artifact, "claude-s1").unwrap();
+            let m = load_manifest(cfg).unwrap();
+            let rec = &m["claude"]["s1"];
+            assert_eq!(rec.cache_id.as_deref(), Some("claude-s1"));
+            assert_eq!(rec.size, Some(99));
+            assert_eq!(
+                rec.remotes.len(),
+                1,
+                "record_artifact must not drop remotes"
+            );
+
+            let mut pending = BTreeMap::new();
+            pending
+                .entry("claude")
+                .or_insert_with(BTreeMap::new)
+                .insert(
+                    "s1".to_string(),
+                    SyncRecord {
+                        path: Some("/p".into()),
+                        cache_id: Some("claude-s1".into()),
+                        modified: None,
+                        size: Some(100),
+                        synced_at: Utc::now(),
+                        remotes: BTreeMap::new(),
+                    },
+                );
+            flush_writes(cfg, &mut pending).unwrap();
+            let m = load_manifest(cfg).unwrap();
+            let rec = &m["claude"]["s1"];
+            assert_eq!(rec.size, Some(100));
+            assert_eq!(rec.remotes.len(), 1, "flush_writes must not drop remotes");
+        });
+    }
+
+    #[test]
+    fn upload_state_judges_by_stamp_and_remote() {
+        let mut m = Manifest::default();
+        m.entry("claude".into()).or_default().insert(
+            "s1".into(),
+            SyncRecord {
+                path: None,
+                cache_id: None,
+                modified: None,
+                size: None,
+                synced_at: Utc::now(),
+                remotes: BTreeMap::from([("https://a/u/me/x".to_string(), remote_state("g1"))]),
+            },
+        );
+        let same = (Some("2026-01-01T00:00:00Z".parse().unwrap()), Some(10));
+        let st = |id: &str, remote: &str, stamp| {
+            upload_state(&m, ArtifactType::Claude, id, remote, stamp)
+        };
+        assert!(matches!(
+            st("s1", "https://a/u/me/x", same),
+            UploadState::Uploaded(u) if u.graph_id == "g1"
+        ));
+        assert!(matches!(
+            st("s1", "https://a/u/me/x", (same.0, Some(11))),
+            UploadState::Changed(_)
+        ));
+        assert!(matches!(
+            st("s1", "https://a/u/me/x", (None, None)),
+            UploadState::Changed(_)
+        ));
+        assert_eq!(st("s1", "https://b/u/me/x", same), UploadState::New);
+        assert_eq!(st("s1", "https://a/u/me/y", same), UploadState::New);
+        assert_eq!(st("s2", "https://a/u/me/x", same), UploadState::New);
     }
 
     fn write_claude_session(home: &Path, project_slug: &str, session: &str, prompt: &str) {
@@ -552,6 +829,7 @@ mod tests {
                     modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
                     size: Some(4096),
                     synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
+                    remotes: BTreeMap::new(),
                 },
             );
             save_manifest(config_dir, &manifest).unwrap();
