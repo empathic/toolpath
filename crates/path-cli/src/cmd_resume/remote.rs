@@ -126,6 +126,7 @@ pub(super) fn resolve_session(
     Ok(super::ResolvedInput {
         graph,
         source_harness,
+        fetched: None,
         json,
     })
 }

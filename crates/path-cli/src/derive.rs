@@ -368,19 +368,41 @@ pub(crate) fn derive_pi_session_with(
 /// document. Used by `path import pathbase` and `path resume <url>`.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Result<DerivedDoc> {
-    use crate::cmd_pathbase::{credentials_path, graphs_download, load_session, resolve_url};
+    let (base_url, ref_) = pathbase_ref_server(target, url_flag)?;
+    pathbase_fetch(&base_url, &ref_)
+}
+
+/// Parse a Pathbase ref and settle the server it is fetched from: the
+/// URL's own host, else `url_flag`, else the stored session's server,
+/// else the default.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn pathbase_ref_server(
+    target: &str,
+    url_flag: Option<&str>,
+) -> Result<(String, PathRef)> {
+    use crate::cmd_pathbase::{credentials_path, load_session, resolve_url};
 
     let (base, ref_) = parse_pathbase_ref(target, url_flag)?;
+    let base_url = match base {
+        Some(base) => base,
+        None => match load_session(&credentials_path()?)? {
+            Some(stored) => stored.url,
+            None => resolve_url(None),
+        },
+    };
+    Ok((base_url, ref_))
+}
+
+/// Download `ref_` from `base_url` with the stored credentials, if any.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn pathbase_fetch(base_url: &str, ref_: &PathRef) -> Result<DerivedDoc> {
+    use crate::cmd_pathbase::{credentials_path, graphs_download, load_session};
+
     let stored = load_session(&credentials_path()?)?;
-    let base_url = base
-        .or_else(|| stored.as_ref().map(|s| s.url.clone()))
-        .unwrap_or_else(|| resolve_url(None));
-
     let token = stored.as_ref().map(|s| s.token.as_str());
-
     let PathRef { owner, repo, id } = ref_;
-    let body = graphs_download(&base_url, token, &owner, &repo, &id)?;
-    let cache_id = crate::cache::pathbase_cache_id(&owner, &repo, &id);
+    let body = graphs_download(base_url, token, owner, repo, id)?;
+    let cache_id = crate::cache::pathbase_cache_id(owner, repo, id);
     let doc = Graph::from_json(&body)
         .map_err(|e| anyhow::anyhow!("server returned a non-toolpath document: {e}"))?;
     Ok(DerivedDoc {
