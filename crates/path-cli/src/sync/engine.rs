@@ -450,9 +450,10 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
 
 /// The cache entry for an artifact, when the manifest says it is
 /// materialized and a fresh stat shows its source unchanged since —
-/// i.e. re-deriving would reproduce the cached doc byte-for-byte.
-/// Used by `share` to upload straight from the cache. The stat
-/// targets one artifact directly — no enumeration of its siblings.
+/// i.e. re-deriving would reproduce the cached doc byte-for-byte —
+/// with that stamp. Used by `share` to upload straight from the cache.
+/// The stat targets one artifact directly — no enumeration of its
+/// siblings.
 ///
 /// Transitional: loads a [`Config`] per call. New code takes the
 /// config directory as a parameter.
@@ -461,7 +462,7 @@ pub(crate) fn fresh_cache_id(
     artifact_type: ArtifactType,
     project: Option<&str>,
     id: &str,
-) -> Option<String> {
+) -> Option<(String, sources::Stamp)> {
     let config_dir = Config::load().ok()?.config_dir().ok()?;
     let manifest = load_manifest(&config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
@@ -473,7 +474,23 @@ pub(crate) fn fresh_cache_id(
         && rec.modified == modified
         && rec.size == size
         && crate::cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
-    .then_some(cache_id)
+    .then_some((cache_id, (modified, size)))
+}
+
+/// The session a cache entry was derived from, with the source stamp
+/// its record carries: what `p export pathbase <cache id>` records an
+/// upload against. `None` when no manifest record names the entry.
+pub(crate) fn session_of_cache_id(
+    cache_id: &str,
+) -> Option<(ArtifactType, String, sources::Stamp)> {
+    let manifest = load_manifest(&crate::config::config_dir().ok()?).ok()?;
+    manifest.iter().find_map(|(name, records)| {
+        let artifact_type = ArtifactType::parse(name)?;
+        records
+            .iter()
+            .find(|(_, rec)| rec.cache_id.as_deref() == Some(cache_id))
+            .map(|(id, rec)| (artifact_type, id.clone(), (rec.modified, rec.size)))
+    })
 }
 
 /// `p cache rm` eviction: the doc is gone, so any record pointing
@@ -1396,7 +1413,7 @@ mod tests {
             );
 
             sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
-            let cache_id = fresh_cache_id(
+            let (cache_id, _) = fresh_cache_id(
                 &bundle,
                 ArtifactType::Claude,
                 Some("/test/project"),
