@@ -78,6 +78,7 @@ pub mod v1 {
     //!         base: Some(Base::vcs("github:org/repo", "abc123")),
     //!         head: "s2".into(),
     //!         graph_ref: None,
+    //!         parent: None,
     //!     },
     //!     steps: vec![s1, s2],
     //!     meta: None,
@@ -147,8 +148,8 @@ pub mod v1 {
 
     pub use crate::types::{
         ActorDefinition, ArtifactChange, Base, Graph, GraphIdentity, GraphMeta, Identity, Key,
-        PATH_KIND_AGENT_CODING_SESSION, PATH_KIND_AGENT_CODING_SESSION_V1_0_0, Path, PathIdentity,
-        PathMeta, PathOrRef, PathRef, Ref, Signature, Step, StepIdentity, StepMeta,
-        StructuralChange, VcsSource,
+        PATH_KIND_AGENT_CODING_SESSION, PATH_KIND_AGENT_CODING_SESSION_V1_0_0, Parent, Path,
+        PathIdentity, PathMeta, PathOrRef, PathRef, Ref, Relation, Signature, Step, StepIdentity,
+        StepMeta, StructuralChange, VcsSource,
     };
 }

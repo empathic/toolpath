@@ -591,6 +591,7 @@ mod tests {
                 base: None,
                 head,
                 graph_ref: None,
+                parent: None,
             },
             steps,
             meta: None,
