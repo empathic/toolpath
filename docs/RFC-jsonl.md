@@ -449,6 +449,11 @@ Existing documents and signatures validate unchanged. This field lets a
 path name the graph it belongs to, supporting cross-referencing from
 streaming contexts where the containing graph is known up front.
 
+The snippet shows the struct as this RFC changed it. `PathIdentity.parent`
+was added later by the base RFC (*Path Parent*); JSONL only carries it on
+`PathOpen`, as the field table and the reader and writer pseudo-code above
+state.
+
 The value of `graph_ref` uses the same `$ref`-style URL conventions as
 `Graph.paths[*].$ref`:
 
