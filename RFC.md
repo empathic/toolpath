@@ -431,11 +431,14 @@ readers MUST NOT treat `parents` as a set. This is git's first-parent rule,
 and it makes the main line and each branch recoverable from structure
 alone: the main line is the `parents[0]` chain from `head` to a root; the
 branch merged at step *m* starts at `m.parents[1..]` and follows
-`parents[0]` until it reaches a step on *m*'s own first-parent chain.
+`parents[0]` until it reaches a step on *m*'s own first-parent chain. That
+step is part of the branch: it is the step the branch left the main line
+at, and for a delegation it is the tool-use step that spawned the subagent
+and carries what the subagent was told to do.
 
-A delegated subagent is a branch. The tool-use step that spawned it is the
-fork point, its steps carry their own actor, and the tool-result step is the
-merge:
+A delegated subagent is a branch. It leaves the main line at the tool-use
+step that spawned it, its steps carry their own actor, and the tool-result
+step is the merge:
 
 ```
 turn-7 ─ agent-call ─────────────────────── agent-result ─ turn-8 (head)
