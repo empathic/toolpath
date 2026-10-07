@@ -205,7 +205,7 @@
         "tags": [
           "Anon"
         ],
-        "summary": "Upload a graph anonymously as the `anon` user. No authentication\nrequired; the resulting graph is always `Unlisted` and reachable\nonly via the returned share URL.",
+        "summary": "Upload a graph anonymously as the `anon` user. No authentication\nrequired; the resulting graph is always `Unlisted` and reachable\nonly via the returned share URL. The graph and its paths are\ncreated `frozen`.",
         "operationId": "create_anon_graph",
         "requestBody": {
           "description": "Toolpath Graph document. The body's `visibility` field is ignored; anon uploads are always `Unlisted`.",
@@ -220,17 +220,17 @@
         },
         "responses": {
           "201": {
-            "description": "Graph stored; the `url` in the response is the share link.",
+            "description": "Graph stored `frozen`; the `url` in the response is the share link. `paths` names each stored path's server id, in document order, with the `path.id` it had in the document.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GraphDocumentResponse"
+                  "$ref": "#/components/schemas/GraphCreatedResponse"
                 }
               }
             }
           },
           "400": {
-            "description": "Document failed to parse as a toolpath Graph.",
+            "description": "Document failed to parse as a toolpath Graph, or two of its paths have the same ID.",
             "content": {
               "application/json": {
                 "schema": {
@@ -777,7 +777,7 @@
           "Graphs"
         ],
         "summary": "Create a graph from a multi-path toolpath document.",
-        "description": "Each entry in the document's `paths` list either carries the path's\nfull content or only its id. Paths with content are stored; id-only\nentries are kept as references.\n\nCaller must own `{owner}/{repo}`. The `document` field must parse\nas a toolpath v1 `Graph`.",
+        "description": "Each entry in the document's `paths` list either carries the path's\nfull content or only its ID. Paths with content are stored; ID-only\n`$ref` entries are ignored, neither stored nor linked.\n\nThe graph and its paths are created `mutable`: the owner can append\nsteps to them and stream further paths into the graph.\n\nCaller must own `{owner}/{repo}`. The `document` field must parse\nas a toolpath v1 `Graph`.",
         "operationId": "create_graph",
         "parameters": [
           {
@@ -800,7 +800,7 @@
           }
         ],
         "requestBody": {
-          "description": "Multi-path toolpath Graph document, optional display name, and visibility (`public`/`unlisted`/`private`, default `unlisted`). Paths sent with content are stored; id-only entries are kept as references.",
+          "description": "Multi-path toolpath Graph document, optional display name, and visibility (`public`/`unlisted`/`private`, default `unlisted`). Paths sent with content are stored; ID-only `$ref` entries are ignored, neither stored nor linked.",
           "content": {
             "application/json": {
               "schema": {
@@ -812,17 +812,17 @@
         },
         "responses": {
           "201": {
-            "description": "The newly created graph with its server-assigned UUID, a headers-only `document` (graph + per-path headers, no steps — the uploader already has them), and the canonical `url`.",
+            "description": "The newly created `mutable` graph with its server-assigned UUID, an empty `document` (the uploader already has it), and the canonical `url`. `paths` names each stored path's server id, in document order, with the `path.id` it had in the document.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GraphDocumentResponse"
+                  "$ref": "#/components/schemas/GraphCreatedResponse"
                 }
               }
             }
           },
           "400": {
-            "description": "Document failed to parse as a toolpath Graph.",
+            "description": "Document failed to parse as a toolpath Graph, or two of its paths have the same ID.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1126,8 +1126,8 @@
         "tags": [
           "Graphs"
         ],
-        "summary": "Open a path in a mutable graph from the first chunk of a toolpath JSONL\nstream (`.path.jsonl`). Line 1 must be a `PathOpen`; the remaining lines\nare applied as by `POST .../paths/{path_id}/steps`, in the same\ntransaction. Requires write permission on the repo.",
-        "description": "Safe to retry: when the graph already has a path with the `PathOpen`'s\ntoolpath path ID and the same `PathOpen`, the lines are applied to that\npath and the response is `200` with its `path_id`.",
+        "summary": "Open a path in a mutable graph from the first chunk of a toolpath JSONL\nstream (`.path.jsonl`). Line 1 must be a `PathOpen`; once the path\nexists, the remaining lines are applied as by\n`POST .../paths/{path_id}/steps`. Requires write permission on the repo.",
+        "description": "Safe to retry: when the graph already has a path with the `PathOpen`'s\ntoolpath path ID and the same `PathOpen`, the lines are applied to that\npath and the response is `200` with its `path_id`. A request refused\nafter the path was created leaves it in the graph with nothing applied,\nand the retry resolves to it.",
         "operationId": "open_graph_path",
         "parameters": [
           {
@@ -1189,7 +1189,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: line 1 is not a `PathOpen`, or a line is malformed (the message names its 1-based number). `invalid_document`: a `Step` line reuses a stored step ID with a different payload. Nothing is written.",
+            "description": "`bad_request`: line 1 is not a `PathOpen`, a line is malformed (the message names its 1-based number), or a step `Signature` names a step that is neither stored nor earlier in the body. `invalid_document`: a `Step` line reuses a stored step ID with a different payload. A malformed line is refused before anything is written; a refused `Signature` or `Step` leaves the path created with no lines applied.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1638,7 +1638,7 @@
           "Graphs"
         ],
         "summary": "Continue a constituent path with more toolpath JSONL lines. Requires\nwrite permission on the repo. The lines are applied in order, in one\ntransaction:",
-        "description": "- `Step` is stored; one already stored with an identical payload is\n  skipped. Parent edges resolve against steps already stored, so send\n  parents first.\n- `Head` sets the path's head; the step must be stored (or earlier in\n  this body).\n- `PathMeta` overwrites the patched `meta` fields; `ActorDef` sets\n  `meta.actors[actor]`.\n- `Signature` is appended to the path's or the stored step's\n  `meta.signatures` unless an identical one is present.\n- `PathClose` changes nothing; unknown variants are skipped.\n\nReplaying a body is a no-op.",
+        "description": "- `Step` is stored; one already stored with an identical payload is\n  skipped. Parent edges resolve against steps already stored, so send\n  parents first.\n- `Head` sets the path's head to the step ID it carries, stored as sent\n  like `path.head` of a `POST /graphs` document; the newest `Head` wins.\n  The head is empty until one arrives.\n- `PathMeta` overwrites the patched `meta` fields; `ActorDef` sets\n  `meta.actors[actor]`.\n- `Signature` is appended to the path's or the stored step's\n  `meta.signatures` unless an identical one is present.\n- `PathClose` changes nothing; unknown variants are skipped.\n\nRe-sending a request after a lost response is a no-op.",
         "operationId": "append_graph_path_steps",
         "parameters": [
           {
@@ -1699,7 +1699,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: a line is malformed (the message names its 1-based number), is a `PathOpen`, or names a step that is not stored. `invalid_document`: a `Step` line reuses a stored step ID with a different payload. Nothing is written.",
+            "description": "`bad_request`: a line is malformed (the message names its 1-based number), is a `PathOpen`, or is a step `Signature` naming a step that is neither stored nor earlier in the body. `invalid_document`: a `Step` line reuses a stored step ID with a different payload. Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2052,7 +2052,7 @@
         "properties": {
           "head": {
             "type": "string",
-            "description": "The path's head step ID after the lines were applied; `null` until a\n`Head` line is stored.",
+            "description": "The step the newest stored `Head` line names; `null` while no `Head`\nline has been stored.",
             "nullable": true
           },
           "inserted": {
@@ -2277,6 +2277,25 @@
         },
         "additionalProperties": false
       },
+      "CreatedPath": {
+        "type": "object",
+        "description": "A path stored by `POST /graphs`: the ID the document gave it and the\nserver ID that addresses it.",
+        "required": [
+          "id",
+          "server_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The toolpath `path.id` from the uploaded document."
+          },
+          "server_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The server-assigned UUID; the `{path_id}` of the path routes."
+          }
+        }
+      },
       "Graph": {
         "type": "object",
         "description": "A computation graph — a named ordered collection of paths within\na repo. Pure storage shape — the columns on `graphs`. Derived\nproperties (path count, reconstructed document) live on the response\nwrappers that need them (`GraphSummary`, `GraphDocument`).",
@@ -2304,7 +2323,8 @@
             "format": "uuid"
           },
           "mutability": {
-            "$ref": "#/components/schemas/Mutability"
+            "$ref": "#/components/schemas/Mutability",
+            "description": "`mutable` while the graph's content can still change; `frozen` is\npermanent, and every path in a frozen graph is frozen too."
           },
           "name": {
             "type": "string",
@@ -2333,6 +2353,43 @@
           }
         }
       },
+      "GraphCreatedResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Graph"
+          },
+          {
+            "type": "object",
+            "required": [
+              "path_count",
+              "document",
+              "url",
+              "paths"
+            ],
+            "properties": {
+              "document": {
+                "type": "object",
+                "description": "Always `{}`; the GET endpoints serve the stored document."
+              },
+              "path_count": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CreatedPath"
+                },
+                "description": "The stored paths in document order."
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "The `POST /graphs` response: the `Graph` row, its path count, the\nstored paths, and the URL. `document` is empty."
+      },
       "GraphDocumentResponse": {
         "allOf": [
           {
@@ -2348,7 +2405,7 @@
             "properties": {
               "document": {
                 "type": "object",
-                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }` on the GET\nendpoints. On the upload-create response it is headers-only (no `steps`)\n— see [`from_graph_headers`]."
+                "description": "Reconstructed `{ graph, paths: [{path, steps, meta?}, …] }`."
               },
               "path_count": {
                 "type": "integer",
@@ -2423,7 +2480,7 @@
         "properties": {
           "head": {
             "type": "string",
-            "description": "The path's head step ID after the lines were applied; `null` until a\n`Head` line is stored.",
+            "description": "The step the newest stored `Head` line names; `null` while no `Head`\nline has been stored.",
             "nullable": true
           },
           "inserted": {
@@ -2670,7 +2727,7 @@
           },
           "paths": {
             "type": "array",
-            "description": "One or more entries. Each either carries a path's full content or\nis a `{ \"$ref\": \"...\" }` entry that only names a path by id."
+            "description": "One or more entries. Each either carries a path's full content or\nis a `{ \"$ref\": \"...\" }` entry that only names a path by ID; on\nupload, `$ref` entries are ignored."
           }
         }
       },
@@ -2888,7 +2945,7 @@
         "properties": {
           "document": {
             "$ref": "#/components/schemas/ToolpathDocument",
-            "description": "The toolpath v1 Graph document. Each entry in its `paths` list\neither carries the path's full content or only its id. Paths with\ncontent are stored; id-only entries are kept as references."
+            "description": "The toolpath v1 Graph document. Each entry in its `paths` list\neither carries the path's full content or only its ID. Paths with\ncontent are stored; ID-only `$ref` entries are ignored, neither\nstored nor linked."
           },
           "name": {
             "type": "string",
