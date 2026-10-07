@@ -2,6 +2,49 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.30.0 — 2026-10-07
+
+- **`path-cli`** (0.30.0): `path share --all` uploads every session
+  across the installed harnesses instead of opening the picker.
+  `--project-under <dir>` restricts it to sessions whose project
+  directory is under that subtree (same matching as `p cache sync`);
+  `--harness` narrows to one harness. Before uploading it prints a
+  heading with the session count and, when some are skipped, the
+  `(N already uploaded, M changed since upload, K new)` split; the
+  per-harness totals; and one line per project directory with the
+  sessions to upload, what is skipped there, and the configured remote
+  where a `[[project]]` rule resolves — then asks for confirmation
+  (`--yes` skips the prompt, `--dry-run` stops after the summary).
+  Destinations follow the single-session rules: `--repo` for
+  everything, else each directory's configured remote, else
+  `<you>/pathstash`. Requires login; `--anon`, `--session`,
+  `--project`, and `--name` conflict with it. Uploads are sequential,
+  go through the same path as a single `share` (so a document over
+  4 MiB streams, with the same fallback), fail individually with a
+  warning, and the run exits non-zero if any failed.
+- **`path-cli`**: authed uploads from `share` are recorded in the sync
+  manifest (`remotes` on the artifact's record, keyed by the normalized
+  destination `<server>/u/<owner>/<name>`; each value holds the graph
+  id, its URL, and the source fingerprint at upload time). `share
+  --all` uploads only sessions with no record at their destination:
+  unchanged ones are already there, and ones that changed since are
+  left for `path sync` to bring up to date. Single-session `share` on
+  an unchanged session prints the existing URL instead of uploading a
+  duplicate. `--force` uploads regardless. Sync and import rewrite the
+  fingerprint but keep the upload record; anonymous uploads are not
+  recorded.
+- **`path-cli`**: `share` (the picker and `--all`) groups, displays,
+  and resolves configured remotes for claude and pi sessions by their
+  recorded cwd rather than the slug-decoded project, so `[[project]]`
+  rules on directories containing `_`, `.`, or `-` match them.
+- **`toolpath-claude`** (0.13.5): `ConversationMetadata.cwd` — the
+  working directory the session recorded, captured during the metadata
+  pass. `project_path` is decoded from the directory slug, which is
+  lossy (`_` and `.` come back as `/`); `cwd` is the real path.
+- **`toolpath-pi`** (0.6.2): `SessionMeta.cwd` from the session header,
+  for the same reason — the session-dir name turns every `-` into `/`.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
