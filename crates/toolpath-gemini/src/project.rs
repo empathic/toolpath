@@ -87,10 +87,10 @@ fn project_view(
 ) -> std::result::Result<Conversation, String> {
     let project_hash = cfg.project_hash.clone().unwrap_or_default();
 
-    let mut main_messages: Vec<GeminiMessage> = Vec::with_capacity(view.turns.len());
+    let mut main_messages: Vec<GeminiMessage> = Vec::with_capacity(view.turns().count());
     let mut sub_agents: Vec<ChatFile> = Vec::new();
 
-    for turn in &view.turns {
+    for turn in view.turns() {
         main_messages.push(turn_to_message(turn));
 
         for delegation in &turn.delegations {
@@ -640,12 +640,11 @@ mod tests {
             id: "session-uuid".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("gemini-cli".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }

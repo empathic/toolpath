@@ -52,11 +52,11 @@ fn view_has_expected_turns_and_tools() {
     let view = toolpath_copilot::to_view(&session);
 
     // One user turn, one collapsed assistant turn.
-    assert_eq!(view.turns.len(), 2);
-    assert_eq!(view.turns[0].role, Role::User);
-    assert_eq!(view.turns[1].role, Role::Assistant);
+    assert_eq!(view.turns().count(), 2);
+    assert_eq!(view.turns().next().unwrap().role, Role::User);
+    assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
 
-    let tools = &view.turns[1].tool_uses;
+    let tools = &view.turns().nth(1).unwrap().tool_uses;
     assert_eq!(
         tools.len(),
         5,
@@ -108,15 +108,14 @@ fn view_has_delegation_skill_and_usage() {
     let view = toolpath_copilot::to_view(&session);
 
     // Sub-agent → delegation with result back-filled.
-    let d = &view.turns[1].delegations[0];
+    let d = &view.turns().nth(1).unwrap().delegations[0];
     assert_eq!(d.agent_id, "sub-1");
     assert_eq!(d.result.as_deref(), Some("looks good, no issues"));
 
     // Skill + session.task_complete land as non-turn events.
-    assert!(view.events.iter().any(|e| e.event_type == "skill.invoked"));
+    assert!(view.events().any(|e| e.event_type == "skill.invoked"));
     assert!(
-        view.events
-            .iter()
+        view.events()
             .any(|e| e.event_type == "session.task_complete")
     );
 

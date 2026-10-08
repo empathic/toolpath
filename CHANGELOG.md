@@ -2,6 +2,95 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Turns and events become one ordered item stream — 2026-09-21
+
+`ConversationView` replaces its parallel `turns`/`events` vecs with a
+single ordered `items` stream that preserves the source's exact
+interleaving, and `derive_path` emits `conversation.event` steps so
+non-turn entries survive import/export.
+
+- **`toolpath-convo`** (0.12.0): **Breaking** —
+  `ConversationView.turns`/`.events` are replaced by
+  `items: Vec<Item>` (`Turn | Event`), with `turns()`/`events()`
+  iterators; `ConversationView::turns_since` is removed (it had no
+  callers). `derive_path` emits `conversation.event` steps
+  (previously dropped — a Claude session lost its attachments and
+  system entries on import/export) and resolves duplicate step ids by
+  renaming to `<id>#<n>`.
+  `extract_conversation` strips that suffix from item ids, so a rebuilt
+  view carries the ids the source recorded (a projector never writes
+  `<uuid>#2` as an entry's own id); a `parent_id` keeps naming the step
+  it chained onto, which `derive_path` resolves directly, so the view
+  derives to the same step sequence again. For that to hold, a step
+  byte-identical to a renamed holder of its id is dropped like one
+  identical to the first holder, and a dropped duplicate no longer
+  rebinds its id: the id keeps naming the latest step pushed under it.
+  The stripper is public as `toolpath_convo::base_id`, which the gemini
+  reader now uses in place of its private copy.
+  Readers own linkage: a step's `parents` is the item's `parent_id`
+  resolved to the step it names (an event's id resolves like a
+  turn's). A turn whose `parent_id` is `None` or names nothing emitted
+  has no parents; an event in that position attaches to the step
+  emitted just before it, so an unchained trailing event cannot become
+  an orphan head that reports every turn as a dead end. `derive_path`
+  never rewires a recorded chain, and `extract_conversation` restores
+  `parent_id` from `parents[0]` for turns and events alike. No transform-recovery keys
+  ride in the document (`source_parent` and `event_source_id` are
+  gone). Readers whose harness records no linkage chain over the
+  ordered item stream, so events sit on the head's ancestry
+  naturally. New proptest suite pins unique step ids and
+  derive → extract → derive stability over randomized interleavings
+  with id collisions, and that every turn of a chained stream is an
+  ancestor of the head however its events are linked.
+- **`toolpath-claude`** (0.14.0): the projector emits events inline at
+  their item position — real Claude interleaves attachments and system
+  entries with turns; the old trailing pass regrouped them at end of
+  file. `wire_order_roundtrip` pins the projected entry-type sequence
+  to the captured fixture. Linkage: uuid-bearing entries chain as
+  recorded (a `parentUuid` naming an absorbed tool-result carrier is
+  redirected to the assistant turn on the way in and to the
+  synthesized carrier on the way out); a `compact_boundary` takes its
+  `logicalParentUuid` as `parent_id` and the projector writes
+  `parentUuid: null` back. Headerless lines (`last-prompt`,
+  `ai-title`, `mode`, `permission-mode`, `file-history-snapshot`, …)
+  keep their file position end to end: **Breaking** —
+  `Conversation.preamble: Vec<Value>` is replaced by
+  `Conversation.headerless: Vec<HeaderlessLine>` (`before` = index of
+  the entry the line precedes, `raw` = the line), with
+  `Conversation::add_headerless`, `Conversation::lines()` (every line
+  in file order) and the `Line` enum; the reader, chain merge, writer,
+  `rename_session`/`reroot`, `to_view` and the projector all go
+  through that position. Previously every headerless line derived at
+  the front of the path, so each turn's `last-prompt`/`ai-title`/`mode`
+  group inserted steps before the first turn on every append; now the
+  derived step sequence only grows as the session file does
+  (`wire_order_roundtrip` pins this for every prefix of the fixture).
+  Each headerless event chains onto the item before it, and the
+  uuid-bearing entry after a run chains onto the run's last event when
+  its wire parent is the item the run hangs from, so the run sits on the
+  head's ancestry; the projector resolves that link back past the run
+  (`claude-headerless-N` ids). One position the IR cannot express: a
+  headerless run between an assistant tool-use entry and its absorbed
+  tool-result carrier projects before the carrier (the common shape),
+  so a run recorded after the carrier comes back before it.
+- **`toolpath-codex`** (0.7.0): events interleave with turns at their
+  rollout position — a `compacted` marker now derives between its
+  surrounding turns instead of after them, pinned through
+  derive → extract. The synthesized chain runs over the merged
+  item stream, so events sit between the turns they separate.
+- **`toolpath-gemini`** (0.7.0): split assistant messages group via
+  `group_id` with the snapshot counted once.
+- **`toolpath-opencode`** (0.6.0): `items` holds the turns followed by
+  the part and message events.
+- **`toolpath-cursor`** (0.3.0): builds `items` from its turns.
+- **`toolpath-copilot`** (0.2.0): `items` holds the turns followed by
+  the non-turn events, and the synthesized chain runs over that
+  stream.
+- **`toolpath-pi`** (0.7.0): builds `items` from its turns; compaction
+  stays a System turn.
+- **`path-cli`** (0.30.0), **`toolpath-cli`** (0.30.0): dependency
+  bumps for all of the above.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

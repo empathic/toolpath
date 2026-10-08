@@ -38,10 +38,10 @@ impl ConversationReader {
                 Ok(_) | Err(_) => {
                     // Headerless / metadata lines (ai-title, last-prompt,
                     // queue-operation, permission-mode, file-history-snapshot,
-                    // etc.) are preserved verbatim so the projector can
-                    // re-emit them on roundtrip.
+                    // etc.) are preserved verbatim, at their file position,
+                    // so the projector can re-emit them on roundtrip.
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                        conversation.preamble.push(value);
+                        conversation.add_headerless(value);
                     } else if line_num < 5 || std::env::var("CLAUDE_CLI_DEBUG").is_ok() {
                         eprintln!(
                             "Warning: Failed to parse line {} in {:?}: not valid JSON",
