@@ -5,7 +5,8 @@ All notable changes to the Toolpath workspace are documented here.
 ## toolpath-otel 0.1.4 — 2026-10-01
 
 - **`toolpath-otel`** (0.1.4): records files an agent writes through its
-  shell tool as `file.write` changes: heredoc writes (`cat <<'EOF' > file`,
+  shell tool (a call the caller's classifier names `Shell`) as `file.write`
+  changes: heredoc writes (`cat <<'EOF' > file`,
   `cat > file <<EOF`, `tee [-a] file <<EOF`, `>>` appends, `<<-`, several
   heredocs chained in one script, literal `cd`s) and `apply_patch <<'EOF'`
   patches (Codex running its patch tool through `exec_command` or `shell`),
@@ -40,7 +41,8 @@ All notable changes to the Toolpath workspace are documented here.
   no longer a change.
   `derive_jsonl` keeps every sent step final: a turn also waits for an
   unanswered call from an earlier generation that may move a persistent
-  shell. Sessions whose shell calls write no file (no heredoc write,
+  shell (a worktree tool, or a Claude Code `Bash` the classifier names
+  `Shell`). Sessions whose shell calls write no file (no heredoc write,
   patch, or output redirect or `tee` to a file) derive as before. A
   `NotebookEdit` (one cell) or a `MultiEdit` left to `toolpath-convo`'s
   fallback forgets the file's known content, and such a fallback call

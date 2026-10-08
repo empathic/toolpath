@@ -573,14 +573,21 @@ key spellings are canonicalized onto Claude's), `apply_patch`/`patch`
 text (one change per file, `operation` `add`/`update`/`delete`,
 `rename_to`, `after` for an added file; read by
 `toolpath_convo::shell_writes::parse_patch`, which skips a file header with
-an empty path), and two kinds of heredoc in shell tool calls (Claude Code
-`Bash`, Codex `exec_command`, `shell` and `shell_command`, opencode and pi
-`bash`, Gemini CLI `run_shell_command`): writes
+an empty path), and two kinds of heredoc in calls the classifier names
+`shell` (inputs read: Claude Code `Bash`, Codex `exec_command`, `shell` and
+`shell_command`, opencode and pi `bash`, Gemini CLI `run_shell_command`):
+writes
 (`cat <<'EOF' > file`) and patches (`apply_patch <<'EOF'`, the way Codex runs
 its patch tool through a shell). A shell change is read from the command
 text, not observed, so it is recorded for every execution whatever its
 outcome and marked as inferred. The script reader is
-`toolpath_convo::shell_writes`, shared with the other providers.
+`toolpath_convo::shell_writes`, shared with the other providers. Under the
+provider crates' classifiers `path` passes, Codex `shell_command`
+(`toolpath-codex` does not list it) is not a `shell` call, so its heredocs
+are read only under a classifier that names it. Gemini CLI
+`run_shell_command` is one: a Gemini CLI session infers as `unknown`, and
+every provider crate that names the tool, `toolpath-gemini` among them,
+calls it a shell tool.
 
 `NotebookEdit` names its file in `notebook_path`, and its `new_source` is
 the change's `after`. opencode's `delete` gives `operation` `delete`,
@@ -1652,9 +1659,11 @@ every turn and is passed once the session is over.
 - **Unanswered calls.** A call no prompt ever answers holds its turn, and
   that turn's subtree, back until `Settle::Final`; an abandoned retry holds back
   only its own branch, unless one of its calls may move a persistent shell
-  (a Claude Code `Bash` `cd`, a worktree tool): then every turn from a
-  later generation waits too, since its shell-write stamps read where that
-  call left the shell (File changes).
+  (a Claude Code `Bash` `cd` the classifier names a `shell` call, or a
+  worktree tool): then every turn from a later generation waits too, since
+  its shell-write stamps read where that call left the shell (File
+  changes). A `Bash` call the classifier does not name `shell` writes no
+  file and so moves no shell the stamps read.
 - **`path.base` is fixed at the first send.** `PathOpen` carries it and a
   `PathMeta` patch cannot change it, so when a later generation is the
   first to reveal the working directory the stored path has no base where a
