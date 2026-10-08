@@ -182,7 +182,6 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
     let ResolvedInput {
         graph,
         source_harness,
-        fetched,
         ..
     } = resolve_input(&args)?;
     let path = extract_the_only_path(&graph)?;
@@ -207,81 +206,8 @@ pub fn run_with_strategy(args: ResumeArgs, exec: &dyn ExecStrategy) -> Result<()
     );
 
     let session_id = project_into_harness(path, target, &cwd)?;
-    if let Some(fetched) = &fetched {
-        record_pull(fetched, path, target, &session_id, &cwd);
-    }
     let (binary, argv) = invocation_for(target, &session_id, &cwd);
     exec_harness(&binary, &argv, &cwd, exec)
-}
-
-/// Record on the projected session's manifest entry that its path lives
-/// at `fetched`: the pull is where the session's remote begins, so
-/// work done in it later appends to that path. The path's URL needs
-/// its server id, which the document does not carry; one listing of
-/// the graph's paths supplies it. Every failure warns and returns: the
-/// resume is not the worse for a missing record.
-fn record_pull(
-    fetched: &FetchedGraph,
-    path: &TPath,
-    harness: Harness,
-    session_id: &str,
-    cwd: &std::path::Path,
-) {
-    use crate::cmd_pathbase::{credentials_path, graph_paths_list, load_session, remote_path_url};
-
-    let FetchedGraph { base_url, ref_ } = fetched;
-    let token = credentials_path()
-        .ok()
-        .and_then(|p| load_session(&p).ok().flatten())
-        .map(|s| s.token);
-    let listed = graph_paths_list(
-        base_url,
-        token.as_deref(),
-        &ref_.owner,
-        &ref_.repo,
-        &ref_.id,
-    );
-    let server_id = match listed {
-        Ok(paths) => paths
-            .into_iter()
-            .find(|(toolpath_id, _)| *toolpath_id == path.path.id)
-            .map(|(_, id)| id),
-        Err(e) => {
-            eprintln!("warning: remote record not written: {e}");
-            return;
-        }
-    };
-    let Some(server_id) = server_id else {
-        eprintln!(
-            "warning: remote record not written: {}/{}/{} does not list path {}",
-            ref_.owner, ref_.repo, ref_.id, path.path.id
-        );
-        return;
-    };
-    let url = remote_path_url(base_url, &ref_.owner, &ref_.repo, &ref_.id, &server_id);
-
-    let artifact_type = harness.artifact_type();
-    let project = cwd.to_string_lossy();
-    let bundle = crate::harness::HarnessBundle::from_environment();
-    let stamp = crate::sync::sources::source_for(&bundle, artifact_type)
-        .and_then(|source| source.stamp(Some(&project), session_id))
-        .unwrap_or((None, None));
-    let Some(record) = crate::sync::RemoteRecord::of(path, stamp) else {
-        return;
-    };
-    let written = crate::config::config_dir().and_then(|config_dir| {
-        crate::sync::record_remote(
-            &config_dir,
-            artifact_type,
-            session_id,
-            Some(&project),
-            &url,
-            record,
-        )
-    });
-    if let Err(e) = written {
-        eprintln!("warning: remote record not written: {e}");
-    }
 }
 
 use toolpath::v1::{Graph, Path as TPath, PathOrRef};
@@ -375,18 +301,8 @@ pub(crate) fn require_an_agent_turn(path: &TPath) -> Result<()> {
 pub(crate) struct ResolvedInput {
     pub(crate) graph: Graph,
     pub(crate) source_harness: Option<Harness>,
-    /// The graph this run downloaded from Pathbase; `None` for a file,
-    /// a cache id, or a Pathbase ref served from the cache.
-    pub(crate) fetched: Option<FetchedGraph>,
     #[cfg(all(unix, feature = "resume-remote"))]
     pub(crate) json: String,
-}
-
-/// A graph downloaded from a Pathbase server in this run.
-#[derive(Debug)]
-pub(crate) struct FetchedGraph {
-    pub(crate) base_url: String,
-    pub(crate) ref_: crate::derive::PathRef,
 }
 
 /// Resolve the user-supplied `<input>` argument into a
@@ -418,7 +334,6 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
         Shape::CacheId(raw)
     };
 
-    let mut fetched = None;
     let (json, source) = match shape {
         Shape::PathbaseUrl(u) | Shape::PathbaseShorthand(u) => {
             // Probe the local cache before going to the network. The cache
@@ -426,7 +341,7 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
             // we can compute it without fetching. `--force` skips the probe
             // and re-fetches; `--no-cache` skips both the probe AND the
             // post-fetch write (still useful for ephemeral environments).
-            let (base_url, ref_) = crate::derive::pathbase_ref_server(u, args.url.as_deref())?;
+            let (_, ref_) = crate::derive::parse_pathbase_ref(u, args.url.as_deref())?;
             let cache_id = crate::cache::pathbase_cache_id(&ref_.owner, &ref_.repo, &ref_.id);
             if !args.force
                 && !args.no_cache
@@ -438,7 +353,7 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
                 eprintln!("Resolved {} → {} (cached)", raw, cache_id);
                 (json, format!("cache entry {}", cache_path.display()))
             } else {
-                let derived = crate::derive::pathbase_fetch(&base_url, &ref_)?;
+                let derived = crate::derive::pathbase_fetch_to_doc(u, args.url.as_deref())?;
                 if !args.no_cache {
                     // force=true here: we either short-circuited above
                     // (cache miss) or the user explicitly passed --force,
@@ -450,7 +365,6 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
                     .doc
                     .to_json()
                     .context("serialize the fetched document")?;
-                fetched = Some(FetchedGraph { base_url, ref_ });
                 (json, "fetched from Pathbase".to_string())
             }
         }
@@ -478,7 +392,6 @@ pub(crate) fn resolve_input(args: &ResumeArgs) -> Result<ResolvedInput> {
     Ok(ResolvedInput {
         graph,
         source_harness,
-        fetched,
         #[cfg(all(unix, feature = "resume-remote"))]
         json,
     })
@@ -838,94 +751,6 @@ mod tests {
     }
 
     use toolpath::v1::{Graph, PathMeta, PathOrRef};
-
-    /// A resume from a Pathbase URL records, on the projected session's
-    /// manifest entry, the URL of the path it pulled: the graph's path
-    /// listing supplies the server id the document lacks.
-    #[test]
-    fn resume_from_pathbase_records_the_pulled_path() {
-        use crate::cmd_pathbase::tests::{MockServer, graph_paths_json};
-        let _env = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let home = tempfile::tempdir().unwrap();
-        let claude_dir = home.path().join(".claude");
-        let _vars = ScopedVars::set(&[
-            ("HOME", home.path()),
-            ("CLAUDE_CONFIG_DIR", &claude_dir),
-            (
-                crate::config::CONFIG_DIR_ENV,
-                &home.path().join(".toolpath"),
-            ),
-        ]);
-        let _path_guard = ScopedPathForResume::with_binaries(&["claude"]);
-        let cwd = tempfile::tempdir().unwrap();
-        let cwd_path = std::fs::canonicalize(cwd.path()).unwrap();
-
-        let mut path = make_convo_path_for_resume("claude-code://resume-test-session");
-        path.steps[0].step.actor = "agent:claude-code".to_string();
-        let body = toolpath::v1::Graph::from_path(path.clone())
-            .to_json()
-            .unwrap();
-        let server_path_id = "22222222-2222-2222-2222-222222222222";
-        let server = MockServer::start_sequence(vec![
-            ("HTTP/1.1 200 OK", body),
-            (
-                "HTTP/1.1 200 OK",
-                graph_paths_json(&[(&path.path.id, server_path_id)]),
-            ),
-        ]);
-        let base = server.base();
-        let graph_id = "fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537";
-
-        let args = ResumeArgs {
-            input: Some(format!("{base}/u/alex/repos/pathstash/graphs/{graph_id}")),
-            cwd: Some(cwd.path().to_path_buf()),
-            harness: Some(Harness::Claude),
-            ..Default::default()
-        };
-        let recorder = RecordingExec::default();
-        run_with_strategy(args, &recorder).unwrap();
-        let session_id = recorder.captured().args[1].clone();
-
-        let manifest = crate::sync::load_manifest(&home.path().join(".toolpath")).unwrap();
-        let rec = &manifest["claude"][&session_id];
-        assert_eq!(rec.path.as_deref(), Some(cwd_path.to_str().unwrap()));
-        assert_eq!(rec.cache_id, None, "the next sync materializes it");
-        let remote = &rec.remotes
-            [&format!("{base}/u/alex/pathstash/graphs/{graph_id}/paths/{server_path_id}")];
-        assert_eq!(remote.steps, 1);
-        assert_eq!(remote.last_step, "s1");
-        assert_eq!(remote.head, "s1");
-        let bundle = crate::harness::HarnessBundle::from_environment();
-        let stamp =
-            crate::sync::sources::source_for(&bundle, crate::artifact::ArtifactType::Claude)
-                .unwrap()
-                .stamp(Some(cwd_path.to_str().unwrap()), &session_id)
-                .unwrap();
-        assert!(stamp.1.is_some_and(|size| size > 0), "{stamp:?}");
-        assert_eq!(remote.source_stamp, crate::sync::stamp_string(stamp));
-
-        let lines: Vec<String> = server
-            .requests()
-            .into_iter()
-            .map(|r| {
-                String::from_utf8(r)
-                    .unwrap()
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .to_string()
-            })
-            .collect();
-        assert_eq!(
-            lines,
-            [
-                format!("GET /api/v1/u/alex/repos/pathstash/graphs/{graph_id}/download HTTP/1.1"),
-                format!("GET /api/v1/u/alex/repos/pathstash/graphs/{graph_id}/paths HTTP/1.1"),
-            ]
-        );
-    }
 
     fn make_step_with_actor(id: &str, actor: &str) -> toolpath::v1::Step {
         toolpath::v1::Step::new(id, actor, "2026-01-01T00:00:00Z")

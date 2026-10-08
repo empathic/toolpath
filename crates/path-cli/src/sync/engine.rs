@@ -46,7 +46,7 @@ pub(crate) struct SyncRecord {
     pub(crate) synced_at: DateTime<Utc>,
     /// Where this session's path lives remotely, keyed by the path's
     /// own URL (see [`RemoteRecord`]). Empty when it was never pushed
-    /// to or pulled from a remote.
+    /// to a remote.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) remotes: BTreeMap<String, RemoteRecord>,
 }
@@ -68,7 +68,7 @@ pub(crate) struct RemoteRecord {
     /// The head the remote was last told.
     pub(crate) head: String,
     /// The local source's stamp ([`stamp_string`]) when those steps
-    /// were sent or received.
+    /// were sent.
     pub(crate) source_stamp: String,
 }
 
@@ -103,9 +103,8 @@ pub(crate) fn stamp_string((modified, size): sources::Stamp) -> String {
 
 /// Write `record` under `url` on the session's manifest record,
 /// replacing any earlier record at that URL. A session the manifest
-/// does not know yet (a `--no-cache` share, a session `path resume`
-/// just projected) gets a known-but-uncached record at `path`, which
-/// the next sync materializes.
+/// does not know yet (a `--no-cache` share) gets a known-but-uncached
+/// record at `path`, which the next sync materializes.
 pub(crate) fn record_remote(
     config_dir: &Path,
     artifact_type: ArtifactType,
