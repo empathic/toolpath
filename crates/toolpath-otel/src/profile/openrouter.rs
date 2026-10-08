@@ -266,8 +266,12 @@ fn prompt_whole(raw: &str) -> Option<Vec<Message>> {
 
 /// The prompt's messages: through the read's memos, else
 /// [`prompt_whole`]. `None` when the prompt does not parse.
+#[cfg(test)]
 pub(crate) fn prompt_messages<'a>(raw: &'a str, cx: &mut ReadCx<'a>) -> Option<Vec<Message>> {
-    cx.prompt(raw).or_else(|| prompt_whole(raw))
+    match cx.prompt(raw) {
+        Some(tail) => Some(cx.messages(tail)),
+        None => prompt_whole(raw),
+    }
 }
 
 fn parse_generation<'a>(
@@ -279,10 +283,15 @@ fn parse_generation<'a>(
     // Privacy Mode: either side may be absent (a skeleton on that side).
     let prompt_raw = payload(a, "gen_ai.prompt")?;
     let completion_raw = payload(a, "gen_ai.completion")?;
-    let messages = match prompt_raw {
-        Some(raw) => prompt_messages(raw, cx).ok_or(SkipReason::Truncated)?,
-        None => Vec::new(),
-    };
+    // A memo-read prompt is handed out by the walk once the read is done
+    // (`cx.tail`), so the read's prompts share their messages.
+    let mut messages = Vec::new();
+    if let Some(raw) = prompt_raw {
+        match cx.prompt(raw) {
+            Some(tail) => cx.tail = Some(tail),
+            None => messages = prompt_whole(raw).ok_or(SkipReason::Truncated)?,
+        }
+    }
     // An absent completion reads as `null`, so every field below defaults.
     let parts = match completion_raw {
         Some(raw) => completion_members(raw, cx)
@@ -398,7 +407,7 @@ fn parse_generation<'a>(
         client_key: a
             .str("trace.metadata.openrouter.api_key_name")
             .map(str::to_string),
-        messages,
+        messages: messages.into(),
         completion,
         usage: Usage {
             input_tokens: a.u64("gen_ai.usage.input_tokens"),

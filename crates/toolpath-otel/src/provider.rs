@@ -24,9 +24,9 @@ pub const PROVIDER: &str = "otel";
 #[cfg(test)]
 pub fn session_to_view(session: &Session) -> ConversationView {
     let graph = crate::stitch::stitch(session);
-    let harness = crate::harness::infer_harness(&crate::harness::signals(session));
-    let category =
-        |name: &str| crate::tests::classifier::provider_tool_category(harness.as_str(), name);
+    let classifier = crate::ToolClassifier::new(crate::tests::classifier::provider_tool_category);
+    let harness = crate::stitch::settled_harness(session, true, Some(&classifier));
+    let category = crate::derive::categories(Some(&classifier), harness);
     view_from_graph(
         session,
         &graph,
@@ -333,7 +333,8 @@ mod tests {
                     content: json!("hi"),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             completion: Completion {
                 tool_calls: vec![ToolCall {
                     id: "c1".into(),
@@ -376,7 +377,8 @@ mod tests {
                 role: "user".into(),
                 content: json!("edit"),
                 ..Default::default()
-            }],
+            }]
+            .into(),
             completion: Completion {
                 tool_calls: vec![
                     call(

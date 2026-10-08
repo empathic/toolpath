@@ -32,6 +32,19 @@ impl SourceHarness {
             SourceHarness::Unknown => "unknown",
         }
     }
+
+    /// Exact inverse of [`SourceHarness::as_str`].
+    pub fn from_name(name: &str) -> Option<SourceHarness> {
+        [
+            Self::ClaudeCode,
+            Self::Codex,
+            Self::Opencode,
+            Self::Pi,
+            Self::Unknown,
+        ]
+        .into_iter()
+        .find(|h| h.as_str() == name)
+    }
 }
 
 /// What harness inference looks at.
@@ -48,15 +61,6 @@ pub struct HarnessSignals<'a> {
 
 pub fn signals(session: &Session) -> HarnessSignals<'_> {
     let gens = &session.generations;
-    let system_text = gens
-        .first()
-        .and_then(|g| g.messages.first())
-        .filter(|m| is_system_like(&m.role))
-        .map(|m| match &m.content {
-            Value::String(s) => Cow::Borrowed(s.as_str()),
-            other => Cow::Owned(content_text(other)),
-        })
-        .unwrap_or_default();
     HarnessSignals {
         session_id: session.session_id.as_deref(),
         request_session_id: gens.iter().find_map(|g| g.request_session_id.as_deref()),
@@ -64,13 +68,57 @@ pub fn signals(session: &Session) -> HarnessSignals<'_> {
             .iter()
             .flat_map(|g| &g.messages)
             .any(|m| m.role == "developer"),
-        system_text,
+        system_text: system_text(session),
         tool_names: gens
             .iter()
             .flat_map(|g| &g.completion.tool_calls)
             .map(|c| c.function.name.as_str())
             .collect(),
     }
+}
+
+fn system_text(session: &Session) -> Cow<'_, str> {
+    session
+        .generations
+        .first()
+        .and_then(|g| g.messages.first())
+        .filter(|m| is_system_like(&m.role))
+        .map(|m| match &m.content {
+            Value::String(s) => Cow::Borrowed(s.as_str()),
+            other => Cow::Owned(content_text(other)),
+        })
+        .unwrap_or_default()
+}
+
+/// `infer_harness(&signals(..))` of every non-empty prefix of
+/// `session.generations`, shortest first, in one pass.
+pub fn prefix_harnesses(session: &Session) -> Vec<SourceHarness> {
+    let mut s = HarnessSignals {
+        session_id: session.session_id.as_deref(),
+        system_text: system_text(session),
+        ..Default::default()
+    };
+    let mut harness = None;
+    let mut out = Vec::with_capacity(session.generations.len());
+    for g in &session.generations {
+        let mut changed = harness.is_none();
+        if s.request_session_id.is_none() && g.request_session_id.is_some() {
+            s.request_session_id = g.request_session_id.as_deref();
+            changed = true;
+        }
+        if !s.has_developer && g.messages.iter().any(|m| m.role == "developer") {
+            s.has_developer = true;
+            changed = true;
+        }
+        for c in &g.completion.tool_calls {
+            changed |= s.tool_names.insert(c.function.name.as_str());
+        }
+        if changed {
+            harness = Some(infer_harness(&s));
+        }
+        out.extend(harness);
+    }
+    out
 }
 
 fn uuid_version(s: &str) -> Option<char> {
@@ -225,7 +273,8 @@ mod tests {
                     content: json!("hi"),
                     ..Default::default()
                 },
-            ],
+            ]
+            .into(),
             ..Default::default()
         };
         let s = Session::new("otel-cluster:0000000000000000".into(), None, vec![g]);

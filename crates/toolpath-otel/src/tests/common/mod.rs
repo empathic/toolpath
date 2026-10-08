@@ -122,3 +122,46 @@ pub fn check_snapshot_at(path: &std::path::Path, actual: &Value, bless: bool) {
         }
     }
 }
+
+/// Drops the OpenRouter `session.id` attribute from every span.
+pub fn without_session_ids(values: &mut [Value]) {
+    for v in values {
+        for rs in v["resourceSpans"].as_array_mut().into_iter().flatten() {
+            for ss in rs["scopeSpans"].as_array_mut().into_iter().flatten() {
+                for span in ss["spans"].as_array_mut().into_iter().flatten() {
+                    if let Some(attrs) = span["attributes"].as_array_mut() {
+                        attrs.retain(|a| a["key"] != "session.id");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sets every echoed assistant message's reasoning `index` in `delivery`'s
+/// prompts to `index`.
+pub fn respell_reasoning_index(delivery: &mut Value, index: &Value) {
+    let spans = delivery["resourceSpans"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|rs| rs["scopeSpans"].as_array_mut().unwrap())
+        .flat_map(|ss| ss["spans"].as_array_mut().unwrap());
+    for span in spans {
+        for a in span["attributes"].as_array_mut().unwrap() {
+            if a["key"] != "gen_ai.prompt" {
+                continue;
+            }
+            let mut prompt: Value =
+                serde_json::from_str(a["value"]["stringValue"].as_str().unwrap()).unwrap();
+            for m in prompt["messages"].as_array_mut().unwrap() {
+                if m["role"] == "assistant" {
+                    for r in m["reasoning_details"].as_array_mut().unwrap() {
+                        r["index"] = index.clone();
+                    }
+                }
+            }
+            a["value"]["stringValue"] = Value::String(prompt.to_string());
+        }
+    }
+}

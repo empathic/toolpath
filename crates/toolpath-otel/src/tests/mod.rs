@@ -3,7 +3,7 @@
 mod captures;
 mod captures_event;
 pub(crate) mod classifier;
-mod common;
+pub(crate) mod common;
 mod derive;
 mod derived_keys;
 mod equivalence;
@@ -17,6 +17,7 @@ pub(crate) mod otlp_oracle;
 mod privacy_mode;
 mod provider;
 mod regression;
+mod regressions_317;
 mod resolution;
 mod robustness;
 mod seam;

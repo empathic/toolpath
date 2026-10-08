@@ -54,16 +54,26 @@ println!("skipped {}", derived.skipped.total());
 | `derive(sessions, config)` | Main entry point. One session -> single-path Graph, several -> one path each |
 | `derive_path(requests, config)` | Derive a Path from the request bodies of one session |
 | `derive_graph(sessions, config)` | Derive a Graph, one path per session; skip counts are summed |
+| `read_generations(requests, profile)` | Read request bodies (any sessions, any grouping) into a `GenerationBatch`: one `GenerationRecord` per model call and the messages their prompts name |
+| `derive_path_from_records(records, messages, config)` | Derive a Path from one session's records, as `derive_path` does from the bodies they were read from |
+| `derive_jsonl(records, messages, config, remote, settle, limits)` | Incremental send from records: the request bodies (`Vec<Body>`, split within `BatchLimits`) that bring a stored path up to the session's settled turns (`Settle::Settled`), or all of them (`Settle::Final`) |
+| `GenerationRecord` | One model call, serde-serializable, format `GenerationRecord::FORMAT`; names its prompt by the hash of its last message. Accessors: `generation_id`, `session_id`, `start_ns`, `prompt`, `is_truncated`, `format` |
+| `StoredMessage`, `MessageHash` | A prompt message linked to the one before it (`parent`), stored once under its `hash()` |
+| `GenerationBatch` | `records` and `messages` (`BTreeMap<MessageHash, StoredMessage>`) |
+| `Remote` | What the stored path holds: `opened`, `fed` (its `meta.otel.generation_ids`), `stored` (any subset of its step ids), `harness` (its `meta.otel.harness`), `base` (a continuation's frozen step ids) |
+| `Settle` | `Settled` (default: only turns no later call can change) or `Final` (the session is over) |
+| `BatchLimits`, `Body`, `DeltaError` | Re-exported from `toolpath::v1::jsonl` |
 | `DeriveConfig` | `profile`, an optional graph `title`, the shared `convo` derivation options (a `toolpath_convo::DeriveConfig`: toolpath-convo is a public dependency, so a breaking toolpath-convo release is a breaking release here), and `tool_category`, the caller's tool classifier (`with_tool_category(f)` sets it) |
 | `ToolClassifier` | Wraps `Fn(harness, tool_name) -> Option<ToolCategory>`; `harness` is the inferred harness id (`claude-code`, `codex`, `opencode`, `pi`, `unknown`) |
 | `ProfileSelection` | `Auto` (default: `openrouter`, then `semconv`), `OpenRouter`, `Semconv`, `OpenInference` |
 | `Derived<T>` | The derived document (`output`) and `skipped: SkipCounts` |
 | `SkipCounts` | Telemetry read but not derived, by reason, and `total()` |
-| `OtelError` | `NotOtlp`, `NoGenerations { skipped }`, `MixedSessions(ids)` |
+| `OtelError` | `NotOtlp`, `NoGenerations { skipped }`, `MixedSessions(ids)`, `FedGenerationMissing(id)`, `UnknownHarness(name)`, `MessageMissing(hash)`, `Delta(DeltaError)` |
 
 ## Sessions
 
-The caller groups requests into sessions; request order does not matter.
+The caller groups requests, or records by `GenerationRecord::session_id`,
+into sessions; order does not matter.
 Every generation that carries a client session id (`session.id`, or
 `gen_ai.conversation.id` for `semconv`) must carry the same one, or the call
 returns `OtelError::MixedSessions`. Generations without an id belong to the
@@ -79,6 +89,164 @@ as that harness's own deriver does. `DeriveConfig::default()` has no
 classifier, so no tool call is categorized: no sub-agent is recognized
 (that needs `Delegation`) and no file change is read from a tool call (that
 needs `FileWrite`).
+
+## Generation records
+
+A store that keeps a session as it arrives keeps records, not request
+bodies. `read_generations` reads each delivery once into one
+`GenerationRecord` per model call and the `StoredMessage`s its prompt
+names; the skip counts come from this read. A record serializes to a few
+hundred bytes: ids, timing, completion, usage, cost, models, and the hash of
+its last prompt message. Messages link to the one before them, so each
+distinct prompt prefix is stored once and storage grows with the session's
+new messages, not with the full history every call repeats (1,000
+synthetic full-history calls: 2.26 GB of OTLP, 917 MB of repeated prompt
+JSON, 3.1 MB of records plus 2.2 MB of messages).
+
+Deriving from records gives byte for byte what deriving from the bodies
+does, after a JSON round trip too, and every derived id depends only on
+record and message content. The one exception: message hashes are over
+RFC 8785 (JCS), which spells a number by its value, so a message repeated
+with `1.0` for `1` (or `-0.0` for `0`) shares the first spelling's hash and
+a store keeps that spelling. The read parses each distinct message once
+and shares prompts that extend each other, and stitching matches prompt
+prefixes by hash, so a derive costs the session's new messages rather than
+its repeated history. Reading one delivery at a time is the same as
+reading them all at once as long as no call's telemetry spans two
+deliveries (OpenRouter Broadcast sends each call whole).
+
+## Incremental sends
+
+`derive_jsonl` serves a session that is still growing, as appends to a
+Pathbase path (the streaming JSONL routes). It keeps no state: everything it
+needs is the session's records and what it reads back from the stored path.
+
+```rust,no_run
+use std::collections::{BTreeMap, HashSet};
+use toolpath_otel::{
+    BatchLimits, DeriveConfig, GenerationRecord, MessageHash, ProfileSelection, Remote, Settle,
+    StoredMessage, derive_jsonl, read_generations,
+};
+
+# let delivery: serde_json::Value = serde_json::json!({"resourceSpans": []});
+# let mut records: Vec<GenerationRecord> = Vec::new();
+# let mut messages: BTreeMap<MessageHash, StoredMessage> = BTreeMap::new();
+// At ingest: read the delivery once, append its records (in arrival
+// order), add the messages the store lacks (never replace one: two
+// spellings of a number share a hash).
+let read = read_generations(&[delivery], ProfileSelection::Auto)?;
+records.extend(read.output.records);
+for (hash, message) in read.output.messages {
+    messages.entry(hash).or_insert(message);
+}
+
+// From the stored path: does it exist, its meta.otel.generation_ids,
+// the step ids known to be stored (any subset; empty resends everything)
+// and its meta.otel.harness.
+let remote = Remote {
+    opened: true,
+    fed: vec!["gen-1".into(), "gen-2".into()],
+    stored: HashSet::new(),
+    harness: Some("claude-code".into()),
+    base: HashSet::new(),
+};
+let limits = BatchLimits::new(Some(4 << 20), Some(1000));
+let sent = derive_jsonl(
+    &records,
+    |h| messages.get(h),
+    &DeriveConfig::default(),
+    &remote,
+    Settle::Settled,
+    limits,
+)?;
+for body in &sent.output {
+    // One append per body, in order: POST .../paths (opening) or .../steps.
+    let _ndjson: &str = &body.text;
+    let _sent_now: &[String] = &body.step_ids;
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+- **What the caller passes.** All the session's records so far, in the
+  order they arrived, and a lookup of their messages; `opened`, whether the
+  path exists; `fed`, the stored path's
+  `meta.otel.generation_ids` (empty before the first send); `stored`, step
+  ids the path holds. Any subset of `stored` is correct: a step left out is
+  sent again, identically, and the store keeps one copy. An empty `stored`
+  (resend everything settled) is correct until Pathbase can list a path's
+  step ids. Claiming a step the path lacks is not. The lookup must return
+  the message stored under exactly the hash asked for; it is not checked.
+  `config.tool_category` categorizes tools and decides delegation calls for
+  every derivation of the call; pass the same classifier on every send of
+  a session, or a stored step compares as changed (`Amended`).
+- **One copy of each call.** Of two records of one call (with `Auto`, an
+  app-side `semconv` span and OpenRouter's Broadcast root share its
+  `gen-…` id), `derive_jsonl` derives the first received and counts the
+  other as `duplicate`, so a copy that arrives later never changes a sent
+  step. `derive_path` and `derive_path_from_records` keep the
+  better-ranked profile's copy, so the stream reads back to them only when
+  that copy arrives first. With `ProfileSelection::OpenRouter` the case
+  cannot arise.
+- **What the caller stores.** The records and messages, nothing else. Each
+  body is one append; send them in order. No bodies means no turn has
+  settled yet. A call costs a derive of the records, and with `stored`
+  given a second derive of the generations already sent, to check that no
+  stored step changed: about 0.21 s of CPU for the 1,000th call of a
+  synthetic session of one linear full-history conversation (0.74 s for
+  the 2,000th). Deciding the harness stitches about `n log n`
+  generations in all, whatever the session's shape: 22 ms per call for
+  1,000 requests that never share history (which never settle).
+- **`PathOpen` or `PathMeta`.** The first body starts with a `PathOpen` when
+  `opened` is false, else with a `PathMeta` patch. Either carries the new
+  feed order, so it commits with the first steps.
+- **`Head` per body.** Every body ends with a `Head` naming a step stored by
+  then: the latest settled main-line step so far, and the real head on the
+  last body. `toolpath`'s batcher splits the steps within `limits` (bytes
+  and steps per body; a step is never split).
+- **Settled turns only.** A turn goes out once no later request can change
+  it, its marks or its parents; `Settle::Final` sends the rest once the
+  session is over. Requests that arrive out of start order only append, and a late
+  sub-agent never takes the head.
+- **What waits.** Besides turns whose calls or echo are still pending:
+  everything outside a tree a missing continuation started until the main
+  line is decided (the first tree's second produced turn), a
+  side request until `Settle::Final`, and a delegating thread's turns after a
+  delegation call (one the classifier names `Delegation`, such as Claude
+  Code's `Task`/`Agent`) until that sub-agent's answer is found, because the
+  turn that receives it gains an extra parent. A sub-agent's turns go out
+  as soon as they settle, marked with their call.
+- **Harness fixed at the first settled turn.** The harness (tool
+  categories, delegation calls, `producer.name`) is inferred from the
+  generations that settle the session's first turn and kept for the rest
+  of it: the first send stores it as `meta.otel.harness`, and a later call
+  passes it back as `Remote::harness` (when absent the feed order decides
+  it again, with the same answer except after a `Settle::Final` send before
+  any turn settled followed by a late arrival; always pass the stored
+  harness). `derive_path` applies the same rule, so
+  the last send and the one-shot derivation agree.
+- **Continuing a frozen path.** Pass the frozen path's step ids as `base` on
+  every send of the continuation: the first with the frozen path's `fed` and
+  `opened` false, the next ones with the continuation's own `fed`, `stored`
+  and `opened` true. The bodies open the new path once and hold only new
+  steps; a `base` step is never sent and never the `Head`, only a parent of
+  the new steps that continue from it, wherever it sits (a late sub-agent
+  forks off old history). The first send passes the frozen path's
+  `meta.otel.harness` too: the continuation keeps it, so the session's
+  paths agree on tool categories and `producer.name`, unless it is
+  `unknown`, which the whole feed may refine. Pathbase anchoring a
+  continuation root on any frozen step is an open point.
+- **Resumed sub-agents.** A sub-agent's answer goes out once the turn that
+  receives it is seen. A resumed sub-agent (Claude Code `SendMessage`,
+  Codex `send_message`) echoes the answer in its next request; that echo
+  is left off the answer's step when it comes later in feed order, so the
+  sent step never changes.
+- **`Amended`: a sent step would change.** A step sent unsettled by a
+  `Settle::Final` call can later settle differently. That is a mutation, never an
+  append: record it through Pathbase's mutation log (planned), never by
+  sending or copying the step again. `derive_jsonl` reports
+  `OtelError::Delta(DeltaError::Amended)` for a step listed in `stored`; a
+  step left out cannot be checked, so its changed version goes out and
+  Pathbase refuses the body with nothing written.
 
 ## Profiles
 

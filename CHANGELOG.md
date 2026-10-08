@@ -2,6 +2,102 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-otel 0.1.1 — 2026-10-01
+
+- **Generation records.** `read_generations(requests, profile)` reads
+  request bodies (any sessions, any grouping, typically one delivery) into
+  a `GenerationBatch`: one serde-serializable `GenerationRecord` per model
+  call (format `GenerationRecord::FORMAT` = 1; a truncated call is a
+  marker record, with or without a session id) and the `StoredMessage`s
+  their prompts name.
+  A record names its prompt by the `MessageHash` of its last message, and
+  each message names the one before it, so a store keeps every distinct
+  prompt prefix once and grows with the session's new messages instead of
+  the full history each OpenRouter request repeats (1,000 synthetic calls:
+  2.26 GB of OTLP, 5.3 MB of records and messages). The skip counts come
+  from this read. `derive_path_from_records(records, messages, config)`
+  derives what `derive_path` derives from the same bodies, after a JSON
+  round trip too; derived ids depend only on record and message content.
+  A message the lookup lacks is `OtelError::MessageMissing`. Message
+  hashes are over RFC 8785 (JCS), the crate's one canonical form, so `1`
+  and `1.0` (or `0` and `-0.0`) in otherwise equal messages share a hash
+  and a store keeps the first spelling.
+- **Faster reads and derives.** The read parses each distinct message text
+  once and shares prompts that extend each other instead of copying every
+  history; records stitch by message hash. 1,000 synthetic calls of one
+  linear full-history conversation: one-shot `derive_path` from the bodies
+  1.9 s → about 0.2 s with peak heap 3.4 GB → 0.25 GB; from records
+  0.15 s → 0.06 s (measured after the settle search below).
+- **Stateless incremental sends.** `derive_jsonl(records, messages, config,
+  remote, settle, limits)` derives from the session's records (the
+  1,000th call of that synthetic session costs about 0.21 s of CPU from
+  pre-read records) and
+  returns the request bodies (`Vec<Body>`, split by `toolpath`'s batcher
+  within `BatchLimits`) that bring a stored
+  path up to a growing session's settled turns, as appends to Pathbase's
+  streaming routes (#486). The caller keeps no state: `Remote { opened, fed,
+  stored, harness, base }` is read back from the store, where `fed` is the stored
+  path's `meta.otel.generation_ids`, `harness` its `meta.otel.harness` and
+  `stored` may be any subset of its step ids
+  (a step left out is resent identically, which the store skips). The first
+  body starts with a `PathOpen` (`opened` false) or a `PathMeta` patch, and
+  either carries the new feed order, so it commits with the first steps;
+  every body ends with a `Head` naming a stored step (the latest settled
+  main-line step so far, the real head last). Generations are derived in
+  feed order (`fed` first, then start order), so out-of-order arrivals
+  only append (a late call that repeats a stored turn is a new unplaced
+  step); the head follows start order, so a late sub-agent never
+  takes it; only turns on the settled frontier are sent under
+  `Settle::Settled`, and `Settle::Final` sends the rest once the session is
+  over.
+  A turn settles only once its marks and parents are known too: unmarked
+  turns outside a tree a missing continuation started wait until the main
+  line is decided, side requests wait for
+  `Settle::Final`, and a delegating thread's turns after a delegation call
+  (a tool the caller's classifier, `DeriveConfig::tool_category`, names
+  `Delegation`) wait until the sub-agent's answer is found (the receiving
+  turn gains an extra parent); a turn goes out only after all its parents,
+  extra parents included. The harness is decided by the generations that settle
+  the session's first turn and frozen for the rest of it: stored as
+  `meta.otel.harness` and passed back as `Remote::harness`, whose unknown
+  name is `OtelError::UnknownHarness`. `derive_path` decides the harness
+  the same way, so its output (`meta.otel.harness`, `producer.name` and
+  tool categories) can differ from 0.1.0's for a session whose later calls
+  point elsewhere. Finding the settling prefix searches each run of one
+  harness by doubling and bisecting, about `n log n` generations stitched
+  in all, so a session that never settles (requests that never share
+  history) costs about two stitches, not one per prefix: 1,000 such
+  requests, 2.6 s → 22 ms per `derive_jsonl` call and 3.7 s → 64 ms for
+  `derive_path`.
+  A continuation of a frozen path passes the frozen step ids as `base` on
+  every send (the first with the frozen path's `fed` and `opened` false):
+  the bodies open the continuation path once, hold only the new steps, never
+  send or head a frozen id, and their roots name the frozen steps they
+  continue from, so a continuation takes any number of sends. It keeps the
+  frozen path's harness unless that was `unknown`, which its first send
+  refines from the whole feed. A sent step that would change is
+  `OtelError::Delta(DeltaError::Amended)`, a mutation for the store's
+  mutation log, never a resend; a `fed` id the records lack is
+  `OtelError::FedGenerationMissing`. A session without a client session
+  id is keyed by its first fed generation. `OtelError::MixedSessions`
+  works as for `derive_path`; `Derived::skipped` counts only duplicate
+  generation ids among the records. A meta-only change (a truncation
+  marker arriving after the `Settle::Final` send) still goes out, as a
+  body with no steps. `read_generations` counts per call: a span
+  redelivered across deliveries is `unclaimed` once in each read.
+- **Duplicate copies of a call.** `derive_jsonl` keeps the first record of
+  a generation id (records in arrival order), so a copy received later,
+  another profile's under `ProfileSelection::Auto`, never changes a sent
+  step; the one-shot derives keep the better-ranked profile's copy, so a
+  stream reads back to them only when that copy arrives first.
+- **Resumed sub-agents.** A merged sub-agent answer settles when its merge
+  is seen; an echo a later resumed request carries (Claude Code
+  `SendMessage`, Codex `send_message`) is left off it, in the stream and in
+  `derive_path`, so the sent step never changes.
+- **Re-exports.** `BatchLimits`, `Body` and `DeltaError` from
+  `toolpath::v1::jsonl`, so a caller needs no `toolpath` dependency of its
+  own; `Settle` names the call's mode.
+
 ## toolpath 0.7.2 — 2026-10-01
 
 Adds incremental JSONL emission: `toolpath::v1::jsonl::delta_lines(path,

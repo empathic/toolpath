@@ -31,10 +31,29 @@ pub mod otlp {
 use serde_json::Value;
 use toolpath::v1::Path;
 
+/// The provider crates' classifiers as one [`crate::ToolClassifier`].
+pub fn classifier() -> crate::ToolClassifier {
+    crate::ToolClassifier::new(super::classifier::provider_tool_category)
+}
+
+/// [`classifier`], shared.
+pub fn tools() -> Option<&'static crate::ToolClassifier> {
+    static TOOLS: std::sync::LazyLock<crate::ToolClassifier> = std::sync::LazyLock::new(classifier);
+    Some(&TOOLS)
+}
+
+/// The default config, tool categories from the provider crates'
+/// classifiers.
+pub fn classified() -> crate::DeriveConfig {
+    crate::DeriveConfig {
+        tool_category: Some(classifier()),
+        ..Default::default()
+    }
+}
+
 /// The session's path, tool categories from the provider crates' classifiers.
 pub fn derive_path(session: &Session, config: &DeriveConfig) -> Path {
-    let classifier = crate::ToolClassifier::new(super::classifier::provider_tool_category);
-    crate::derive::derive_session(session, config, Some(&classifier))
+    crate::derive::derive_session(session, config, Some(&classifier()))
 }
 
 /// One session per client session id, in first-seen start order; every

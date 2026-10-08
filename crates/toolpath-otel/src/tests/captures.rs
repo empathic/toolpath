@@ -181,7 +181,7 @@ fn server_side_state_chains_linearly_and_equals_a_full_restatement() {
     }
     // Restate each Delta as Full: previous history + previous completion + new non-system messages.
     let mut full = Vec::new();
-    let mut hist = s.generations[0].messages.clone();
+    let mut hist = s.generations[0].messages.to_vec();
     for (i, g) in s.generations.iter().enumerate() {
         let mut f = g.clone();
         if i > 0 {
@@ -190,7 +190,7 @@ fn server_side_state_chains_linearly_and_equals_a_full_restatement() {
             ));
             hist.extend(g.messages.iter().filter(|m| m.role != "system").cloned());
         }
-        f.messages = hist.clone();
+        f.messages = hist.clone().into();
         f.history = History::Full;
         f.continues = None;
         full.push(f);
@@ -340,7 +340,8 @@ fn reasoning_is_retained_and_kept_out_of_the_key() {
             .iter()
             .find(|n| n.producer == Some(0))
             .unwrap()
-            .echoed
+            .echoed_by
+            .is_some()
     );
     assert!(exp["signature_sent_in_history"].as_bool().unwrap());
     let text = std::fs::read_to_string(semconv_dir("anthropic").join("traces.json")).unwrap();
