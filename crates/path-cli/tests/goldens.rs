@@ -70,6 +70,14 @@ const CASES: &[Case] = &[
         source: Source::Claude,
         target_args: &["p", "export", "codex", "-i", "{ir}", "-o", "{out}"],
     },
+    // Captured once by Bobby with scripts/capture-claude-session.sh (a real `claude -p` run in a
+    // temp HOME); skipped while goldens/claude-session/input.jsonl is absent.
+    Case {
+        name: "claude-session-to-codex",
+        fixture: "goldens/claude-session/input.jsonl",
+        source: Source::Claude,
+        target_args: &["p", "export", "codex", "-i", "{ir}", "-o", "{out}"],
+    },
     // Synthetic (hand-written, not captured) but it carries a compaction boundary. It derives only
     // because the file is placed as `<sessionId>.jsonl`: the adapter matches the file stem to the
     // in-file sessionId, and a mismatched name gives "no documents produced" (goldens-baseline).
@@ -355,19 +363,31 @@ fn goldens() {
     let mut codex_to_claude: Option<Vec<u8>> = None;
 
     for case in CASES {
+        // A case whose input is captured by hand (scripts/capture-claude-session.sh) is skipped
+        // until that input is committed.
+        if !repo_root().join(case.fixture).exists() && case.fixture.starts_with("goldens/") {
+            eprintln!("skipping {}: {} not captured yet", case.name, case.fixture);
+            continue;
+        }
         let run = run_case(case);
         let golden = dir.join(case.name).join("output.jsonl");
+        // A captured input already lives under goldens/; every other fixture is copied beside its output.
+        let copy_input = !case.fixture.starts_with("goldens/");
         let input_golden = dir.join(case.name).join("input.jsonl");
         if updating() {
             write(&golden, &run.output);
-            write(&input_golden, &run.input);
+            if copy_input {
+                write(&input_golden, &run.input);
+            }
         } else {
             check_bytes(&format!("{} output", case.name), &golden, &run.output);
-            check_bytes(
-                &format!("{} input (fixture drifted)", case.name),
-                &input_golden,
-                &run.input,
-            );
+            if copy_input {
+                check_bytes(
+                    &format!("{} input (fixture drifted)", case.name),
+                    &input_golden,
+                    &run.input,
+                );
+            }
         }
         if case.name == "codex-to-claude" {
             codex_to_claude = Some(run.output.clone());
