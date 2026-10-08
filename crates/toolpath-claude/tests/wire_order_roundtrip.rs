@@ -10,23 +10,21 @@
 //! `to_view` → `project` pipeline matches the source line for line —
 //! headerless lines (`last-prompt`, `ai-title`, `queue-operation`, …)
 //! included, at their file position, and attachments in place, not
-//! regrouped at the end — and caveat user entries keep `isMeta: true` on
-//! projection.
+//! regrouped at the end.
 //!
 //! One position the IR cannot express: a tool-result carrier is absorbed
 //! into the assistant turn it answers, so a headerless run written between
 //! that turn and the carrier is indistinguishable from one written right
 //! after the carrier. The projector puts the run before the carrier (the
-//! shape Claude Code writes far more often); the captured fixture has one
-//! run of the other shape, so the fixture comparison is exact over every
+//! shape Claude Code writes far more often); the captured fixture has two
+//! runs of the other shape, so the fixture comparison is exact over every
 //! line except the carriers, and the hand-written fixture is exact over
 //! every line.
 //!
-//! What is NOT pinned: `parentUuid` values. 11 of the fixture's 45 entries
+//! What is NOT pinned: `parentUuid` values. 19 of the fixture's 71 entries
 //! legitimately diverge — the projector re-synthesizes tool-result carrier
-//! entries under derived uuids (`<turn-uuid>-result-<tool-id>`): 10 of the
-//! diverged entries point at a re-synthesized carrier uuid, and 1 is
-//! rewired to the preceding turn. Also not pinned: the
+//! entries under derived uuids (`<turn-uuid>-result-<tool-id>`), and each
+//! diverged entry points at a re-synthesized carrier uuid. Also not pinned: the
 //! derive → extract → project pipeline — only the direct projection is
 //! exercised here.
 
@@ -140,48 +138,6 @@ fn headerless_lines_keep_their_position_through_derive_and_extract() {
     assert_eq!(
         parents, source_parents,
         "wire parents must resolve back past the headerless events"
-    );
-}
-
-#[test]
-fn caveat_entry_keeps_is_meta() {
-    use toolpath_convo::{ConversationView, Item, Role, Turn};
-    // Claude writes local-command caveat entries with `isMeta: true`; the
-    // loader hides them from the transcript sent back to the API. The flag
-    // is re-derived from the caveat envelope on projection.
-    let caveat = Turn {
-        id: "caveat-1".into(),
-        parent_id: None,
-        group_id: None,
-        role: Role::User,
-        timestamp: "2026-01-01T00:00:00Z".into(),
-        text: "<local-command-caveat>Caveat: locally generated.</local-command-caveat>".into(),
-        thinking: None,
-        tool_uses: vec![],
-        model: None,
-        stop_reason: None,
-        token_usage: None,
-        attributed_token_usage: None,
-        environment: None,
-        delegations: vec![],
-        file_mutations: vec![],
-    };
-    let view = ConversationView {
-        id: "wire-order-caveat".into(),
-        items: vec![Item::Turn(caveat)],
-        provider_id: Some("claude-code".into()),
-        ..Default::default()
-    };
-    let projected = ClaudeProjector.project(&view).expect("project view");
-    let entry = projected
-        .entries
-        .iter()
-        .find(|e| e.entry_type == "user")
-        .expect("caveat user entry");
-    assert_eq!(
-        entry.extra.get("isMeta"),
-        Some(&serde_json::json!(true)),
-        "caveat entries must stay hidden from the API transcript"
     );
 }
 

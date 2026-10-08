@@ -100,30 +100,13 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
 
     let file_mutations = compute_file_mutations(&tool_uses, entry.cwd.as_deref());
 
-    // An all-zero usage block is a placeholder, not a measurement —
-    // Claude stamps one on synthetic entries (API errors) that consumed
-    // nothing. The convention (matching pi/opencode) decodes it as `None`
-    // rather than stamping zero-filled counters onto a step.
-    let token_usage = msg
-        .usage
-        .as_ref()
-        .map(|u| TokenUsage {
-            input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
-            cache_read_tokens: u.cache_read_input_tokens,
-            cache_write_tokens: u.cache_creation_input_tokens,
-            ..Default::default()
-        })
-        .filter(|u| {
-            [
-                u.input_tokens,
-                u.output_tokens,
-                u.cache_read_tokens,
-                u.cache_write_tokens,
-            ]
-            .iter()
-            .any(|v| v.unwrap_or(0) > 0)
-        });
+    let token_usage = msg.usage.as_ref().map(|u| TokenUsage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cache_read_tokens: u.cache_read_input_tokens,
+        cache_write_tokens: u.cache_creation_input_tokens,
+        ..Default::default()
+    });
 
     let environment = if entry.cwd.is_some() || entry.git_branch.is_some() {
         Some(EnvironmentSnapshot {
@@ -421,23 +404,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // The UUID of the last turn emitted into `items`.
     let mut last_turn_uuid: Option<String> = None;
 
-    // Duplicate-uuid stripping, defensive: a compacted session can re-emit
-    // earlier entries with their original uuids (the entries Claude carries
-    // into the post-compaction context). Current 2.1.x in-file compaction
-    // has not been observed writing such a block, and the format docs in
-    // docs/agents/formats/claude-code/ don't describe one, so this guards
-    // the shape rather than documents it. Only a byte-identical re-emission
-    // is stripped: the original carries the true lineage, and an identical
-    // copy is a context-window artifact, not provenance. An entry with a
-    // seen uuid and a different body is data and goes through to
-    // `derive_path`, which renames it `<uuid>#2`. Stripping must happen
-    // here, before `derive_path` — its dedup skips byte-identical replays,
-    // but the group-total token stamping below
-    // (`canonicalize_message_usage`) can make a replayed copy differ from
-    // its original and survive as a renamed step. The comparison is on the
-    // source entry, which nothing has stamped yet.
-    let mut seen_entries: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-
     for line in convo.lines() {
         let entry = match line {
             Line::Headerless(raw) => {
@@ -452,24 +418,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             }
             Line::Entry(entry) => entry,
         };
-
-        // Strip re-emitted entries: a non-boundary entry byte-identical to
-        // one with the same uuid earlier in this conversation. Boundary
-        // entries are exempt so every compaction marker survives into the
-        // item stream — a continuation file can repeat its parent's
-        // boundary verbatim (session-chains.md §Duplicate
-        // compact_boundary), and a byte-identical copy collapses later, in
-        // `derive_path`.
-        if !is_compact_boundary(entry)
-            && !entry.uuid.is_empty()
-            && let Ok(source) = serde_json::to_value(entry)
-        {
-            let variants = seen_entries.entry(entry.uuid.clone()).or_default();
-            if variants.contains(&source) {
-                continue;
-            }
-            variants.push(source);
-        }
 
         let Some(msg) = &entry.message else {
             // Message-less entries (attachments, snapshots, compaction
@@ -725,69 +673,56 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// per-step attribution from them, and — the format being undocumented — we
 /// do not trust line order.
 ///
-/// For each `group_id` this sets `token_usage` on the group's
-/// **last-occurring** turn to the field-wise **maximum** across the group (the
-/// message total — never under-counts whatever the stream order) and clears it
-/// from the others, so summing `token_usage` over turns yields session totals.
-///
-/// Grouping is by `group_id` across the whole sequence, not by consecutive run:
-/// a single message's turns can be interrupted by an unrelated turn (e.g. a
-/// `<subagent_notification>` user message lands between two assistant turns of
-/// the same Codex round). Collapsing per run would leave the message total on
-/// two turns — once per run — double-counting it. Keying on `group_id` lands it
-/// exactly once.
+/// For each consecutive `group_id` run this sets `token_usage` on the run's
+/// **final** turn to the field-wise **maximum** across the run (the message
+/// total — never under-counts whatever the stream order) and clears it from
+/// the others, so summing `token_usage` over turns yields session totals.
 fn canonicalize_message_usage(turns: &mut [&mut Turn]) {
-    // First pass: per group_id, the field-wise max usage and the index of the
-    // group's last-occurring turn.
-    let mut group_total: HashMap<String, TokenUsage> = HashMap::new();
-    let mut group_last_idx: HashMap<String, usize> = HashMap::new();
-    for (idx, t) in turns.iter().enumerate() {
-        let Some(mid) = t.group_id.clone() else {
+    let mut i = 0;
+    while i < turns.len() {
+        let Some(mid) = turns[i].group_id.clone() else {
+            i += 1;
             continue;
         };
-        group_last_idx.insert(mid.clone(), idx);
-        if let Some(u) = &t.token_usage {
-            group_total
-                .entry(mid)
-                .and_modify(|acc| *acc = max_usage(acc, u))
-                .or_insert_with(|| u.clone());
+        let mut j = i;
+        while j < turns.len() && turns[j].group_id.as_deref() == Some(mid.as_str()) {
+            j += 1;
         }
-    }
 
-    // Second pass: clear usage off every grouped turn, then stamp each
-    // group's total back onto its last-occurring turn.
-    for t in turns.iter_mut() {
-        if t.group_id.is_some() {
+        // Message total = field-wise max across the run (the final streaming
+        // snapshot, found without trusting line order).
+        let mut total: Option<TokenUsage> = None;
+        for t in &turns[i..j] {
+            if let Some(u) = &t.token_usage {
+                total = Some(match total {
+                    Some(acc) => max_usage(&acc, u),
+                    None => u.clone(),
+                });
+            }
+        }
+
+        for t in &mut turns[i..j] {
             t.token_usage = None;
         }
-    }
-    for (mid, total) in group_total {
-        if let Some(&idx) = group_last_idx.get(&mid) {
-            turns[idx].token_usage = Some(total);
+        if let Some(total) = total {
+            turns[j - 1].token_usage = Some(total);
         }
+        i = j;
     }
 }
 
 /// Sum token usage across all turns.
 fn sum_usage<'a>(turns: impl IntoIterator<Item = &'a Turn>) -> Option<TokenUsage> {
     let turns: Vec<&Turn> = turns.into_iter().collect();
-
-    // A message's usage repeats across every turn split from it; count it
-    // once, on the group's last-occurring turn. Key on `group_id` rather than
-    // adjacency so an interrupted group (a turn of another group landing in
-    // the middle) still counts once.
-    let mut group_last_idx: HashMap<&str, usize> = HashMap::new();
-    for (idx, turn) in turns.iter().enumerate() {
-        if let Some(mid) = &turn.group_id {
-            group_last_idx.insert(mid.as_str(), idx);
-        }
-    }
-
     let mut total = TokenUsage::default();
     let mut any = false;
     for (idx, turn) in turns.iter().enumerate() {
+        // Turns split from one provider message all repeat that message's
+        // usage; count it once, on the run's last turn.
         if let Some(mid) = &turn.group_id
-            && group_last_idx.get(mid.as_str()) != Some(&idx)
+            && turns
+                .get(idx + 1)
+                .is_some_and(|next| next.group_id.as_ref() == Some(mid))
         {
             continue;
         }
@@ -1112,38 +1047,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn canonicalize_groups_across_an_interrupting_turn() {
-        // A message group can be interrupted by an unrelated turn (e.g. a
-        // `<subagent_notification>` user turn lands between two assistant
-        // turns of the same Codex round, both stamped with the group total).
-        // Grouping must key on `group_id`, not adjacency: the total lands on
-        // the group's LAST-occurring turn ONCE — collapsing per consecutive
-        // run would leave it on two turns, double-counting.
-        let mut t1 = grp_turn("t1", "msg_A", 997);
-        let mut interrupt = message_turn_stub("u1");
-        interrupt.role = Role::User;
-        interrupt.group_id = None;
-        let mut t2 = grp_turn("t2", "msg_A", 997);
-
-        {
-            let mut turns = [&mut t1, &mut interrupt, &mut t2];
-            canonicalize_message_usage(&mut turns);
-        }
-
-        assert!(t1.token_usage.is_none(), "earlier group turn cleared");
-        assert!(interrupt.token_usage.is_none(), "ungrouped turn untouched");
-        assert_eq!(
-            t2.token_usage.as_ref().unwrap().output_tokens,
-            Some(997),
-            "total lands once on the group's last-occurring turn"
-        );
-
-        // And the session sum counts the group exactly once.
-        let total = sum_usage([&t1, &interrupt, &t2]).expect("total");
-        assert_eq!(total.output_tokens, Some(997));
-    }
-
     fn setup_provider() -> (TempDir, ClaudeConvo) {
         let temp = TempDir::new().unwrap();
         let claude_dir = temp.path().join(".claude");
@@ -1420,134 +1323,6 @@ mod tests {
         let turns: Vec<&Turn> = view.turns().collect();
         assert_eq!(turns.len(), 2);
         assert!(turns[1].tool_uses[0].result.is_none());
-    }
-
-    fn item_ids(view: &ConversationView) -> Vec<&str> {
-        view.items
-            .iter()
-            .map(|item| match item {
-                Item::Turn(t) => t.id.as_str(),
-                Item::Event(e) => e.id.as_str(),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn test_replayed_duplicate_uuids_are_stripped() {
-        // The compaction replay shape: before the boundary, earlier
-        // tool_use/tool_result entries are re-emitted with their original
-        // uuids. Only the first occurrence of each uuid may reach the item
-        // stream — a surviving replay would duplicate a turn id.
-        let temp = TempDir::new().unwrap();
-        let claude_dir = temp.path().join(".claude");
-        let project_dir = claude_dir.join("projects/-test-project");
-        fs::create_dir_all(&project_dir).unwrap();
-
-        let assistant = r#"{"uuid":"u2","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading..."},{"type":"tool_use","id":"t1","name":"Read","input":{"path":"a.rs"}}],"stop_reason":"tool_use"}}"#;
-        let carrier = r#"{"uuid":"u3","type":"user","parentUuid":"u2","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"file a contents","is_error":false}]}}"#;
-        let entries = [
-            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Read a file"}}"#,
-            assistant,
-            carrier,
-            assistant,
-            carrier,
-            r#"{"uuid":"cb-1","type":"compact_boundary","parentUuid":null,"logicalParentUuid":"u3","timestamp":"2024-01-01T00:00:03Z","compactMetadata":{"trigger":"auto","preTokens":180000}}"#,
-            r#"{"uuid":"u4","type":"user","parentUuid":"cb-1","timestamp":"2024-01-01T00:00:04Z","message":{"role":"user","content":"Keep going"}}"#,
-        ];
-        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
-
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
-        let provider = ClaudeConvo::with_resolver(resolver);
-        let view =
-            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
-
-        let turn_ids: Vec<&str> = view.turns().map(|t| t.id.as_str()).collect();
-        assert_eq!(
-            turn_ids,
-            vec!["u1", "u2", "u4"],
-            "replayed u2 must be stripped, carriers absorbed"
-        );
-
-        let ids = item_ids(&view);
-        let mut deduped = ids.clone();
-        deduped.sort_unstable();
-        deduped.dedup();
-        assert_eq!(deduped.len(), ids.len(), "duplicate item ids: {ids:?}");
-
-        let result = view
-            .turns()
-            .find(|t| t.id == "u2")
-            .and_then(|t| t.tool_uses[0].result.as_ref())
-            .expect("tool result assembled");
-        assert_eq!(result.content, "file a contents");
-    }
-
-    #[test]
-    fn test_same_uuid_with_different_body_is_kept() {
-        // Only a byte-identical re-emission is a replay. Two assistant
-        // entries sharing a uuid but carrying different texts are both data:
-        // both reach the view, and derive_path keeps both as steps, the
-        // later one renamed.
-        let temp = TempDir::new().unwrap();
-        let claude_dir = temp.path().join(".claude");
-        let project_dir = claude_dir.join("projects/-test-project");
-        fs::create_dir_all(&project_dir).unwrap();
-
-        let entries = [
-            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
-            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"reply one"}],"stop_reason":"end_turn"}}"#,
-            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"reply two, different content"}],"stop_reason":"end_turn"}}"#,
-        ];
-        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
-
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
-        let provider = ClaudeConvo::with_resolver(resolver);
-        let view =
-            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
-
-        assert_eq!(item_ids(&view), vec!["u1", "a1", "a1"]);
-        let texts: Vec<&str> = view.turns().map(|t| t.text.as_str()).collect();
-        assert_eq!(
-            texts,
-            vec!["Hello", "reply one", "reply two, different content"]
-        );
-
-        let path = toolpath_convo::derive_path(&view, &toolpath_convo::DeriveConfig::default());
-        let step_ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
-        assert_eq!(step_ids, vec!["u1", "a1", "a1#2"]);
-    }
-
-    #[test]
-    fn test_compact_boundary_is_exempt_from_uuid_dedup() {
-        // A continuation file can repeat its parent's compact_boundary
-        // verbatim. Boundary entries bypass the duplicate-uuid strip, so
-        // both copies survive to the item stream (a byte-identical copy
-        // collapses later, in derive_path).
-        let temp = TempDir::new().unwrap();
-        let claude_dir = temp.path().join(".claude");
-        let project_dir = claude_dir.join("projects/-test-project");
-        fs::create_dir_all(&project_dir).unwrap();
-
-        let boundary = r#"{"uuid":"cb-1","type":"compact_boundary","parentUuid":null,"logicalParentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","compactMetadata":{"trigger":"auto","preTokens":180000}}"#;
-        let entries = [
-            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
-            boundary,
-            boundary,
-            r#"{"uuid":"u2","type":"user","parentUuid":"cb-1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":"After compaction"}}"#,
-        ];
-        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
-
-        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
-        let provider = ClaudeConvo::with_resolver(resolver);
-        let view =
-            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
-
-        assert_eq!(item_ids(&view), vec!["u1", "cb-1", "cb-1", "u2"]);
-        let boundaries: Vec<_> = view
-            .events()
-            .filter(|e| e.event_type == "compact_boundary")
-            .collect();
-        assert_eq!(boundaries.len(), 2, "both boundary copies survive to_view");
     }
 
     #[test]

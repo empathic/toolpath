@@ -409,15 +409,6 @@ fn apply_turn_metadata(entry: &mut ConversationEntry, turn: &Turn) {
 fn user_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
     let content = MessageContent::Text(turn.text.clone());
 
-    // Claude writes local-command caveat entries with `isMeta: true` — the
-    // loader hides them from the transcript sent back to the API. The flag
-    // is a deterministic function of the caveat envelope, so re-derive it
-    // rather than carry it through the IR.
-    let mut extra: std::collections::HashMap<String, serde_json::Value> = Default::default();
-    if turn.text.trim_start().starts_with("<local-command-caveat>") {
-        extra.insert("isMeta".to_string(), serde_json::json!(true));
-    }
-
     ConversationEntry {
         uuid: turn.id.clone(),
         parent_uuid: turn.parent_id.clone(),
@@ -446,7 +437,7 @@ fn user_turn_to_entry(turn: &Turn, session_id: &str) -> ConversationEntry {
         tool_use_result: None,
         snapshot: None,
         message_id: None,
-        extra,
+        extra: Default::default(),
     }
 }
 
@@ -510,19 +501,6 @@ fn build_assistant_content(turn: &Turn) -> MessageContent {
     let has_tool_uses = !turn.tool_uses.is_empty();
 
     if !has_thinking && !has_tool_uses {
-        // A fully empty assistant turn (a source whose derivation dropped an
-        // empty-thinking block, an aborted response, …) must NOT become
-        // `[{"type":"text","text":""}]`: that content shape aborts Claude
-        // 2.1.216's transcript renderer — a resumed session shows no ❯
-        // prompts and no Compacted indicator. Re-emit it as the empty
-        // thinking block real Claude writes for these entries (verified to
-        // render, signature-less, in 2.1.216).
-        if turn.text.is_empty() {
-            return MessageContent::Parts(vec![ContentPart::Thinking {
-                thinking: String::new(),
-                signature: None,
-            }]);
-        }
         // Claude Code expects assistant content to always be an array,
         // even for simple text-only responses.
         return MessageContent::Parts(vec![ContentPart::Text {
@@ -1169,33 +1147,6 @@ mod tests {
     /// Helper: return all conversation entries (headerless lines are separate).
     fn content_entries(convo: &Conversation) -> &[ConversationEntry] {
         &convo.entries
-    }
-
-    #[test]
-    fn test_fully_empty_assistant_turn_never_projects_an_empty_text_block() {
-        // `[{"type":"text","text":""}]` aborts Claude 2.1.216's transcript
-        // renderer — a resumed session shows no ❯ prompts and no Compacted
-        // indicator. An empty turn (thinking dropped at derive, aborted
-        // response) must project as the empty thinking block real Claude
-        // writes instead (verified to render signature-less in 2.1.216).
-        let content = build_assistant_content(&assistant_turn("a1", ""));
-        let MessageContent::Parts(parts) = content else {
-            panic!("assistant content is always Parts");
-        };
-        assert_eq!(
-            serde_json::to_value(&parts).unwrap(),
-            serde_json::json!([{"type":"thinking","thinking":""}]),
-        );
-
-        // Non-empty text keeps the plain text shape.
-        let content = build_assistant_content(&assistant_turn("a2", "hi"));
-        let MessageContent::Parts(parts) = content else {
-            panic!("assistant content is always Parts");
-        };
-        assert_eq!(
-            serde_json::to_value(&parts).unwrap(),
-            serde_json::json!([{"type":"text","text":"hi"}]),
-        );
     }
 
     // ── Message-group usage re-expansion ─────────────────────────────

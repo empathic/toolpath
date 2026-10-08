@@ -46,11 +46,7 @@ non-turn entries survive import/export.
   their item position — real Claude interleaves attachments and system
   entries with turns; the old trailing pass regrouped them at end of
   file. `wire_order_roundtrip` pins the projected entry-type sequence
-  to the captured fixture. Byte-identical duplicate-uuid replays (the
-  compaction re-emission block) are stripped at read time, with
-  compact boundaries exempt; an entry that shares a uuid with an earlier
-  one but differs in body is kept and reaches `derive_path`, which
-  renames it `<uuid>#2`. Linkage: uuid-bearing entries chain as
+  to the captured fixture. Linkage: uuid-bearing entries chain as
   recorded (a `parentUuid` naming an absorbed tool-result carrier is
   redirected to the assistant turn on the way in and to the
   synthesized carrier on the way out); a `compact_boundary` takes its
