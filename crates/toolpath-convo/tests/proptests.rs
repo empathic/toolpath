@@ -7,10 +7,7 @@
 //!
 //! 1. a derived path's step ids are unique;
 //! 2. derive → extract → derive is stable at generation one;
-//! 3. re-emitting a turn whose step kept its source linkage (the replay
-//!    shape) — after the original, before the next turn — never changes
-//!    the derived path at all;
-//! 4. in a stream whose turns chain, every turn step is an ancestor of the
+//! 3. in a stream whose turns chain, every turn step is an ancestor of the
 //!    head however the events are linked — an event with no parent or a
 //!    dangling one cannot orphan the session.
 
@@ -134,18 +131,10 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
             }
         }
     }
-    // Session-level files_changed rides `meta.extra` on the wire; a
-    // non-empty list makes the stability property cover its recovery.
-    let files_changed = if items.is_empty() {
-        vec![]
-    } else {
-        vec!["/abs/gen.rs".into(), "rel/gen.rs".into()]
-    };
     ConversationView {
         id: "prop-session".into(),
         items,
         provider_id: Some("prop".into()),
-        files_changed,
         ..Default::default()
     }
 }
@@ -257,69 +246,16 @@ proptest! {
     #[test]
     fn derive_extract_derive_is_stable(elems in proptest::collection::vec(elem(), 0..12)) {
         let view = build_view(elems);
-        // An empty conversation derives to an empty path, which carries no
-        // artifact keys to recover the session id from — identity is only
-        // representable once there is at least one step.
-        prop_assume!(!view.items.is_empty());
+        // Extract recovers the session id from the artifact key of a
+        // `conversation.append` step, so identity is only representable once
+        // there is at least one turn.
+        prop_assume!(view.turns().next().is_some());
         let gen1 = derive_path(&view, &DeriveConfig::default());
         let gen2 = derive_path(&extract_conversation(&gen1), &DeriveConfig::default());
         prop_assert_eq!(
             serde_json::to_value(&gen1).unwrap(),
             serde_json::to_value(&gen2).unwrap(),
             "derive → extract → derive changed the document"
-        );
-    }
-
-    #[test]
-    fn byte_identical_replay_is_a_no_op(
-        elems in proptest::collection::vec(elem(), 1..10),
-        replay_of in 0u8..8,
-        skip_nonturns in 0u8..4,
-    ) {
-        // The real replay shape (a Claude chain merge): a turn is re-emitted
-        // with its original id and parent linkage, after the original —
-        // possibly with events/compactions between, but before the next
-        // turn. A copy at such a position is the same source entry and must
-        // be dropped without any effect on the derived path.
-        // (A same-id turn with *different* linkage is not a replay; the
-        // dedup renames it, which is data-preserving, not a no-op.)
-        let base = build_view(elems);
-        let replayable: Vec<Turn> = {
-            let all: Vec<&Turn> = base.turns().collect();
-            all.iter()
-                .filter(|t| all.iter().filter(|o| o.id == t.id).count() == 1)
-                .map(|t| (*t).clone())
-                .collect()
-        };
-        prop_assume!(!replayable.is_empty());
-        let src_turn = replayable[replay_of as usize % replayable.len()].clone();
-        let src_pos = base
-            .items
-            .iter()
-            .position(|i| matches!(i, Item::Turn(t) if t.id == src_turn.id))
-            .unwrap();
-        // Insert after the original, skipping up to `skip_nonturns` of the
-        // non-turn items that follow it (events/compactions may sit between
-        // an original and its replay).
-        let mut at = src_pos + 1;
-        let mut skips = skip_nonturns;
-        while skips > 0
-            && at < base.items.len()
-            && !matches!(base.items[at], Item::Turn(_))
-        {
-            at += 1;
-            skips -= 1;
-        }
-
-        let mut with_replay = base.clone();
-        with_replay.items.insert(at, Item::Turn(src_turn));
-
-        let without = derive_path(&base, &DeriveConfig::default());
-        let with = derive_path(&with_replay, &DeriveConfig::default());
-        prop_assert_eq!(
-            serde_json::to_value(&without).unwrap(),
-            serde_json::to_value(&with).unwrap(),
-            "a dropped byte-identical replay changed the derived path"
         );
     }
 }

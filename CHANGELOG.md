@@ -15,9 +15,8 @@ non-turn entries survive import/export.
   iterators; `ConversationView::turns_since` is removed (it had no
   callers). `derive_path` emits `conversation.event` steps
   (previously dropped — a Claude session lost its attachments and
-  system entries on import/export), resolves duplicate step ids by
-  renaming to `<id>#<n>`, and recognizes byte-identical wire replays
-  at the source level and drops them (the Claude chain-merge shape).
+  system entries on import/export) and resolves duplicate step ids by
+  renaming to `<id>#<n>`.
   `extract_conversation` strips that suffix from item ids, so a rebuilt
   view carries the ids the source recorded (a projector never writes
   `<uuid>#2` as an entry's own id); a `parent_id` keeps naming the step
@@ -39,11 +38,10 @@ non-turn entries survive import/export.
   ride in the document (`source_parent` and `event_source_id` are
   gone). Readers whose harness records no linkage chain over the
   ordered item stream, so events sit on the head's ancestry
-  naturally. New proptest suite pins unique step ids,
-  derive → extract → derive stability, and replay no-ops over
-  randomized interleavings with id collisions, and that every turn of
-  a chained stream is an ancestor of the head however its events are
-  linked.
+  naturally. New proptest suite pins unique step ids and
+  derive → extract → derive stability over randomized interleavings
+  with id collisions, and that every turn of a chained stream is an
+  ancestor of the head however its events are linked.
 - **`toolpath-claude`** (0.14.0): the projector emits events inline at
   their item position — real Claude interleaves attachments and system
   entries with turns; the old trailing pass regrouped them at end of
