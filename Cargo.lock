@@ -3137,6 +3137,7 @@ dependencies = [
  "pathbase-client",
  "predicates",
  "rand 0.9.4",
+ "ratatui",
  "rayon",
  "regex",
  "reqwest",
