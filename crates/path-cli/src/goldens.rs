@@ -1547,33 +1547,128 @@ fn live_transcripts(h: LiveHarness, home: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// String values (>= 20 chars) found in a credential file, used only to prove none reached a
-/// transcript. Never printed.
-fn secret_strings(file_text: &str) -> Vec<String> {
-    fn walk(v: &Value, out: &mut Vec<String>) {
+/// An account identifier (account id, user id, email-shaped account field): not a bearer secret, but
+/// identity. It is REDACTED to a stable placeholder in a captured transcript, never refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Identifier {
+    field: String,
+    value: String,
+}
+
+/// Field names that hold account identity (compared lower-cased, `_` and `-` removed).
+fn is_identifier_key(key: &str) -> bool {
+    let k: String = key
+        .chars()
+        .filter(|c| *c != '_' && *c != '-')
+        .collect::<String>()
+        .to_lowercase();
+    matches!(
+        k.as_str(),
+        "accountid"
+            | "userid"
+            | "creatoraccountid"
+            | "creatoruserid"
+            | "organizationid"
+            | "orgid"
+            | "email"
+            | "useremail"
+            | "accountemail"
+    )
+}
+
+/// The stable placeholder for an identifier field.
+fn placeholder_for(field: &str) -> &'static str {
+    let f = field.to_lowercase();
+    if f.contains("email") {
+        "email-redacted"
+    } else if f.contains("user") {
+        "user-redacted"
+    } else {
+        "acct-redacted"
+    }
+}
+
+/// Split a credential file into secrets (string values >= 20 chars, refused if they reach a
+/// transcript) and account identifiers (values under identifier-named keys, redacted instead). A
+/// non-JSON file (e.g. TOML) yields only secrets. Values are never printed.
+fn split_credentials(file_text: &str) -> (Vec<String>, Vec<Identifier>) {
+    fn walk(key: &str, v: &Value, secrets: &mut Vec<String>, ids: &mut Vec<Identifier>) {
         match v {
-            Value::String(s) if s.len() >= 20 => out.push(s.clone()),
-            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
-            Value::Object(m) => m.values().for_each(|x| walk(x, out)),
+            Value::String(s) if is_identifier_key(key) && s.len() >= 8 => ids.push(Identifier {
+                field: key.to_string(),
+                value: s.clone(),
+            }),
+            Value::String(s) if s.len() >= 20 => secrets.push(s.clone()),
+            Value::Array(a) => a.iter().for_each(|x| walk(key, x, secrets, ids)),
+            Value::Object(m) => m.iter().for_each(|(k, x)| walk(k, x, secrets, ids)),
             _ => {}
         }
     }
-    let mut out = Vec::new();
+    let (mut secrets, mut ids) = (Vec::new(), Vec::new());
     match serde_json::from_str::<Value>(file_text) {
-        Ok(v) => walk(&v, &mut out),
+        Ok(v) => walk("", &v, &mut secrets, &mut ids),
         Err(_) => {
             // Not JSON (e.g. TOML): any quoted value or the whole trimmed line counts.
             for line in file_text.lines() {
                 if let Some((_, v)) = line.split_once('=') {
                     let v = v.trim().trim_matches('"');
                     if v.len() >= 20 {
-                        out.push(v.to_string());
+                        secrets.push(v.to_string());
                     }
                 }
             }
         }
     }
+    (secrets, ids)
+}
+
+/// Identifier fields found in the transcript itself (claude `userID`, copilot/pi account ids,
+/// codex `creator_account_id`, ...): (field name, value >= 8 chars).
+fn transcript_identifiers(text: &str) -> Vec<Identifier> {
+    fn walk(key: &str, v: &Value, out: &mut Vec<Identifier>) {
+        match v {
+            Value::String(s) if is_identifier_key(key) && s.len() >= 8 => out.push(Identifier {
+                field: key.to_string(),
+                value: s.clone(),
+            }),
+            Value::Array(a) => a.iter().for_each(|x| walk(key, x, out)),
+            Value::Object(m) => m.iter().for_each(|(k, x)| walk(k, x, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            walk("", &v, &mut out);
+        }
+    }
     out
+}
+
+/// Replace every occurrence of each identifier value with its stable placeholder. Returns the new
+/// text and, per field name actually redacted, the placeholder and occurrence count (no values).
+fn redact_identifiers(text: &str, ids: &[Identifier]) -> (String, Vec<Value>) {
+    let mut uniq: Vec<&Identifier> = Vec::new();
+    for i in ids {
+        if !uniq.iter().any(|u| u.value == i.value) {
+            uniq.push(i);
+        }
+    }
+    uniq.sort_by_key(|i| std::cmp::Reverse(i.value.len()));
+    let mut out = text.to_string();
+    let mut report: Vec<Value> = Vec::new();
+    for i in uniq {
+        let n = out.matches(i.value.as_str()).count();
+        if n == 0 {
+            continue;
+        }
+        out = out.replace(i.value.as_str(), placeholder_for(&i.field));
+        match report.iter_mut().find(|r| r["field"] == i.field.as_str()) {
+            Some(r) => r["occurrences"] = json!(r["occurrences"].as_u64().unwrap_or(0) + n as u64),
+            None => report.push(json!({ "field": i.field, "placeholder": placeholder_for(&i.field), "occurrences": n })),
+        }
+    }
+    (out, report)
 }
 
 fn redact(text: &str, secrets: &[String]) -> String {
@@ -1624,6 +1719,7 @@ impl Goldens {
         // Credentials: only ever copied or forwarded into the child, and removed with the temp dir.
         let mut secrets: Vec<String> = Vec::new();
         let mut child_env: Vec<(String, String)> = Vec::new();
+        let mut cred_ids: Vec<Identifier> = Vec::new();
         let mut cred_note = String::new();
         if which == LiveHarness::Claude {
             let (source, raw) = read_credential()?;
@@ -1678,7 +1774,9 @@ impl Goldens {
             }
             fs::copy(real_home.join(from), &dest)?;
             if let Ok(text) = fs::read_to_string(&dest) {
-                secrets.extend(secret_strings(&text));
+                let (s, ids) = split_credentials(&text);
+                secrets.extend(s);
+                cred_ids.extend(ids);
             }
         }
         say(&format!("temp dir: {}", base.display()));
@@ -1753,11 +1851,18 @@ impl Goldens {
             bail!("transcript count");
         }
         let src = &transcripts[0];
-        let bytes = fs::read(src)?;
-        let text = String::from_utf8_lossy(&bytes);
+        let raw = fs::read(src)?;
+        let raw_text = String::from_utf8_lossy(&raw).into_owned();
+        // Account identifiers (from the seeded credential files and from the transcript's own
+        // identity fields) are redacted to stable placeholders, never refused and never kept.
+        let mut ids = cred_ids.clone();
+        ids.extend(transcript_identifiers(&raw_text));
+        let (text, redacted) = redact_identifiers(&raw_text, &ids);
+        let bytes = text.clone().into_bytes();
         say(&format!(
-            "transcript found ({} lines); leak check",
-            text.lines().count()
+            "transcript found ({} lines); redacted {} identifier field(s); leak check",
+            text.lines().count(),
+            redacted.len()
         ));
         let (leaks, attribution_present) = leak_check(&text, &secrets);
         if !leaks.is_empty() {
@@ -1820,6 +1925,8 @@ impl Goldens {
                 "refused": ["real home directory", "credential (token, key, or any string from a seeded credential file)", "local username", "email address other than the allowed one"],
                 "allowed_addresses": [ATTRIBUTION_ADDRESS],
                 "allowed_address_present": attribution_present,
+                // Account identifiers replaced by stable placeholders before the input was written.
+                "redacted": redacted,
                 "reason": "noreply@anthropic.com is Claude Code's own Co-Authored-By attribution constant, injected in a system-reminder; it is not the user's address",
             });
         }
@@ -1910,12 +2017,45 @@ mod tests {
     }
 
     #[test]
-    fn secret_strings_come_from_json_and_toml_values_only() {
-        let json =
-            secret_strings(r#"{"tokens":{"access":"abcdefghijklmnopqrstuvwxyz"},"short":"x"}"#);
-        assert_eq!(json, ["abcdefghijklmnopqrstuvwxyz"]);
-        let toml = secret_strings("model = \"o3\"\napi_key = \"abcdefghijklmnopqrstuvwxyz\"\n");
-        assert_eq!(toml, ["abcdefghijklmnopqrstuvwxyz"]);
+    fn credentials_split_into_secrets_and_account_identifiers() {
+        let (secrets, ids) = split_credentials(
+            r#"{"tokens":{"access":"abcdefghijklmnopqrstuvwxyz","account_id":"acc-1234-5678"},"short":"x"}"#,
+        );
+        assert_eq!(secrets, ["abcdefghijklmnopqrstuvwxyz"]);
+        assert_eq!(
+            ids,
+            [Identifier {
+                field: "account_id".into(),
+                value: "acc-1234-5678".into()
+            }]
+        );
+        let (toml, toml_ids) =
+            split_credentials("model = \"o3\"\napi_key = \"abcdefghijklmnopqrstuvwxyz\"\n");
+        assert_eq!(
+            (toml, toml_ids.len()),
+            (vec!["abcdefghijklmnopqrstuvwxyz".to_string()], 0)
+        );
+    }
+
+    #[test]
+    fn identifiers_are_redacted_to_stable_placeholders_not_refused() {
+        let text = "{\"creator_account_id\":\"acc-1234-5678\",\"creator_user_id\":\"usr-9999-0000\",\"note\":\"acc-1234-5678\"}\n";
+        let mut ids = transcript_identifiers(text);
+        ids.push(Identifier {
+            field: "account_id".into(),
+            value: "acc-1234-5678".into(),
+        });
+        let (out, report) = redact_identifiers(text, &ids);
+        assert!(!out.contains("acc-1234") && !out.contains("usr-9999"));
+        assert_eq!(out.matches("acct-redacted").count(), 2);
+        assert!(out.contains("user-redacted"));
+        assert_eq!(report.len(), 2);
+        // A real secret still refuses.
+        let (leaks, _) = leak_check(
+            "bearer abcdefghijklmnopqrstuvwxyz",
+            &["abcdefghijklmnopqrstuvwxyz".to_string()],
+        );
+        assert!(leaks.contains(&"a credential"));
     }
 
     #[test]
