@@ -1108,27 +1108,6 @@ pub(crate) fn graphs_download(
     }
 }
 
-/// `GET …/graphs/{id}/paths`: the server ids of a graph's paths, each
-/// with the toolpath `path.id` it stores. A fetched document carries
-/// only the toolpath ids, so this is how `path resume` learns the URL
-/// of the path it pulled.
-pub(crate) fn graph_paths_list(
-    base_url: &str,
-    token: Option<&str>,
-    owner: &str,
-    repo: &str,
-    id: &str,
-) -> Result<Vec<(String, uuid::Uuid)>> {
-    let uuid: uuid::Uuid = id
-        .parse()
-        .with_context(|| format!("not a valid graph UUID: {id}"))?;
-    let client = pathbase_client(base_url, token)?;
-    let paths = block_on(client.list_graph_paths(owner, repo, &uuid, None))
-        .map_err(|e| anyhow!("list paths of {owner}/{repo}/{id}: {}", full_chain(&e)))?
-        .into_inner();
-    Ok(paths.into_iter().map(|p| (p.toolpath_id, p.id)).collect())
-}
-
 // ── File storage ────────────────────────────────────────────────────────
 
 pub(crate) fn credentials_path() -> Result<PathBuf> {
@@ -1450,28 +1429,6 @@ pub(crate) mod tests {
         body.to_string()
     }
 
-    /// A `TracePathSummaryResponse` list body, `(toolpath_id, server id)`
-    /// each.
-    pub(crate) fn graph_paths_json(paths: &[(&str, &str)]) -> String {
-        paths
-            .iter()
-            .map(|(toolpath_id, id)| {
-                serde_json::json!({
-                    "id": id,
-                    "repo_id": TEST_REPO_UUID,
-                    "toolpath_id": toolpath_id,
-                    "visibility": "unlisted",
-                    "mutability": "mutable",
-                    "created_at": "2024-01-01T00:00:00Z",
-                    "updated_at": "2024-01-01T00:00:00Z",
-                    "step_count": 1,
-                    "url": format!("https://pathbase.dev/u/alex/pathstash/paths/{id}"),
-                })
-            })
-            .collect::<serde_json::Value>()
-            .to_string()
-    }
-
     #[test]
     fn remote_path_url_encodes_owner_and_repo_under_the_server() {
         let path_id: uuid::Uuid = PATH_ID.parse().unwrap();
@@ -1529,30 +1486,6 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert!(created.paths.is_empty());
-    }
-
-    #[test]
-    fn graph_paths_list_pairs_toolpath_ids_with_server_ids() {
-        let server = MockServer::start(
-            "HTTP/1.1 200 OK",
-            Box::leak(graph_paths_json(&[("p1", PATH_ID), ("p2", TEST_UUID)]).into_boxed_str()),
-        );
-        let paths =
-            graph_paths_list(&server.base(), Some("tok"), "alex", "pathstash", TEST_UUID).unwrap();
-        assert_eq!(
-            paths,
-            [
-                ("p1".to_string(), PATH_ID.parse().unwrap()),
-                ("p2".to_string(), TEST_UUID.parse().unwrap())
-            ]
-        );
-        let req = String::from_utf8(server.request()).unwrap();
-        assert!(
-            req.starts_with(&format!(
-                "GET /api/v1/u/alex/repos/pathstash/graphs/{TEST_UUID}/paths "
-            )),
-            "got: {req}"
-        );
     }
 
     #[test]
