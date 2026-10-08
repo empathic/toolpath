@@ -15,7 +15,7 @@
 //!   - Post-compact user/assistant content survives the round-trip.
 //!   - The `compacted` marker rides as an opaque event at its rollout
 //!     position — between the pre- and post-compact turns — and keeps
-//!     that position (and its `message` payload) through the
+//!     that position (and its payload) through the
 //!     derive → extract round-trip. Typing the boundary is the
 //!     compaction-provenance follow-up's concern; position and payload
 //!     survival are pinned here.
@@ -165,7 +165,7 @@ fn compacted_event_keeps_its_stream_position_through_roundtrip() {
         serde_json::to_string(&compacted.data)
             .expect("serialize event data")
             .contains(summary),
-        "compacted message payload should survive roundtrip"
+        "compacted payload should survive roundtrip"
     );
 }
 

@@ -76,9 +76,7 @@ non-turn entries survive import/export.
 - **`toolpath-codex`** (0.7.0): events interleave with turns at their
   rollout position — a `compacted` marker now derives between its
   surrounding turns instead of after them, pinned through
-  derive → extract. Empty carrier turns that carry token accounting
-  survive via a keep-mask, and the opening `turn_context` placement
-  matches native rollouts. The synthesized chain runs over the merged
+  derive → extract. The synthesized chain runs over the merged
   item stream, so events sit between the turns they separate.
 - **`toolpath-gemini`** (0.7.0): all-zero token usage is dropped,
   split assistant messages group via `group_id` with the snapshot
