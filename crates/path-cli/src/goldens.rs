@@ -99,9 +99,16 @@ pub enum GoldensCommand {
     },
     /// Show how a fresh run differs from a set's goldens
     Diff { name: String },
-    /// Capture one REAL `claude -p` session hermetically (token from env or Keychain), then
-    /// capture it as a golden set
-    CaptureClaude(CaptureClaudeArgs),
+    /// Capture one REAL headless session of an installed agent hermetically (credentials copied or
+    /// forwarded into a temp HOME only), leak-check it, then capture it as a golden set
+    CaptureLive {
+        #[arg(value_enum)]
+        harness: LiveHarness,
+        #[command(flatten)]
+        args: CaptureLiveArgs,
+    },
+    /// Alias for `capture-live claude`
+    CaptureClaude(CaptureLiveArgs),
 }
 
 #[derive(Args, Debug)]
@@ -124,16 +131,16 @@ pub struct CaptureArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct CaptureClaudeArgs {
-    /// Path to the claude executable (default: $CLAUDE_BIN, then PATH, then ~/.local/bin/claude)
+pub struct CaptureLiveArgs {
+    /// Path to the agent executable (default: $<AGENT>_BIN, then PATH, then ~/.local/bin/<agent>)
     #[arg(long)]
-    claude_bin: Option<PathBuf>,
-    /// Golden set name
-    #[arg(long, default_value = "claude-session")]
-    name: String,
-    /// Model to run
-    #[arg(long, default_value = "claude-haiku-4-5-20251001")]
-    model: String,
+    bin: Option<PathBuf>,
+    /// Golden set name (default: <agent>-session)
+    #[arg(long)]
+    name: Option<String>,
+    /// Model to run (claude defaults to claude-haiku-4-5-20251001; others use their own default)
+    #[arg(long)]
+    model: Option<String>,
 }
 
 pub fn run(args: GoldensArgs) -> Result<()> {
@@ -175,7 +182,8 @@ pub fn run(args: GoldensArgs) -> Result<()> {
                 std::process::exit(1)
             }
         }
-        GoldensCommand::CaptureClaude(a) => g.capture_claude(a),
+        GoldensCommand::CaptureLive { harness, args } => g.capture_live(harness, args),
+        GoldensCommand::CaptureClaude(args) => g.capture_live(LiveHarness::Claude, args),
     }
 }
 
@@ -1270,32 +1278,6 @@ fn read_credential() -> Result<(String, String)> {
     )
 }
 
-/// A real executable, not a shell function: $CLAUDE_BIN, then a PATH search, then ~/.local/bin/claude.
-fn resolve_claude(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    let is_exe = |p: &Path| {
-        p.is_file()
-            && fs::metadata(p)
-                .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
-                .unwrap_or(false)
-    };
-    let candidates: Vec<PathBuf> = explicit
-        .into_iter()
-        .chain(std::env::var_os("CLAUDE_BIN").map(PathBuf::from))
-        .chain(
-            std::env::var("PATH")
-                .unwrap_or_default()
-                .split(':')
-                .map(|d| Path::new(d).join("claude")),
-        )
-        .chain(std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/bin/claude")))
-        .collect();
-    let found = candidates
-        .iter()
-        .find(|p| is_exe(p))
-        .ok_or_else(|| anyhow!("no claude executable found (use --claude-bin or CLAUDE_BIN)"))?;
-    Ok(fs::canonicalize(found)?)
-}
-
 fn now_utc() -> String {
     Command::new("date")
         .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
@@ -1400,17 +1382,283 @@ fn local_username() -> Option<String> {
         .filter(|u| !u.is_empty())
 }
 
+/// An agent whose live headless run `capture-live` can drive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum LiveHarness {
+    Claude,
+    Codex,
+    Pi,
+    Copilot,
+    /// Not supported: cursor-agent keeps its transcript in a protobuf store the adapter does not parse.
+    Cursor,
+    /// Not supported: opencode keeps its transcript in SQLite; a golden input must be a single file.
+    Opencode,
+}
+
+/// How one agent is driven headlessly and where its transcript lands in the temp HOME.
+struct Driver {
+    /// The source harness whose adapter reads the transcript.
+    harness: Harness,
+    exe: &'static str,
+    /// Credential FILES copied (never read for content, never printed) from the real HOME into the
+    /// temp HOME: (path relative to the real HOME, path relative to the temp HOME).
+    seed_files: &'static [(&'static str, &'static str)],
+    /// Credential environment variables, first one present wins; forwarded under its own name.
+    env_creds: &'static [&'static str],
+    /// Hint shown when no credential is found.
+    hint: &'static str,
+}
+
+fn driver(h: LiveHarness) -> Result<Driver> {
+    Ok(match h {
+        LiveHarness::Claude => Driver {
+            harness: Harness::Claude,
+            exe: "claude",
+            seed_files: &[],
+            env_creds: &[], // handled by read_credential/normalize_credential
+            hint: "",
+        },
+        LiveHarness::Codex => Driver {
+            harness: Harness::Codex,
+            exe: "codex",
+            seed_files: &[
+                (".codex/auth.json", ".codex/auth.json"),
+                (".codex/config.toml", ".codex/config.toml"),
+            ],
+            env_creds: &[],
+            hint: "log in with `codex login`; ~/.codex/auth.json and config.toml are copied into the temp CODEX_HOME",
+        },
+        LiveHarness::Pi => Driver {
+            harness: Harness::Pi,
+            exe: "pi",
+            seed_files: &[(".pi/agent/auth.json", ".pi/agent/auth.json")],
+            env_creds: &[],
+            hint: "log in with pi; ~/.pi/agent/auth.json is copied into the temp HOME",
+        },
+        LiveHarness::Copilot => Driver {
+            harness: Harness::Copilot,
+            exe: "copilot",
+            seed_files: &[],
+            env_creds: &["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+            hint: "copilot has no config file here and uses the gh login; export COPILOT_GITHUB_TOKEN (for example from `gh auth token`) in your own shell",
+        },
+        LiveHarness::Cursor => bail!(
+            "cursor-agent has a non-interactive mode (`-p --output-format ...`, CURSOR_API_KEY), but it stores its transcript in a protobuf store that the Cursor adapter does not parse (it reads the IDE's state.vscdb), so there is no adapter-readable transcript to capture"
+        ),
+        LiveHarness::Opencode => bail!(
+            "opencode has a non-interactive mode (`opencode run`), but it stores its session in SQLite under XDG_DATA_HOME; a golden input is a single file, and the CLI has no JSON-file source to replay one (the test fixture is an export parsed by test code only)"
+        ),
+    })
+}
+
+/// The command line for a driver, with the prompt as given.
+fn live_argv(h: LiveHarness, model: Option<&str>, proj: &Path, prompt: &str) -> Vec<String> {
+    let s = |x: &str| x.to_string();
+    let mut v = match h {
+        LiveHarness::Claude => vec![
+            s("-p"),
+            s(prompt),
+            s("--model"),
+            s(model.unwrap_or("claude-haiku-4-5-20251001")),
+            s("--output-format"),
+            s("json"),
+            s("--allowedTools"),
+        ],
+        LiveHarness::Codex => {
+            let mut v = vec![
+                s("exec"),
+                s("--skip-git-repo-check"),
+                s("--sandbox"),
+                s("read-only"),
+                s("-C"),
+                proj.to_string_lossy().into_owned(),
+            ];
+            if let Some(m) = model {
+                v.extend([s("-m"), s(m)]);
+            }
+            v.push(s(prompt));
+            v
+        }
+        LiveHarness::Pi => {
+            let mut v = vec![s("-p"), s(prompt)];
+            if let Some(m) = model {
+                v.extend([s("--model"), s(m)]);
+            }
+            v
+        }
+        LiveHarness::Copilot => {
+            let mut v = vec![s("-p"), s(prompt), s("--allow-all-tools")];
+            if let Some(m) = model {
+                v.extend([s("--model"), s(m)]);
+            }
+            v
+        }
+        LiveHarness::Cursor | LiveHarness::Opencode => Vec::new(),
+    };
+    if h == LiveHarness::Claude {
+        v.extend(CAPTURE_TOOLS.iter().map(|t| t.to_string()));
+    }
+    v
+}
+
+/// Every file under `dir` (recursive) satisfying `keep`.
+fn files_under(dir: &Path, keep: &dyn Fn(&Path) -> bool, out: &mut Vec<PathBuf>) {
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            files_under(&p, keep, out);
+        } else if keep(&p) {
+            out.push(p);
+        }
+    }
+}
+
+/// Where the adapter looks for this agent's transcript inside the temp HOME.
+fn live_transcripts(h: LiveHarness, home: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let ext = |p: &Path, e: &str| p.extension().is_some_and(|x| x == e);
+    match h {
+        LiveHarness::Claude => files_under(
+            &home.join(".claude/projects"),
+            &|p| ext(p, "jsonl"),
+            &mut out,
+        ),
+        LiveHarness::Codex => files_under(
+            &home.join(".codex/sessions"),
+            &|p| {
+                ext(p, "jsonl")
+                    && p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
+            },
+            &mut out,
+        ),
+        LiveHarness::Pi => files_under(
+            &home.join(".pi/agent/sessions"),
+            &|p| ext(p, "jsonl"),
+            &mut out,
+        ),
+        LiveHarness::Copilot => files_under(
+            &home.join(".copilot/session-state"),
+            &|p| p.file_name().is_some_and(|n| n == "events.jsonl"),
+            &mut out,
+        ),
+        LiveHarness::Cursor | LiveHarness::Opencode => {}
+    }
+    out
+}
+
+/// String values (>= 20 chars) found in a credential file, used only to prove none reached a
+/// transcript. Never printed.
+fn secret_strings(file_text: &str) -> Vec<String> {
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::String(s) if s.len() >= 20 => out.push(s.clone()),
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            Value::Object(m) => m.values().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    match serde_json::from_str::<Value>(file_text) {
+        Ok(v) => walk(&v, &mut out),
+        Err(_) => {
+            // Not JSON (e.g. TOML): any quoted value or the whole trimmed line counts.
+            for line in file_text.lines() {
+                if let Some((_, v)) = line.split_once('=') {
+                    let v = v.trim().trim_matches('"');
+                    if v.len() >= 20 {
+                        out.push(v.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn redact(text: &str, secrets: &[String]) -> String {
+    secrets
+        .iter()
+        .fold(text.to_string(), |t, s| t.replace(s.as_str(), "<redacted>"))
+}
+
+/// Refusals for a transcript headed for the repo; also reports whether the one allowed address
+/// (Claude Code's attribution constant) was present.
+fn leak_check(text: &str, secrets: &[String]) -> (Vec<&'static str>, bool) {
+    let mut leaks = Vec::new();
+    if let Ok(h) = std::env::var("HOME")
+        && h.len() > 1
+        && text.contains(&h)
+    {
+        leaks.push("the real home directory");
+    }
+    if secrets.iter().any(|s| text.contains(s.as_str())) {
+        leaks.push("a credential");
+    }
+    // Exactly one address is allowed: Claude Code's attribution constant. Any other is a leak.
+    let found = emails(text);
+    let attribution_present = found.iter().any(|e| e == ATTRIBUTION_ADDRESS);
+    if found.iter().any(|e| e != ATTRIBUTION_ADDRESS) {
+        leaks.push("an email address other than the attribution address");
+    }
+    if let Some(u) = local_username()
+        && has_word(text, &u)
+    {
+        leaks.push("the local username");
+    }
+    (leaks, attribution_present)
+}
+
 impl Goldens {
-    fn capture_claude(&self, a: CaptureClaudeArgs) -> Result<()> {
-        let say = |m: &str| eprintln!("capture-claude: {m}");
-        let bin = resolve_claude(a.claude_bin)?;
-        say(&format!("claude binary: {}", bin.display()));
-        let (source, raw) = read_credential()?;
-        let (kind, token) =
-            normalize_credential(&raw).with_context(|| format!("credential from {source}"))?;
+    /// One REAL headless run of `which`, hermetic, then captured as a golden set.
+    fn capture_live(&self, which: LiveHarness, a: CaptureLiveArgs) -> Result<()> {
+        let drv = driver(which)?;
+        let name = a
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("{}-session", drv.exe));
+        let say = |m: &str| eprintln!("capture-live {}: {m}", drv.exe);
+        let bin = resolve_agent(drv.exe, a.bin)?;
+        say(&format!("binary: {}", bin.display()));
+
+        // Credentials: only ever copied or forwarded into the child, and removed with the temp dir.
+        let mut secrets: Vec<String> = Vec::new();
+        let mut child_env: Vec<(String, String)> = Vec::new();
+        let mut cred_note = String::new();
+        if which == LiveHarness::Claude {
+            let (source, raw) = read_credential()?;
+            let (kind, token) =
+                normalize_credential(&raw).with_context(|| format!("credential from {source}"))?;
+            cred_note = format!("{source}, kind: {}", kind.var());
+            secrets.push(token.clone());
+            child_env.push((kind.var().to_string(), token));
+        }
+        if let Some(var) = drv
+            .env_creds
+            .iter()
+            .find(|v| std::env::var(v).is_ok_and(|x| !x.trim().is_empty()))
+        {
+            let v = std::env::var(var)?;
+            cred_note = format!("${var}");
+            secrets.push(v.trim().to_string());
+            child_env.push((var.to_string(), v.trim().to_string()));
+        } else if !drv.env_creds.is_empty() {
+            bail!("no credential: {}", drv.hint);
+        }
+        let real_home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow!("HOME is not set"))?;
+        for (from, _) in drv.seed_files {
+            if !real_home.join(from).is_file() {
+                bail!("no credential file ~/{from}: {}", drv.hint);
+            }
+            cred_note = format!(
+                "{cred_note}{}~/{from}",
+                if cred_note.is_empty() { "" } else { ", " }
+            );
+        }
         say(&format!(
-            "credential source: {source}, kind: {} (value not shown)",
-            kind.var()
+            "credential source: {cred_note} (values not shown)"
         ));
 
         let tmp = tempfile::tempdir()?;
@@ -1423,20 +1671,32 @@ impl Goldens {
             "first line of the notes\nsecond line\n",
         )?;
         fs::write(proj.join("other.txt"), "unrelated\n")?;
+        for (from, to) in drv.seed_files {
+            let dest = home.join(to);
+            if let Some(p) = dest.parent() {
+                fs::create_dir_all(p)?;
+            }
+            fs::copy(real_home.join(from), &dest)?;
+            if let Ok(text) = fs::read_to_string(&dest) {
+                secrets.extend(secret_strings(&text));
+            }
+        }
         say(&format!("temp dir: {}", base.display()));
 
-        // Everything below keeps the temp dir on failure and removes it on success.
         let keep = |tmp: tempfile::TempDir| {
             let p = tmp.keep();
             eprintln!(
-                "capture-claude: FAILED; temp dir kept for inspection: {}",
+                "capture-live {}: FAILED; temp dir kept for inspection (it holds a copy of any credential file; delete it): {}",
+                drv.exe,
                 p.display()
             );
         };
-        say(&format!("running claude -p ({})", a.model));
-        let result_json = base.join("result.json");
-        let status = Command::new(&bin)
-            .current_dir(&proj)
+        let argv = live_argv(which, a.model.as_deref(), &proj, CAPTURE_PROMPT);
+        say(&format!("running {} headless", drv.exe));
+        let out_file = base.join("stdout.txt");
+        let err_file = base.join("stderr.txt");
+        let mut cmd = Command::new(&bin);
+        cmd.current_dir(&proj)
             .env_clear()
             .env(
                 "PATH",
@@ -1452,54 +1712,38 @@ impl Goldens {
             .env("XDG_STATE_HOME", home.join(".local/state"))
             .env("XDG_CACHE_HOME", home.join(".cache"))
             .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
-            .env(kind.var(), &token)
-            .args([
-                "-p",
-                CAPTURE_PROMPT,
-                "--model",
-                &a.model,
-                "--output-format",
-                "json",
-                "--allowedTools",
-            ])
-            .args(CAPTURE_TOOLS)
+            .env("CODEX_HOME", home.join(".codex"))
+            .env("COPILOT_HOME", home.join(".copilot"))
+            .args(&argv)
             .stdin(Stdio::null())
-            .stdout(fs::File::create(&result_json)?)
-            .stderr(fs::File::create(base.join("claude.stderr"))?)
-            .status()?;
+            .stdout(fs::File::create(&out_file)?)
+            .stderr(fs::File::create(&err_file)?);
+        for (k, v) in &child_env {
+            cmd.env(k, v);
+        }
+        let status = cmd.status()?;
         if !status.success() {
-            // `claude -p` reports errors as JSON on STDOUT; show error/result, never the credential.
-            let res: Value = fs::read(&result_json)
-                .ok()
-                .and_then(|b| serde_json::from_slice(&b).ok())
-                .unwrap_or(Value::Null);
-            let clip = |v: &Value| {
-                v.as_str()
-                    .unwrap_or("")
-                    .chars()
-                    .take(300)
-                    .collect::<String>()
+            // Show a short, redacted tail; `claude -p` reports its error as JSON on stdout.
+            let tail = |p: &Path| {
+                let t = fs::read_to_string(p).unwrap_or_default();
+                redact(
+                    t.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or(""),
+                    &secrets,
+                )
+                .chars()
+                .take(300)
+                .collect::<String>()
             };
             say(&format!(
-                "claude exited with {status}: error={} result={}",
-                clip(&res["error"]),
-                clip(&res["result"])
+                "{} exited with {status}: stdout: {} | stderr: {}",
+                drv.exe,
+                tail(&out_file),
+                tail(&err_file)
             ));
             keep(tmp);
-            bail!("claude failed");
+            bail!("{} failed", drv.exe);
         }
-        let mut transcripts = Vec::new();
-        for d in fs::read_dir(home.join(".claude/projects"))
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            for f in fs::read_dir(d.path()).into_iter().flatten().flatten() {
-                if f.path().extension().is_some_and(|e| e == "jsonl") {
-                    transcripts.push(f.path());
-                }
-            }
-        }
+        let transcripts = live_transcripts(which, &home);
         if transcripts.len() != 1 {
             say(&format!(
                 "expected exactly one transcript, found {}",
@@ -1511,36 +1755,11 @@ impl Goldens {
         let src = &transcripts[0];
         let bytes = fs::read(src)?;
         let text = String::from_utf8_lossy(&bytes);
-        let session = src
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
         say(&format!(
-            "transcript found: session {session} ({} lines); leak check",
+            "transcript found ({} lines); leak check",
             text.lines().count()
         ));
-        let mut leaks = Vec::new();
-        if let Ok(h) = std::env::var("HOME")
-            && h.len() > 1
-            && text.contains(&h)
-        {
-            leaks.push("the real home directory");
-        }
-        if text.contains(&token) {
-            leaks.push("the credential");
-        }
-        // Exactly one address is allowed: Claude Code's attribution constant. Any other is a leak.
-        let found = emails(&text);
-        let attribution_present = found.iter().any(|e| e == ATTRIBUTION_ADDRESS);
-        if found.iter().any(|e| e != ATTRIBUTION_ADDRESS) {
-            leaks.push("an email address other than the attribution address");
-        }
-        if let Some(u) = local_username()
-            && has_word(&text, &u)
-        {
-            leaks.push("the local username");
-        }
+        let (leaks, attribution_present) = leak_check(&text, &secrets);
         if !leaks.is_empty() {
             say(&format!(
                 "LEAK: transcript contains {}; refusing to write anything",
@@ -1549,26 +1768,25 @@ impl Goldens {
             keep(tmp);
             bail!("leak check failed");
         }
-        let out = self.dir().join(&a.name);
+        let out = self.dir().join(&name);
         write(&out.join("input.jsonl"), &bytes)?;
-        let version = Command::new(&bin)
-            .arg("--version")
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .to_string()
+        let version = agent_version(&bin);
+        let shown: Vec<String> = argv
+            .iter()
+            .map(|x| {
+                if x == CAPTURE_PROMPT {
+                    "<prompt>".into()
+                } else {
+                    x.replace(&proj.to_string_lossy().into_owned(), "<tmp>/project")
+                }
             })
-            .unwrap_or_default();
+            .collect();
         let meta = json!({
-            "captured_at": Command::new("date").args(["-u", "+%Y-%m-%dT%H:%M:%SZ"]).output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default(),
-            "session_id": session,
+            "captured_at": now_utc(),
+            "agent": drv.exe,
             "input_sha256": sha256_hex(&bytes),
-            "claude_version": version,
-            "model": a.model,
-            "command": format!("cd <tmp>/project && env -i HOME=<tmp>/home XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp>/home/.claude {}=<redacted> claude -p <prompt> --model {} --output-format json --allowedTools Read Glob Bash(ls) < /dev/null", kind.var(), a.model),
+            "agent_version": version,
+            "command": format!("cd <tmp>/project && env -i HOME=<tmp>/home XDG_*=<tmp> CLAUDE_CONFIG_DIR/CODEX_HOME/COPILOT_HOME=<tmp>/home/... <credentials redacted> {} {} < /dev/null", drv.exe, shown.join(" ")),
             "prompt": CAPTURE_PROMPT,
         });
         write(
@@ -1576,32 +1794,30 @@ impl Goldens {
             (serde_json::to_string_pretty(&meta)? + "\n").as_bytes(),
         )?;
         say(&format!(
-            "written: goldens/{}/input.jsonl; capturing the golden set",
-            a.name
+            "written: goldens/{name}/input.jsonl; capturing the golden set"
         ));
         let pin = json!({
-            "name": "claude",
+            "name": drv.exe,
             "version": version,
             "binary_path": bin.to_string_lossy(),
             "binary_sha256": hash_file(&bin).unwrap_or_default(),
             "captured_at": now_utc(),
         });
-        let captured = self.capture(
-            Harness::Claude,
+        self.capture(
+            drv.harness,
             &out.join("input.jsonl"),
-            &a.name,
+            &name,
             None,
             Some(pin),
-        );
-        captured?;
+        )?;
         // Record which address the leak check let through, in the set's manifest entry.
         let mut m = self.read_manifest()?;
         if let Some(e) = m["goldens"]
             .as_array_mut()
-            .and_then(|s| s.iter_mut().find(|e| e["name"] == a.name))
+            .and_then(|s| s.iter_mut().find(|e| e["name"] == name))
         {
             e["leak_check"] = json!({
-                "refused": ["real home directory", "credential", "local username", "email address other than the allowed one"],
+                "refused": ["real home directory", "credential (token, key, or any string from a seeded credential file)", "local username", "email address other than the allowed one"],
                 "allowed_addresses": [ATTRIBUTION_ADDRESS],
                 "allowed_address_present": attribution_present,
                 "reason": "noreply@anthropic.com is Claude Code's own Co-Authored-By attribution constant, injected in a system-reminder; it is not the user's address",
@@ -1609,6 +1825,33 @@ impl Goldens {
         }
         self.write_manifest(&m)
     }
+}
+
+/// A real executable for `exe`: --bin, then $<EXE>_BIN, then PATH, then ~/.local/bin.
+fn resolve_agent(exe: &str, explicit: Option<PathBuf>) -> Result<PathBuf> {
+    let is_exe = |p: &Path| {
+        p.is_file()
+            && fs::metadata(p)
+                .map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o111 != 0)
+                .unwrap_or(false)
+    };
+    let env_name = format!("{}_BIN", exe.to_uppercase());
+    let candidates: Vec<PathBuf> = explicit
+        .into_iter()
+        .chain(std::env::var_os(&env_name).map(PathBuf::from))
+        .chain(
+            std::env::var("PATH")
+                .unwrap_or_default()
+                .split(':')
+                .map(|d| Path::new(d).join(exe)),
+        )
+        .chain(std::env::var_os("HOME").map(|h| Path::new(&h).join(".local/bin").join(exe)))
+        .collect();
+    let found = candidates
+        .iter()
+        .find(|p| is_exe(p))
+        .ok_or_else(|| anyhow!("no {exe} executable found (use --bin or {env_name})"))?;
+    Ok(fs::canonicalize(found)?)
 }
 
 #[cfg(test)]
@@ -1664,6 +1907,46 @@ mod tests {
     fn username_is_matched_as_a_whole_word() {
         assert!(has_word("-rw-r--r--  1 bobby  staff 12 notes.txt", "bobby"));
         assert!(!has_word("bobbysocks and abobby", "bobby"));
+    }
+
+    #[test]
+    fn secret_strings_come_from_json_and_toml_values_only() {
+        let json =
+            secret_strings(r#"{"tokens":{"access":"abcdefghijklmnopqrstuvwxyz"},"short":"x"}"#);
+        assert_eq!(json, ["abcdefghijklmnopqrstuvwxyz"]);
+        let toml = secret_strings("model = \"o3\"\napi_key = \"abcdefghijklmnopqrstuvwxyz\"\n");
+        assert_eq!(toml, ["abcdefghijklmnopqrstuvwxyz"]);
+    }
+
+    #[test]
+    fn leak_check_refuses_secrets_and_other_addresses_but_not_the_attribution_address() {
+        let secrets = vec!["abcdefghijklmnopqrstuvwxyz".to_string()];
+        let ok = "Co-Authored-By: Claude <noreply@anthropic.com> listing: notes.txt other.txt";
+        let (leaks, attributed) = leak_check(ok, &secrets);
+        assert!(attributed);
+        // The username is the machine's own; only assert on what this text could trip.
+        assert!(!leaks.contains(&"a credential") && !leaks.iter().any(|l| l.contains("email")));
+        let (leaks, _) = leak_check("token abcdefghijklmnopqrstuvwxyz here", &secrets);
+        assert!(leaks.contains(&"a credential"));
+        let (leaks, _) = leak_check("mail someone@example.org", &secrets);
+        assert!(leaks.iter().any(|l| l.contains("email")));
+    }
+
+    #[test]
+    fn live_commands_keep_prompt_and_project_but_no_credentials() {
+        let proj = Path::new("/tmp/p");
+        let codex = live_argv(LiveHarness::Codex, None, proj, "PROMPT");
+        assert_eq!(
+            codex[..4],
+            ["exec", "--skip-git-repo-check", "--sandbox", "read-only"]
+        );
+        assert!(codex.contains(&"/tmp/p".to_string()) && codex.last().unwrap() == "PROMPT");
+        let claude = live_argv(LiveHarness::Claude, None, proj, "PROMPT");
+        assert!(
+            claude.contains(&"claude-haiku-4-5-20251001".to_string())
+                && claude.contains(&"Bash(ls)".to_string())
+        );
+        assert!(driver(LiveHarness::Cursor).is_err() && driver(LiveHarness::Opencode).is_err());
     }
 
     #[test]
