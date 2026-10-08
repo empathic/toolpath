@@ -40,7 +40,7 @@ pub(crate) struct User {
 /// `id` is the graph UUID; `url` is the server-rendered share URL.
 #[derive(Debug, Clone)]
 pub(crate) struct AnonGraphResponse {
-    pub id: String,
+    pub id: uuid::Uuid,
     pub url: String,
     /// The stored paths in document order; empty from a server that
     /// predates the field.
@@ -57,7 +57,7 @@ pub(crate) struct AnonGraphResponse {
 /// request.
 #[derive(Debug, Clone)]
 pub(crate) struct CreatedGraph {
-    pub id: String,
+    pub id: uuid::Uuid,
     pub url: String,
     pub visibility: pathbase_client::types::Visibility,
     /// The stored paths in document order, each with the `path.id` the
@@ -66,23 +66,41 @@ pub(crate) struct CreatedGraph {
     pub paths: Vec<pathbase_client::types::CreatedPath>,
 }
 
-/// The URL a path is addressed by on a Pathbase server:
-/// `<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>`, owner and
-/// repo percent-encoded as in the API routes. The key a
-/// `sync::RemoteRecord` sits under.
+/// The URL a path is addressed by on a Pathbase server,
+/// `<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>`: the key a
+/// `sync::RemoteRecord` sits under. One spelling per path, however
+/// the parts were typed: scheme and host lowercase, no trailing slash
+/// on the server, owner and repo percent-encoded exactly once as in
+/// the API routes, the ids lowercase and hyphenated.
 pub(crate) fn remote_path_url(
     base_url: &str,
     owner: &str,
     repo: &str,
-    graph_id: &str,
+    graph_id: &uuid::Uuid,
     path_id: &uuid::Uuid,
 ) -> String {
     use pathbase_client::encode_segment;
+    use percent_encoding::percent_decode_str;
+
+    let segment = |s: &str| encode_segment(&percent_decode_str(s).decode_utf8_lossy());
+    let base = base_url.trim_end_matches('/');
+    let server = match base.split_once("://") {
+        Some((scheme, rest)) => {
+            let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            format!(
+                "{}://{}{path}",
+                scheme.to_ascii_lowercase(),
+                host.to_ascii_lowercase()
+            )
+        }
+        None => base.to_string(),
+    };
     format!(
-        "{}/u/{}/{}/graphs/{graph_id}/paths/{path_id}",
-        base_url.trim_end_matches('/'),
-        encode_segment(owner),
-        encode_segment(repo)
+        "{server}/u/{}/{}/graphs/{}/paths/{}",
+        segment(owner),
+        segment(repo),
+        graph_id.hyphenated(),
+        path_id.hyphenated()
     )
 }
 
@@ -513,7 +531,7 @@ pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<An
         Ok(resp) => {
             let inner = resp.into_inner();
             Ok(AnonGraphResponse {
-                id: inner.id.to_string(),
+                id: inner.id,
                 url: inner.url,
                 paths: inner.paths,
             })
@@ -585,7 +603,7 @@ pub(crate) fn graphs_post(
         Ok(resp) => {
             let inner = resp.into_inner();
             Ok(CreatedGraph {
-                id: inner.id.to_string(),
+                id: inner.id,
                 url: inner.url,
                 visibility: inner.visibility,
                 paths: inner.paths,
@@ -849,7 +867,7 @@ pub(crate) fn graphs_post_streamed(
     };
     let shell_json = serde_json::to_string(&shell).context("serialize graph")?;
     let mut created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
-    let graph_id = uuid::Uuid::parse_str(&created.id).context("graph id is not a UUID")?;
+    let graph_id = created.id;
 
     let client = BatchClient::new(base_url, token)?;
     match stream_paths(&client, owner, repo, &graph_id, doc, budget) {
@@ -1431,9 +1449,10 @@ pub(crate) mod tests {
 
     #[test]
     fn remote_path_url_encodes_owner_and_repo_under_the_server() {
+        let graph_id: uuid::Uuid = TEST_UUID.parse().unwrap();
         let path_id: uuid::Uuid = PATH_ID.parse().unwrap();
         assert_eq!(
-            remote_path_url("https://pathbase.dev/", "a b", "r/s", TEST_UUID, &path_id),
+            remote_path_url("https://pathbase.dev/", "a b", "r/s", &graph_id, &path_id),
             format!("https://pathbase.dev/u/a%20b/r%2Fs/graphs/{TEST_UUID}/paths/{PATH_ID}")
         );
         assert_eq!(
@@ -1441,10 +1460,39 @@ pub(crate) mod tests {
                 "http://127.0.0.1:8080",
                 "me",
                 "pathstash",
-                TEST_UUID,
+                &graph_id,
                 &path_id
             ),
             format!("http://127.0.0.1:8080/u/me/pathstash/graphs/{TEST_UUID}/paths/{PATH_ID}")
+        );
+    }
+
+    /// The same path reached through differently typed parts gets one
+    /// key: the server's case and trailing slash, an already-encoded
+    /// owner or repo, and the ids' case all normalise away.
+    #[test]
+    fn remote_path_url_is_one_spelling_per_path() {
+        let graph_id: uuid::Uuid = TEST_UUID.parse().unwrap();
+        let path_id: uuid::Uuid = PATH_ID.parse().unwrap();
+        let key = remote_path_url("https://pathbase.dev", "a b", "r/s", &graph_id, &path_id);
+        assert_eq!(
+            remote_path_url(
+                "HTTPS://Pathbase.DEV/",
+                "a%20b",
+                "r%2Fs",
+                &TEST_UUID.to_uppercase().parse().unwrap(),
+                &PATH_ID.to_uppercase().parse().unwrap()
+            ),
+            key
+        );
+        assert_eq!(
+            remote_path_url("https://pathbase.dev//", "a b", "r/s", &graph_id, &path_id),
+            key
+        );
+        // A path under the host is the server's, not the key's, and keeps its case.
+        assert_eq!(
+            remote_path_url("HTTP://Host:8080/Base/", "me", "r", &graph_id, &path_id),
+            format!("http://host:8080/Base/u/me/r/graphs/{TEST_UUID}/paths/{PATH_ID}")
         );
     }
 
@@ -1504,7 +1552,7 @@ pub(crate) mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
         assert_eq!(
             created.visibility,
             pathbase_client::types::Visibility::Unlisted
@@ -1581,7 +1629,7 @@ pub(crate) mod tests {
             Box::leak(graph_document_json().into_boxed_str()),
         );
         let resp = anon_graphs_post(&server.base(), r#"{"graph":{"id":"g"},"paths":[]}"#).unwrap();
-        assert_eq!(resp.id, TEST_UUID);
+        assert_eq!(resp.id.to_string(), TEST_UUID);
         assert!(resp.url.ends_with(TEST_UUID));
 
         let req = String::from_utf8(server.request()).unwrap();
@@ -2053,7 +2101,7 @@ pub(crate) mod tests {
         let server = MockServer::start_sequence(responses);
 
         let created = post_streamed(&server, &path, 1000).unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), batches.len() + 1);
@@ -2280,7 +2328,7 @@ pub(crate) mod tests {
             ("HTTP/1.1 201 Created", graph_document_json()),
         ]);
         let created = post_streamed(&server, &path, 1000).unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), 4);
@@ -2312,7 +2360,7 @@ pub(crate) mod tests {
             ("HTTP/1.1 201 Created", older),
         ]);
         let created = post_streamed(&server, &path, 1000).unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
         let reqs = server.requests();
         assert_eq!(reqs.len(), 4);
         assert_eq!(
