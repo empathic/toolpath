@@ -1,0 +1,23 @@
+{"type":"session.start","id":"e1","timestamp":"2026-06-30T10:00:00.000Z","data":{"sessionId":"demo","version":1,"producer":"copilot-agent","copilotVersion":"1.0.67","context":{"cwd":"/tmp/demo","gitRoot":"/tmp/demo","repository":"acme/demo","hostType":"github","branch":"main","headCommit":"abc123"}}}
+{"type":"session.model_change","id":"e1b","parentId":"e1","timestamp":"2026-06-30T10:00:00.500Z","data":{"newModel":"auto"}}
+{"type":"system.message","id":"e2","parentId":"e1","timestamp":"2026-06-30T10:00:00.700Z","data":{"role":"system","content":"You are the GitHub Copilot CLI."}}
+{"type":"user.message","id":"e3","parentId":"e2","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"Set up a tiny Rust project and check it for TODOs."}}
+{"type":"assistant.turn_start","id":"e4","parentId":"e3","timestamp":"2026-06-30T10:00:02.000Z","data":{}}
+{"type":"assistant.message","id":"e5","parentId":"e4","timestamp":"2026-06-30T10:00:03.000Z","data":{"messageId":"m1","model":"claude-haiku-4.5","content":"I'll start by listing the directory.","reasoningText":"Let me see what's here first.","outputTokens":120}}
+{"type":"tool.execution_start","id":"e6","parentId":"e5","timestamp":"2026-06-30T10:00:04.000Z","data":{"toolCallId":"c1","toolName":"bash","arguments":{"command":"ls -la","description":"List files"},"model":"claude-haiku-4.5"}}
+{"type":"tool.execution_complete","id":"e7","parentId":"e6","timestamp":"2026-06-30T10:00:05.000Z","data":{"toolCallId":"c1","success":true,"result":{"content":"Cargo.toml\nsrc\n","detailedContent":"Cargo.toml\nsrc\n"}}}
+{"type":"assistant.message","id":"e8","parentId":"e7","timestamp":"2026-06-30T10:00:06.000Z","data":{"model":"claude-haiku-4.5","content":"Creating the entry point.","outputTokens":90}}
+{"type":"tool.execution_start","id":"e9","parentId":"e8","timestamp":"2026-06-30T10:00:07.000Z","data":{"toolCallId":"c2","toolName":"create_file","arguments":{"path":"src/main.rs","content":"fn main() {\n    println!(\"hi\");\n}\n"}}}
+{"type":"tool.execution_complete","id":"e10","parentId":"e9","timestamp":"2026-06-30T10:00:08.000Z","data":{"toolCallId":"c2","success":true}}
+{"type":"tool.execution_start","id":"e11","parentId":"e10","timestamp":"2026-06-30T10:00:09.000Z","data":{"toolCallId":"c3","toolName":"read_file","arguments":{"path":"Cargo.toml"}}}
+{"type":"tool.execution_complete","id":"e12","parentId":"e11","timestamp":"2026-06-30T10:00:10.000Z","data":{"toolCallId":"c3","success":true,"result":{"content":"[package]\nname = \"demo\"\n"}}}
+{"type":"tool.execution_start","id":"e13","parentId":"e12","timestamp":"2026-06-30T10:00:11.000Z","data":{"toolCallId":"c4","toolName":"grep_search","arguments":{"query":"TODO","path":"."}}}
+{"type":"tool.execution_complete","id":"e14","parentId":"e13","timestamp":"2026-06-30T10:00:12.000Z","data":{"toolCallId":"c4","success":true,"result":{"content":"no matches found"}}}
+{"type":"tool.execution_start","id":"e15","parentId":"e14","timestamp":"2026-06-30T10:00:13.000Z","data":{"toolCallId":"c5","toolName":"read_file","arguments":{"path":"missing.txt"}}}
+{"type":"tool.execution_complete","id":"e16","parentId":"e15","timestamp":"2026-06-30T10:00:14.000Z","data":{"toolCallId":"c5","success":false,"result":{"content":"Error: no such file or directory (os error 2)"}}}
+{"type":"subagent.started","id":"e17","parentId":"e16","timestamp":"2026-06-30T10:00:15.000Z","data":{"id":"sub-1","prompt":"review src/main.rs for issues"}}
+{"type":"subagent.completed","id":"e18","parentId":"e17","timestamp":"2026-06-30T10:00:18.000Z","data":{"id":"sub-1","result":"looks good, no issues"}}
+{"type":"skill.invoked","id":"e19","parentId":"e18","timestamp":"2026-06-30T10:00:19.000Z","data":{"skill":"rustfmt"}}
+{"type":"assistant.message","id":"e20","parentId":"e19","timestamp":"2026-06-30T10:00:20.000Z","data":{"model":"claude-haiku-4.5","content":"Done. Created src/main.rs; no TODOs found.","outputTokens":60}}
+{"type":"assistant.turn_end","id":"e21","parentId":"e20","timestamp":"2026-06-30T10:00:21.000Z","data":{}}
+{"type":"session.task_complete","id":"e22","parentId":"e21","timestamp":"2026-06-30T10:00:22.000Z","data":{"summary":"Created a tiny Rust project; scanned for TODOs."}}

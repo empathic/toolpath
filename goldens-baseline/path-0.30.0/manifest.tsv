@@ -1,0 +1,10 @@
+# toolpath baseline capture 2026-10-08T17:23:30Z
+# path 0.30.0 at /nix/store/hxkr9ys8fv75xa8zk0bvab3ib5dp3lf9-toolpath-path-0.30.0/bin/path; repo HEAD 465de3d (wip/bdelanghe)
+harness	fixture	input_sha	ir_docs	ir_sorted_sha	claude_lines	claude_sha	status
+codex	sample-codex-python	242eac251eb3109a	1	9ab8f2c1ef668bac	97	b6a1092087bf39db	ok
+codex	compacted_session	64722b16c213361e	1	2d4b7c93b8d0133d	9	924d0afc3cdc15ed	ok
+copilot	real-session	7f9f41b8322107cd	1	c6b598174ffaaf30	26	7f0e1d87df13906d	ok
+copilot	sample-session	e67f243e7434670e	1	9eb132c9cabc8f58	12	96fc384e9ec91e32	ok
+claude	compacted_session	ce35c60cc9e0c62d	0	-	0	-	derive-failed
+pi	basic_session	b59700ca57e57c11	1	f9aaeaa318af9646	5	495ed8dea207462e	ok
+pi	compacted_session	82a78bb6def1dfba	1	9969e1302a5faa2a	6	fc51817ce7174ef4	ok
