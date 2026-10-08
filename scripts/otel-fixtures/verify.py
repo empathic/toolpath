@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compare a fresh capture tree (argv[1]) with the committed fixtures, byte for byte
-(the JSON files; the exporter request bodies, *.binpb, are not committed yet)."""
+(the JSON files and the exporter request bodies, *.binpb)."""
 import sys
 from pathlib import Path
 
@@ -10,7 +10,7 @@ FIXTURES = Path(__file__).resolve().parent.parent.parent / "test-fixtures" / "ot
 def main():
     fresh = Path(sys.argv[1])
     bad = []
-    files = sorted(fresh.rglob("*.json"))
+    files = sorted([*fresh.rglob("*.json"), *fresh.rglob("*.binpb")])
     if not files:
         sys.exit("verify: the fresh capture tree is empty")
     for new in files:

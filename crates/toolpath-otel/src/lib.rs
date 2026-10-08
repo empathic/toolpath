@@ -2,14 +2,20 @@
 
 mod branch;
 mod derive;
+mod entries;
 mod error;
 mod generation;
 mod harness;
 mod hash;
+mod input;
 mod jsonl;
 mod normalize;
 mod otlp;
 mod profile;
+#[cfg(feature = "protobuf")]
+mod proto;
+#[cfg(feature = "protobuf")]
+mod protojson;
 mod provider;
 mod record;
 mod session;
@@ -20,8 +26,11 @@ mod walk;
 mod tests;
 
 pub use error::{OtelError, Result};
+pub use input::{DecodeLimits, decode_input, decode_input_with_limit, decode_input_with_limits};
 pub use jsonl::{Remote, Settle, derive_jsonl};
 pub use profile::ProfileSelection;
+#[cfg(feature = "protobuf")]
+pub use protojson::{decode_protobuf, encode_protobuf};
 pub use record::{GenerationBatch, GenerationRecord, MessageHash, StoredMessage, read_generations};
 /// The `toolpath` types [`derive_jsonl`] takes and returns, so a caller
 /// needs no `toolpath` dependency of its own to use it.

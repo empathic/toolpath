@@ -4,6 +4,7 @@ pub use crate::ProfileSelection;
 pub use crate::error::{OtelError, Result};
 pub use crate::generation::{Absent, CacheBasis, Generation, History, Message, ToolCall, Usage};
 pub use crate::hash::derived_session_id;
+pub use crate::input::decode_input;
 pub use crate::provider::session_to_view;
 pub use crate::session::Session;
 pub use crate::stitch::{TurnGraph, stitch};
@@ -92,23 +93,4 @@ pub fn derive_paths<'a>(
         })
         .collect();
     Ok((paths, out))
-}
-
-/// A JSON document, else JSON lines; a JSON value that is not OTLP is
-/// [`OtelError::NotOtlp`].
-pub fn decode_input(bytes: &[u8], _name: Option<&str>) -> Result<Vec<Value>> {
-    let values: Vec<Value> = match serde_json::from_slice(bytes) {
-        Ok(v) => vec![v],
-        Err(_) => std::str::from_utf8(bytes)
-            .expect("utf-8 fixture")
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).expect("JSON line"))
-            .collect(),
-    };
-    if values.iter().all(crate::otlp::is_otlp) {
-        Ok(values)
-    } else {
-        Err(OtelError::NotOtlp)
-    }
 }

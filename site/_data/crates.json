@@ -81,11 +81,11 @@
   },
   {
     "name": "toolpath-otel",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "description": "Derive Toolpath provenance documents from OpenTelemetry LLM traces (OTLP)",
     "docs": "https://docs.rs/toolpath-otel",
     "crate": "https://crates.io/crates/toolpath-otel",
-    "role": "Takes the OTLP/HTTP JSON request bodies (traces and logs) of one agent session and walks every span and its correlated log records through profiles: `openrouter` (OpenRouter Broadcast), `semconv` (the OpenTelemetry GenAI semantic conventions, as emitted by the official instrumentations) and a minimal explicit-only `openinference`. Stitches the requests into a turn DAG with chained content ids and derives a Toolpath `Path` via `toolpath-convo`'s shared `derive_path`, keeping per-step usage, cost and routing under `extra[\"otel\"]`; write, edit and `apply_patch` tool calls become file changes. `derive_jsonl` turns a growing session into stateless incremental JSONL appends for Pathbase's streaming routes. Pure functions over parsed JSON, so Pathbase can call it server-side."
+    "role": "Takes the OTLP/HTTP JSON request bodies (traces and logs) of one agent session and walks every span and its correlated log records through profiles: `openrouter` (OpenRouter Broadcast), `semconv` (the OpenTelemetry GenAI semantic conventions, as emitted by the official instrumentations) and a minimal explicit-only `openinference`. Stitches the requests into a turn DAG with chained content ids and derives a Toolpath `Path` via `toolpath-convo`'s shared `derive_path`, keeping per-step usage, cost and routing under `extra[\"otel\"]`; write, edit and `apply_patch` tool calls become file changes. `derive_jsonl` turns a growing session into stateless incremental JSONL appends for Pathbase's streaming routes. Decodes the transport too: JSON lines, OTLP protobuf bodies, Collector file-exporter frames, gzip and zstd (features `protobuf` and `compression`), under one decompressed-size budget. Pure functions over bytes and parsed JSON, so Pathbase can call it server-side."
   },
   {
     "name": "toolpath-cursor",

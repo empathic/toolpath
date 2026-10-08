@@ -123,10 +123,7 @@ Scenario to instrumentation:
 - The fixture clock (`otlp_json.install_fixture_clock`) makes the SDK stamp
   spans (and, in event mode, log records) from a counter that starts at the
   first rank, so the times are already ranked when the exporter sends them.
-- `./capture.sh verify` must report the JSON files identical. The `*.binpb`
-  request bodies are written but not committed yet, so `verify` does not
-  compare them, and a capture into `test-fixtures/otel/` leaves them
-  untracked.
+- `./capture.sh verify` must report the files identical, `*.binpb` included.
 
 ## Binary bodies and event mode
 

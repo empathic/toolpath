@@ -1,6 +1,7 @@
 //! Committed OTel fixtures, and the goldens and snapshots derived from them,
 //! carry no host paths, host names or keys, and every capture directory has
-//! its traces, manifest and oracle.
+//! its traces, manifest and oracle. Binary and zstd fixtures are scanned as
+//! text via `scan_text` (see `encodings/README.md`).
 
 use super::common::captures::SEMCONV;
 use serde_json::{Value, json};
@@ -48,6 +49,7 @@ fn scan_roots() -> Vec<PathBuf> {
         root().join("semconv"),
         root().join("openinference"),
         root().join("equivalence"),
+        root().join("encodings"),
         root().join("openrouter"),
         crate_dir.join("tests/golden"),
         crate_dir.join("tests/snapshots"),
@@ -91,11 +93,44 @@ fn the_leak_scan_covers_the_goldens_and_snapshots() {
     }
 }
 
+/// The text a fixture is scanned as: the file itself (lossy UTF-8), or for
+/// zstd the decoded OTLP/JSON when this build can decode it.
+fn scan_text(f: &Path, bytes: &[u8]) -> String {
+    #[cfg(all(feature = "compression", feature = "protobuf"))]
+    if f.extension().is_some_and(|e| e == "zst") {
+        let name = f.file_name().and_then(|n| n.to_str());
+        match crate::decode_input(bytes, name) {
+            Ok(values) => return serde_json::to_string(&values).unwrap(),
+            // `nested-5.json.zst` is one layer past `MAX_LAYERS` by design;
+            // its payload is `nested-4`'s, which decodes.
+            Err(crate::OtelError::Decompress(_)) => {
+                assert!(name.is_some_and(|n| n.starts_with("nested-")), "{name:?}");
+            }
+            Err(e) => panic!("{}: {e}", f.display()),
+        }
+    }
+    let _ = f;
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 #[test]
 fn fixtures_hold_no_host_paths_names_or_keys() {
     let all = scanned_files(&scan_roots());
     for f in all {
-        let text = std::fs::read_to_string(&f).unwrap();
+        let bytes = std::fs::read(&f).unwrap();
+        let ext = f.extension().and_then(|e| e.to_str()).unwrap_or("");
+        // Every zstd fixture is a derived encoding form (see the module doc).
+        if ext == "zst" {
+            assert!(
+                f.parent().is_some_and(|p| p.ends_with("encodings")),
+                "{}: zstd outside encodings/",
+                f.display()
+            );
+        }
+        let text = scan_text(&f, &bytes);
+        // Protobuf embeds strings without JSON's quotes (zstd of protobuf
+        // decodes to JSON, so it keeps them).
+        let binary = matches!(ext, "binpb" | "pb" | "protobuf");
         let name = f.display();
         assert!(!text.contains("/Users/"), "{name}");
         for (i, _) in text.match_indices("/home/") {
@@ -112,6 +147,11 @@ fn fixtures_hold_no_host_paths_names_or_keys() {
             "sk-ant-fixture-dummy",
             "fixture-dummy-key",
         ] {
+            let needle = if binary {
+                needle.trim_matches('"')
+            } else {
+                needle
+            };
             assert!(!text.contains(needle), "{name}: {needle}");
         }
     }
@@ -194,12 +234,17 @@ fn semconv_event_captures_recorded_event_only_content() {
     }
 }
 
-/// The event captures keep the exporter's logs request body as `logs.json`;
-/// the openinference capture and the SYNTHETIC copy have no exporter.
+/// The exporter's request bodies sit beside the JSON written without the
+/// Rust decoder: `traces.binpb` in every semconv capture, `logs.json` and
+/// `logs.binpb` in the event captures; the openinference capture and the
+/// SYNTHETIC copy have none.
 #[test]
 fn semconv_captures_keep_the_exported_request_bodies() {
     for p in SEMCONV {
-        for (mode, files) in [("span", &[][..]), ("event", &["logs.json"][..])] {
+        for (mode, files) in [
+            ("span", &["traces.binpb"][..]),
+            ("event", &["traces.binpb", "logs.binpb", "logs.json"][..]),
+        ] {
             let d = root().join(format!("semconv/{p}/{mode}"));
             for f in files {
                 let bytes = std::fs::read(d.join(f)).unwrap_or_default();
@@ -217,6 +262,7 @@ fn semconv_captures_keep_the_exported_request_bodies() {
         "semconv/openai-responses/span-continuation",
     ] {
         let d = root().join(dir);
+        assert!(!d.join("traces.binpb").exists(), "{dir}");
         assert!(
             json(d.join("manifest.json")).get("otlp_exporter").is_none(),
             "{dir}"
