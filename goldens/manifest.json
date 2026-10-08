@@ -25,9 +25,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+          "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
           "dirty": true,
-          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+          "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -87,9 +87,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+          "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
           "dirty": true,
-          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+          "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -163,9 +163,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+          "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
           "dirty": true,
-          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+          "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -225,9 +225,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+          "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
           "dirty": true,
-          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+          "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -287,9 +287,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+          "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
           "dirty": true,
-          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+          "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -349,9 +349,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+          "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
           "dirty": true,
-          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+          "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -389,8 +389,8 @@
   ],
   "informational": {
     "rustc": "",
-    "toolpath_dirty": true,
-    "toolpath_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+    "toolpath_dirty": false,
+    "toolpath_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
   },
   "known_defects": [
     {
@@ -420,9 +420,9 @@
       "file": "goldens/roundtrip/claude-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "7e6ea9e6d866e4bee9885c3f2fe836981e8228dc33dd07015da013cbba65ef89"
     },
@@ -430,9 +430,9 @@
       "file": "goldens/roundtrip/claude-compacted-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
     },
@@ -440,9 +440,9 @@
       "file": "goldens/roundtrip/claude-compacted-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "29be8cb8c53fa3d9a49ec74c4f3c373adc973f8f03a9113a7accaaa74692d6f0"
     },
@@ -450,9 +450,9 @@
       "file": "goldens/roundtrip/claude-compacted-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
     },
@@ -460,9 +460,9 @@
       "file": "goldens/roundtrip/claude-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "9c72e3e059c6ba73c3e75e8be9f28242cfbd8d23ce6112daf0310c5880f5d7b8"
     },
@@ -470,9 +470,9 @@
       "file": "goldens/roundtrip/claude-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "1a7c14aa1d5521511d710acaa9aa43f8c6b91ce1433fffe91a911fbe75c3c0ec"
     },
@@ -480,9 +480,9 @@
       "file": "goldens/roundtrip/claude-session-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "d5fee6928c95df428b1688f48949b4280b92022abe2e2254640e55dcb5f01273"
     },
@@ -490,9 +490,9 @@
       "file": "goldens/roundtrip/claude-session-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "90b16b3f49f9b48e546d0f9c55b8109b0a076b65fa0baf4fb44bf7a70de34e80"
     },
@@ -500,9 +500,9 @@
       "file": "goldens/roundtrip/claude-session-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "bc8ae191b9776da0470eefacb6dd084fc7eb733505b6dc1612aa582a3fca8eec"
     },
@@ -510,9 +510,9 @@
       "file": "goldens/roundtrip/codex-claude.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "8a1d7742939d8a32b2d97eb56eb02e8cdaafe6f5cdeb05a4fc2350d37e9003d9"
     },
@@ -520,9 +520,9 @@
       "file": "goldens/roundtrip/codex-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "7df3f81e3dd637aabee9ee606c3b2387541a6d62b86c333b6048936c2a5d573f"
     },
@@ -530,9 +530,9 @@
       "file": "goldens/roundtrip/codex-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
     },
@@ -540,9 +540,9 @@
       "file": "goldens/roundtrip/copilot-claude.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
     },
@@ -550,9 +550,9 @@
       "file": "goldens/roundtrip/copilot-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "c55f0de8d0b297de18a1201c8d57560e8fc9d3c7f6fffb6b89d73e1dceafd809"
     },
@@ -560,9 +560,9 @@
       "file": "goldens/roundtrip/copilot-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "d7e405a24064cf585263d7fc443b7cf330694d27c4611fce46f098d95a4cf9e5"
     },
@@ -570,9 +570,9 @@
       "file": "goldens/roundtrip/pi-claude.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
     },
@@ -580,9 +580,9 @@
       "file": "goldens/roundtrip/pi-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
     },
@@ -590,9 +590,9 @@
       "file": "goldens/roundtrip/pi-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
+        "binary_sha256": "5cabbc7ebb35dcebfc24a766893029701bb2c08a69e94b458ece0d6c09ebf0ea",
         "dirty": true,
-        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
+        "repo_rev": "27f7536ecd9ea00816fd6788e1603625ad48c6f5"
       },
       "sha256": "cfdc5a9e5091fa29e5b2fa4e276c4c4b65a04cb931206f6fc536730010af901a"
     }
