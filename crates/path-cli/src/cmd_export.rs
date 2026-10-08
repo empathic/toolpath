@@ -869,6 +869,12 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         use crate::cmd_pathbase::preflight_auth;
 
         let file = cache_ref(&args.input)?;
+        // A cache id names a session the manifest may know; a file does
+        // not, and its upload is recorded nowhere. The session's stamp
+        // is taken before the body is read, so a sync that rewrites
+        // the entry during the upload leaves a record older than the
+        // source, never newer than the body that was sent.
+        let session = crate::sync::session_of_cache_id(&args.input);
         let body = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read {}", file.display()))?;
         let upload = PathbaseUploadArgs {
@@ -883,9 +889,7 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
         let uploaded = run_pathbase_inner(auth, base_url, upload, &body, &summary_source)?;
-        // A cache id names a session the manifest may know; a file does
-        // not, and its upload is recorded nowhere.
-        if let Some((artifact_type, id, stamp)) = crate::sync::session_of_cache_id(&args.input)
+        if let Some((artifact_type, id, stamp)) = session
             && let Ok(doc) = toolpath::v1::Graph::from_json(&body)
         {
             record_remotes(artifact_type, &id, None, &doc, &uploaded, stamp);
@@ -2128,14 +2132,9 @@ mod tests {
         )
     }
 
-    /// `p export pathbase <cache id>` records the upload on the session
-    /// the manifest says the entry was derived from, with that record's
-    /// stamp; a file input is recorded nowhere.
-    #[test]
-    fn pathbase_export_of_a_cache_entry_records_against_its_session() {
-        use crate::cmd_pathbase::tests::{
-            MockServer, graph_created_json, me_response_body, write_credentials,
-        };
+    /// Run `f` with the config directory pinned to a fresh tempdir,
+    /// which `f` receives. Holds `TEST_ENV_LOCK` for the duration.
+    fn with_config_dir<R>(f: impl FnOnce(&std::path::Path) -> R) -> R {
         let _g = crate::config::TEST_ENV_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2144,18 +2143,59 @@ mod tests {
         unsafe {
             std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path());
         }
-        let result = std::panic::catch_unwind(|| {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(temp.path())));
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var(crate::config::CONFIG_DIR_ENV, v),
+                None => std::env::remove_var(crate::config::CONFIG_DIR_ENV),
+            }
+        }
+        match result {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
+
+    /// The manifest record of Claude session `sess` naming cache entry
+    /// `claude-sess`, stamped `2026-03-01T00:00:00Z/<size>`.
+    fn record_sess(size: u64) {
+        let artifact = crate::artifact::ArtifactRef {
+            artifact_type: crate::artifact::ArtifactType::Claude,
+            id: "sess".into(),
+            path: Some("/p".into()),
+            modified: Some("2026-03-01T00:00:00Z".parse().unwrap()),
+            size: Some(size),
+        };
+        let config = crate::config::Config::load().unwrap();
+        crate::sync::record_artifact(&config, &artifact, "claude-sess").unwrap();
+    }
+
+    /// `p export pathbase <input>` to `alex/pathstash` on `base`.
+    fn export_to(config_dir: &std::path::Path, input: &str, base: &str) -> Result<()> {
+        crate::cmd_pathbase::tests::write_credentials(config_dir, base);
+        run_pathbase(PathbaseExportArgs {
+            input: input.to_string(),
+            url: Some(base.to_string()),
+            anon: false,
+            repo: Some(RepoSpec {
+                owner: "alex".to_string(),
+                name: "pathstash".to_string(),
+            }),
+            name: None,
+            public: false,
+        })
+    }
+
+    /// `p export pathbase <cache id>` records the upload on the session
+    /// the manifest says the entry was derived from, with that record's
+    /// stamp; a file input is recorded nowhere.
+    #[test]
+    fn pathbase_export_of_a_cache_entry_records_against_its_session() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_created_json, me_response_body};
+        with_config_dir(|config_dir| {
             let doc = make_path_doc();
             crate::cache::write_cached("claude-sess", &doc, true).unwrap();
-            let artifact = crate::artifact::ArtifactRef {
-                artifact_type: crate::artifact::ArtifactType::Claude,
-                id: "sess".into(),
-                path: Some("/p".into()),
-                modified: Some("2026-03-01T00:00:00Z".parse().unwrap()),
-                size: Some(99),
-            };
-            let config = crate::config::Config::load().unwrap();
-            crate::sync::record_artifact(&config, &artifact, "claude-sess").unwrap();
+            record_sess(99);
 
             let server = MockServer::start_sequence(vec![
                 ("HTTP/1.1 200 OK", me_response_body("alex")),
@@ -2164,24 +2204,10 @@ mod tests {
                     graph_created_json(&[("test-path", "22222222-2222-2222-2222-222222222222")]),
                 ),
             ]);
-            let export = |input: &str, base: &str| {
-                write_credentials(temp.path(), base);
-                run_pathbase(PathbaseExportArgs {
-                    input: input.to_string(),
-                    url: Some(base.to_string()),
-                    anon: false,
-                    repo: Some(RepoSpec {
-                        owner: "alex".to_string(),
-                        name: "pathstash".to_string(),
-                    }),
-                    name: None,
-                    public: false,
-                })
-            };
             let base = server.base();
-            export("claude-sess", &base).unwrap();
+            export_to(config_dir, "claude-sess", &base).unwrap();
 
-            let manifest = crate::sync::load_manifest(temp.path()).unwrap();
+            let manifest = crate::sync::load_manifest(config_dir).unwrap();
             let rec = &manifest["claude"]["sess"];
             assert_eq!(rec.remotes.len(), 1);
             let (url, remote) = rec.remotes.iter().next().unwrap();
@@ -2197,7 +2223,7 @@ mod tests {
             assert_eq!(remote.source_stamp, "2026-03-01T00:00:00Z/99");
 
             // The same document from a file: no session to record on.
-            let file = temp.path().join("doc.json");
+            let file = config_dir.join("doc.json");
             std::fs::write(&file, serde_json::to_string(&doc).unwrap()).unwrap();
             let server = MockServer::start_sequence(vec![
                 ("HTTP/1.1 200 OK", me_response_body("alex")),
@@ -2206,17 +2232,57 @@ mod tests {
                     graph_created_json(&[("test-path", "33333333-3333-3333-3333-333333333333")]),
                 ),
             ]);
-            export(file.to_str().unwrap(), &server.base()).unwrap();
-            let manifest = crate::sync::load_manifest(temp.path()).unwrap();
+            export_to(config_dir, file.to_str().unwrap(), &server.base()).unwrap();
+            let manifest = crate::sync::load_manifest(config_dir).unwrap();
             assert_eq!(manifest["claude"]["sess"].remotes.len(), 1);
         });
-        unsafe {
-            match prior {
-                Some(v) => std::env::set_var(crate::config::CONFIG_DIR_ENV, v),
-                None => std::env::remove_var(crate::config::CONFIG_DIR_ENV),
-            }
-        }
-        result.unwrap();
+    }
+
+    /// The stamp the record carries is the one the manifest held before
+    /// the body was read, not after the upload: a sync that re-stamps
+    /// the entry in between must not make the record claim the newer
+    /// source. The cache entry is a FIFO: opening it to write blocks
+    /// until the export opens it to read, and only then does the writer
+    /// re-stamp the entry and supply the body.
+    #[cfg(unix)]
+    #[test]
+    fn pathbase_export_stamps_the_record_before_reading_the_body() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_created_json, me_response_body};
+        with_config_dir(|config_dir| {
+            let fifo = crate::cache::cache_path("claude-sess").unwrap();
+            std::fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+            assert!(
+                std::process::Command::new("mkfifo")
+                    .arg(&fifo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            record_sess(99);
+            let body = serde_json::to_string(&make_path_doc()).unwrap();
+            let writer = std::thread::spawn(move || {
+                use std::io::Write;
+                let mut pipe = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+                record_sess(100);
+                pipe.write_all(body.as_bytes()).unwrap();
+            });
+
+            let server = MockServer::start_sequence(vec![
+                ("HTTP/1.1 200 OK", me_response_body("alex")),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[("test-path", "22222222-2222-2222-2222-222222222222")]),
+                ),
+            ]);
+            export_to(config_dir, "claude-sess", &server.base()).unwrap();
+            writer.join().unwrap();
+
+            let manifest = crate::sync::load_manifest(config_dir).unwrap();
+            let rec = &manifest["claude"]["sess"];
+            assert_eq!(rec.size, Some(100));
+            let remote = rec.remotes.values().next().unwrap();
+            assert_eq!(remote.source_stamp, "2026-03-01T00:00:00Z/99");
+        });
     }
 
     /// Where the single-request upload says the path landed: the server
