@@ -21,6 +21,17 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 /// Files that make up this harness; their sha256 is pinned in every manifest entry.
+/// What a producer's code is made of: a rev change touching none of these is not drift.
+const PRODUCER_CODE: &[&str] = &[
+    "crates",
+    "Cargo.toml",
+    "Cargo.lock",
+    "flake.lock",
+    "rust-toolchain.toml",
+    "test-fixtures",
+    "scripts",
+];
+
 const HARNESS_FILES: &[&str] = &["crates/path-cli/src/goldens.rs", "scripts/goldens.sh"];
 
 /// Fixtures `init` captures: (set name, harness, fixture path relative to the root).
@@ -102,6 +113,10 @@ pub enum GoldensCommand {
     Check {
         /// Check only this set (default: all)
         name: Option<String>,
+        /// Report a moved producer (the running `path` binary, or repo code differing from the pin)
+        /// as a warning row instead of a problem
+        #[arg(long)]
+        allow_producer_drift: bool,
     },
     /// Show how a fresh run differs from a set's goldens
     Diff { name: String },
@@ -163,7 +178,7 @@ pub fn run(args: GoldensArgs) -> Result<()> {
         Some(r) => r,
         None => find_root()?,
     };
-    let g = Goldens::new(root, std::env::current_exe()?);
+    let mut g = Goldens::new(root, std::env::current_exe()?);
     match args.command {
         GoldensCommand::List => g.list(),
         GoldensCommand::Roundtrip { name } => g.roundtrip_report(name.as_deref()),
@@ -180,7 +195,11 @@ pub fn run(args: GoldensArgs) -> Result<()> {
             let name = a.name.unwrap_or_else(|| harness.name().to_string());
             g.capture(harness, &abs(&fixture)?, &name, a.project.as_deref(), None)
         }
-        GoldensCommand::Check { name } => {
+        GoldensCommand::Check {
+            name,
+            allow_producer_drift,
+        } => {
+            g.allow_producer_drift = allow_producer_drift;
             let report = g.check(name.as_deref())?;
             print!("{}", report.render());
             if report.problems.is_empty() {
@@ -257,6 +276,8 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
 pub struct Goldens {
     pub root: PathBuf,
     exe: PathBuf,
+    /// Downgrade producer drift (binary sha, repo rev) from a problem to a warning row.
+    pub allow_producer_drift: bool,
 }
 
 /// Result of a check: one line per passing target, one entry per problem (already formatted).
@@ -265,6 +286,8 @@ pub struct Report {
     pub ok: Vec<String>,
     /// Information only (never a failure), e.g. a local agent binary that moved since capture.
     pub info: Vec<String>,
+    /// Would be problems, but were allowed (`--allow-producer-drift`).
+    pub warnings: Vec<String>,
     pub problems: Vec<String>,
 }
 
@@ -276,6 +299,9 @@ impl Report {
         }
         for i in &self.info {
             s += &format!("info  {i}\n");
+        }
+        for w in &self.warnings {
+            s += &format!("warn  {w}\n");
         }
         for p in &self.problems {
             s += &format!("FAIL  {p}\n");
@@ -307,7 +333,11 @@ struct SetRun {
 
 impl Goldens {
     pub fn new(root: PathBuf, exe: PathBuf) -> Self {
-        Goldens { root, exe }
+        Goldens {
+            root,
+            exe,
+            allow_producer_drift: false,
+        }
     }
 
     fn dir(&self) -> PathBuf {
@@ -613,7 +643,7 @@ impl Goldens {
             "fixture": rel(fixture),
             "project": project,
             "input_sha256": sha256_hex(&input),
-            "pins": self.pins(),
+            "pins": self.pins_with_producer(),
             "targets": targets,
         });
         if let Some(v) = prev_leak_check {
@@ -743,8 +773,28 @@ impl Goldens {
         })
     }
 
-    /// Recorded for the reader, never pinned: HEAD moves with every commit, rustc is the dev shell's.
-    fn informational(&self) -> Value {
+    /// The tool that ran a capture: the `path` binary (by content) and the checkout it ran in.
+    /// `dirty` says the tree differed from `repo_rev`, so the binary sha is what identifies the code.
+    fn producer(&self) -> Value {
+        let (repo_rev, dirty) = self.git_state();
+        json!({
+            "binary_path": fs::canonicalize(&self.exe)
+                .unwrap_or_else(|_| self.exe.clone())
+                .to_string_lossy(),
+            "binary_sha256": hash_file(&self.exe),
+            "repo_rev": repo_rev,
+            "dirty": dirty,
+        })
+    }
+
+    fn pins_with_producer(&self) -> Value {
+        let mut pins = self.pins();
+        pins["producer"] = self.producer();
+        pins
+    }
+
+    /// (HEAD, whether the code or fixtures differ from it).
+    fn git_state(&self) -> (String, bool) {
         let git = |a: &[&str]| {
             Command::new("git")
                 .args(a)
@@ -753,9 +803,92 @@ impl Goldens {
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
                 .unwrap_or_default()
         };
+        (
+            git(&["rev-parse", "HEAD"]),
+            !git(&[
+                "status",
+                "--porcelain",
+                "-uno",
+                "--",
+                "crates",
+                "test-fixtures",
+            ])
+            .is_empty(),
+        )
+    }
+
+    /// Did anything the transformations depend on change between two revs? None: git cannot say.
+    fn code_moved(&self, from: &str, to: &str) -> Option<bool> {
+        let st = Command::new("git")
+            .args(["diff", "--quiet", from, to, "--"])
+            .args(PRODUCER_CODE)
+            .current_dir(&self.root)
+            .status()
+            .ok()?;
+        match st.code()? {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Compare a recorded producer to the one running now. A pin from before producers were
+    /// recorded is information; a different binary is a problem (a warning when allowed). A
+    /// different repo rev is a problem only if the code between the two revs differs, so a commit
+    /// that touches only goldens or docs does not turn every check red.
+    fn check_producer(&self, label: &str, pinned: &Value, r: &mut Report) {
+        if !pinned.is_object() {
+            r.info.push(format!(
+                "{label}: unpinned producer (captured before producers were pinned; the next capture pins it)"
+            ));
+            return;
+        }
+        let now = self.producer();
+        let mut drift = Vec::new();
+        if pinned["binary_sha256"] != now["binary_sha256"] {
+            drift.push(format!(
+                "{label}: PRODUCER MOVED binary_sha256: pinned {} ({}) running {} ({})",
+                pinned["binary_sha256"],
+                pinned["binary_path"],
+                now["binary_sha256"],
+                now["binary_path"]
+            ));
+        }
+        let (was, is) = (
+            pinned["repo_rev"].as_str().unwrap_or(""),
+            now["repo_rev"].as_str().unwrap_or(""),
+        );
+        if was != is && !is.is_empty() {
+            match self.code_moved(was, is) {
+                Some(true) => drift.push(format!(
+                    "{label}: PRODUCER MOVED repo_rev: pinned {was} running {is}, and the code differs between them"
+                )),
+                Some(false) => r.info.push(format!(
+                    "{label}: repo_rev moved {was} -> {is}; code and fixtures unchanged"
+                )),
+                None => drift.push(format!(
+                    "{label}: PRODUCER MOVED repo_rev: pinned {was} is not comparable with {is} here"
+                )),
+            }
+        }
+        if pinned["dirty"] == json!(true) {
+            r.info.push(format!(
+                "{label}: captured from a dirty tree; the binary sha is the identity"
+            ));
+        }
+        if self.allow_producer_drift {
+            r.warnings.extend(drift);
+        } else {
+            r.problems.extend(drift);
+        }
+    }
+
+    /// Recorded for the reader, never pinned: HEAD moves with every commit, rustc is the dev shell's.
+    fn informational(&self) -> Value {
+        let (toolpath_rev, toolpath_dirty) = self.git_state();
         json!({
-            "toolpath_rev": git(&["rev-parse", "HEAD"]),
-            "toolpath_dirty": !git(&["status", "--porcelain", "-uno", "--", "crates", "test-fixtures"]).is_empty(),
+            "toolpath_rev": toolpath_rev,
+            "toolpath_dirty": toolpath_dirty,
             "rustc": Command::new("rustc").arg("--version").output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default(),
         })
@@ -859,10 +992,24 @@ impl Goldens {
             }
             // Pins: every moved item, named.
             let mut moved = Vec::new();
-            diff_json("pins", &e["pins"], &current_pins, &mut moved);
+            let mut want_pins = e["pins"].clone();
+            if let Some(o) = want_pins.as_object_mut() {
+                o.remove("producer");
+            }
+            diff_json("pins", &want_pins, &current_pins, &mut moved);
             check_nix_pin(&e["pins"]["nix_pinned_binary"], &mut moved);
             for p in moved {
                 r.problems.push(format!("{name}: PIN MOVED {p}"));
+            }
+            self.check_producer(&name, &e["pins"]["producer"], &mut r);
+            let prefix = format!("goldens/{name}/");
+            if let Some(doc) = m["roundtrip"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|d| d["file"].as_str().is_some_and(|f| f.starts_with(&prefix)))
+            {
+                self.check_producer(&format!("{name} round trips"), &doc["producer"], &mut r);
             }
             // The fixture must still be the one captured.
             let fixture = self.root.join(e["fixture"].as_str().unwrap_or(""));
@@ -1519,7 +1666,11 @@ impl Goldens {
             let file = row_file(set, row["adapter"].as_str().unwrap_or("?"));
             let body = serde_json::to_string_pretty(&row)? + "\n";
             write(&self.root.join(&file), body.as_bytes())?;
-            let doc = json!({ "file": file, "sha256": sha256_hex(body.as_bytes()) });
+            let doc = json!({
+                "file": file,
+                "sha256": sha256_hex(body.as_bytes()),
+                "producer": self.producer(),
+            });
             if m["roundtrip"].is_null() {
                 m["roundtrip"] = json!([]);
             }
@@ -1538,6 +1689,18 @@ impl Goldens {
     /// `path goldens roundtrip [set]`: print one line per (set, adapter); no files written.
     fn roundtrip_report(&self, only: Option<&str>) -> Result<()> {
         let m = self.read_manifest()?;
+        let p = self.producer();
+        println!(
+            "producer: {} rev {}{} ({})",
+            p["binary_sha256"].as_str().unwrap_or("?"),
+            p["repo_rev"].as_str().unwrap_or("?"),
+            if p["dirty"] == json!(true) {
+                " dirty"
+            } else {
+                ""
+            },
+            p["binary_path"].as_str().unwrap_or("?")
+        );
         println!(
             "{:<18} {:<8} {:>11} {:>14} {:>10} {:>6} {:>6}",
             "set", "adapter", "steps", "text chars", "tool uses", "lost", "gained"
