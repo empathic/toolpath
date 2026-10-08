@@ -42,6 +42,16 @@ fn git(root: &Path, args: &[&str]) {
 
 /// A git repo holding the files a capture reads, committed once, with the claude set captured.
 fn captured() -> (tempfile::TempDir, Goldens) {
+    capture_with(false)
+}
+
+/// Like `captured`, but the producing binary is a copy of `path` under a directory the check
+/// treats as the nix store, so its sha is compared strictly.
+fn captured_in_store() -> (tempfile::TempDir, Goldens) {
+    capture_with(true)
+}
+
+fn capture_with(store: bool) -> (tempfile::TempDir, Goldens) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     for rel in COPIED {
@@ -52,7 +62,18 @@ fn captured() -> (tempfile::TempDir, Goldens) {
     git(&root, &["init", "-q"]);
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "base"]);
-    let g = Goldens::new(root.clone(), PathBuf::from(EXE));
+    let bin = if store {
+        let bin = root.join("store/path");
+        fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        fs::copy(EXE, &bin).unwrap();
+        bin
+    } else {
+        PathBuf::from(EXE)
+    };
+    let mut g = Goldens::new(root.clone(), bin);
+    if store {
+        g.store_root = root.join("store");
+    }
     g.capture(Harness::Claude, &root.join(FIXTURE), "claude", None, None)
         .unwrap();
     (tmp, g)
@@ -86,7 +107,8 @@ fn capture_pins_the_running_binary_and_rev() {
     let exe = fs::read(EXE).unwrap();
     assert_eq!(p["binary_sha256"], hex::encode(Sha256::digest(&exe)));
     assert_eq!(p["repo_rev"].as_str().unwrap().len(), 40);
-    assert_eq!(p["dirty"], false);
+    // target/debug/path is not a nix store binary: recorded as a dev build.
+    assert_eq!(p["dirty"], true);
     assert!(p["binary_path"].as_str().unwrap().ends_with("/path"));
     assert!(
         m["roundtrip"]
@@ -101,9 +123,25 @@ fn capture_pins_the_running_binary_and_rev() {
 }
 
 #[test]
-fn moved_binary_is_a_problem_unless_allowed() {
-    let (_tmp, mut g) = captured();
+fn a_moved_dev_build_is_information_never_a_failure() {
+    let (_tmp, g) = captured();
     let mut m = manifest(&g);
+    m["goldens"][0]["pins"]["producer"]["binary_sha256"] = "0".repeat(64).into();
+    write_manifest(&g, &m);
+    let r = g.check(None).unwrap();
+    assert!(r.problems.is_empty(), "{}", shown(&r));
+    assert!(
+        mentions(&r.info, "producer: unpinned dev build"),
+        "{}",
+        shown(&r)
+    );
+}
+
+#[test]
+fn moved_store_binary_is_a_problem_unless_allowed() {
+    let (_tmp, mut g) = captured_in_store();
+    let mut m = manifest(&g);
+    assert_eq!(m["goldens"][0]["pins"]["producer"]["dirty"], false);
     m["goldens"][0]["pins"]["producer"]["binary_sha256"] = "0".repeat(64).into();
     write_manifest(&g, &m);
 

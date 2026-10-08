@@ -278,6 +278,8 @@ pub struct Goldens {
     exe: PathBuf,
     /// Downgrade producer drift (binary sha, repo rev) from a problem to a warning row.
     pub allow_producer_drift: bool,
+    /// Binaries under this directory are reproducible builds whose sha is compared strictly.
+    pub store_root: PathBuf,
 }
 
 /// Result of a check: one line per passing target, one entry per problem (already formatted).
@@ -337,6 +339,7 @@ impl Goldens {
             root,
             exe,
             allow_producer_drift: false,
+            store_root: PathBuf::from("/nix/store"),
         }
     }
 
@@ -773,17 +776,21 @@ impl Goldens {
         })
     }
 
+    fn exe_path(&self) -> PathBuf {
+        fs::canonicalize(&self.exe).unwrap_or_else(|_| self.exe.clone())
+    }
+
     /// The tool that ran a capture: the `path` binary (by content) and the checkout it ran in.
     /// `dirty` says the tree differed from `repo_rev`, so the binary sha is what identifies the code.
     fn producer(&self) -> Value {
-        let (repo_rev, dirty) = self.git_state();
+        let (repo_rev, tree_dirty) = self.git_state();
+        let bin = self.exe_path();
         json!({
-            "binary_path": fs::canonicalize(&self.exe)
-                .unwrap_or_else(|_| self.exe.clone())
-                .to_string_lossy(),
+            "binary_path": bin.to_string_lossy(),
             "binary_sha256": hash_file(&self.exe),
             "repo_rev": repo_rev,
-            "dirty": dirty,
+            // A binary outside the nix store is a dev build: not reproducible, so never strict.
+            "dirty": tree_dirty || !bin.starts_with(&self.store_root),
         })
     }
 
@@ -845,7 +852,16 @@ impl Goldens {
         }
         let now = self.producer();
         let mut drift = Vec::new();
-        if pinned["binary_sha256"] != now["binary_sha256"] {
+        // Strict only when both binaries are nix store paths (reproducible); a dev build's sha
+        // changes with every cargo build, so it is information.
+        let strict = Path::new(pinned["binary_path"].as_str().unwrap_or(""))
+            .starts_with(&self.store_root)
+            && self.exe_path().starts_with(&self.store_root);
+        if pinned["binary_sha256"] != now["binary_sha256"] && !strict {
+            r.info.push(format!(
+                "{label}: producer: unpinned dev build (binary sha not compared; capture with the nix-built path to pin it)"
+            ));
+        } else if pinned["binary_sha256"] != now["binary_sha256"] {
             drift.push(format!(
                 "{label}: PRODUCER MOVED binary_sha256: pinned {} ({}) running {} ({})",
                 pinned["binary_sha256"],
@@ -871,7 +887,7 @@ impl Goldens {
                 )),
             }
         }
-        if pinned["dirty"] == json!(true) {
+        if pinned["dirty"] == json!(true) && strict {
             r.info.push(format!(
                 "{label}: captured from a dirty tree; the binary sha is the identity"
             ));
