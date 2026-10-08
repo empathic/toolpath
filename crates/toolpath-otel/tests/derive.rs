@@ -478,3 +478,21 @@ fn a_batch_of_every_conversation_groups_back_into_each_one() {
     want.sort_by_key(|v| v.to_string());
     assert_eq!(got, want);
 }
+
+#[test]
+fn derive_session_categorizes_with_the_configs_classifier() {
+    let batch = requests("openrouter/claude-code.ndjson");
+    let grouped = group_sessions(&batch, ProfileSelection::Auto).unwrap();
+    let s = &grouped.output[0];
+    let (mut with, mut without) = (Vec::new(), Vec::new());
+    categories(
+        &json(derive_session(s, &config()).unwrap().output),
+        &mut with,
+    );
+    categories(
+        &json(derive_session(s, &DeriveConfig::default()).unwrap().output),
+        &mut without,
+    );
+    assert!(with.contains(&serde_json::json!("shell")), "{with:?}");
+    assert!(without.iter().all(Value::is_null), "{without:?}");
+}
