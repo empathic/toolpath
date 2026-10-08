@@ -18,12 +18,14 @@ All notable changes to the Toolpath workspace are documented here.
   import keep the records when they rewrite a session's fingerprint.
   Nothing reads them yet; incremental append and `share --all` will.
   Manifests without the field load unchanged.
-- **`pathbase-client`** (0.2.2): regenerate from the Pathbase branch
+- **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
   whose `POST /graphs` answers `GraphCreatedResponse`: an empty
   `document` and `paths[]` naming each stored path's `path.id` and
-  `server_id`, for the anonymous route too. `build.rs` makes `paths`
-  and `TracePath.mutability` optional at generation time, as it does
-  `Graph.mutability`, so an older server's response still decodes.
+  `server_id`, for the anonymous route too. `create_graph` and
+  `create_anon_graph` return that type instead of
+  `GraphDocumentResponse`, hence the minor bump. `build.rs` makes
+  `paths` and `TracePath.mutability` optional at generation time, as it
+  does `Graph.mutability`, so an older server's response still decodes.
 - **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.29.0 — 2026-09-29
