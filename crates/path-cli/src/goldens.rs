@@ -32,7 +32,14 @@ const PRODUCER_CODE: &[&str] = &[
     "scripts",
 ];
 
-const HARNESS_FILES: &[&str] = &["crates/path-cli/src/goldens.rs", "scripts/goldens.sh"];
+const HARNESS_FILES: &[&str] = &[
+    "crates/path-cli/src/goldens.rs",
+    "scripts/goldens.sh",
+    // The spec the goldens follow (rule: `check` cites it by sha and fails without it).
+    SPEC_FILE,
+];
+
+const SPEC_FILE: &str = "docs/GOLDENS.md";
 
 /// Fixtures `init` captures: (set name, harness, fixture path relative to the root).
 const STANDARD_SETS: &[(&str, Harness, &str)] = &[
@@ -978,6 +985,15 @@ impl Goldens {
                 "no golden set named {n:?} (see `path goldens list`)"
             ));
             return Ok(r);
+        }
+        // The spec is part of the contract: cite its sha, fail without it.
+        match fs::read(self.root.join(SPEC_FILE)) {
+            Ok(b) => r
+                .info
+                .push(format!("spec {SPEC_FILE} sha256 {}", sha256_hex(&b))),
+            Err(_) => r.problems.push(format!(
+                "{SPEC_FILE} is missing: the goldens are defined by that spec (commit it)"
+            )),
         }
         let current_pins = self.pins();
         let mut fresh_runs: Vec<(String, SetRun)> = Vec::new();

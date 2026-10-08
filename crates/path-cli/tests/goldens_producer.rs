@@ -21,6 +21,7 @@ const COPIED: &[&str] = &[
     "rust-toolchain.toml",
     "crates/path-cli/src/goldens.rs",
     "scripts/goldens.sh",
+    "docs/GOLDENS.md",
 ];
 
 fn repo() -> PathBuf {
