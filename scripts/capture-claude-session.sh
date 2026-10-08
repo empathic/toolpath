@@ -39,7 +39,22 @@ if [ -z "$token_var" ]; then
   say "no credential: export CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or add Keychain item 'claude-code-oauth-token'"
   exit 1
 fi
-say "credential source: $source_name (value not shown)"
+
+# Normalise defensively (observed 2026-10-08: `security -w` prints a value holding a stray newline as
+# HEX). Decode an all-hex, even-length value, strip all whitespace, then route by prefix. The value is
+# only ever piped, never printed.
+token=$(printf '%s' "$token" | tr -d '[:space:]')
+if [[ "$token" =~ ^[0-9a-f]+$ ]] && [ $(( ${#token} % 2 )) -eq 0 ]; then
+  if ! command -v xxd >/dev/null 2>&1; then say "credential from $source_name looks hex-encoded but xxd is not available to decode it"; exit 1; fi
+  token=$(printf '%s' "$token" | xxd -r -p | tr -d '[:space:]')
+  say "credential from $source_name was hex-encoded; decoded"
+fi
+case "$token" in
+  sk-ant-oat*) token_var=CLAUDE_CODE_OAUTH_TOKEN ;;
+  sk-ant-api*) token_var=ANTHROPIC_API_KEY ;;
+  *) say "credential from $source_name does not start with sk-ant-oat or sk-ant-api after normalising (length ${#token}); refusing"; exit 1 ;;
+esac
+say "credential source: $source_name, kind: $token_var (value not shown)"
 
 TMP=$(mktemp -d)
 ok=0

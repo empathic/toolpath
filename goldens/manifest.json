@@ -59,8 +59,8 @@
   ],
   "informational": {
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
-    "toolpath_dirty": true,
-    "toolpath_rev": "f040ec56dc8b57a8433896828881bb22282bbe3a"
+    "toolpath_dirty": false,
+    "toolpath_rev": "c7bbbfa3d4df8cbf6ae2b325b679154bd39bc38b"
   },
   "known_defects": [
     {
@@ -79,7 +79,7 @@
     "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
     "harness": {
       "crates/path-cli/tests/goldens.rs": "f8f87c6281b172983166ff0aba9123a7db960e829abd8dc092ef66c029216f9d",
-      "scripts/capture-claude-session.sh": "299e9ef98b0604d2534f013c4bdf7a290f8a90708e41b424a872cc55c7307e0b",
+      "scripts/capture-claude-session.sh": "b6fd395d7d1e5ff6c1173b8834b00435b44e04f01ed20494fdf108c873962f99",
       "scripts/goldens.sh": "25a9f35a74784f3ac107c96171b9baa5601872ad7054d8dd86d68b44c3d72de7"
     },
     "nix_pinned_binary": {
