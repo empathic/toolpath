@@ -89,11 +89,7 @@ non-turn entries survive import/export.
   turns. Other part events (`file`, `agent`, `retry`, unknown) follow
   their message's turn in the stream. Projected timestamps are
   monotonized so a re-read keeps emission order.
-- **`toolpath-cursor`** (0.3.0): `/summarize` marker bubbles
-  (`capabilityType` 22) become `summarization` events on the bubble
-  chain and project back to well-formed marker bubbles — the marker
-  survives a full cursor → toolpath → cursor round-trip instead of
-  being dropped.
+- **`toolpath-cursor`** (0.3.0): builds `items` from its turns.
 - **`toolpath-copilot`** (0.2.0): `items` holds the turns followed by
   the non-turn events, and the synthesized chain runs over that
   stream.
