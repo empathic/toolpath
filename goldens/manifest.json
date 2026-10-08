@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {
+      "case": "codex-to-claude",
+      "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive codex --all && path p project claude -i {ir} -o {out}",
+      "fixture": "test-fixtures/codex/convo.jsonl",
+      "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+      "output_sha256": "346555c475b5bb536ca600d7c6de099069b9455285a4f8bbc3148c275ba6ec1d"
+    },
+    {
+      "case": "claude-to-codex",
+      "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude --all && path p export codex -i {ir} -o {out}",
+      "fixture": "test-fixtures/claude/convo.jsonl",
+      "input_sha256": "c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644",
+      "output_sha256": "515df098c2c2e46d98888a3e3e3eaf17b949b5be6ffd0b6dff9fe2c6315fb82e"
+    }
+  ],
+  "known_defect": {
+    "file": "known-defect/codex-to-claude-illegal-types.tsv",
+    "report": "~/.lobby/ops/toolpath-transform-regression-goal.md (2026-09-29)",
+    "sha256": "f0673d93c556d4827039db1fddef6ca0b7242241e173d3b92c8d8a6e7f1e70ff"
+  },
+  "path_version": "0.30.0",
+  "toolpath_dirty": false,
+  "toolpath_rev": "465de3ddcc084bb384cc16951748e641567e64a4"
+}
