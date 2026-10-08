@@ -3163,6 +3163,7 @@ dependencies = [
  "toolpath-gemini",
  "toolpath-git",
  "toolpath-github",
+ "toolpath-golden",
  "toolpath-md",
  "toolpath-opencode",
  "toolpath-pi",
@@ -5437,6 +5438,13 @@ dependencies = [
  "serde",
  "serde_json",
  "toolpath",
+]
+
+[[package]]
+name = "toolpath-golden"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

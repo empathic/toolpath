@@ -20,18 +20,20 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-/// Files that make up this harness; their sha256 is pinned in every manifest entry.
-/// What a producer's code is made of: a rev change touching none of these is not drift.
+/// What a producer's code is made of: only what can change a golden. A rev change touching none of
+/// these is not drift. Ruling 2026-10-08 18:01: Rust sources under crates/ except tests/, Cargo.toml
+/// and Cargo.lock files, and the pinned harness script; `.qual` records, docs/, goldens/, tests and
+/// DEMO.md never count (the fixtures and toolchain are pinned separately by their own shas).
+/// These are git pathspecs.
 const PRODUCER_CODE: &[&str] = &[
-    "crates",
-    "Cargo.toml",
+    ":(glob)crates/**/*.rs",
+    ":(exclude,glob)crates/**/tests/**",
+    ":(glob)**/Cargo.toml",
     "Cargo.lock",
-    "flake.lock",
-    "rust-toolchain.toml",
-    "test-fixtures",
-    "scripts",
+    "scripts/goldens.sh",
 ];
 
+/// Files that make up this harness; their sha256 is pinned in every manifest entry.
 const HARNESS_FILES: &[&str] = &[
     "crates/path-cli/src/goldens.rs",
     "scripts/goldens.sh",
@@ -345,6 +347,8 @@ struct TargetRun {
 
 struct SetRun {
     source_cwd: Option<String>,
+    /// The transcript the run started from.
+    input: Vec<u8>,
     /// The Toolpath document derived from the input (IR1).
     ir: Vec<u8>,
     targets: Vec<TargetRun>,
@@ -567,6 +571,7 @@ impl Goldens {
         }
         Ok(SetRun {
             source_cwd,
+            input: input.to_vec(),
             ir: ir_bytes,
             targets,
         })
@@ -734,13 +739,27 @@ impl Goldens {
         })
     }
 
+    /// The output a defect is computed from: a projection target of the set, or (`self:<format>`) the
+    /// IR projected back to the set's own format.
+    fn defect_output(&self, def: &Defect, run: &SetRun) -> Option<Vec<u8>> {
+        if let Some(own) = def.target.strip_prefix("self:") {
+            return self.project_ir(&run.ir, own).ok();
+        }
+        run.targets
+            .iter()
+            .find(|t| t.target == def.target)?
+            .result
+            .as_ref()
+            .ok()
+            .cloned()
+    }
+
     fn write_defects(&self, m: &mut Value, name: &str, run: &SetRun) -> Result<()> {
         for def in DEFECTS.iter().filter(|d| d.set == name) {
-            let Some(t) = run.targets.iter().find(|t| t.target == def.target) else {
+            let Some(out) = self.defect_output(def, run) else {
                 continue;
             };
-            let Ok(out) = &t.result else { continue };
-            let body = (def.compute)(run, out);
+            let body = (def.compute)(run, &out);
             write(&self.root.join(def.file), body.as_bytes())?;
             let doc = json!({
                 "file": def.file, "set": def.set, "target": def.target,
@@ -1192,11 +1211,10 @@ impl Goldens {
             let Some((_, run)) = fresh_runs.iter().find(|(n, _)| n == def.set) else {
                 continue;
             };
-            let Some(t) = run.targets.iter().find(|t| t.target == def.target) else {
+            let Some(out) = self.defect_output(def, run) else {
                 continue;
             };
-            let Ok(out) = &t.result else { continue };
-            let body = (def.compute)(run, out);
+            let body = (def.compute)(run, &out);
             match fs::read_to_string(self.root.join(def.file)) {
                 Ok(golden) if golden == body => r.ok.push(format!("known defect {} (still present)", def.file)),
                 Ok(golden) => r.problems.push(format!(
@@ -1258,7 +1276,35 @@ const DEFECTS: &[Defect] = &[
         report: "~/.lobby/ops/REPORT-demo-goldens-toolpath-2026-10-08.md (found 2026-10-08)",
         compute: caller_cwd,
     },
+    // Found by `shed` 2026-10-08: the claude projection renames `message.stop_reason` (the API field
+    // Claude Code reads) to `message.stopReason`; the docs (jsonl-envelope.md) say `stopReason` is a
+    // different, hook-provided envelope field. Pinned as the renames the projection currently makes
+    // (source path -> written path) over a claude -> IR -> claude round trip.
+    Defect {
+        file: "goldens/known-defect/claude-roundtrip-renames.tsv",
+        set: "claude",
+        target: "self:claude",
+        report: "shed finding 2026-10-08; docs/agents/formats/claude-code/jsonl-envelope.md; qualifier concern on the claude projection",
+        compute: renamed_fields,
+    },
 ];
+
+/// `source path<TAB>written path` for every field the same-format round trip renames
+/// (a lost path and a gained path that differ only by snake_case / camelCase).
+fn renamed_fields(run: &SetRun, output: &[u8]) -> String {
+    let before = raw_paths(&String::from_utf8_lossy(&run.input));
+    let after = raw_paths(&String::from_utf8_lossy(output));
+    let lost: Vec<&String> = before.keys().filter(|k| !after.contains_key(*k)).collect();
+    let gained: Vec<&String> = after.keys().filter(|k| !before.contains_key(*k)).collect();
+    lost.iter()
+        .filter_map(|l| {
+            gained
+                .iter()
+                .find(|g| **g != *l && snake_case(g) == snake_case(l))
+                .map(|g| format!("{l}\t{g}\n"))
+        })
+        .collect()
+}
 
 /// Top-level `type` values documented for Claude Code (docs/agents/formats/claude-code/entry-types.md).
 const CLAUDE_TYPES: &[&str] = &[
@@ -1550,96 +1596,7 @@ fn read_credential() -> Result<(String, String)> {
     )
 }
 
-// ---------------------------------------------------------------------------------------------
-// Stub factory (spec rule 10): test inputs are derived from captured bytes, never typed.
-//
-//     let g = path_cli::goldens::golden("claude");
-//     let jsonl = g.slice(0..6);                                  // a prefix of a real session
-//     let bad = g.with_field(2, "message.role", json!("robot"));  // one-field mutation of one line
-// ---------------------------------------------------------------------------------------------
-
-/// A handle on one golden set's captured input.
-pub struct Golden {
-    name: String,
-    text: String,
-}
-
-/// The captured input of golden set `set`, read from the repo's `goldens/manifest.json` (the path
-/// the manifest names for the set's fixture). Panics with a readable message if the set is unknown:
-/// this is a test helper.
-pub fn golden(set: &str) -> Golden {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let manifest: Value = serde_json::from_slice(
-        &fs::read(root.join("goldens/manifest.json")).expect("goldens/manifest.json"),
-    )
-    .expect("manifest is JSON");
-    let fixture = manifest["goldens"]
-        .as_array()
-        .and_then(|a| a.iter().find(|e| e["name"] == set))
-        .and_then(|e| e["fixture"].as_str())
-        .unwrap_or_else(|| panic!("no golden set named {set:?}"))
-        .to_string();
-    let text = fs::read_to_string(root.join(&fixture)).unwrap_or_else(|e| panic!("{fixture}: {e}"));
-    Golden {
-        name: set.to_string(),
-        text,
-    }
-}
-
-impl Golden {
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-    /// The whole captured input.
-    pub fn input(&self) -> &str {
-        &self.text
-    }
-    /// Every line parsed as JSON (non-JSON lines are skipped).
-    pub fn events(&self) -> Vec<Value> {
-        self.text
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect()
-    }
-    /// Lines `range` of the input, newline-joined (no trailing newline).
-    pub fn slice(&self, range: std::ops::Range<usize>) -> String {
-        self.text
-            .lines()
-            .skip(range.start)
-            .take(range.len())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-    /// The first string value of key `key` anywhere in the input (e.g. `sessionId`, `cwd`).
-    pub fn first_string(&self, key: &str) -> Option<String> {
-        fn find(v: &Value, key: &str) -> Option<String> {
-            match v {
-                Value::Object(m) => m
-                    .get(key)
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| m.values().find_map(|x| find(x, key))),
-                Value::Array(a) => a.iter().find_map(|x| find(x, key)),
-                _ => None,
-            }
-        }
-        self.events().iter().find_map(|v| find(v, key))
-    }
-    /// The input with `value` set at dotted `path` on line `line` (one-field mutation).
-    pub fn with_field(&self, line: usize, path: &str, value: Value) -> String {
-        let mut lines: Vec<String> = self.text.lines().map(str::to_string).collect();
-        let mut v: Value = serde_json::from_str(&lines[line]).expect("line is JSON");
-        let mut cur = &mut v;
-        let parts: Vec<&str> = path.split('.').collect();
-        for p in &parts[..parts.len() - 1] {
-            cur = &mut cur[*p];
-        }
-        cur[parts[parts.len() - 1]] = value;
-        lines[line] = serde_json::to_string(&v).expect("serialises");
-        lines.join("\n")
-    }
-}
-
+pub use toolpath_golden::{Golden, golden};
 // ---------------------------------------------------------------------------------------------
 // Round trips: IR1 = derive(input); X = project(IR1); IR2 = derive(X). One row per (set, adapter X).
 // ---------------------------------------------------------------------------------------------

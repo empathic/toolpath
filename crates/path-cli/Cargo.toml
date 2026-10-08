@@ -38,6 +38,7 @@ jsonschema = { version = "0.46", default-features = false }
 sha2 = "0.10"
 serde_json_canonicalizer = { version = "0.3", optional = true }
 hex = "0.4"
+toolpath-golden = { workspace = true }
 jaq-core = "3.1.0"
 jaq-std = "3.0.1"
 jaq-json = "2.0.1"

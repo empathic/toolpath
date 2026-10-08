@@ -11,10 +11,10 @@
       "input_sha256": "c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644",
       "name": "claude",
       "pins": {
-        "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
+        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "8443cbd2b589af04cb2205a000165103e6b006f238ef3c284bf2b41630efcc6e",
+          "crates/path-cli/src/goldens.rs": "d14422a061c9b8e701ed02c7fa83966c3c2b7554dbd70e7232b6fa71939ac619",
           "docs/GOLDENS.md": "2f72ef7044372e4036604a9addf8880b760ab701055897a3b49ad4647a694ca8",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
@@ -25,9 +25,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
           "dirty": true,
-          "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -73,10 +73,10 @@
       "input_sha256": "ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988",
       "name": "claude-compacted",
       "pins": {
-        "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
+        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "8443cbd2b589af04cb2205a000165103e6b006f238ef3c284bf2b41630efcc6e",
+          "crates/path-cli/src/goldens.rs": "d14422a061c9b8e701ed02c7fa83966c3c2b7554dbd70e7232b6fa71939ac619",
           "docs/GOLDENS.md": "2f72ef7044372e4036604a9addf8880b760ab701055897a3b49ad4647a694ca8",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
@@ -87,9 +87,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
           "dirty": true,
-          "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -149,10 +149,10 @@
       },
       "name": "claude-session",
       "pins": {
-        "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
+        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "8443cbd2b589af04cb2205a000165103e6b006f238ef3c284bf2b41630efcc6e",
+          "crates/path-cli/src/goldens.rs": "d14422a061c9b8e701ed02c7fa83966c3c2b7554dbd70e7232b6fa71939ac619",
           "docs/GOLDENS.md": "2f72ef7044372e4036604a9addf8880b760ab701055897a3b49ad4647a694ca8",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
@@ -163,9 +163,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
           "dirty": true,
-          "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -211,10 +211,10 @@
       "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
       "name": "codex",
       "pins": {
-        "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
+        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "8443cbd2b589af04cb2205a000165103e6b006f238ef3c284bf2b41630efcc6e",
+          "crates/path-cli/src/goldens.rs": "d14422a061c9b8e701ed02c7fa83966c3c2b7554dbd70e7232b6fa71939ac619",
           "docs/GOLDENS.md": "2f72ef7044372e4036604a9addf8880b760ab701055897a3b49ad4647a694ca8",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
@@ -225,9 +225,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
           "dirty": true,
-          "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -273,10 +273,10 @@
       "input_sha256": "7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f",
       "name": "copilot",
       "pins": {
-        "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
+        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "8443cbd2b589af04cb2205a000165103e6b006f238ef3c284bf2b41630efcc6e",
+          "crates/path-cli/src/goldens.rs": "d14422a061c9b8e701ed02c7fa83966c3c2b7554dbd70e7232b6fa71939ac619",
           "docs/GOLDENS.md": "2f72ef7044372e4036604a9addf8880b760ab701055897a3b49ad4647a694ca8",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
@@ -287,9 +287,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
           "dirty": true,
-          "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -335,10 +335,10 @@
       "input_sha256": "846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c",
       "name": "pi",
       "pins": {
-        "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
+        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "8443cbd2b589af04cb2205a000165103e6b006f238ef3c284bf2b41630efcc6e",
+          "crates/path-cli/src/goldens.rs": "d14422a061c9b8e701ed02c7fa83966c3c2b7554dbd70e7232b6fa71939ac619",
           "docs/GOLDENS.md": "2f72ef7044372e4036604a9addf8880b760ab701055897a3b49ad4647a694ca8",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
@@ -349,9 +349,9 @@
         "path_version": "0.30.0",
         "producer": {
           "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-          "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+          "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
           "dirty": true,
-          "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+          "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
         },
         "rust_toolchain": {
           "channel": "1.94.0",
@@ -390,7 +390,7 @@
   "informational": {
     "rustc": "",
     "toolpath_dirty": true,
-    "toolpath_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+    "toolpath_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
   },
   "known_defects": [
     {
@@ -406,6 +406,13 @@
       "set": "claude",
       "sha256": "8816483354bf0336ffbab64e358ef191a5854cf3242ccdd4f16ad97b2d93bf58",
       "target": "codex"
+    },
+    {
+      "file": "goldens/known-defect/claude-roundtrip-renames.tsv",
+      "report": "shed finding 2026-10-08; docs/agents/formats/claude-code/jsonl-envelope.md; qualifier concern on the claude projection",
+      "set": "claude",
+      "sha256": "cf773c0d0274e87445b406ee2a1357501f416c5638793573a74a71b7ea20ca14",
+      "target": "self:claude"
     }
   ],
   "roundtrip": [
@@ -413,9 +420,9 @@
       "file": "goldens/roundtrip/claude-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "7e6ea9e6d866e4bee9885c3f2fe836981e8228dc33dd07015da013cbba65ef89"
     },
@@ -423,9 +430,9 @@
       "file": "goldens/roundtrip/claude-compacted-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
     },
@@ -433,9 +440,9 @@
       "file": "goldens/roundtrip/claude-compacted-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "29be8cb8c53fa3d9a49ec74c4f3c373adc973f8f03a9113a7accaaa74692d6f0"
     },
@@ -443,9 +450,9 @@
       "file": "goldens/roundtrip/claude-compacted-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
     },
@@ -453,9 +460,9 @@
       "file": "goldens/roundtrip/claude-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "9c72e3e059c6ba73c3e75e8be9f28242cfbd8d23ce6112daf0310c5880f5d7b8"
     },
@@ -463,9 +470,9 @@
       "file": "goldens/roundtrip/claude-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "1a7c14aa1d5521511d710acaa9aa43f8c6b91ce1433fffe91a911fbe75c3c0ec"
     },
@@ -473,9 +480,9 @@
       "file": "goldens/roundtrip/claude-session-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "d5fee6928c95df428b1688f48949b4280b92022abe2e2254640e55dcb5f01273"
     },
@@ -483,9 +490,9 @@
       "file": "goldens/roundtrip/claude-session-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "90b16b3f49f9b48e546d0f9c55b8109b0a076b65fa0baf4fb44bf7a70de34e80"
     },
@@ -493,9 +500,9 @@
       "file": "goldens/roundtrip/claude-session-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "bc8ae191b9776da0470eefacb6dd084fc7eb733505b6dc1612aa582a3fca8eec"
     },
@@ -503,9 +510,9 @@
       "file": "goldens/roundtrip/codex-claude.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "8a1d7742939d8a32b2d97eb56eb02e8cdaafe6f5cdeb05a4fc2350d37e9003d9"
     },
@@ -513,9 +520,9 @@
       "file": "goldens/roundtrip/codex-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "7df3f81e3dd637aabee9ee606c3b2387541a6d62b86c333b6048936c2a5d573f"
     },
@@ -523,9 +530,9 @@
       "file": "goldens/roundtrip/codex-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
     },
@@ -533,9 +540,9 @@
       "file": "goldens/roundtrip/copilot-claude.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
     },
@@ -543,9 +550,9 @@
       "file": "goldens/roundtrip/copilot-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "c55f0de8d0b297de18a1201c8d57560e8fc9d3c7f6fffb6b89d73e1dceafd809"
     },
@@ -553,9 +560,9 @@
       "file": "goldens/roundtrip/copilot-pi.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "d7e405a24064cf585263d7fc443b7cf330694d27c4611fce46f098d95a4cf9e5"
     },
@@ -563,9 +570,9 @@
       "file": "goldens/roundtrip/pi-claude.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
     },
@@ -573,9 +580,9 @@
       "file": "goldens/roundtrip/pi-codex.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
     },
@@ -583,9 +590,9 @@
       "file": "goldens/roundtrip/pi-copilot.json",
       "producer": {
         "binary_path": "/Users/bobby/.local/state/scratch-surface/toolpath-goldens/target/debug/path",
-        "binary_sha256": "7c9e43d223db39226ce0cce64148ae01ae7c00957b65900e3f04f369a9aa3f3c",
+        "binary_sha256": "27d05d62b2c7bee849aa334f76e4a10c429e0ab3b9c1bd5ed0a18d423c0c1feb",
         "dirty": true,
-        "repo_rev": "0171f554bffac205cf03aa1cc8c58e61054b9705"
+        "repo_rev": "0cac69ef6aa5105dfb02d25fb6babc7a4163f0fa"
       },
       "sha256": "cfdc5a9e5091fa29e5b2fa4e276c4c4b65a04cb931206f6fc536730010af901a"
     }

@@ -189,9 +189,19 @@ fn a_golden_without_a_producer_is_information_not_failure() {
 #[test]
 fn a_rev_that_changes_no_code_is_information_and_one_that_does_is_a_problem() {
     let (_tmp, g) = captured();
+    // Nothing here can change a golden: docs, a qualifier record file under crates/ (the 0cac69e
+    // case), and a test source.
     fs::write(g.root.join("NOTES.md"), "docs only\n").unwrap();
+    fs::create_dir_all(g.root.join("crates/x/src")).unwrap();
+    fs::write(
+        g.root.join("crates/x/src/.qual"),
+        "{\"type\":\"annotation\"}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(g.root.join("crates/x/tests")).unwrap();
+    fs::write(g.root.join("crates/x/tests/t.rs"), "#[test] fn t() {}\n").unwrap();
     git(&g.root, &["add", "."]);
-    git(&g.root, &["commit", "-q", "-m", "docs"]);
+    git(&g.root, &["commit", "-q", "-m", "docs, .qual, test"]);
     let r = g.check(None).unwrap();
     assert!(r.problems.is_empty(), "{}", shown(&r));
     assert!(
@@ -200,7 +210,8 @@ fn a_rev_that_changes_no_code_is_information_and_one_that_does_is_a_problem() {
         shown(&r)
     );
 
-    fs::write(g.root.join("crates/changed.txt"), "code moved\n").unwrap();
+    // A Rust source under crates/ does count.
+    fs::write(g.root.join("crates/x/src/lib.rs"), "pub fn moved() {}\n").unwrap();
     git(&g.root, &["add", "."]);
     git(&g.root, &["commit", "-q", "-m", "code"]);
     let r = g.check(None).unwrap();
