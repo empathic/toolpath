@@ -1,10 +1,9 @@
 //! Build a provider-agnostic [`ConversationView`] from a Copilot [`Session`].
 //!
-//! The mapping follows the `events.jsonl` semantics in
-//! `docs/agents/formats/copilot-cli/events.md`, verified against first-hand
-//! captures at `copilotVersion` 1.0.67–1.0.68 (turns, tools, sub-agents,
-//! shutdown totals, and context compaction). Tool-name classification stays
-//! deliberately broad for MCP/custom pass-through names.
+//! ⚠️ The mapping below follows the *inferred* `events.jsonl` semantics in
+//! `docs/agents/formats/copilot-cli/events.md`. Tool-name classification and
+//! file-mutation extraction are best-effort and should be tightened once a
+//! real session is captured.
 
 use crate::io::ConvoIO;
 use crate::paths::PathResolver;
@@ -142,10 +141,7 @@ pub fn to_view(session: &Session) -> ConversationView {
 
     let mut turns: Vec<Turn> = Vec::new();
     let mut current: Option<Turn> = None;
-    // Each event is tagged with how many turns precede it in the stream
-    // (flushed turns plus a content-bearing in-progress turn), so the final
-    // `items` assembly can restore the real turn/event interleaving.
-    let mut events: Vec<(usize, ConversationEvent)> = Vec::new();
+    let mut events: Vec<ConversationEvent> = Vec::new();
     // Copilot reports per-message tokens (`outputTokens`, and — on a projected
     // session — `inputTokens`/cache). We set them per-turn and sum for the
     // session total; `session.shutdown` (when present) is the fallback total.
@@ -272,46 +268,20 @@ pub fn to_view(session: &Session) -> ConversationView {
                 backfill_delegation_result(&mut current, &mut turns, s.id.as_deref(), s.result);
             }
             CopilotEvent::SkillInvoked(p) => {
-                events.push((
-                    turn_watermark(&turns, &current),
-                    make_event(i, "skill.invoked", &ts, p),
-                ));
+                events.push(make_event(i, "skill.invoked", &ts, p));
             }
             CopilotEvent::Hook { kind, payload } => {
-                events.push((
-                    turn_watermark(&turns, &current),
-                    make_event(i, &kind, &ts, payload),
-                ));
+                events.push(make_event(i, &kind, &ts, payload));
             }
-            CopilotEvent::Abort(p) => {
-                events.push((
-                    turn_watermark(&turns, &current),
-                    make_event(i, "abort", &ts, p),
-                ));
-            }
-            CopilotEvent::CompactionStart(p) => {
-                events.push((
-                    turn_watermark(&turns, &current),
-                    make_event(i, "session.compaction_start", &ts, p),
-                ));
-            }
+            CopilotEvent::Abort(p) => events.push(make_event(i, "abort", &ts, p)),
             CopilotEvent::CompactionComplete(p) => {
-                events.push((
-                    turn_watermark(&turns, &current),
-                    make_event(i, "session.compaction_complete", &ts, p),
-                ));
+                events.push(make_event(i, "session.compaction_complete", &ts, p));
             }
             CopilotEvent::SessionOther { kind, payload } => {
-                events.push((
-                    turn_watermark(&turns, &current),
-                    make_event(i, &kind, &ts, payload),
-                ));
+                events.push(make_event(i, &kind, &ts, payload));
             }
             CopilotEvent::Unknown { kind, payload } => {
-                events.push((
-                    turn_watermark(&turns, &current),
-                    make_event(i, &kind, &ts, payload),
-                ));
+                events.push(make_event(i, &kind, &ts, payload));
             }
         }
     }
@@ -392,17 +362,11 @@ pub fn to_view(session: &Session) -> ConversationView {
         None
     };
 
-    // Merge turns and events into the ordered `items` stream, restoring
-    // the real interleaving from each event's turn watermark.
-    let mut items: Vec<Item> = Vec::new();
-    let mut ev = events.into_iter().peekable();
-    for (i, t) in turns.into_iter().enumerate() {
-        while ev.peek().is_some_and(|(w, _)| *w <= i) {
-            items.push(Item::Event(ev.next().unwrap().1));
-        }
-        items.push(Item::Turn(t));
-    }
-    items.extend(ev.map(|(_, e)| Item::Event(e)));
+    let mut items: Vec<Item> = turns
+        .into_iter()
+        .map(Item::Turn)
+        .chain(events.into_iter().map(Item::Event))
+        .collect();
 
     // Copilot records no linkage on the wire, so the chain is the event log
     // order: each item parents on the one emitted before it.
@@ -481,16 +445,11 @@ fn append_text(buf: &mut String, more: &str) {
 }
 
 fn turn_has_content(t: &Turn) -> bool {
-    // Token usage counts as content: an aborted response is an empty-text,
-    // tool-less assistant message that still consumed real tokens, and
-    // dropping it breaks session-total conservation across round-trips.
     !t.text.trim().is_empty()
         || !t.tool_uses.is_empty()
         || !t.delegations.is_empty()
         || !t.file_mutations.is_empty()
         || t.thinking.is_some()
-        || t.token_usage.is_some()
-        || t.attributed_token_usage.is_some()
 }
 
 fn flush(turns: &mut Vec<Turn>, current: &mut Option<Turn>) {
@@ -499,13 +458,6 @@ fn flush(turns: &mut Vec<Turn>, current: &mut Option<Turn>) {
     {
         turns.push(t);
     }
-}
-
-/// How many turns precede an event created now: the flushed turns, plus the
-/// in-progress turn when it already has content (it started before the event,
-/// so it sorts ahead of it in the `items` stream).
-fn turn_watermark(turns: &[Turn], current: &Option<Turn>) -> usize {
-    turns.len() + current.as_ref().is_some_and(turn_has_content) as usize
 }
 
 /// Attach a `tool.execution_complete` result to its matching invocation.
@@ -1073,149 +1025,5 @@ mod tests {
         assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
         // body() has two id-bearing tool calls: bash + create_file.
         assert_eq!(view.turns().nth(1).unwrap().tool_uses.len(), 2);
-    }
-
-    #[test]
-    fn empty_message_with_usage_survives_as_a_turn() {
-        // An aborted response: assistant.message with no content, no tools,
-        // no reasoning — but real outputTokens. Dropping it would break
-        // session-total conservation (seen crossing real sessions into
-        // copilot in the cross-harness matrix).
-        let body = [
-            r#"{"type":"session.start","timestamp":"2026-07-01T00:00:00Z","data":{"copilotVersion":"1.0.67","context":{"cwd":"/p"}}}"#,
-            r#"{"type":"user.message","timestamp":"2026-07-01T00:00:01Z","data":{"content":"go"}}"#,
-            r#"{"type":"assistant.turn_start","timestamp":"2026-07-01T00:00:02Z","data":{}}"#,
-            r#"{"type":"assistant.message","timestamp":"2026-07-01T00:00:03Z","data":{"content":"","outputTokens":7}}"#,
-            r#"{"type":"assistant.turn_end","timestamp":"2026-07-01T00:00:04Z","data":{}}"#,
-        ]
-        .join("\n");
-        let session = crate::Session {
-            id: "s-abort".into(),
-            dir_path: "/tmp/s-abort".into(),
-            lines: body
-                .lines()
-                .map(|l| serde_json::from_str(l).unwrap())
-                .collect(),
-            workspace: None,
-        };
-        let view = to_view(&session);
-        let aborted = view
-            .turns()
-            .find(|t| matches!(t.role, Role::Assistant))
-            .expect("empty assistant turn with usage must survive");
-        assert_eq!(
-            aborted.token_usage.as_ref().and_then(|u| u.output_tokens),
-            Some(7)
-        );
-        assert_eq!(
-            view.total_usage.as_ref().and_then(|u| u.output_tokens),
-            Some(7),
-            "session total must include the aborted response's tokens"
-        );
-    }
-
-    /// Compact item-stream fingerprint: `turn:<text>` / `event:<type>`.
-    fn item_shapes(view: &ConversationView) -> Vec<String> {
-        view.items
-            .iter()
-            .map(|i| match i {
-                Item::Turn(t) => format!("turn:{}", t.text),
-                Item::Event(e) => format!("event:{}", e.event_type),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn event_after_open_turn_content_lands_after_that_turn() {
-        // The hook fires after the in-progress assistant turn already has
-        // content, so it must sort after that turn and before the next one.
-        let body = [
-            r#"{"type":"user.message","data":{"content":"go"}}"#,
-            r#"{"type":"assistant.turn_start","data":{}}"#,
-            r#"{"type":"assistant.message","data":{"content":"working"}}"#,
-            r#"{"type":"hook.start","data":{"name":"fmt"}}"#,
-            r#"{"type":"assistant.turn_end","data":{}}"#,
-            r#"{"type":"user.message","data":{"content":"next"}}"#,
-        ]
-        .join("\n");
-        let view = to_view(&parse(&body));
-        assert_eq!(
-            item_shapes(&view),
-            ["turn:go", "turn:working", "event:hook.start", "turn:next"]
-        );
-        let parents: Vec<Option<&str>> = view
-            .items
-            .iter()
-            .map(|i| match i {
-                Item::Turn(t) => t.parent_id.as_deref(),
-                Item::Event(e) => e.parent_id.as_deref(),
-            })
-            .collect();
-        assert_eq!(
-            parents,
-            [None, Some("t0"), Some("t1"), Some("evt-0003")],
-            "the chain runs through the event"
-        );
-    }
-
-    #[test]
-    fn event_before_open_turn_content_lands_before_that_turn() {
-        // The hook fires after turn_start but before the turn has any
-        // content, so it must sort ahead of that turn.
-        let body = [
-            r#"{"type":"user.message","data":{"content":"go"}}"#,
-            r#"{"type":"assistant.turn_start","data":{}}"#,
-            r#"{"type":"hook.start","data":{"name":"fmt"}}"#,
-            r#"{"type":"assistant.message","data":{"content":"reply"}}"#,
-            r#"{"type":"assistant.turn_end","data":{}}"#,
-        ]
-        .join("\n");
-        let view = to_view(&parse(&body));
-        assert_eq!(
-            item_shapes(&view),
-            ["turn:go", "event:hook.start", "turn:reply"]
-        );
-    }
-
-    #[test]
-    fn leading_and_trailing_events_stay_at_the_ends() {
-        let body = [
-            r#"{"type":"hook.start","data":{"name":"boot"}}"#,
-            r#"{"type":"user.message","data":{"content":"go"}}"#,
-            r#"{"type":"assistant.turn_start","data":{}}"#,
-            r#"{"type":"assistant.message","data":{"content":"reply"}}"#,
-            r#"{"type":"assistant.turn_end","data":{}}"#,
-            r#"{"type":"skill.invoked","data":{"skill":"x"}}"#,
-        ]
-        .join("\n");
-        let view = to_view(&parse(&body));
-        assert_eq!(
-            item_shapes(&view),
-            [
-                "event:hook.start",
-                "turn:go",
-                "turn:reply",
-                "event:skill.invoked"
-            ]
-        );
-    }
-
-    #[test]
-    fn event_inside_dropped_empty_turn_lands_between_neighbor_turns() {
-        // The assistant turn bracketing the hook never gains content and is
-        // dropped; the event must still land between the surviving turns.
-        let body = [
-            r#"{"type":"user.message","data":{"content":"one"}}"#,
-            r#"{"type":"assistant.turn_start","data":{}}"#,
-            r#"{"type":"hook.start","data":{"name":"fmt"}}"#,
-            r#"{"type":"assistant.turn_end","data":{}}"#,
-            r#"{"type":"user.message","data":{"content":"two"}}"#,
-        ]
-        .join("\n");
-        let view = to_view(&parse(&body));
-        assert_eq!(
-            item_shapes(&view),
-            ["turn:one", "event:hook.start", "turn:two"]
-        );
     }
 }

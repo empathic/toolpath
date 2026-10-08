@@ -94,10 +94,9 @@ non-turn entries survive import/export.
   chain and project back to well-formed marker bubbles — the marker
   survives a full cursor → toolpath → cursor round-trip instead of
   being dropped.
-- **`toolpath-copilot`** (0.2.0): non-turn events carry a turn
-  watermark and merge into `items` in source order, and the
-  synthesized chain runs over that merged stream; assistant messages
-  whose only content is token usage survive as turns.
+- **`toolpath-copilot`** (0.2.0): `items` holds the turns followed by
+  the non-turn events, and the synthesized chain runs over that
+  stream.
 - **`toolpath-pi`** (0.7.0): tree parents resolve past discarded
   entries (model changes, labels, folded tool results, the virtual
   root) via `resolve_item_parent`; compaction stays a System turn.
