@@ -1,0 +1,868 @@
+{
+  "graph": {
+    "id": "path-otel-f3adf1cb"
+  },
+  "paths": [
+    {
+      "meta": {
+        "actors": {
+          "agent:openai/gpt-5.1-codex-mini": {
+            "model": "openai/gpt-5.1-codex-mini",
+            "name": "openai/gpt-5.1-codex-mini",
+            "provider": "otel"
+          },
+          "human:user": {
+            "name": "user"
+          },
+          "tool:otel": {
+            "name": "otel",
+            "provider": "otel"
+          }
+        },
+        "kind": "https://toolpath.net/kinds/agent-coding-session/v1.1.0",
+        "otel": {
+          "client_key": "fixture key",
+          "cost_usd": {
+            "by_model": {
+              "openai/gpt-5.1-codex-mini": 0.016390580000000002
+            },
+            "generations": 6,
+            "priced_generations": 6,
+            "total": 0.016390580000000002
+          },
+          "derived_session_id": "f3adf1cb-7721-83b5-ac18-3e8348a3a82c",
+          "generation_ids": [
+            "gen-1790606055-lQEtY5tcJIA3qEdgtaaa",
+            "gen-1790606059-t5wtYWOLe4iC5c17HLyQ",
+            "gen-1790606063-LgDu4PBhc0TCYdZpL73e",
+            "gen-1790606069-INCUlVNj6arfXa72lUbO",
+            "gen-1790606073-GeYNgn87vrb7FfSIeqxb",
+            "gen-1790606076-h44xsdT3F3vAUuZg72Kl"
+          ],
+          "harness": "codex",
+          "openrouter": {
+            "creator_user_id": "user_fixture0000000000000000",
+            "entity_id": "user_fixture0000000000000000"
+          },
+          "profile": "openrouter",
+          "providers": [
+            "openai"
+          ],
+          "session_id": "01a0e870-1365-7a93-b8a1-14726a5a70da",
+          "session_key": "01a0e870-1365-7a93-b8a1-14726a5a70da",
+          "trace_ids": [
+            "1d51a5ee005a2134d42d138ecc155d95",
+            "2c45ef760dbe489d75c126b1e849e4b5",
+            "8766b2a19462540592eec49c45337f79",
+            "31188a19c3e0b4a33ba56182c19ec307",
+            "64ce65ef7f48d70c670d3dbfd9d227b5",
+            "82fa579c8d2c444c778f27d68e447b72"
+          ],
+          "truncated": false
+        },
+        "producer": {
+          "name": "codex"
+        },
+        "source": "otel",
+        "title": "otel session: f3adf1cb"
+      },
+      "path": {
+        "base": {
+          "uri": "file:///work/project"
+        },
+        "head": "17b6f76e48c86415",
+        "id": "path-otel-f3adf1cb"
+      },
+      "steps": [
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "f4689464b973d70a9dc2f64ca886b4b04c8c8a2fc5023826931b908c1f76d5bd",
+                  "first_generation_id": "gen-1790606055-lQEtY5tcJIA3qEdgtaaa",
+                  "message_role": "developer"
+                },
+                "role": "system",
+                "text": "[sanitized developer 3b08633f]",
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "tool:otel",
+            "id": "9c98fa149436895d",
+            "timestamp": "2026-09-28T14:34:15.699Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "d567a6c5a6009665f868979e67f9c5b9ad8e00f102a63a7290bdd209d9a4f015",
+                  "first_generation_id": "gen-1790606055-lQEtY5tcJIA3qEdgtaaa",
+                  "message_role": "user"
+                },
+                "role": "user",
+                "text": "[sanitized user-context 74c7ccf4]\n[sanitized user-context 97c91671]\n[sanitized user-context ed8d447e]\n<environment_context><cwd>/work/project</cwd></environment_context>",
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "human:user",
+            "id": "fb0eb2064e4a7d1c",
+            "parents": [
+              "9c98fa149436895d"
+            ],
+            "timestamp": "2026-09-28T14:34:15.699Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "e82cf928947cef3e70132d7b63fdd72fb4dbf3672eb62bd1e22238431573ab1b",
+                  "first_generation_id": "gen-1790606055-lQEtY5tcJIA3qEdgtaaa",
+                  "message_role": "user"
+                },
+                "role": "user",
+                "text": "Create wc.py, a Python CLI that counts whitespace-separated words in a file, and test_wc.py with one unittest. Run the test with python3 -m unittest, fix any failure, then git commit. Do not ask questions.",
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "human:user",
+            "id": "2641a749eaa25341",
+            "parents": [
+              "fb0eb2064e4a7d1c"
+            ],
+            "timestamp": "2026-09-28T14:34:15.699Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "e735c8a0450cf964077adcb70c9159afce287e37fd194d9f0cf7f8556d69e1bb",
+                  "cost": {
+                    "input": 0.00469075,
+                    "output": 0.000234,
+                    "total": 0.00492475
+                  },
+                  "dropped": [
+                    {
+                      "content_hash": "4e5133d6013beeb1653da4762d19998615b1dd77a32724c2a5bc45f171b3373b",
+                      "index": 1,
+                      "role": "developer"
+                    }
+                  ],
+                  "dropped_content": {
+                    "4e5133d6013beeb1653da4762d19998615b1dd77a32724c2a5bc45f171b3373b": "[sanitized developer 40c981a3]\n[sanitized developer a49b6630]"
+                  },
+                  "first_generation_id": "gen-1790606055-lQEtY5tcJIA3qEdgtaaa",
+                  "generation_id": "gen-1790606055-lQEtY5tcJIA3qEdgtaaa",
+                  "message_role": "assistant",
+                  "openrouter": {
+                    "api_key_name": "fixture key",
+                    "creator_user_id": "user_fixture0000000000000000",
+                    "entity_id": "user_fixture0000000000000000",
+                    "first_token_ms": 1854.0,
+                    "inter_token_latency_ms": 6.181034482758621,
+                    "provider_body_end_ms": 2571.0,
+                    "provider_headers_ms": 684.0,
+                    "provider_name": "Azure",
+                    "provider_request_ms": 121.0,
+                    "provider_responses": [
+                      {
+                        "endpoint_id": "cdb3ebc6-45e5-40ec-b586-48336ea95841",
+                        "id": "9cea178a-5745-4ed8-8102-f9ac669d7aa4",
+                        "is_byok": false,
+                        "latency": 563,
+                        "model_permaslug": "openai/gpt-5.1-codex-mini-20251113",
+                        "provider_name": "Azure",
+                        "status": 200
+                      }
+                    ],
+                    "provider_slug": "azure",
+                    "provider_time_to_first_token_ms": 1733.0,
+                    "request_params": {
+                      "_skin": "<omitted>",
+                      "model": "<omitted>",
+                      "parallel_tool_calls": "<omitted>",
+                      "reasoning": "<omitted>",
+                      "responsesPassthrough": "<omitted>",
+                      "stream": "<omitted>",
+                      "tool_choice": "<omitted>",
+                      "usage": "<omitted>"
+                    },
+                    "router_latency_ms": 121.0,
+                    "unit_price": {
+                      "input": 2.5e-7,
+                      "output": 2e-6
+                    },
+                    "upstream_finish_reason": "completed"
+                  },
+                  "prompt_tip": "2641a749eaa25341",
+                  "provider": "openai",
+                  "request_model": "openai/gpt-5.1-codex-mini",
+                  "trace_id": "1d51a5ee005a2134d42d138ecc155d95",
+                  "usage": {
+                    "cache_basis": "inclusive",
+                    "cache_write_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "input_tokens": 18763,
+                    "output_tokens": 117,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 18880
+                  }
+                },
+                "role": "assistant",
+                "stop_reason": "tool_calls",
+                "text": "",
+                "token_usage": {
+                  "cache_read_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "input_tokens": 18763,
+                  "output_tokens": 117
+                },
+                "tool_uses": [
+                  {
+                    "category": "shell",
+                    "id": "call_ZsKc3vj8CPWrnUFiUzDf64xs",
+                    "input": {
+                      "cmd": "pwd && ls",
+                      "justification": "inspect repo contents before action",
+                      "login": true,
+                      "max_output_tokens": 6000,
+                      "prefix_rule": [],
+                      "sandbox_permissions": "use_default",
+                      "shell": "/bin/zsh",
+                      "tty": false,
+                      "workdir": "/work/project",
+                      "yield_time_ms": 1000
+                    },
+                    "name": "exec_command",
+                    "result": {
+                      "content": "Chunk ID: ff886d\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 17\nOutput:\n/work/project\n",
+                      "is_error": false
+                    }
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:openai/gpt-5.1-codex-mini",
+            "id": "82f9df617d45b925",
+            "parents": [
+              "2641a749eaa25341"
+            ],
+            "timestamp": "2026-09-28T14:34:18.270Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "fb6879c45bee1c88e6dfa9ce8f4bf903f679443b1b3c99a3d62c01eb493798e9",
+                  "cost": {
+                    "input": 0.004743,
+                    "output": 0.000224,
+                    "total": 0.004967
+                  },
+                  "dropped": [
+                    {
+                      "content_hash": "4e5133d6013beeb1653da4762d19998615b1dd77a32724c2a5bc45f171b3373b",
+                      "index": 1,
+                      "role": "developer"
+                    }
+                  ],
+                  "first_generation_id": "gen-1790606059-t5wtYWOLe4iC5c17HLyQ",
+                  "generation_id": "gen-1790606059-t5wtYWOLe4iC5c17HLyQ",
+                  "message_role": "assistant",
+                  "openrouter": {
+                    "api_key_name": "fixture key",
+                    "creator_user_id": "user_fixture0000000000000000",
+                    "entity_id": "user_fixture0000000000000000",
+                    "first_token_ms": 2609.0,
+                    "inter_token_latency_ms": 6.036036036036036,
+                    "provider_body_end_ms": 3279.0,
+                    "provider_headers_ms": 1008.0,
+                    "provider_name": "Azure",
+                    "provider_request_ms": 48.0,
+                    "provider_responses": [
+                      {
+                        "endpoint_id": "cdb3ebc6-45e5-40ec-b586-48336ea95841",
+                        "id": "ad8c1166-d84a-43d5-b1bb-22b45d4eec9b",
+                        "is_byok": false,
+                        "latency": 960,
+                        "model_permaslug": "openai/gpt-5.1-codex-mini-20251113",
+                        "provider_name": "Azure",
+                        "status": 200
+                      }
+                    ],
+                    "provider_slug": "azure",
+                    "provider_time_to_first_token_ms": 2561.0,
+                    "request_params": {
+                      "_skin": "<omitted>",
+                      "model": "<omitted>",
+                      "parallel_tool_calls": "<omitted>",
+                      "reasoning": "<omitted>",
+                      "responsesPassthrough": "<omitted>",
+                      "stream": "<omitted>",
+                      "tool_choice": "<omitted>",
+                      "usage": "<omitted>"
+                    },
+                    "router_latency_ms": 48.0,
+                    "unit_price": {
+                      "input": 2.5e-7,
+                      "output": 2e-6
+                    },
+                    "upstream_finish_reason": "completed"
+                  },
+                  "prompt_tip": "531c7c68e919ea5a",
+                  "provider": "openai",
+                  "request_model": "openai/gpt-5.1-codex-mini",
+                  "trace_id": "2c45ef760dbe489d75c126b1e849e4b5",
+                  "usage": {
+                    "cache_basis": "inclusive",
+                    "cache_write_tokens": 0,
+                    "cached_input_tokens": 0,
+                    "input_tokens": 18972,
+                    "output_tokens": 112,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 19084
+                  }
+                },
+                "role": "assistant",
+                "stop_reason": "tool_calls",
+                "text": "",
+                "token_usage": {
+                  "cache_read_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "input_tokens": 18972,
+                  "output_tokens": 112
+                },
+                "tool_uses": [
+                  {
+                    "category": "shell",
+                    "id": "call_dQC58CSAWsGvlgySgicxJFD3",
+                    "input": {
+                      "cmd": "ls",
+                      "justification": "inspect repo contents",
+                      "login": true,
+                      "max_output_tokens": 6000,
+                      "prefix_rule": [],
+                      "sandbox_permissions": "use_default",
+                      "shell": "/bin/zsh",
+                      "tty": false,
+                      "workdir": "/work/project",
+                      "yield_time_ms": 1000
+                    },
+                    "name": "exec_command",
+                    "result": {
+                      "content": "Chunk ID: e66673\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n",
+                      "is_error": false
+                    }
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:openai/gpt-5.1-codex-mini",
+            "id": "31a71887dcf1d344",
+            "parents": [
+              "82f9df617d45b925"
+            ],
+            "timestamp": "2026-09-28T14:34:22.418Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "4edcc05e418447a3df404f2d5b13f20e4d2b56941a76a9dab8c74947d0055bf4",
+                  "cost": {
+                    "input": 0.00060832,
+                    "output": 0.000204,
+                    "total": 0.00081232
+                  },
+                  "dropped": [
+                    {
+                      "content_hash": "4e5133d6013beeb1653da4762d19998615b1dd77a32724c2a5bc45f171b3373b",
+                      "index": 1,
+                      "role": "developer"
+                    }
+                  ],
+                  "first_generation_id": "gen-1790606063-LgDu4PBhc0TCYdZpL73e",
+                  "generation_id": "gen-1790606063-LgDu4PBhc0TCYdZpL73e",
+                  "message_role": "assistant",
+                  "openrouter": {
+                    "api_key_name": "fixture key",
+                    "creator_user_id": "user_fixture0000000000000000",
+                    "entity_id": "user_fixture0000000000000000",
+                    "first_token_ms": 4837.0,
+                    "inter_token_latency_ms": 9.05940594059406,
+                    "provider_body_end_ms": 5752.0,
+                    "provider_headers_ms": 3381.0,
+                    "provider_name": "Azure",
+                    "provider_request_ms": 39.0,
+                    "provider_responses": [
+                      {
+                        "endpoint_id": "cdb3ebc6-45e5-40ec-b586-48336ea95841",
+                        "id": "98ffca17-8752-4045-91f5-650c300a0f50",
+                        "is_byok": false,
+                        "latency": 3342,
+                        "model_permaslug": "openai/gpt-5.1-codex-mini-20251113",
+                        "provider_name": "Azure",
+                        "status": 200
+                      }
+                    ],
+                    "provider_slug": "azure",
+                    "provider_time_to_first_token_ms": 4798.0,
+                    "request_params": {
+                      "_skin": "<omitted>",
+                      "model": "<omitted>",
+                      "parallel_tool_calls": "<omitted>",
+                      "reasoning": "<omitted>",
+                      "responsesPassthrough": "<omitted>",
+                      "stream": "<omitted>",
+                      "tool_choice": "<omitted>",
+                      "usage": "<omitted>"
+                    },
+                    "router_latency_ms": 39.0,
+                    "unit_price": {
+                      "input": 2.5e-7,
+                      "output": 2e-6
+                    },
+                    "upstream_finish_reason": "completed"
+                  },
+                  "prompt_tip": "6189948af81e2904",
+                  "provider": "openai",
+                  "request_model": "openai/gpt-5.1-codex-mini",
+                  "trace_id": "8766b2a19462540592eec49c45337f79",
+                  "usage": {
+                    "cache_basis": "inclusive",
+                    "cache_write_tokens": 0,
+                    "cached_input_tokens": 18944,
+                    "input_tokens": 160,
+                    "output_tokens": 102,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 19206
+                  }
+                },
+                "role": "assistant",
+                "stop_reason": "tool_calls",
+                "text": "",
+                "token_usage": {
+                  "cache_read_tokens": 18944,
+                  "cache_write_tokens": 0,
+                  "input_tokens": 160,
+                  "output_tokens": 102
+                },
+                "tool_uses": [
+                  {
+                    "category": "shell",
+                    "id": "call_0EuuQLzGaPjSttc4FNljuOjb",
+                    "input": {
+                      "cmd": "ls -a",
+                      "justification": "inspect repo contents",
+                      "login": true,
+                      "max_output_tokens": 2000,
+                      "prefix_rule": [],
+                      "sandbox_permissions": "use_default",
+                      "shell": "/bin/zsh",
+                      "tty": false,
+                      "workdir": "/work/project",
+                      "yield_time_ms": 1000
+                    },
+                    "name": "exec_command",
+                    "result": {
+                      "content": "Chunk ID: 68efc7\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 3\nOutput:\n.\n..\n.git\n",
+                      "is_error": false
+                    }
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:openai/gpt-5.1-codex-mini",
+            "id": "03d7be2bac2a2642",
+            "parents": [
+              "31a71887dcf1d344"
+            ],
+            "timestamp": "2026-09-28T14:34:28.803Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "9f3dcc301294d802d86ab112342f6bc7d98c173a84eb45c147cc6894811e7702",
+                  "cost": {
+                    "input": 0.00374092,
+                    "output": 0.000204,
+                    "total": 0.00394492
+                  },
+                  "dropped": [
+                    {
+                      "content_hash": "4e5133d6013beeb1653da4762d19998615b1dd77a32724c2a5bc45f171b3373b",
+                      "index": 1,
+                      "role": "developer"
+                    }
+                  ],
+                  "first_generation_id": "gen-1790606069-INCUlVNj6arfXa72lUbO",
+                  "generation_id": "gen-1790606069-INCUlVNj6arfXa72lUbO",
+                  "message_role": "assistant",
+                  "openrouter": {
+                    "api_key_name": "fixture key",
+                    "creator_user_id": "user_fixture0000000000000000",
+                    "entity_id": "user_fixture0000000000000000",
+                    "first_token_ms": 1732.0,
+                    "inter_token_latency_ms": 6.0,
+                    "provider_body_end_ms": 2338.0,
+                    "provider_headers_ms": 649.0,
+                    "provider_name": "Azure",
+                    "provider_request_ms": 66.0,
+                    "provider_responses": [
+                      {
+                        "endpoint_id": "cdb3ebc6-45e5-40ec-b586-48336ea95841",
+                        "id": "a43206b8-56ec-4dbe-8b51-ef2ac322ad21",
+                        "is_byok": false,
+                        "latency": 583,
+                        "model_permaslug": "openai/gpt-5.1-codex-mini-20251113",
+                        "provider_name": "Azure",
+                        "status": 200
+                      }
+                    ],
+                    "provider_slug": "azure",
+                    "provider_time_to_first_token_ms": 1666.0,
+                    "request_params": {
+                      "_skin": "<omitted>",
+                      "model": "<omitted>",
+                      "parallel_tool_calls": "<omitted>",
+                      "reasoning": "<omitted>",
+                      "responsesPassthrough": "<omitted>",
+                      "stream": "<omitted>",
+                      "tool_choice": "<omitted>",
+                      "usage": "<omitted>"
+                    },
+                    "router_latency_ms": 66.0,
+                    "unit_price": {
+                      "input": 2.5e-7,
+                      "output": 2e-6
+                    },
+                    "upstream_finish_reason": "completed"
+                  },
+                  "prompt_tip": "05e66cec36cbfb08",
+                  "provider": "openai",
+                  "request_model": "openai/gpt-5.1-codex-mini",
+                  "trace_id": "31188a19c3e0b4a33ba56182c19ec307",
+                  "usage": {
+                    "cache_basis": "inclusive",
+                    "cache_write_tokens": 0,
+                    "cached_input_tokens": 4864,
+                    "input_tokens": 14380,
+                    "output_tokens": 102,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 19346
+                  }
+                },
+                "role": "assistant",
+                "stop_reason": "tool_calls",
+                "text": "",
+                "token_usage": {
+                  "cache_read_tokens": 4864,
+                  "cache_write_tokens": 0,
+                  "input_tokens": 14380,
+                  "output_tokens": 102
+                },
+                "tool_uses": [
+                  {
+                    "category": "shell",
+                    "id": "call_82sqdNTmyZp3izzxeT1B5mFL",
+                    "input": {
+                      "cmd": "ls .git",
+                      "justification": "inspect repo contents",
+                      "login": true,
+                      "max_output_tokens": 6000,
+                      "prefix_rule": [],
+                      "sandbox_permissions": "use_default",
+                      "shell": "/bin/zsh",
+                      "tty": false,
+                      "workdir": "/work/project",
+                      "yield_time_ms": 1000
+                    },
+                    "name": "exec_command",
+                    "result": {
+                      "content": "Chunk ID: 442099\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 12\nOutput:\nHEAD\nconfig\ndescription\nhooks\ninfo\nobjects\nrefs\n",
+                      "is_error": false
+                    }
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:openai/gpt-5.1-codex-mini",
+            "id": "75cf0d449acaa692",
+            "parents": [
+              "03d7be2bac2a2642"
+            ],
+            "timestamp": "2026-09-28T14:34:32.030Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "4aa1581996de73890a38ad2c5f051aed3a2dbae1cc4099def10f1e1f0b3cbe27",
+                  "cost": {
+                    "input": 0.000624,
+                    "output": 0.000258,
+                    "total": 0.000882
+                  },
+                  "dropped": [
+                    {
+                      "content_hash": "4e5133d6013beeb1653da4762d19998615b1dd77a32724c2a5bc45f171b3373b",
+                      "index": 1,
+                      "role": "developer"
+                    }
+                  ],
+                  "first_generation_id": "gen-1790606073-GeYNgn87vrb7FfSIeqxb",
+                  "generation_id": "gen-1790606073-GeYNgn87vrb7FfSIeqxb",
+                  "message_role": "assistant",
+                  "openrouter": {
+                    "api_key_name": "fixture key",
+                    "creator_user_id": "user_fixture0000000000000000",
+                    "entity_id": "user_fixture0000000000000000",
+                    "first_token_ms": 1664.0,
+                    "inter_token_latency_ms": 5.7265625,
+                    "provider_body_end_ms": 2397.0,
+                    "provider_headers_ms": 693.0,
+                    "provider_name": "Azure",
+                    "provider_request_ms": 44.0,
+                    "provider_responses": [
+                      {
+                        "endpoint_id": "cdb3ebc6-45e5-40ec-b586-48336ea95841",
+                        "id": "ad2e280f-4a42-45b1-b025-a159d5c5eafc",
+                        "is_byok": false,
+                        "latency": 649,
+                        "model_permaslug": "openai/gpt-5.1-codex-mini-20251113",
+                        "provider_name": "Azure",
+                        "status": 200
+                      }
+                    ],
+                    "provider_slug": "azure",
+                    "provider_time_to_first_token_ms": 1620.0,
+                    "request_params": {
+                      "_skin": "<omitted>",
+                      "model": "<omitted>",
+                      "parallel_tool_calls": "<omitted>",
+                      "reasoning": "<omitted>",
+                      "responsesPassthrough": "<omitted>",
+                      "stream": "<omitted>",
+                      "tool_choice": "<omitted>",
+                      "usage": "<omitted>"
+                    },
+                    "router_latency_ms": 44.0,
+                    "unit_price": {
+                      "input": 2.5e-7,
+                      "output": 2e-6
+                    },
+                    "upstream_finish_reason": "completed"
+                  },
+                  "prompt_tip": "753d2a5417a6d440",
+                  "provider": "openai",
+                  "request_model": "openai/gpt-5.1-codex-mini",
+                  "trace_id": "64ce65ef7f48d70c670d3dbfd9d227b5",
+                  "usage": {
+                    "cache_basis": "inclusive",
+                    "cache_write_tokens": 0,
+                    "cached_input_tokens": 19200,
+                    "input_tokens": 192,
+                    "output_tokens": 129,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 19521
+                  }
+                },
+                "role": "assistant",
+                "stop_reason": "tool_calls",
+                "text": "",
+                "token_usage": {
+                  "cache_read_tokens": 19200,
+                  "cache_write_tokens": 0,
+                  "input_tokens": 192,
+                  "output_tokens": 129
+                },
+                "tool_uses": [
+                  {
+                    "category": "shell",
+                    "id": "call_uyuxoGYlV6WCi0Wj6M0vdF14",
+                    "input": {
+                      "cmd": "find .. -name AGENTS.md -print",
+                      "justification": "check for AGENTS instructions",
+                      "login": true,
+                      "max_output_tokens": 6000,
+                      "prefix_rule": [],
+                      "sandbox_permissions": "use_default",
+                      "shell": "/bin/zsh",
+                      "tty": false,
+                      "workdir": "/work/project",
+                      "yield_time_ms": 1000
+                    },
+                    "name": "exec_command",
+                    "result": {
+                      "content": "Chunk ID: 6247ef\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n",
+                      "is_error": false
+                    }
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:openai/gpt-5.1-codex-mini",
+            "id": "80fc4cad2b8601f6",
+            "parents": [
+              "75cf0d449acaa692"
+            ],
+            "timestamp": "2026-09-28T14:34:35.606Z"
+          }
+        },
+        {
+          "change": {
+            "otel://f3adf1cb-7721-83b5-ac18-3e8348a3a82c": {
+              "structural": {
+                "otel": {
+                  "content_hash": "9d6cbe5b5e0c21e83b1a4c9d2ec59e55f758f3794a817cf4b441682d8c600046",
+                  "cost": {
+                    "input": 0.00063159,
+                    "output": 0.000228,
+                    "total": 0.00085959
+                  },
+                  "dropped": [
+                    {
+                      "content_hash": "4e5133d6013beeb1653da4762d19998615b1dd77a32724c2a5bc45f171b3373b",
+                      "index": 1,
+                      "role": "developer"
+                    }
+                  ],
+                  "first_generation_id": "gen-1790606076-h44xsdT3F3vAUuZg72Kl",
+                  "generation_id": "gen-1790606076-h44xsdT3F3vAUuZg72Kl",
+                  "message_role": "assistant",
+                  "openrouter": {
+                    "api_key_name": "fixture key",
+                    "creator_user_id": "user_fixture0000000000000000",
+                    "entity_id": "user_fixture0000000000000000",
+                    "first_token_ms": 1957.0,
+                    "inter_token_latency_ms": 5.371681415929204,
+                    "provider_body_end_ms": 2564.0,
+                    "provider_headers_ms": 847.0,
+                    "provider_name": "Azure",
+                    "provider_request_ms": 110.0,
+                    "provider_responses": [
+                      {
+                        "endpoint_id": "cdb3ebc6-45e5-40ec-b586-48336ea95841",
+                        "id": "94c6e1e6-0ca3-4670-bc2d-fb4c1e3c93a1",
+                        "is_byok": false,
+                        "latency": 737,
+                        "model_permaslug": "openai/gpt-5.1-codex-mini-20251113",
+                        "provider_name": "Azure",
+                        "status": 200
+                      }
+                    ],
+                    "provider_slug": "azure",
+                    "provider_time_to_first_token_ms": 1847.0,
+                    "request_params": {
+                      "_skin": "<omitted>",
+                      "model": "<omitted>",
+                      "parallel_tool_calls": "<omitted>",
+                      "reasoning": "<omitted>",
+                      "responsesPassthrough": "<omitted>",
+                      "stream": "<omitted>",
+                      "tool_choice": "<omitted>",
+                      "usage": "<omitted>"
+                    },
+                    "router_latency_ms": 110.0,
+                    "unit_price": {
+                      "input": 2.5e-7,
+                      "output": 2e-6
+                    },
+                    "upstream_finish_reason": "completed"
+                  },
+                  "prompt_tip": "b8c919942b473a77",
+                  "provider": "openai",
+                  "request_model": "openai/gpt-5.1-codex-mini",
+                  "trace_id": "82fa579c8d2c444c778f27d68e447b72",
+                  "usage": {
+                    "cache_basis": "inclusive",
+                    "cache_write_tokens": 0,
+                    "cached_input_tokens": 19328,
+                    "input_tokens": 207,
+                    "output_tokens": 114,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 19649
+                  }
+                },
+                "role": "assistant",
+                "stop_reason": "tool_calls",
+                "text": "",
+                "token_usage": {
+                  "cache_read_tokens": 19328,
+                  "cache_write_tokens": 0,
+                  "input_tokens": 207,
+                  "output_tokens": 114
+                },
+                "tool_uses": [
+                  {
+                    "category": "shell",
+                    "id": "call_monnH2GshKBMa02Mkx53nxS4",
+                    "input": {
+                      "cmd": "pwd && ls -a",
+                      "justification": "check after git status",
+                      "login": true,
+                      "max_output_tokens": 6000,
+                      "prefix_rule": [],
+                      "sandbox_permissions": "use_default",
+                      "shell": "/bin/zsh",
+                      "tty": false,
+                      "workdir": "/work/project",
+                      "yield_time_ms": 1000
+                    },
+                    "name": "exec_command"
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:openai/gpt-5.1-codex-mini",
+            "id": "17b6f76e48c86415",
+            "parents": [
+              "80fc4cad2b8601f6"
+            ],
+            "timestamp": "2026-09-28T14:34:38.697Z"
+          }
+        }
+      ]
+    }
+  ]
+}

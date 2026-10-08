@@ -2,6 +2,76 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath-otel 0.1.0 — 2026-10-01
+
+- **`toolpath-otel`** (0.1.0, new): derive `agent-coding-session` paths
+  from OpenTelemetry LLM telemetry. `derive_path(requests, config)` takes
+  the parsed OTLP/HTTP JSON request bodies (`resourceSpans` and/or
+  `resourceLogs`) of one session; `derive_graph` and `derive` take several
+  sessions, as `toolpath-git`'s do. The caller groups requests into
+  sessions. A walker resolves every span and its correlated log records
+  against profiles chosen by `DeriveConfig::profile`: `openrouter`
+  (OpenRouter Broadcast, connection tests skipped), `semconv` (the
+  OpenTelemetry GenAI semantic conventions, span or log-record content)
+  and an explicit-only `openinference`. Requests are stitched into a turn
+  DAG with chained content ids that stay stable as a session grows;
+  continuations (`previous_response_id`) and skeletons (content not
+  captured) chain onto earlier turns. Steps keep per-request usage, cost,
+  routing and what is needed to rebuild each request under `extra.otel`;
+  write, edit, `NotebookEdit`, `apply_patch` and opencode `delete` tool
+  calls become file changes. A generation whose completion is already a
+  turn (an identical retry) gets a dead-end step of its own,
+  `extra.otel.branch = "unplaced"`, carrying its tokens, so path token
+  totals cover every generation. Each
+  entry point returns `Derived { output, skipped }`, where `SkipCounts`
+  counts what was read but not derived by reason (error status,
+  connection test, duplicate, truncated, missing payload, unclaimed).
+  Errors: `OtelError::NotOtlp`, `OtelError::NoGenerations` (with the
+  skip counts) and `OtelError::MixedSessions` (generations carrying more
+  than one client session id). A session with no client session id is
+  keyed by its first generation, so the key holds as it grows. OTLP hex
+  trace and span ids are lowercased as they are read.
+  - `meta.producer.name` is the inferred harness (`claude-code`, `codex`,
+    `opencode`, `pi`), else `otel`; `meta.source` is `otel`.
+  - `path.base` is the working directory from the inferred harness's own
+    cwd marker, read only in the role that harness puts it (Codex's
+    `<environment_context>` user message, the system prompt otherwise);
+    a known harness whose marker is absent gives no cwd, and only an
+    `unknown` harness takes any harness's marker.
+  - Tool categories come from the caller: `DeriveConfig::tool_category`
+    (a `ToolClassifier`, or `DeriveConfig::with_tool_category(f)`) is
+    asked `(harness, tool_name)`, `harness` being the inferred harness id.
+    The crate holds no per-harness tool tables. Without a classifier no
+    tool call is categorized, so no sub-agent is recognized and no file
+    change is read from a tool call.
+  - Token classes are additive: `input_tokens` excludes cache reads and
+    writes for every profile; `extra.otel.usage.cache_basis` records
+    whether the source's count was `inclusive` or `exclusive`.
+  - Turn ids, content hashes and digests are defined on RFC 8785 (JCS),
+    through one canonicalizer (`serde_json_canonicalizer`, as `path-cli`
+    uses), from 0.1.0. Derived session ids hash the session key and do
+    not depend on it.
+  - Every `Task`/`Agent` call with a prompt is listed in its turn's
+    `delegations`, from the call and its result alone; a sub-agent thread
+    that matches a call is marked `extra.otel.branch = "subagent"` and
+    joined back by an extra parent where its answer is first received, so
+    it is not a dead end. Threads take calls first come, first served, so
+    duplicate prompts match the first thread to the first call, and a
+    sub-agent that answers twice keeps the merge of its first answer. A
+    shared sub-agent system turn takes its first thread's mark. Side
+    requests and skeleton turns are marked `extra.otel.branch` too. The
+    main line is the first tree to produce two turns outside sub-agent
+    threads: a leading system message's, or one started by a request
+    whose continuation target is missing (a capture that starts
+    mid-session), which is never side. Until a main line is decided no
+    turn is side. `path.head` is the last unmarked turn. Marks depend only
+    on earlier turns or the turn's own data, so a growing session never
+    changes a mark it already gave, except that turns left unmarked while
+    the main line is undecided become side once it is decided if they
+    are off it.
+  - `meta.otel.cost_usd` carries `priced_generations` and `generations`;
+    a total is `null` when any generation it covers is unpriced.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

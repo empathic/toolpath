@@ -1,0 +1,25 @@
+[package]
+name = "toolpath-otel"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/empathic/toolpath"
+description = "Derive Toolpath provenance documents from OpenTelemetry LLM traces (OTLP)"
+keywords = ["opentelemetry", "otlp", "provenance", "toolpath", "ai"]
+categories = ["development-tools"]
+
+[dependencies]
+toolpath = { workspace = true }
+toolpath-convo = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_json_canonicalizer = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+toolpath-claude = { workspace = true }
+toolpath-codex = { workspace = true }
+toolpath-opencode = { workspace = true }
+toolpath-pi = { workspace = true }

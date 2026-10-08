@@ -306,6 +306,28 @@ recording an AI coding conversation, where each conversational-turn step
 carries a `"conversation.append"` structural change with the turn's role,
 text, and so on. See the linked spec for the full contract.
 
+The kind's `token_usage` does not say whether `input_tokens` includes cache
+reads and writes, and producers differ. *Exclusive* means additive classes:
+`input_tokens` excludes `cache_read_tokens` and `cache_write_tokens`, and the
+three sum to the prompt. *Inclusive* means `input_tokens` already counts the
+cached tokens. Each producer passes its source's count through, except
+`toolpath-otel`, which normalizes:
+
+| Producer | Basis of `input_tokens` | Source field |
+|---|---|---|
+| `toolpath-claude` | exclusive | `message.usage.input_tokens`, beside `cache_read_input_tokens` and `cache_creation_input_tokens` |
+| `toolpath-codex` | inclusive of cache reads (no cache writes reported) | `total_token_usage.input_tokens`, which contains `cached_input_tokens` |
+| `toolpath-gemini` | inclusive of cache reads (no cache writes reported) | `tokens.input`, which contains `tokens.cached` |
+| `toolpath-opencode` | exclusive | `tokens.input`; `total = input + output + reasoning + cache.read + cache.write` |
+| `toolpath-pi` | exclusive, for every upstream provider: pi normalizes each provider's count before writing it (verified against pi 0.87.1) | `usage.input`, beside `cacheRead` and `cacheWrite` |
+| `toolpath-cursor` | unknown (no cache classes reported) | `tokenCount.inputTokens` |
+| `toolpath-copilot` | exclusive | `session.shutdown` `tokenDetails.input.tokenCount`, beside `cache_read` and `cache_write`; a session without `tokenDetails` falls back to `usage.inputTokens`, whose basis is unknown |
+| `toolpath-otel` | exclusive | `gen_ai.usage.input_tokens` (or OpenRouter's), less cache reads and writes when the source was inclusive; the source's basis is kept as `cache_basis` |
+
+Consumers that price or sum classes should check the producer
+(`path.meta.source`) against this table; a future kind version is the place
+to make the basis normative.
+
 #### Actor Definitions
 
 `meta.actors` maps actor strings to full definitions:

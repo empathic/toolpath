@@ -146,14 +146,39 @@ splits them across two entries by design.
 ```
 
 `usage` is **per API call** (per assistant message), not cumulative.
-`totalTokens`'s formula is **version-dependent and not load-bearing for us**:
-older Pi reported `input + output`, but Pi 0.2.0+ redefined its headline
-token metric to `input + output + cacheWrite` (cacheRead deliberately
-excluded so repeated cache hits don't dominate). `toolpath-pi` does **not**
-read `totalTokens` — it reads the raw `input`/`output`/`cacheRead`/`cacheWrite`
-fields and sums each independently, so it's correct regardless of which
-`totalTokens` convention a session used. The `cost` breakdown is
-Pi-specific; not present in real sessions where cost can't be computed.
+
+**`input` excludes cache reads and cache writes**, whatever the upstream
+provider. Pi's `pi-ai` layer normalizes each provider's usage before it
+is written (paths relative to the `@earendil-works/pi-ai` package, 0.87.1):
+
+| Adapter (`api`) | `input` is |
+|---|---|
+| `anthropic-messages` (`dist/api/anthropic-messages.js`) | `input_tokens`, already exclusive |
+| `bedrock-converse-stream` (`dist/api/bedrock-converse-stream.js`) | `inputTokens`, already exclusive |
+| `openai-completions` (`dist/api/openai-completions.js`, `parseChunkUsage`) | `prompt_tokens − cached_tokens − cache_write_tokens` |
+| `openai-responses` (`dist/api/openai-responses-shared.js`) | `input_tokens − cached_tokens − cache_write_tokens` |
+| `google-generative-ai`, `google-vertex` | `promptTokenCount − cachedContentTokenCount` |
+| `mistral-conversations` | `prompt_tokens − cached prompt tokens` |
+
+A real session confirms it (pi 0.87.1, `openrouter` provider,
+`moonshotai/kimi-k2.6` model, `openai-completions` api, two calls in one
+session): the first call recorded `input` 454, `cacheRead` 0; the second
+recorded `input` 38, `cacheRead` 448, so its prompt was 486 tokens with
+only 38 uncached, and `cost.input` scaled with the 38, not the 486. No
+cache writes were reported, so that half rests on the source alone.
+
+`totalTokens` is **adapter-dependent and not load-bearing for us**. The
+`anthropic-messages`, `openai-completions` and `mistral-conversations`
+adapters compute `input + output + cacheRead + cacheWrite` (both calls
+above matched it exactly); `google-*`, `openai-responses` and Bedrock
+copy the provider's own total. `toolpath-pi` does **not** read
+`totalTokens`. It reads the raw `input`/`output`/`cacheRead`/`cacheWrite`
+fields and sums each independently, so it is correct whichever
+convention a session used. Some adapters add optional fields:
+`reasoning` (`openai-completions`; already counted in `output`) and
+`cacheWrite1h` (Anthropic and Bedrock; a subset of `cacheWrite`).
+`toolpath-pi` reads neither. The `cost` breakdown is Pi-specific and is
+absent from real sessions where cost can't be computed.
 
 ### Stop reasons
 

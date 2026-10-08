@@ -1,0 +1,44 @@
+{
+  "scenario": "openai-chat",
+  "description": "OpenAI Chat Completions via opentelemetry-instrumentation-openai-v2: a tool call,\nits result, an answer, and a follow-up requested with n=2.",
+  "python": "3.12",
+  "packages": {
+    "opentelemetry-api": "1.45.0",
+    "opentelemetry-sdk": "1.45.0",
+    "opentelemetry-proto": "1.45.0",
+    "opentelemetry-exporter-otlp-proto-common": "1.45.0",
+    "opentelemetry-exporter-otlp-proto-http": "1.45.0",
+    "opentelemetry-instrumentation": "0.66b0",
+    "opentelemetry-semantic-conventions": "0.66b0",
+    "opentelemetry-util-genai": "1.1b0",
+    "opentelemetry-instrumentation-openai-v2": "2.4b0",
+    "openai": "3.20.0",
+    "httpx": "0.28.1"
+  },
+  "env": {
+    "OTEL_RESOURCE_ATTRIBUTES": "service.name=otel-fixture",
+    "OTEL_EXPERIMENTAL_RESOURCE_DETECTORS": "",
+    "OTEL_TRACES_EXPORTER": "none",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_LOGS_EXPORTER": "none",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_ONLY",
+    "OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT": "false",
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"
+  },
+  "scopes": [
+    {
+      "name": "opentelemetry.util.genai.handler",
+      "version": "1.1b0"
+    }
+  ],
+  "mock": {
+    "module": "mock_openai",
+    "requests": 3
+  },
+  "mode": "span",
+  "otlp_exporter": {
+    "package": "opentelemetry-exporter-otlp-proto-http",
+    "version": "1.45.0",
+    "binpb": "request bodies as exported"
+  }
+}

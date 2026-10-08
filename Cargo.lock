@@ -5466,6 +5466,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolpath-otel"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_json_canonicalizer",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "toolpath",
+ "toolpath-claude",
+ "toolpath-codex",
+ "toolpath-convo",
+ "toolpath-opencode",
+ "toolpath-pi",
+]
+
+[[package]]
 name = "toolpath-pi"
 version = "0.6.1"
 dependencies = [
