@@ -206,8 +206,6 @@ fn project_view(
         }
     }
 
-    monotonize_times(&mut messages);
-
     Ok(Session {
         id: session_id,
         project_id,
@@ -227,38 +225,6 @@ fn project_view(
         time_archived: None,
         messages,
     })
-}
-
-/// Force strictly increasing `time_created` across the emitted message
-/// sequence. The real reader orders rows by `time_created ASC, id ASC`,
-/// so a message whose native time is at-or-before its predecessor's (e.g.
-/// a compaction boundary stamped later than the host assistant message
-/// that follows it) would MOVE on re-read. Bumping each such message to
-/// its predecessor's time + 1 keeps re-read order identical to emission
-/// order.
-fn monotonize_times(messages: &mut [Message]) {
-    let mut prev: Option<i64> = None;
-    for msg in messages {
-        let t = match prev {
-            Some(p) if msg.time_created <= p => p + 1,
-            _ => msg.time_created,
-        };
-        if t != msg.time_created {
-            msg.time_created = t;
-            msg.time_updated = msg.time_updated.max(t);
-            match &mut msg.data {
-                MessageData::User(u) => u.time.created = t,
-                MessageData::Assistant(a) => {
-                    a.time.created = t;
-                    if a.time.completed.is_some_and(|c| c < t) {
-                        a.time.completed = Some(t);
-                    }
-                }
-                MessageData::Other => {}
-            }
-        }
-        prev = Some(t);
-    }
 }
 
 fn build_user_message(
@@ -993,111 +959,5 @@ mod tests {
             MessageData::Assistant(a) => assert_eq!(a.parent_id, user_id),
             _ => panic!("expected assistant"),
         }
-    }
-
-    fn user_msg(id: &str, t: i64) -> Message {
-        Message {
-            id: id.into(),
-            session_id: "s".into(),
-            time_created: t,
-            time_updated: t,
-            data: MessageData::User(UserMessage {
-                time: MessageTime {
-                    created: t,
-                    completed: None,
-                },
-                agent: "build".into(),
-                model: ModelRef {
-                    provider_id: "anthropic".into(),
-                    model_id: "m".into(),
-                    variant: None,
-                },
-                format: None,
-                summary: None,
-                system: None,
-                tools: None,
-                extra: HashMap::new(),
-            }),
-            parts: vec![],
-        }
-    }
-
-    fn assistant_msg(id: &str, t: i64) -> Message {
-        Message {
-            id: id.into(),
-            session_id: "s".into(),
-            time_created: t,
-            time_updated: t,
-            data: MessageData::Assistant(AssistantMessage {
-                parent_id: String::new(),
-                time: MessageTime {
-                    created: t,
-                    completed: Some(t),
-                },
-                error: None,
-                agent: "build".into(),
-                mode: Some("build".into()),
-                model_id: "m".into(),
-                provider_id: "anthropic".into(),
-                path: MessagePath {
-                    cwd: "/p".into(),
-                    root: "/p".into(),
-                },
-                summary: None,
-                cost: 0.0,
-                tokens: Tokens::default(),
-                structured: None,
-                variant: None,
-                finish: None,
-                extra: HashMap::new(),
-            }),
-            parts: vec![],
-        }
-    }
-
-    #[test]
-    fn monotonize_times_bumps_ties_and_regressions() {
-        let mut msgs = vec![
-            user_msg("a", 100),
-            user_msg("b", 100),
-            assistant_msg("c", 50),
-        ];
-        monotonize_times(&mut msgs);
-        let times: Vec<i64> = msgs.iter().map(|m| m.time_created).collect();
-        assert_eq!(times, vec![100, 101, 102]);
-        match &msgs[1].data {
-            MessageData::User(u) => assert_eq!(u.time.created, 101),
-            _ => panic!("expected user"),
-        }
-        match &msgs[2].data {
-            MessageData::Assistant(a) => {
-                assert_eq!(a.time.created, 102);
-                assert_eq!(a.time.completed, Some(102));
-            }
-            _ => panic!("expected assistant"),
-        }
-        assert!(msgs.iter().all(|m| m.time_updated >= m.time_created));
-    }
-
-    #[test]
-    fn monotonize_times_keeps_reader_order_stable() {
-        // The reader orders rows by (time_created, id); ids are arranged
-        // so an unbumped tie would reorder relative to emission order.
-        let mut msgs = vec![user_msg("z", 100), user_msg("a", 100), user_msg("m", 100)];
-        monotonize_times(&mut msgs);
-        let emitted: Vec<String> = msgs.iter().map(|m| m.id.clone()).collect();
-        let mut reread = msgs.clone();
-        reread
-            .sort_by(|x, y| (x.time_created, x.id.as_str()).cmp(&(y.time_created, y.id.as_str())));
-        let reread_ids: Vec<String> = reread.iter().map(|m| m.id.clone()).collect();
-        assert_eq!(reread_ids, emitted);
-    }
-
-    #[test]
-    fn monotonize_times_leaves_increasing_sequence_untouched() {
-        let mut msgs = vec![user_msg("a", 1), user_msg("b", 2)];
-        monotonize_times(&mut msgs);
-        assert_eq!(msgs[0].time_created, 1);
-        assert_eq!(msgs[1].time_created, 2);
     }
 }

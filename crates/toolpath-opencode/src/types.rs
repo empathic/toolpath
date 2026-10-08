@@ -508,16 +508,7 @@ pub struct CompactionPart {
     pub auto: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overflow: Option<bool>,
-    /// First message id of the post-compaction tail. opencode writes this
-    /// as `tailStartID` (matching its `parentID`/`sessionID` convention);
-    /// the snake_case alias accepts the form used in older docs/fixtures.
-    #[serde(
-        rename = "tailStartID",
-        alias = "tailStartId",
-        alias = "tail_start_id",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail_start_id: Option<String>,
     #[serde(flatten, skip_serializing_if = "HashMap::is_empty", default)]
     pub extra: HashMap<String, Value>,

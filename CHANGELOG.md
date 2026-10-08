@@ -80,15 +80,8 @@ non-turn entries survive import/export.
   item stream, so events sit between the turns they separate.
 - **`toolpath-gemini`** (0.7.0): split assistant messages group via
   `group_id` with the snapshot counted once.
-- **`toolpath-opencode`** (0.6.0): compaction parts become in-position
-  `part.compaction` events (previously a trailing events vec), chained
-  onto the preceding item; the turn that follows chains onto the
-  boundary, whether its native `parentID` names the suppressed host
-  or the last pre-boundary message. Empty compaction-host user
-  messages are suppressed; attachment-only user messages still emit
-  turns. Other part events (`file`, `agent`, `retry`, unknown) follow
-  their message's turn in the stream. Projected timestamps are
-  monotonized so a re-read keeps emission order.
+- **`toolpath-opencode`** (0.6.0): `items` holds the turns followed by
+  the part and message events.
 - **`toolpath-cursor`** (0.3.0): builds `items` from its turns.
 - **`toolpath-copilot`** (0.2.0): `items` holds the turns followed by
   the non-turn events, and the synthesized chain runs over that
