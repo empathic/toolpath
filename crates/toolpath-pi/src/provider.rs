@@ -222,37 +222,6 @@ fn truncate_output(output: &str, max: usize) -> String {
     }
 }
 
-/// Resolve an item's parent reference past entries that produced no item
-/// (the session header, `model_change` / `thinking_level_change` / `label`
-/// metadata, folded tool results), walking the entry parent chain up to
-/// the nearest ancestor that did. Ids not present in this session's
-/// entries (e.g. a chained parent-session entry) are preserved verbatim —
-/// except the `<session-id>-init` virtual root, which Pi writes as the
-/// first entry's `parentId` without any such entry existing: that is the
-/// tree root and resolves to `None`.
-fn resolve_item_parent(
-    start: Option<&str>,
-    entry_parents: &HashMap<&str, Option<&str>>,
-    item_ids: &std::collections::HashSet<String>,
-    virtual_root: &str,
-) -> Option<String> {
-    let mut cur = start?;
-    for _ in 0..=entry_parents.len() {
-        if cur == virtual_root {
-            return None;
-        }
-        if item_ids.contains(cur) {
-            return Some(cur.to_string());
-        }
-        match entry_parents.get(cur) {
-            None => return Some(cur.to_string()),
-            Some(Some(next)) => cur = next,
-            Some(None) => return None,
-        }
-    }
-    None
-}
-
 // ── Main conversion ──────────────────────────────────────────────────
 
 /// Convert a PiSession into a provider-agnostic ConversationView.
@@ -527,36 +496,6 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         {
             d.result = Some(content.clone());
         }
-    }
-
-    // Discarded entries leave dangling parent references on the items
-    // derived from their children (a turn parented on a `model_change`, a
-    // turn after a folded tool result). Resolve each parent to the
-    // nearest ancestor that became an item, so the view is self-contained
-    // and `expand_kept` chains never break at a non-item entry.
-    let entry_parents: HashMap<&str, Option<&str>> = session
-        .entries
-        .iter()
-        .map(|e| (e.entry_id(), e.parent_entry_id()))
-        .collect();
-    let item_ids: std::collections::HashSet<String> = items
-        .iter()
-        .map(|i| match i {
-            Item::Turn(t) => t.id.clone(),
-            Item::Event(e) => e.id.clone(),
-        })
-        .collect();
-    for item in &mut items {
-        let parent = match item {
-            Item::Turn(t) => &mut t.parent_id,
-            Item::Event(e) => &mut e.parent_id,
-        };
-        *parent = resolve_item_parent(
-            parent.as_deref(),
-            &entry_parents,
-            &item_ids,
-            &format!("{}-init", session.header.id),
-        );
     }
 
     // Aggregate token usage from Assistant turns.
@@ -1065,7 +1004,7 @@ mod tests {
         let c = Entry::Compaction {
             base: base("c", None, "t"),
             summary: "sum".into(),
-            first_kept_entry_id: Some("x".into()),
+            first_kept_entry_id: "x".into(),
             tokens_before: 100,
             details: None,
             from_hook: Some(false),
@@ -1075,55 +1014,6 @@ mod tests {
         let t = v.turns().next().unwrap();
         assert_eq!(t.role, Role::System);
         assert!(t.text.starts_with("Compacted"));
-    }
-
-    #[test]
-    fn test_resolve_item_parent_skips_discarded_entries() {
-        // Entry chain: turn "a" ← model_change "mc1" ← model_change "mc2".
-        // A parent naming "mc2" resolves to "a", the nearest item ancestor.
-        let entry_parents: HashMap<&str, Option<&str>> =
-            [("a", None), ("mc1", Some("a")), ("mc2", Some("mc1"))]
-                .into_iter()
-                .collect();
-        let item_ids: std::collections::HashSet<String> =
-            std::iter::once("a".to_string()).collect();
-        assert_eq!(
-            resolve_item_parent(Some("mc2"), &entry_parents, &item_ids, "sess-1-init"),
-            Some("a".to_string())
-        );
-    }
-
-    #[test]
-    fn test_resolve_item_parent_virtual_root_resolves_to_none() {
-        // Pi writes "<session-id>-init" as the first entry's parentId
-        // without any such entry existing. A chain ending there is rooted.
-        let entry_parents: HashMap<&str, Option<&str>> =
-            std::iter::once(("mc", Some("sess-1-init"))).collect();
-        let item_ids = std::collections::HashSet::new();
-        assert_eq!(
-            resolve_item_parent(
-                Some("sess-1-init"),
-                &entry_parents,
-                &item_ids,
-                "sess-1-init"
-            ),
-            None
-        );
-        assert_eq!(
-            resolve_item_parent(Some("mc"), &entry_parents, &item_ids, "sess-1-init"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_resolve_item_parent_terminates_on_cycle() {
-        let entry_parents: HashMap<&str, Option<&str>> =
-            [("x", Some("y")), ("y", Some("x"))].into_iter().collect();
-        let item_ids = std::collections::HashSet::new();
-        assert_eq!(
-            resolve_item_parent(Some("x"), &entry_parents, &item_ids, "sess-1-init"),
-            None
-        );
     }
 
     #[test]

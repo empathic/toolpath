@@ -86,9 +86,8 @@ non-turn entries survive import/export.
 - **`toolpath-copilot`** (0.2.0): `items` holds the turns followed by
   the non-turn events, and the synthesized chain runs over that
   stream.
-- **`toolpath-pi`** (0.7.0): tree parents resolve past discarded
-  entries (model changes, labels, folded tool results, the virtual
-  root) via `resolve_item_parent`; compaction stays a System turn.
+- **`toolpath-pi`** (0.7.0): builds `items` from its turns; compaction
+  stays a System turn.
 - **`path-cli`** (0.30.0), **`toolpath-cli`** (0.30.0): dependency
   bumps for all of the above.
 
