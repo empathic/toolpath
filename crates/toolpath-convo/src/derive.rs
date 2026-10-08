@@ -51,6 +51,13 @@ impl Default for DeriveConfig {
 /// unchanged message) is dropped, and a same-id-but-different step is renamed
 /// to a fresh id. Either way the derivation always succeeds and the result is
 /// collision-free.
+///
+/// Linkage comes from the reader: a step's `parents` is its item's
+/// `parent_id` resolved to the step that item became. A turn whose
+/// `parent_id` is `None` or names nothing emitted has no parents. An event in
+/// that position is attached to the step emitted just before it (a leading
+/// event stays a root), so an unchained trailing event cannot become an
+/// orphan head that reports every turn as a dead end.
 pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let provider = view.provider_id.as_deref().unwrap_or("unknown");
     let id_prefix: String = view.id.chars().take(8).collect();
@@ -123,9 +130,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     // `step-{:04}` indexed by turn count, events `event-{:04}` by event count.
     //
     // Linkage is the reader's: a step's `parents` is the item's `parent_id`
-    // resolved through `turn_to_step`, or empty when it names nothing
-    // emitted. Nothing here rewires or synthesizes a chain — a reader whose
-    // harness records no linkage synthesizes one over its own item stream.
+    // resolved through `turn_to_step`. A turn whose parent names nothing
+    // emitted has no parents; an event in that position falls back to the
+    // step emitted just before it. Nothing here rewires a recorded chain —
+    // a reader whose harness records no linkage synthesizes one over its
+    // own item stream.
     let mut turn_idx = 0usize;
     let mut event_idx = 0usize;
 
@@ -472,10 +481,16 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     serde_json::Value::String(event.event_type.clone()),
                 );
 
+                // An event's recorded parent resolves like a turn's. One
+                // that names nothing emitted (or none at all) hangs off the
+                // step just before it, so a reader that leaves a trailing
+                // event unchained cannot make it an orphan head and turn the
+                // whole session into dead ends. A leading event stays a root.
                 let parents: Vec<String> = event
                     .parent_id
                     .as_ref()
                     .and_then(|pid| turn_to_step.get(pid).cloned())
+                    .or_else(|| steps.last().map(|s| s.step.id.clone()))
                     .into_iter()
                     .collect();
 
@@ -1101,29 +1116,93 @@ mod tests {
         assert!(dead_end_ids(&path).is_empty());
     }
 
-    #[test]
-    fn test_event_without_parent_is_not_chained() {
-        // derive never synthesizes linkage: an event whose reader recorded
-        // no parent is a root, and a turn whose parent names nothing
-        // emitted has no parents.
-        let u1 = base_turn("u1", Role::User);
-        let event = crate::ConversationEvent {
-            id: "e1".into(),
+    fn event_with_parent(id: &str, parent_id: Option<&str>) -> crate::ConversationEvent {
+        crate::ConversationEvent {
+            id: id.into(),
             timestamp: "2026-01-01T00:00:00Z".into(),
-            parent_id: None,
+            parent_id: parent_id.map(Into::into),
             event_type: "attachment".into(),
             data: std::collections::HashMap::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn test_turn_with_dangling_parent_is_not_chained() {
+        // Turns keep the reader's linkage as recorded: a turn whose parent
+        // names nothing emitted has no parents.
+        let u1 = base_turn("u1", Role::User);
         let mut a1 = base_turn("a1", Role::Assistant);
         a1.parent_id = Some("missing".into());
 
         let mut view = view_with(vec![u1]);
-        view.items.push(Item::Event(event));
         view.items.push(Item::Turn(a1));
 
         let path = derive_path(&view, &DeriveConfig::default());
         assert!(path.steps[1].step.parents.is_empty());
-        assert!(path.steps[2].step.parents.is_empty());
+    }
+
+    #[test]
+    fn test_trailing_event_without_parent_attaches_to_previous_step() {
+        // An event with no recorded parent hangs off the step before it, so
+        // it does not become an orphan head with the turn as a dead end.
+        let u1 = base_turn("u1", Role::User);
+        let mut view = view_with(vec![u1]);
+        view.items.push(Item::Event(event_with_parent("e1", None)));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[1].step.parents, vec!["u1".to_string()]);
+        assert_eq!(path.path.head, "e1");
+        assert!(dead_end_ids(&path).is_empty());
+    }
+
+    #[test]
+    fn test_trailing_event_with_dangling_parent_attaches_to_previous_step() {
+        // A parent that names nothing emitted is treated like none at all:
+        // the event attaches to the step just before it — the renamed
+        // duplicate when that step was re-IDed, since that is what was
+        // emitted last.
+        let u1 = base_turn("u1", Role::User);
+        let a1 = base_turn("a1", Role::Assistant);
+        let mut a1_other = base_turn("a1", Role::Assistant);
+        a1_other.text = "different body".into();
+
+        let mut view = view_with(vec![u1, a1, a1_other]);
+        view.items
+            .push(Item::Event(event_with_parent("e1", Some("missing"))));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["u1", "a1", "a1#2", "e1"]);
+        assert_eq!(path.steps[3].step.parents, vec!["a1#2".to_string()]);
+        assert_eq!(path.path.head, "e1");
+    }
+
+    #[test]
+    fn test_leading_event_without_parent_is_a_root() {
+        // With nothing emitted before it there is nothing to attach to.
+        let mut view = view_with(vec![]);
+        view.items.push(Item::Event(event_with_parent("e1", None)));
+        let mut u1 = base_turn("u1", Role::User);
+        u1.parent_id = Some("e1".into());
+        view.items.push(Item::Turn(u1));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert!(path.steps[0].step.parents.is_empty());
+        assert_eq!(path.steps[1].step.parents, vec!["e1".to_string()]);
+    }
+
+    #[test]
+    fn test_event_with_resolved_parent_keeps_it() {
+        // A recorded parent that resolves is used as is, even when a later
+        // step was emitted since.
+        let u1 = base_turn("u1", Role::User);
+        let a1 = base_turn("a1", Role::Assistant);
+        let mut view = view_with(vec![u1, a1]);
+        view.items
+            .push(Item::Event(event_with_parent("e1", Some("u1"))));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.steps[2].step.parents, vec!["u1".to_string()]);
     }
 
     #[test]

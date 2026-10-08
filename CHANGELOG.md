@@ -19,15 +19,20 @@ non-turn entries survive import/export.
   at the source level and drops them (the Claude chain-merge shape).
   Readers own linkage: a step's `parents` is the item's `parent_id`
   resolved to the step it names (an event's id resolves like a
-  turn's), or empty; `derive_path` never rewires or synthesizes a
-  chain, and `extract_conversation` restores `parent_id` from
-  `parents[0]` for turns and events alike. No transform-recovery keys
+  turn's). A turn whose `parent_id` is `None` or names nothing emitted
+  has no parents; an event in that position attaches to the step
+  emitted just before it, so an unchained trailing event cannot become
+  an orphan head that reports every turn as a dead end. `derive_path`
+  never rewires a recorded chain, and `extract_conversation` restores
+  `parent_id` from `parents[0]` for turns and events alike. No transform-recovery keys
   ride in the document (`source_parent` and `event_source_id` are
   gone). Readers whose harness records no linkage chain over the
   ordered item stream, so events sit on the head's ancestry
   naturally. New proptest suite pins unique step ids,
   derive → extract → derive stability, and replay no-ops over
-  randomized interleavings with id collisions.
+  randomized interleavings with id collisions, and that every turn of
+  a chained stream is an ancestor of the head however its events are
+  linked.
 - **`toolpath-claude`** (0.14.0): the projector emits events inline at
   their item position — real Claude interleaves attachments and system
   entries with turns; the old trailing pass regrouped them at end of

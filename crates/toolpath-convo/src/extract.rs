@@ -1382,9 +1382,10 @@ mod tests {
     fn test_turn_parent_past_event_round_trips_verbatim() {
         use crate::DeriveConfig;
 
-        // Wire truth: a1's parent is u1. An id-less event (e.g. a Claude
-        // file-history-snapshot line) sits between them in the stream.
-        // derive keeps a1 on u1; extract hands the same parent back.
+        // Wire truth: a1's parent is u1. An id-less, parent-less event
+        // (e.g. a Claude file-history-snapshot line) sits between them in
+        // the stream. derive keeps a1 on u1 and hangs the event off u1,
+        // the step before it; extract hands both parents back.
         let source = ConversationView {
             id: "sess-1".into(),
             items: vec![
@@ -1415,7 +1416,7 @@ mod tests {
         assert_eq!(turns[1].parent_id.as_deref(), Some("u1"));
         let events: Vec<&ConversationEvent> = view.events().collect();
         assert_eq!(events[0].id, "event-0001");
-        assert_eq!(events[0].parent_id, None);
+        assert_eq!(events[0].parent_id.as_deref(), Some("u1"));
 
         let again = crate::derive::derive_path(&view, &DeriveConfig::default());
         assert_eq!(

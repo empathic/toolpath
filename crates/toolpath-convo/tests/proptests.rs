@@ -9,7 +9,10 @@
 //! 2. derive → extract → derive is stable at generation one;
 //! 3. re-emitting a turn whose step kept its source linkage (the replay
 //!    shape) — after the original, before the next turn — never changes
-//!    the derived path at all.
+//!    the derived path at all;
+//! 4. in a stream whose turns chain, every turn step is an ancestor of the
+//!    head however the events are linked — an event with no parent or a
+//!    dangling one cannot orphan the session.
 
 use proptest::prelude::*;
 use std::collections::HashMap;
@@ -147,8 +150,99 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
     }
 }
 
+/// One element of a stream whose turns chain, as every shipped reader's do.
+#[derive(Debug, Clone)]
+enum ChainedElem {
+    /// A turn chained onto the id-bearing item before it (role by parity).
+    Turn(u8),
+    /// (id slot, linkage). Slot 0 = id-less; 1–3 = `e<slot>` (repeats
+    /// collide). Linkage: 0 = no parent, 1 = a parent naming nothing in the
+    /// stream, 2 = the id-bearing item before it.
+    Event(u8, u8),
+}
+
+fn chained_elem() -> impl Strategy<Value = ChainedElem> {
+    prop_oneof![
+        3 => (0u8..4).prop_map(ChainedElem::Turn),
+        2 => (0u8..4, 0u8..3).prop_map(|(id_slot, link)| ChainedElem::Event(id_slot, link)),
+    ]
+}
+
+/// Materialize a chained stream. Turn ids are distinct (`t<n>` by position)
+/// so a turn's step is found under its own id. Event ids may collide but
+/// every event carries its position in `data`, so a colliding event is
+/// renamed rather than dropped as a replay, and the turn after it resolves
+/// its parent through the event's source id to the renamed step.
+fn build_chained_view(elems: Vec<ChainedElem>) -> ConversationView {
+    let mut items: Vec<Item> = Vec::new();
+    let mut last_id: Option<String> = None;
+    for (n, e) in elems.into_iter().enumerate() {
+        match e {
+            ChainedElem::Turn(kind) => {
+                let id = format!("t{n}");
+                let role = if kind % 2 == 0 {
+                    Role::User
+                } else {
+                    Role::Assistant
+                };
+                let text = format!("text-{n}-{kind}");
+                items.push(Item::Turn(turn(&id, last_id.as_deref(), role, &text)));
+                last_id = Some(id);
+            }
+            ChainedElem::Event(id_slot, link) => {
+                let id = match id_slot {
+                    0 => String::new(),
+                    s => format!("e{s}"),
+                };
+                let parent = match link {
+                    0 => None,
+                    1 => Some("missing".to_string()),
+                    _ => last_id.clone(),
+                };
+                items.push(Item::Event(ConversationEvent {
+                    id: id.clone(),
+                    timestamp: "2026-01-01T00:00:00Z".into(),
+                    parent_id: parent,
+                    event_type: "generated".into(),
+                    data: HashMap::from([("n".to_string(), serde_json::json!(n))]),
+                }));
+                if !id.is_empty() {
+                    last_id = Some(id);
+                }
+            }
+        }
+    }
+    ConversationView {
+        id: "prop-session".into(),
+        items,
+        provider_id: Some("prop".into()),
+        ..Default::default()
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
+
+    #[test]
+    fn chained_turns_are_all_ancestors_of_head(
+        elems in proptest::collection::vec(chained_elem(), 1..12),
+    ) {
+        let view = build_chained_view(elems);
+        let path = derive_path(&view, &DeriveConfig::default());
+        let active = toolpath::v1::query::ancestors(&path.steps, &path.path.head);
+        for t in view.turns() {
+            prop_assert!(
+                active.contains(&t.id),
+                "turn {:?} is not an ancestor of head {:?}; dead ends: {:?}",
+                t.id,
+                path.path.head,
+                toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+                    .iter()
+                    .map(|s| s.step.id.as_str())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
 
     #[test]
     fn derived_step_ids_are_unique(elems in proptest::collection::vec(elem(), 0..12)) {
