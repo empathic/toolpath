@@ -1,0 +1,9 @@
+{
+  "captured_at": "2026-10-08T19:52:30Z",
+  "claude_version": "2.1.285 (Claude Code)",
+  "command": "cd <tmp>/project && env -i HOME=<tmp>/home XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp>/home/.claude CLAUDE_CODE_OAUTH_TOKEN=<redacted> claude -p <prompt> --model claude-haiku-4-5-20251001 --output-format json --allowedTools Read Glob Bash(ls) < /dev/null",
+  "input_sha256": "a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c",
+  "model": "claude-haiku-4-5-20251001",
+  "prompt": "Run the shell command `ls` exactly, with no arguments or flags, to list the file names in the current directory. Then read the file notes.txt and tell me its first line.",
+  "session_id": "08f8ca74-56bc-441d-8922-cb3637991ef5"
+}
