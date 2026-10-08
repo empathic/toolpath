@@ -1,0 +1,37 @@
+{
+  "adapter": "pi",
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.stop_reason"
+  ],
+  "ir1": {
+    "key_paths": 59,
+    "steps": 14,
+    "text_chars": 4594,
+    "tool_uses": 11
+  },
+  "ir2": {
+    "key_paths": 48,
+    "steps": 12,
+    "text_chars": 4594,
+    "tool_uses": 11
+  },
+  "lost": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
+    "paths[].steps[].change.<artifact>.structural.content",
+    "paths[].steps[].change.<artifact>.structural.contextTier",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.newModel",
+    "paths[].steps[].change.<artifact>.structural.reasoningEffort"
+  ],
+  "set": "copilot"
+}

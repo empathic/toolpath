@@ -1,0 +1,37 @@
+{
+  "adapter": "copilot",
+  "gained": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path",
+    "paths[].steps[].change.src/auth.rs.structural.after"
+  ],
+  "ir1": {
+    "key_paths": 42,
+    "steps": 7,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "ir2": {
+    "key_paths": 37,
+    "steps": 6,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "lost": [
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string"
+  ],
+  "set": "claude-compacted"
+}

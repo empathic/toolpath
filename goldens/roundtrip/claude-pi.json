@@ -1,0 +1,50 @@
+{
+  "adapter": "pi",
+  "gained": [],
+  "ir1": {
+    "key_paths": 91,
+    "steps": 61,
+    "text_chars": 4563,
+    "tool_uses": 19
+  },
+  "ir2": {
+    "key_paths": 60,
+    "steps": 47,
+    "text_chars": 4563,
+    "tool_uses": 19
+  },
+  "lost": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].path.base.branch",
+    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+    "paths[].steps[].change.<artifact>.structural.cwd",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.isInitial",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.itemCount",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.skillCount",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.type",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.entrypoint",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.git_branch",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.raw.aiTitle",
+    "paths[].steps[].change.<artifact>.structural.raw.content",
+    "paths[].steps[].change.<artifact>.structural.raw.lastPrompt",
+    "paths[].steps[].change.<artifact>.structural.raw.leafUuid",
+    "paths[].steps[].change.<artifact>.structural.raw.operation",
+    "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+    "paths[].steps[].change.<artifact>.structural.raw.timestamp",
+    "paths[].steps[].change.<artifact>.structural.raw.type",
+    "paths[].steps[].change.<artifact>.structural.thinking",
+    "paths[].steps[].change.<artifact>.structural.user_type",
+    "paths[].steps[].change.<artifact>.structural.version",
+    "paths[].steps[].change.notes.md.structural.operation"
+  ],
+  "set": "claude"
+}

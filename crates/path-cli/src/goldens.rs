@@ -87,6 +87,12 @@ pub struct GoldensArgs {
 pub enum GoldensCommand {
     /// List the golden sets in the manifest
     List,
+    /// Round trips IR -> adapter -> IR for every set and adapter: key paths lost and gained, text
+    /// and tool-use survival (check pins today's losses; a new loss fails)
+    Roundtrip {
+        /// Only this set (default: all)
+        name: Option<String>,
+    },
     /// Capture the standard sets from the repo's own fixtures
     Init,
     /// Capture a golden set from a fixture, hermetically, to every target; with --all re-capture
@@ -109,6 +115,15 @@ pub enum GoldensCommand {
     },
     /// Alias for `capture-live claude`
     CaptureClaude(CaptureLiveArgs),
+    /// Print the provenance of an installed agent binary: code signature and upstream match
+    /// (needs network for the upstream check; no credentials)
+    Provenance {
+        #[arg(value_enum)]
+        harness: LiveHarness,
+        /// Path to the agent executable (default: $<AGENT>_BIN, then PATH, then ~/.local/bin/<agent>)
+        #[arg(long)]
+        bin: Option<PathBuf>,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -151,6 +166,7 @@ pub fn run(args: GoldensArgs) -> Result<()> {
     let g = Goldens::new(root, std::env::current_exe()?);
     match args.command {
         GoldensCommand::List => g.list(),
+        GoldensCommand::Roundtrip { name } => g.roundtrip_report(name.as_deref()),
         GoldensCommand::Init => {
             for (name, harness, fixture) in STANDARD_SETS {
                 g.capture(*harness, &g.root.join(fixture), name, None, None)?;
@@ -184,6 +200,22 @@ pub fn run(args: GoldensArgs) -> Result<()> {
         }
         GoldensCommand::CaptureLive { harness, args } => g.capture_live(harness, args),
         GoldensCommand::CaptureClaude(args) => g.capture_live(LiveHarness::Claude, args),
+        GoldensCommand::Provenance { harness, bin } => {
+            let drv = driver(harness)?;
+            let bin = resolve_agent(drv.exe, bin)?;
+            let version = agent_version(&bin);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "name": drv.exe,
+                    "version": version,
+                    "binary_path": bin.to_string_lossy(),
+                    "binary_sha256": hash_file(&bin).unwrap_or_default(),
+                    "provenance": provenance(drv.exe, &bin, &version),
+                }))?
+            );
+            Ok(())
+        }
     }
 }
 
@@ -268,6 +300,8 @@ struct TargetRun {
 
 struct SetRun {
     source_cwd: Option<String>,
+    /// The Toolpath document derived from the input (IR1).
+    ir: Vec<u8>,
     targets: Vec<TargetRun>,
 }
 
@@ -483,6 +517,7 @@ impl Goldens {
         }
         Ok(SetRun {
             source_cwd,
+            ir: ir_bytes,
             targets,
         })
     }
@@ -592,6 +627,7 @@ impl Goldens {
         m["informational"] = self.informational();
         // Known-defect goldens, derived from the set just captured.
         self.write_defects(&mut m, name, &a)?;
+        self.write_roundtrips(&mut m, name, &a)?;
         self.write_manifest(&m)
     }
 
@@ -911,6 +947,42 @@ impl Goldens {
                     _ => r
                         .problems
                         .push(format!("{label}: malformed manifest entry")),
+                }
+            }
+            // Round trips: today's losses are pinned as known; only a NEW loss is a problem.
+            for row in self.roundtrip_rows(&name, &run) {
+                match row {
+                    Err(e) => r.problems.push(format!("round trip: {e}")),
+                    Ok(fresh) => {
+                        let adapter = fresh["adapter"].as_str().unwrap_or("?");
+                        let label = format!("{name} -> {adapter} -> IR");
+                        let file = row_file(&name, adapter);
+                        let pinned = m["roundtrip"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .find(|d| d["file"] == file.as_str());
+                        match (fs::read(self.root.join(&file)), pinned) {
+                            (Ok(bytes), Some(p)) => {
+                                if Some(sha256_hex(&bytes).as_str()) != p["sha256"].as_str() {
+                                    r.problems.push(format!("{label}: {file} does not match the manifest sha256 (hand-edited?)"));
+                                    continue;
+                                }
+                                let committed: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                                let regress = roundtrip_regressions(&label, &committed, &fresh);
+                                if regress.is_empty() {
+                                    r.ok.push(if fresh["error"].is_string() {
+                                        format!("{label} (cannot round-trip, as pinned)")
+                                    } else {
+                                        format!("{label} (loses {} key paths, as pinned)", fresh["lost"].as_array().map_or(0, Vec::len))
+                                    });
+                                } else {
+                                    r.problems.extend(regress);
+                                }
+                            }
+                            _ => r.problems.push(format!("{label}: no committed round-trip row {file}; run `path goldens capture --all`")),
+                        }
+                    }
                 }
             }
             fresh_runs.push((name, run));
@@ -1276,6 +1348,540 @@ fn read_credential() -> Result<(String, String)> {
     bail!(
         "no credential: export CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or add Keychain item 'claude-code-oauth-token'"
     )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Round trips: IR1 = derive(input); X = project(IR1); IR2 = derive(X). One row per (set, adapter X).
+// ---------------------------------------------------------------------------------------------
+
+/// Leaf key paths of a document: array indices collapsed to `[]`, artifact-URL keys (whose text embeds
+/// a session id) and actor-id keys collapsed to `<artifact>` / `<actor>`, so two derivations of the
+/// same session compare by structure, not by identity.
+fn key_paths(v: &Value) -> BTreeSet<String> {
+    fn walk(prefix: &str, v: &Value, out: &mut BTreeSet<String>) {
+        match v {
+            Value::Object(m) => {
+                for (k, x) in m {
+                    let seg = if k.contains("://") {
+                        "<artifact>"
+                    } else if prefix.ends_with("actors") {
+                        "<actor>"
+                    } else {
+                        k.as_str()
+                    };
+                    walk(&format!("{prefix}.{seg}"), x, out);
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(&format!("{prefix}[]"), x, out)),
+            _ => {
+                out.insert(prefix.trim_start_matches('.').to_string());
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk("", v, &mut out);
+    out
+}
+
+/// (steps, conversation text chars, tool uses) of a Toolpath document.
+fn ir_counts(v: &Value) -> (usize, usize, usize) {
+    fn walk(v: &Value, c: &mut (usize, usize, usize)) {
+        match v {
+            Value::Object(m) => {
+                if m.get("type").and_then(Value::as_str) == Some("conversation.append") {
+                    c.1 += m
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map_or(0, |t| t.chars().count());
+                    c.2 += m
+                        .get("tool_uses")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len);
+                }
+                if m.contains_key("step") && m.contains_key("change") {
+                    c.0 += 1;
+                }
+                m.values().for_each(|x| walk(x, c));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, c)),
+            _ => {}
+        }
+    }
+    let mut c = (0, 0, 0);
+    walk(v, &mut c);
+    c
+}
+
+/// One round-trip row: what IR1 had that IR2 lost, what IR2 gained, and text / tool-use survival.
+fn roundtrip_row(set: &str, adapter: &str, ir1: &Value, ir2: &Value) -> Value {
+    let (k1, k2) = (key_paths(ir1), key_paths(ir2));
+    let (c1, c2) = (ir_counts(ir1), ir_counts(ir2));
+    json!({
+        "set": set,
+        "adapter": adapter,
+        "ir1": { "steps": c1.0, "text_chars": c1.1, "tool_uses": c1.2, "key_paths": k1.len() },
+        "ir2": { "steps": c2.0, "text_chars": c2.1, "tool_uses": c2.2, "key_paths": k2.len() },
+        "lost": k1.difference(&k2).collect::<Vec<_>>(),
+        "gained": k2.difference(&k1).collect::<Vec<_>>(),
+    })
+}
+
+fn row_file(set: &str, adapter: &str) -> String {
+    format!("goldens/roundtrip/{set}-{adapter}.json")
+}
+
+/// Problems when a fresh row is worse than the committed one: a loss that was not there before, or
+/// less text / fewer tool uses surviving. Losses that shrank are not problems.
+fn roundtrip_regressions(label: &str, committed: &Value, fresh: &Value) -> Vec<String> {
+    match (committed["error"].as_str(), fresh["error"].as_str()) {
+        (Some(a), Some(b)) if a == b => return Vec::new(),
+        (Some(_), Some(b)) => {
+            return vec![format!(
+                "{label}: still cannot round-trip, but differently: {b}"
+            )];
+        }
+        (Some(_), None) => {
+            return vec![format!(
+                "{label}: now round-trips (was pinned as an error); recapture on purpose"
+            )];
+        }
+        (None, Some(b)) => return vec![format!("{label}: can no longer round-trip: {b}")],
+        (None, None) => {}
+    }
+    let set_of = |v: &Value| -> BTreeSet<String> {
+        v["lost"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect()
+    };
+    let (old, new) = (set_of(committed), set_of(fresh));
+    let mut out = Vec::new();
+    let grown: Vec<_> = new.difference(&old).take(8).collect();
+    if !grown.is_empty() {
+        out.push(format!(
+            "{label}: round trip loses {} key path(s) it did not before, e.g. {}",
+            new.difference(&old).count(),
+            grown
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    for k in ["text_chars", "tool_uses", "steps"] {
+        let (a, b) = (
+            committed["ir2"][k].as_u64().unwrap_or(0),
+            fresh["ir2"][k].as_u64().unwrap_or(0),
+        );
+        if b < a {
+            out.push(format!(
+                "{label}: round trip keeps fewer {k}: {b} (was {a})"
+            ));
+        }
+    }
+    out
+}
+
+impl Goldens {
+    /// Round-trip rows for one run: for every adapter X the set projects to, derive IR2 from X's raw output.
+    fn roundtrip_rows(&self, set: &str, run: &SetRun) -> Vec<std::result::Result<Value, String>> {
+        let ir1: Value = match serde_json::from_slice(&run.ir) {
+            Ok(v) => v,
+            Err(e) => return vec![Err(format!("{set}: IR1 is not JSON: {e}"))],
+        };
+        let mut rows = Vec::new();
+        for t in &run.targets {
+            let Ok(bytes) = &t.result else { continue };
+            let one = || -> Result<Value> {
+                let adapter = Harness::parse(t.target)?;
+                let tmp = tempfile::tempdir()?;
+                let home = tmp.path().canonicalize()?;
+                let (args, _) = Self::place(adapter, bytes, &home, None)?;
+                let ir2 = Self::exec(self.hermetic(&home).args(&args))
+                    .map_err(|e| anyhow!("derive from {} failed: {e}", t.target))?;
+                let ir2: Value = serde_json::from_slice(&ir2)?;
+                Ok(roundtrip_row(set, t.target, &ir1, &ir2))
+            };
+            // A pair that cannot be re-derived at all is a pinned row too (`error`), not a crash.
+            rows.push(Ok(match one() {
+                Ok(v) => v,
+                Err(e) => json!({ "set": set, "adapter": t.target, "error": e.to_string() }),
+            }));
+        }
+        rows
+    }
+
+    fn write_roundtrips(&self, m: &mut Value, set: &str, run: &SetRun) -> Result<()> {
+        for row in self.roundtrip_rows(set, run) {
+            let row = row.map_err(|e| anyhow!(e))?;
+            let file = row_file(set, row["adapter"].as_str().unwrap_or("?"));
+            let body = serde_json::to_string_pretty(&row)? + "\n";
+            write(&self.root.join(&file), body.as_bytes())?;
+            let doc = json!({ "file": file, "sha256": sha256_hex(body.as_bytes()) });
+            if m["roundtrip"].is_null() {
+                m["roundtrip"] = json!([]);
+            }
+            let list = m["roundtrip"]
+                .as_array_mut()
+                .ok_or_else(|| anyhow!("roundtrip not an array"))?;
+            match list.iter_mut().find(|d| d["file"] == file.as_str()) {
+                Some(slot) => *slot = doc,
+                None => list.push(doc),
+            }
+            list.sort_by(|a, b| a["file"].as_str().cmp(&b["file"].as_str()));
+        }
+        Ok(())
+    }
+
+    /// `path goldens roundtrip [set]`: print one line per (set, adapter); no files written.
+    fn roundtrip_report(&self, only: Option<&str>) -> Result<()> {
+        let m = self.read_manifest()?;
+        println!(
+            "{:<18} {:<8} {:>11} {:>14} {:>10} {:>6} {:>6}",
+            "set", "adapter", "steps", "text chars", "tool uses", "lost", "gained"
+        );
+        for e in m["goldens"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|e| only.is_none_or(|n| e["name"] == n))
+        {
+            let name = e["name"].as_str().unwrap_or("?");
+            let harness = Harness::parse(e["harness"]["name"].as_str().unwrap_or(""))?;
+            let input = fs::read(self.root.join(e["fixture"].as_str().unwrap_or("")))?;
+            let run = self.run_set(harness, &input, e["project"].as_str())?;
+            for row in self.roundtrip_rows(name, &run) {
+                match row {
+                    Ok(r) if r["error"].is_string() => println!(
+                        "{:<18} {:<8} cannot round-trip: {}",
+                        name,
+                        r["adapter"].as_str().unwrap_or(""),
+                        r["error"].as_str().unwrap_or("")
+                    ),
+                    Ok(r) => println!(
+                        "{:<18} {:<8} {:>5}->{:<5} {:>6}->{:<7} {:>4}->{:<5} {:>6} {:>6}",
+                        name,
+                        r["adapter"].as_str().unwrap_or(""),
+                        r["ir1"]["steps"],
+                        r["ir2"]["steps"],
+                        r["ir1"]["text_chars"],
+                        r["ir2"]["text_chars"],
+                        r["ir1"]["tool_uses"],
+                        r["ir2"]["tool_uses"],
+                        r["lost"].as_array().map_or(0, Vec::len),
+                        r["gained"].as_array().map_or(0, Vec::len)
+                    ),
+                    Err(e) => println!("{name:<18} ERROR {e}"),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Binary provenance: code signature and a match against the upstream release
+// ---------------------------------------------------------------------------------------------
+
+/// First `x.y.z` in `s`.
+fn semver_in(s: &str) -> Option<String> {
+    s.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map(|t| t.trim_matches('.'))
+        .find(|t| {
+            t.split('.').count() == 3
+                && t.split('.')
+                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        })
+        .map(str::to_string)
+}
+
+/// What `codesign -dv --verbose=2` printed -> the first Developer ID authority, `adhoc`, or `none`.
+fn parse_codesign(output: &str) -> String {
+    if output.contains("not signed at all") {
+        return "none".into();
+    }
+    if let Some(a) = output.lines().find_map(|l| l.strip_prefix("Authority=")) {
+        return a.to_string();
+    }
+    if output.lines().any(|l| l.trim() == "Signature=adhoc") {
+        return "adhoc".into();
+    }
+    "none".into()
+}
+
+fn codesign_of(p: &Path) -> String {
+    Command::new("codesign")
+        .args(["-dv", "--verbose=2"])
+        .arg(p)
+        .output()
+        .map(|o| parse_codesign(&String::from_utf8_lossy(&o.stderr)))
+        .unwrap_or_else(|_| "unverified".into())
+}
+
+fn curl_bytes(url: &str) -> std::result::Result<Vec<u8>, String> {
+    let o = Command::new("curl")
+        .args(["-fsSL", "--max-time", "120", url])
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
+    if o.status.success() {
+        Ok(o.stdout)
+    } else {
+        Err(format!("curl {url}: {}", o.status))
+    }
+}
+
+fn curl_json(url: &str) -> std::result::Result<Value, String> {
+    serde_json::from_slice(&curl_bytes(url)?).map_err(|e| format!("{url}: not JSON: {e}"))
+}
+
+/// Provenance of an installed agent binary: `{ codesign_authority, upstream: { kind, ref, matched } }`,
+/// with `upstream.kind == "unverified"` (and a reason) when it cannot be computed.
+fn provenance(agent: &str, bin: &Path, version_line: &str) -> Value {
+    let mut sig = codesign_of(bin);
+    let mut signed_path = bin.to_path_buf();
+    // A nix wrapper script carries no signature; the real binary behind it does.
+    if sig == "none"
+        && bin.starts_with("/nix/store")
+        && let Some(real) = nix_real_binary(bin, agent, version_line)
+    {
+        sig = codesign_of(&real);
+        signed_path = real;
+    }
+    let upstream = match agent {
+        "claude" => upstream_claude(bin, version_line),
+        "codex" => upstream_codex(bin, version_line),
+        "pi" | "copilot" => upstream_npm_nix(bin, agent, version_line),
+        _ => Err("no upstream check for this agent".into()),
+    }
+    .unwrap_or_else(
+        |reason| json!({ "kind": "unverified", "ref": null, "matched": null, "reason": reason }),
+    );
+    let mut v = json!({ "codesign_authority": sig, "upstream": upstream });
+    if signed_path != bin {
+        v["codesign_path"] = json!(signed_path.to_string_lossy());
+    }
+    v
+}
+
+/// Store paths the binary depends on (`nix-store -qR` of its store root).
+fn nix_requisites(bin: &Path) -> Vec<String> {
+    let root: String = bin
+        .to_string_lossy()
+        .split('/')
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("/");
+    Command::new("nix-store")
+        .args(["-qR", &root])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The dependency that IS the package (store name ends `-<version>`, has `bin/<agent>`).
+fn nix_package_dir(bin: &Path, agent: &str, version_line: &str) -> Option<String> {
+    let ver = semver_in(version_line)?;
+    nix_requisites(bin)
+        .into_iter()
+        .find(|p| p.ends_with(&format!("-{ver}")) && Path::new(p).join("bin").join(agent).exists())
+        .or_else(|| {
+            nix_requisites(bin)
+                .into_iter()
+                .find(|p| p.ends_with(&format!("-{ver}")))
+        })
+}
+
+fn nix_real_binary(bin: &Path, agent: &str, version_line: &str) -> Option<PathBuf> {
+    let dir = nix_package_dir(bin, agent, version_line)?;
+    let p = Path::new(&dir).join("bin").join(agent);
+    p.exists().then_some(p)
+}
+
+/// pi / copilot from nix: the package's fixed-output tarball hash must equal the npm registry's
+/// `dist.integrity` for the package.json name@version found inside the installed package.
+fn upstream_npm_nix(
+    bin: &Path,
+    agent: &str,
+    version_line: &str,
+) -> std::result::Result<Value, String> {
+    if !bin.starts_with("/nix/store") {
+        return Err("not a nix store path".into());
+    }
+    let ver = semver_in(version_line).ok_or("no version")?;
+    let pkg = nix_package_dir(bin, agent, version_line).ok_or("package store path not found")?;
+    let drv = Command::new("nix-store")
+        .args(["-q", "--deriver", &pkg])
+        .output()
+        .map_err(|e| e.to_string())?;
+    let drv = String::from_utf8_lossy(&drv.stdout).trim().to_string();
+    let show = |d: &str| -> std::result::Result<Value, String> {
+        let o = Command::new("nix")
+            .args(["derivation", "show", d])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let v: Value = serde_json::from_slice(&o.stdout).map_err(|e| e.to_string())?;
+        v["derivations"]
+            .as_object()
+            .and_then(|m| m.values().next().cloned())
+            .ok_or_else(|| "no derivation".to_string())
+    };
+    let d = show(&drv)?;
+    let tgz_drv = d["inputs"]["drvs"]
+        .as_object()
+        .and_then(|m| m.keys().find(|k| k.ends_with(".tgz.drv")))
+        .ok_or("no .tgz fixed-output input")?;
+    let fod = show(&format!("/nix/store/{tgz_drv}"))?;
+    let nix_hash = fod["outputs"]["out"]["hash"]
+        .as_str()
+        .ok_or("fixed-output hash missing")?
+        .to_string();
+    // name@version from the installed package's own package.json
+    // nix lays the package out as lib/<dir>/package.json (lib/pi, lib/github-copilot-cli)
+    let name = fs::read_dir(Path::new(&pkg).join("lib"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find_map(|d| {
+            let v: Value =
+                serde_json::from_slice(&fs::read(d.path().join("package.json")).ok()?).ok()?;
+            (v["version"].as_str() == Some(ver.as_str()))
+                .then(|| v["name"].as_str().map(str::to_string))?
+        })
+        .ok_or("package.json name not found under lib/*/")?;
+    let url = format!("https://registry.npmjs.org/{name}/{ver}");
+    let reg = curl_json(&url)?;
+    let integrity = reg["dist"]["integrity"]
+        .as_str()
+        .ok_or("registry integrity missing")?;
+    // nix may pin the tarball with a different algorithm than npm publishes (copilot: sha256 vs
+    // npm's sha512), so when the SRI strings differ, hash the registry's own tarball the way nix did.
+    let matched = if integrity == nix_hash {
+        true
+    } else {
+        let tarball = reg["dist"]["tarball"]
+            .as_str()
+            .ok_or("registry tarball url missing")?;
+        let bytes = curl_bytes(tarball)?;
+        sri(&nix_hash, &bytes).is_some_and(|s| s == nix_hash)
+    };
+    Ok(json!({ "kind": "npm-integrity", "ref": url, "matched": matched }))
+}
+
+/// `<algo>-<base64 digest>` of `bytes` using the algorithm named in `like` (sha256 or sha512).
+fn sri(like: &str, bytes: &[u8]) -> Option<String> {
+    use sha2::Sha512;
+    let algo = like.split('-').next()?;
+    let digest: Vec<u8> = match algo {
+        "sha256" => Sha256::digest(bytes).to_vec(),
+        "sha512" => Sha512::digest(bytes).to_vec(),
+        _ => return None,
+    };
+    Some(format!("{algo}-{}", base64_std(&digest)))
+}
+
+fn base64_std(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in data.chunks(3) {
+        let n = (u32::from(c[0]) << 16)
+            | (u32::from(*c.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*c.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(T[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// codex: the GitHub release asset's published digest must match the downloaded tarball, and the
+/// binary inside must equal the installed one.
+fn upstream_codex(bin: &Path, version_line: &str) -> std::result::Result<Value, String> {
+    let ver = semver_in(version_line).ok_or("no version")?;
+    if !cfg!(target_os = "macos") {
+        return Err("codex upstream check implemented for macOS only".into());
+    }
+    let triple = format!("{}-apple-darwin", std::env::consts::ARCH);
+    let rel = curl_json(&format!(
+        "https://api.github.com/repos/openai/codex/releases/tags/rust-v{ver}"
+    ))?;
+    let asset_name = format!("codex-{triple}.tar.gz");
+    let asset = rel["assets"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["name"] == asset_name.as_str()))
+        .ok_or_else(|| format!("release asset {asset_name} not found"))?;
+    let url = asset["browser_download_url"]
+        .as_str()
+        .ok_or("no download url")?;
+    let digest = asset["digest"]
+        .as_str()
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .ok_or("release asset has no sha256 digest")?;
+    let tar = curl_bytes(url)?;
+    let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let tgz = tmp.path().join("a.tar.gz");
+    fs::write(&tgz, &tar).map_err(|e| e.to_string())?;
+    let digest_ok = sha256_hex(&tar) == digest;
+    let st = Command::new("tar")
+        .arg("-xzf")
+        .arg(&tgz)
+        .arg("-C")
+        .arg(tmp.path())
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !st.success() {
+        return Err("tar extraction failed".into());
+    }
+    let mut files = Vec::new();
+    files_under(
+        tmp.path(),
+        &|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("codex"))
+                && p.extension().is_none()
+        },
+        &mut files,
+    );
+    let ours = hash_file(bin).ok_or("cannot hash installed binary")?;
+    let same = files
+        .iter()
+        .any(|f| hash_file(f).as_deref() == Some(ours.as_str()));
+    Ok(json!({ "kind": "github-release-digest", "ref": url, "matched": digest_ok && same }))
+}
+
+/// claude: the release manifest's darwin checksum for this version. The manifest base URL is not
+/// public API knowledge this tool can guess, so it comes from $CLAUDE_RELEASE_BASE_URL
+/// (`<base>/<version>/manifest.json`).
+fn upstream_claude(bin: &Path, version_line: &str) -> std::result::Result<Value, String> {
+    let ver = semver_in(version_line).ok_or("no version")?;
+    let base = std::env::var("CLAUDE_RELEASE_BASE_URL").map_err(|_| {
+        "release manifest base URL not configured (set CLAUDE_RELEASE_BASE_URL)".to_string()
+    })?;
+    let url = format!("{}/{ver}/manifest.json", base.trim_end_matches('/'));
+    let m = curl_json(&url)?;
+    let plat = format!(
+        "darwin-{}",
+        if std::env::consts::ARCH == "aarch64" {
+            "arm64"
+        } else {
+            "x64"
+        }
+    );
+    let want = m["platforms"][plat.as_str()]["checksum"]
+        .as_str()
+        .ok_or_else(|| format!("manifest has no platforms.{plat}.checksum"))?;
+    let ours = hash_file(bin).ok_or("cannot hash installed binary")?;
+    Ok(json!({ "kind": "release-manifest", "ref": url, "matched": want == ours }))
 }
 
 fn now_utc() -> String {
@@ -1907,6 +2513,7 @@ impl Goldens {
             "binary_path": bin.to_string_lossy(),
             "binary_sha256": hash_file(&bin).unwrap_or_default(),
             "captured_at": now_utc(),
+            "provenance": provenance(drv.exe, &bin, &version),
         });
         self.capture(
             drv.harness,
@@ -2087,6 +2694,46 @@ mod tests {
                 && claude.contains(&"Bash(ls)".to_string())
         );
         assert!(driver(LiveHarness::Cursor).is_err() && driver(LiveHarness::Opencode).is_err());
+    }
+
+    #[test]
+    fn roundtrip_row_counts_losses_and_flags_only_new_ones() {
+        let doc = |extra: Value| {
+            json!({ "paths": [{ "steps": [{ "step": {"id": "s"}, "change": { "claude-code://sess-1": { "structural": {
+                "type": "conversation.append", "text": "hello", "tool_uses": [{"id": "t"}], "extra": extra } } } }] }] })
+        };
+        let ir1 = doc(json!({"a": 1, "b": 2}));
+        let ir2 = doc(json!({"a": 1}));
+        let row = roundtrip_row("s", "x", &ir1, &ir2);
+        // the artifact key (which embeds a session id) is collapsed, so only real structure differs
+        assert_eq!(
+            row["lost"],
+            json!(["paths[].steps[].change.<artifact>.structural.extra.b"])
+        );
+        assert_eq!(
+            (
+                row["ir1"]["text_chars"].as_u64(),
+                row["ir2"]["tool_uses"].as_u64()
+            ),
+            (Some(5), Some(1))
+        );
+        assert!(roundtrip_regressions("s", &row, &row).is_empty());
+        // a NEW loss against the committed row is a problem; the same loss is not
+        let worse = roundtrip_row("s", "x", &ir1, &doc(json!({})));
+        let msgs = roundtrip_regressions("s", &row, &worse);
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].contains("did not before"));
+        // a pair that cannot round-trip is pinned by its error text
+        let err = json!({"error": "no identity"});
+        assert!(roundtrip_regressions("s", &err, &err).is_empty());
+        assert!(!roundtrip_regressions("s", &err, &row).is_empty());
+    }
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        assert_eq!(base64_std(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64_std(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_std(b"foob"), "Zm9vYg==");
     }
 
     #[test]

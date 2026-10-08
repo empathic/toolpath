@@ -1,0 +1,51 @@
+{
+  "adapter": "copilot",
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
+  ],
+  "ir1": {
+    "key_paths": 91,
+    "steps": 61,
+    "text_chars": 4563,
+    "tool_uses": 19
+  },
+  "ir2": {
+    "key_paths": 64,
+    "steps": 34,
+    "text_chars": 4563,
+    "tool_uses": 19
+  },
+  "lost": [
+    "paths[].steps[].change.<artifact>.structural.cwd",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.isInitial",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.itemCount",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.skillCount",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.type",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.entrypoint",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.git_branch",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.raw.aiTitle",
+    "paths[].steps[].change.<artifact>.structural.raw.content",
+    "paths[].steps[].change.<artifact>.structural.raw.lastPrompt",
+    "paths[].steps[].change.<artifact>.structural.raw.leafUuid",
+    "paths[].steps[].change.<artifact>.structural.raw.operation",
+    "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+    "paths[].steps[].change.<artifact>.structural.raw.timestamp",
+    "paths[].steps[].change.<artifact>.structural.raw.type",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.thinking",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+    "paths[].steps[].change.<artifact>.structural.user_type",
+    "paths[].steps[].change.<artifact>.structural.version"
+  ],
+  "set": "claude"
+}
