@@ -2,6 +2,54 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.7.2 — 2026-10-01
+
+Adds incremental JSONL emission: `toolpath::v1::jsonl::delta_lines(path,
+stored, opened)` returns the lines that bring a reader holding the step ids
+in `stored` up to `path`. A first send (`opened` false) is `PathOpen`,
+`ActorDef`s, every step not in `stored` with its `Signature` lines, and
+`Head`; an incremental send (`opened` true, whatever `stored` holds) is
+`ActorDef`s (idempotent), the new steps with their
+signatures, `Head`, and a `PathMeta` patch with the current scalar fields,
+`refs` (always sent, replacing the reader's; empty clears) and `extra`,
+sent whenever the path has `meta`. Steps go out parents-first
+(document order when valid, else a stable topological sort); `PathClose`
+and path-level signatures are never emitted. Errors use a new
+`#[non_exhaustive]` `DeltaError`: `Jsonl(JsonlError)`,
+`DanglingParent { step, parent }` for a new step whose parent is neither
+stored nor new, `Cycle { steps }` for a parent cycle among the new steps,
+and `Amended { steps }`, which `delta_lines` never returns, for callers
+that can see the held content and would change a stored step. The delta is
+set-based: a new step placed before stored ones in document order goes out
+like any other. `JsonlError` is unchanged; the release is purely additive.
+`docs/RFC-jsonl.md` gains a "Delta Emission" section. `toolpath` now enables
+serde_json's `float_roundtrip` feature, so JSON and JSONL read back every
+number serde_json writes exactly, to the last bit of a double (cargo unifies the feature across a build; parsing
+floats is slightly slower).
+
+Adds batching, so callers that send a path in request bodies stop
+re-implementing the JSONL line builders and the splitter.
+`batch_lines(lines, held, limits, head)` splits a parents-first line stream
+into `Body`s (`text`, `step_ids`, `head`, `largest_step`) within
+`BatchLimits::new(max_bytes, max_steps)`: opening lines (`PathOpen`, then
+`PathMeta` patches, then `ActorDef`s) start the first body, a step keeps
+its signatures, path-level signatures and `PathClose` end the last body,
+and every body ends with a `Head` the reader holds by then, chosen by a
+`HeadRule` (`LastStep`, `LatestIn(order)` or `Custom`) except the last,
+which takes the input's head. A step over the byte limit goes alone, over
+it. Ordering faults are a new `#[non_exhaustive]` `BatchError`.
+`delta_bodies(path, stored, opened, limits, head)` is `delta_lines`,
+batched; `DeltaError` gains `Batch(BatchError)`. `BatchLimits`, `Body`,
+`HeadContext` and `HeadRule` are `#[non_exhaustive]`, so a field or rule
+added later is not a breaking change (build limits with `BatchLimits::new`
+or `default()`).
+The line builders are public: `PathOpenBody::for_path`,
+`PathOpenMeta::for_meta`, `PathMetaPatch::full`, `JsonlLine::head`,
+`JsonlLine::to_wire`, `step_lines`, `actor_def_lines`,
+`Path::to_jsonl_lines` (what `to_jsonl_writer` writes) and
+`parents_first(steps, held)`. `docs/RFC-jsonl.md` gains a "Batching"
+subsection.
+
 ## toolpath-otel 0.1.0 — 2026-10-01
 
 - **`toolpath-otel`** (0.1.0, new): derive `agent-coding-session` paths

@@ -63,6 +63,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::io::{BufRead, Write};
 
+mod batch;
+mod delta;
+pub use batch::{BatchError, BatchLimits, Body, HeadContext, HeadRule, batch_lines, delta_bodies};
+pub use delta::{DeltaError, delta_lines, parents_first};
+
 // ============================================================================
 // Line kind types
 // ============================================================================
@@ -577,81 +582,38 @@ fn path_meta_is_empty(m: &PathMeta) -> bool {
 // ============================================================================
 
 impl Path {
-    /// Write the normalized JSONL form of this path to any writer.
+    /// The normalized JSONL lines of this path, in the order
+    /// [`Path::to_jsonl_writer`] writes them.
     ///
     /// Emission order matches the RFC: `PathOpen`, then `ActorDef` entries
     /// sorted by actor key for determinism, then each `Step` followed by its
     /// step-level `Signature` lines in original order, then path-level
     /// `Signature` lines in original order, then `Head`, then `PathClose`.
-    /// Each line is compact JSON followed by a single `\n`.
-    pub fn to_jsonl_writer<W: Write>(&self, w: &mut W) -> Result<(), JsonlError> {
-        // PathOpen
-        let open_meta = self.meta.as_ref().and_then(path_meta_for_open);
-        let open = JsonlLine::PathOpen(PathOpenBody {
-            version: "1".to_string(),
-            id: self.path.id.clone(),
-            base: self.path.base.clone(),
-            graph_ref: self.path.graph_ref.clone(),
-            meta: open_meta,
-        });
-        write_line(w, &open)?;
-
-        // ActorDef lines, sorted by actor key for determinism
-        if let Some(actors) = self.meta.as_ref().and_then(|m| m.actors.as_ref()) {
-            let sorted: BTreeMap<&String, &ActorDefinition> = actors.iter().collect();
-            for (actor, def) in sorted {
-                let line = JsonlLine::ActorDef(ActorDefBody {
-                    actor: actor.clone(),
-                    definition: def.clone(),
-                });
-                write_line(w, &line)?;
-            }
-        }
-
-        // Steps + per-step signatures
+    pub fn to_jsonl_lines(&self) -> Vec<JsonlLine> {
+        let mut lines = vec![JsonlLine::PathOpen(PathOpenBody::for_path(self))];
+        lines.extend(actor_def_lines(self.meta.as_ref()));
         for step in &self.steps {
-            let mut trimmed = step.clone();
-            let step_sigs: Vec<Signature> = trimmed
-                .meta
-                .as_mut()
-                .map(|m| std::mem::take(&mut m.signatures))
-                .unwrap_or_default();
-            if let Some(m) = trimmed.meta.as_ref()
-                && step_meta_is_empty(m)
-            {
-                trimmed.meta = None;
-            }
-            let line = JsonlLine::Step(StepBody(trimmed));
-            write_line(w, &line)?;
-            for sig in step_sigs {
-                let sig_line = JsonlLine::Signature(SignatureBody {
-                    target: format!("step:{}", step.step.id),
-                    signature: sig,
-                });
-                write_line(w, &sig_line)?;
-            }
+            lines.extend(step_lines(step));
         }
-
-        // Path-level signatures
         if let Some(meta) = &self.meta {
-            for sig in &meta.signatures {
-                let line = JsonlLine::Signature(SignatureBody {
+            lines.extend(meta.signatures.iter().map(|sig| {
+                JsonlLine::Signature(SignatureBody {
                     target: "path".to_string(),
                     signature: sig.clone(),
-                });
-                write_line(w, &line)?;
-            }
+                })
+            }));
         }
+        lines.push(JsonlLine::head(&self.path.head));
+        lines.push(JsonlLine::PathClose(PathCloseBody {}));
+        lines
+    }
 
-        // Head
-        write_line(
-            w,
-            &JsonlLine::Head(HeadBody {
-                step_id: self.path.head.clone(),
-            }),
-        )?;
-        // PathClose
-        write_line(w, &JsonlLine::PathClose(PathCloseBody {}))?;
+    /// Write the normalized JSONL form of this path ([`Path::to_jsonl_lines`])
+    /// to any writer. Each line is compact JSON followed by a single `\n`.
+    pub fn to_jsonl_writer<W: Write>(&self, w: &mut W) -> Result<(), JsonlError> {
+        for line in self.to_jsonl_lines() {
+            write_line(w, &line)?;
+        }
         Ok(())
     }
 
@@ -663,15 +625,142 @@ impl Path {
     }
 }
 
+impl JsonlLine {
+    /// A `Head` line naming `step_id`.
+    pub fn head(step_id: impl Into<String>) -> Self {
+        JsonlLine::Head(HeadBody {
+            step_id: step_id.into(),
+        })
+    }
+
+    /// This line as compact JSON followed by `\n`, as it appears on the wire.
+    ///
+    /// # Errors
+    ///
+    /// [`JsonlError::BadBody`] if serde_json fails to serialize the body.
+    /// Every body is built from string-keyed maps and `serde_json::Value`s,
+    /// so this does not happen in practice; the `Result` keeps a failing
+    /// serializer from panicking.
+    pub fn to_wire(&self) -> Result<String, JsonlError> {
+        let mut s = serde_json::to_string(self).map_err(|e| JsonlError::BadBody {
+            line_num: 0,
+            tag: "<writer>".into(),
+            source: e,
+        })?;
+        s.push('\n');
+        Ok(s)
+    }
+}
+
+impl PathOpenBody {
+    /// The `PathOpen` line body for `path`: its identity and
+    /// [`PathOpenMeta::for_meta`] of its meta. `head` is not carried; a
+    /// `Head` line sets it.
+    pub fn for_path(path: &Path) -> Self {
+        PathOpenBody {
+            version: "1".to_string(),
+            id: path.path.id.clone(),
+            base: path.path.base.clone(),
+            graph_ref: path.path.graph_ref.clone(),
+            meta: path.meta.as_ref().and_then(PathOpenMeta::for_meta),
+        }
+    }
+}
+
+impl PathOpenMeta {
+    /// The parts of `m` that `PathOpen.meta` carries: everything but
+    /// `actors` and `signatures`, which have their own line kinds. `None`
+    /// when that projection is empty.
+    pub fn for_meta(m: &PathMeta) -> Option<Self> {
+        let open = PathOpenMeta {
+            title: m.title.clone(),
+            kind: m.kind.clone(),
+            source: m.source.clone(),
+            intent: m.intent.clone(),
+            description: m.description.clone(),
+            refs: m.refs.clone(),
+            extra: m.extra.clone(),
+        };
+        if open.title.is_none()
+            && open.kind.is_none()
+            && open.source.is_none()
+            && open.intent.is_none()
+            && open.description.is_none()
+            && open.refs.is_empty()
+            && open.extra.is_empty()
+        {
+            None
+        } else {
+            Some(open)
+        }
+    }
+}
+
+impl PathMetaPatch {
+    /// A patch setting every field of `m` a patch can carry: the scalar
+    /// fields that are set, `refs` always (replacing the reader's list, so
+    /// an empty list clears it) and every `extra` key. A reader that applies
+    /// it after any earlier meta holds `m`, except for scalar fields `m`
+    /// leaves unset and `extra` keys `m` lacks, which a patch cannot remove.
+    pub fn full(m: &PathMeta) -> Self {
+        PathMetaPatch {
+            title: m.title.clone(),
+            kind: m.kind.clone(),
+            source: m.source.clone(),
+            intent: m.intent.clone(),
+            description: m.description.clone(),
+            refs: Some(m.refs.clone()),
+            extra: m.extra.clone(),
+        }
+    }
+}
+
 fn write_line<W: Write>(w: &mut W, line: &JsonlLine) -> Result<(), JsonlError> {
-    let s = serde_json::to_string(line).map_err(|e| JsonlError::BadBody {
-        line_num: 0,
-        tag: "<writer>".into(),
-        source: e,
-    })?;
-    w.write_all(s.as_bytes())?;
-    w.write_all(b"\n")?;
+    w.write_all(line.to_wire()?.as_bytes())?;
     Ok(())
+}
+
+/// `ActorDef` lines for every actor in `meta`, sorted by actor key.
+pub fn actor_def_lines(meta: Option<&PathMeta>) -> Vec<JsonlLine> {
+    let Some(actors) = meta.and_then(|m| m.actors.as_ref()) else {
+        return Vec::new();
+    };
+    let sorted: BTreeMap<&String, &ActorDefinition> = actors.iter().collect();
+    sorted
+        .into_iter()
+        .map(|(actor, def)| {
+            JsonlLine::ActorDef(ActorDefBody {
+                actor: actor.clone(),
+                definition: def.clone(),
+            })
+        })
+        .collect()
+}
+
+/// The `Step` line for `step` (its signatures moved out of the body, and an
+/// emptied `meta` dropped), followed by one `Signature` line per step-level
+/// signature in original order.
+pub fn step_lines(step: &Step) -> Vec<JsonlLine> {
+    let mut trimmed = step.clone();
+    let step_sigs: Vec<Signature> = trimmed
+        .meta
+        .as_mut()
+        .map(|m| std::mem::take(&mut m.signatures))
+        .unwrap_or_default();
+    if let Some(m) = trimmed.meta.as_ref()
+        && step_meta_is_empty(m)
+    {
+        trimmed.meta = None;
+    }
+    let mut lines = Vec::with_capacity(1 + step_sigs.len());
+    lines.push(JsonlLine::Step(StepBody(trimmed)));
+    for sig in step_sigs {
+        lines.push(JsonlLine::Signature(SignatureBody {
+            target: format!("step:{}", step.step.id),
+            signature: sig,
+        }));
+    }
+    lines
 }
 
 fn step_meta_is_empty(m: &StepMeta) -> bool {
@@ -682,32 +771,6 @@ fn step_meta_is_empty(m: &StepMeta) -> bool {
         && m.actors.as_ref().is_none_or(|a| a.is_empty())
         && m.signatures.is_empty()
         && m.extra.is_empty()
-}
-
-/// Project the parts of `PathMeta` that may be carried in `PathOpen.meta`.
-/// Returns `None` if the projection would be empty.
-fn path_meta_for_open(m: &PathMeta) -> Option<PathOpenMeta> {
-    let open = PathOpenMeta {
-        title: m.title.clone(),
-        kind: m.kind.clone(),
-        source: m.source.clone(),
-        intent: m.intent.clone(),
-        description: m.description.clone(),
-        refs: m.refs.clone(),
-        extra: m.extra.clone(),
-    };
-    if open.title.is_none()
-        && open.kind.is_none()
-        && open.source.is_none()
-        && open.intent.is_none()
-        && open.description.is_none()
-        && open.refs.is_empty()
-        && open.extra.is_empty()
-    {
-        None
-    } else {
-        Some(open)
-    }
 }
 
 // ============================================================================
@@ -1186,6 +1249,38 @@ mod tests {
         let jsonl = p.to_jsonl_string().unwrap();
         let back = Path::from_jsonl_str(&jsonl).unwrap();
         assert_eq!(canonical_json(&p), canonical_json(&back));
+    }
+
+    #[test]
+    fn roundtrip_floats_are_exact() {
+        // Deterministic spread of finite doubles; the default serde_json
+        // parser misrounds some of them in the last bit.
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let floats: Vec<f64> = std::iter::from_fn(|| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            Some(f64::from_bits(seed))
+        })
+        .filter(|f| f.is_finite())
+        .take(20_000)
+        .collect();
+        let mut p = linear_path();
+        p.meta = Some(PathMeta::default());
+        p.meta
+            .as_mut()
+            .unwrap()
+            .extra
+            .insert("floats".into(), serde_json::json!(floats));
+        let back = Path::from_jsonl_str(&p.to_jsonl_string().unwrap()).unwrap();
+        let read: Vec<f64> =
+            serde_json::from_value(back.meta.unwrap().extra["floats"].clone()).unwrap();
+        let wrong = floats
+            .iter()
+            .zip(&read)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(wrong, 0, "{wrong} floats changed");
     }
 
     #[test]
