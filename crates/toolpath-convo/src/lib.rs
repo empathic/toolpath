@@ -432,18 +432,6 @@ impl ConversationView {
     pub fn turns_by_role(&self, role: &Role) -> Vec<&Turn> {
         self.turns().filter(|t| &t.role == role).collect()
     }
-
-    /// Turns added after the turn with the given ID.
-    ///
-    /// If the ID is not found, returns all turns. If the ID is the last
-    /// turn, returns an empty vec.
-    pub fn turns_since(&self, turn_id: &str) -> Vec<&Turn> {
-        let turns: Vec<&Turn> = self.turns().collect();
-        match turns.iter().position(|t| t.id == turn_id) {
-            Some(idx) => turns[idx + 1..].to_vec(),
-            None => turns,
-        }
-    }
 }
 
 /// Lightweight metadata for a conversation (no turns loaded).
@@ -725,28 +713,6 @@ mod tests {
         assert_eq!(users.len(), 2);
         let assistants = view.turns_by_role(&Role::Assistant);
         assert_eq!(assistants.len(), 1);
-    }
-
-    #[test]
-    fn test_turns_since_middle() {
-        let view = sample_view();
-        let since = view.turns_since("t1");
-        assert_eq!(since.len(), 2);
-        assert_eq!(since[0].id, "t2");
-    }
-
-    #[test]
-    fn test_turns_since_last() {
-        let view = sample_view();
-        let since = view.turns_since("t3");
-        assert!(since.is_empty());
-    }
-
-    #[test]
-    fn test_turns_since_unknown() {
-        let view = sample_view();
-        let since = view.turns_since("nonexistent");
-        assert_eq!(since.len(), 3);
     }
 
     #[test]

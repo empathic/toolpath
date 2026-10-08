@@ -12,7 +12,8 @@ non-turn entries survive import/export.
 - **`toolpath-convo`** (0.12.0): **Breaking** —
   `ConversationView.turns`/`.events` are replaced by
   `items: Vec<Item>` (`Turn | Event`), with `turns()`/`events()`
-  iterators. `derive_path` emits `conversation.event` steps
+  iterators; `ConversationView::turns_since` is removed (it had no
+  callers). `derive_path` emits `conversation.event` steps
   (previously dropped — a Claude session lost its attachments and
   system entries on import/export), resolves duplicate step ids by
   renaming to `<id>#<n>`, and recognizes byte-identical wire replays
