@@ -2592,3 +2592,69 @@ fn truncated_clears_when_a_kept_copy_arrives_later() {
 }
 
 mod property;
+
+/// The categories of the tool calls in the steps `lines` send.
+fn sent_categories(lines: &[JsonlLine]) -> Vec<Value> {
+    lines
+        .iter()
+        .filter_map(|l| match l {
+            JsonlLine::Step(s) => Some(value(&s.0)),
+            _ => None,
+        })
+        .flat_map(|step| {
+            let changes = step["change"].as_object().unwrap().clone();
+            changes
+                .into_values()
+                .flat_map(|c| {
+                    c["structural"]["tool_uses"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .map(|u| u["category"].clone())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// `derive_jsonl` categorizes tool calls, and settles, with the classifier
+/// its config carries; with none it categorizes nothing.
+#[test]
+fn derive_jsonl_categorizes_with_the_configs_classifier() {
+    for (file, _) in REAL {
+        let store = stored(&deliveries(file));
+        let send = |config: &crate::DeriveConfig, final_| {
+            let d = derive_jsonl(
+                &store.records,
+                |h| store.messages.get(h),
+                config,
+                &Remote::default(),
+                final_,
+                0,
+            )
+            .unwrap();
+            d.output.concat()
+        };
+        for final_ in [false, true] {
+            let with = sent_categories(&send(&classified(), final_));
+            assert!(with.iter().any(|c| !c.is_null()), "{file} {final_}");
+            let without = sent_categories(&send(&crate::DeriveConfig::default(), final_));
+            assert!(without.iter().all(Value::is_null), "{file} {final_}");
+        }
+        let want = crate::derive_path_from_records(
+            &store.records,
+            |h| store.messages.get(h),
+            &classified(),
+        )
+        .unwrap()
+        .output;
+        let sent = send(&classified(), true);
+        for st in &want.steps {
+            assert_eq!(
+                sent_step(&sent, &st.step.id),
+                Some(path_step(&want, &st.step.id)),
+                "{file}"
+            );
+        }
+    }
+}
