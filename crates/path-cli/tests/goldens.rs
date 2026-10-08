@@ -13,7 +13,7 @@
 //!
 //! `scripts/goldens.sh` wraps both modes; see `goldens/DEMO.md`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,9 +55,36 @@ struct Case {
 enum Source {
     Codex,
     Claude,
+    Copilot,
+    Pi,
 }
 
 const CASES: &[Case] = &[
+    // Real captured fixtures for the two harnesses `p project` / `p export` can both read and write.
+    Case {
+        name: "copilot-to-claude",
+        fixture: "test-fixtures/copilot/convo.jsonl",
+        source: Source::Copilot,
+        target_args: &["p", "project", "claude", "-i", "{ir}", "-o", "{out}"],
+    },
+    Case {
+        name: "pi-to-claude",
+        fixture: "test-fixtures/pi/convo.jsonl",
+        source: Source::Pi,
+        target_args: &["p", "project", "claude", "-i", "{ir}", "-o", "{out}"],
+    },
+    Case {
+        name: "claude-to-pi",
+        fixture: "test-fixtures/claude/convo.jsonl",
+        source: Source::Claude,
+        target_args: &["p", "export", "pi", "-i", "{ir}", "-o", "{out}"],
+    },
+    Case {
+        name: "claude-to-copilot",
+        fixture: "test-fixtures/claude/convo.jsonl",
+        source: Source::Claude,
+        target_args: &["p", "export", "copilot", "-i", "{ir}", "-o", "{out}"],
+    },
     Case {
         name: "codex-to-claude",
         fixture: "test-fixtures/codex/convo.jsonl",
@@ -161,6 +188,42 @@ fn run_case(case: &Case) -> Run {
             .unwrap();
             vec!["p".into(), "derive".into(), "codex".into(), "--all".into()]
         }
+        Source::Copilot => {
+            let sid = first_json(&input, |v| v.get("data")?.get("sessionId").cloned());
+            let dir = home
+                .join(".copilot/session-state")
+                .join(sid.as_str().unwrap());
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("events.jsonl"), &input).unwrap();
+            vec![
+                "p".into(),
+                "derive".into(),
+                "copilot".into(),
+                "--all".into(),
+            ]
+        }
+        Source::Pi => {
+            let head = first_json(&input, |v| (v["type"] == "session").then(|| v.clone()));
+            let cwd = head["cwd"].as_str().unwrap().to_string();
+            // Pi's project dir: `--` + cwd without the leading `/`, `/` -> `-`, + `--`.
+            let enc = format!("--{}--", cwd.trim_start_matches('/').replace('/', "-"));
+            let ts = head["timestamp"].as_str().unwrap().replace([':', '.'], "-");
+            let dir = home.join(".pi/agent/sessions").join(enc);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join(format!("{ts}_{}.jsonl", head["id"].as_str().unwrap())),
+                &input,
+            )
+            .unwrap();
+            vec![
+                "p".into(),
+                "derive".into(),
+                "pi".into(),
+                "--project".into(),
+                cwd,
+                "--all".into(),
+            ]
+        }
         Source::Claude => {
             let cwd = first_json(&input, |v| v.get("cwd").cloned());
             let cwd = cwd.as_str().unwrap().to_string();
@@ -196,7 +259,10 @@ fn run_case(case: &Case) -> Run {
         })
         .collect();
     exec(hermetic(&home).args(&target), "project/export");
-    let output = fs::read(&out).unwrap();
+    let mut output = fs::read(&out).unwrap();
+    if nondeterministic(case) {
+        output = canonicalize(&output);
+    }
 
     // Hermeticity: the output may mention neither the temp HOME nor the real one.
     let text = String::from_utf8_lossy(&output);
@@ -226,6 +292,35 @@ fn run_case(case: &Case) -> Run {
         output,
         command_line,
     }
+}
+
+/// Cases whose raw output differs between identical runs (observed 2026-10-08): `p export copilot`
+/// mints a random session id and emits object keys in unstable order. Their golden is the canonical
+/// form (keys sorted, session id masked), recorded as such in the manifest; every other case is
+/// compared as raw bytes.
+fn nondeterministic(case: &Case) -> bool {
+    case.name == "claude-to-copilot"
+}
+
+fn canonicalize(output: &[u8]) -> Vec<u8> {
+    fn sorted(v: Value) -> Value {
+        match v {
+            Value::Object(m) => {
+                let mut kv: Vec<_> = m.into_iter().collect();
+                kv.sort_by(|a, b| a.0.cmp(&b.0));
+                Value::Object(kv.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+            }
+            Value::Array(a) => Value::Array(a.into_iter().map(sorted).collect()),
+            other => other,
+        }
+    }
+    let mut text = String::from_utf8_lossy(output).into_owned();
+    let id = first_json(output, |v| v.get("data")?.get("sessionId").cloned());
+    text = text.replace(id.as_str().unwrap(), "<session-id>");
+    text.lines()
+        .map(|l| serde_json::to_string(&sorted(serde_json::from_str(l).unwrap())).unwrap() + "\n")
+        .collect::<String>()
+        .into_bytes()
 }
 
 /// Readable line diff: counts, then the first few differing lines (truncated).
@@ -361,6 +456,7 @@ fn goldens() {
     let dir = goldens_dir();
     let mut manifest = Vec::new();
     let mut codex_to_claude: Option<Vec<u8>> = None;
+    let mut claude_to_codex: Option<(Vec<u8>, Vec<u8>)> = None;
 
     for case in CASES {
         // A case whose input is captured by hand (scripts/capture-claude-session.sh) is skipped
@@ -392,63 +488,228 @@ fn goldens() {
         if case.name == "codex-to-claude" {
             codex_to_claude = Some(run.output.clone());
         }
+        if case.name == "claude-to-codex" {
+            claude_to_codex = Some((run.input.clone(), run.output.clone()));
+        }
         manifest.push(json!({
             "case": case.name,
             "fixture": case.fixture,
             "input_sha256": sha256_hex(&run.input),
             "output_sha256": sha256_hex(&run.output),
             "command": run.command_line,
+            "output_form": if nondeterministic(case) { "canonical (sorted keys, session id masked)" } else { "raw bytes" },
         }));
     }
 
-    // Defect golden.
-    let defect = illegal_types(&codex_to_claude.unwrap());
-    let defect_path = dir.join("known-defect/codex-to-claude-illegal-types.tsv");
-    if updating() {
-        write(&defect_path, defect.as_bytes());
-    } else {
-        check_bytes(
-            "known defect (codex-to-claude illegal entry types)",
-            &defect_path,
-            defect.as_bytes(),
-        );
+    // Defect goldens.
+    let (c2c_input, c2c_output) = claude_to_codex.unwrap();
+    let defects = [
+        (
+            "known-defect/codex-to-claude-illegal-types.tsv",
+            illegal_types(&codex_to_claude.unwrap()),
+            "~/.lobby/ops/toolpath-transform-regression-goal.md (2026-09-29)",
+        ),
+        (
+            "known-defect/claude-to-codex-caller-cwd.tsv",
+            caller_cwd(&c2c_input, &c2c_output),
+            "~/.lobby/ops/REPORT-demo-goldens-toolpath-2026-10-08.md (found 2026-10-08)",
+        ),
+    ];
+    let mut defect_docs = Vec::new();
+    for (file, body, report) in &defects {
+        let path = dir.join(file);
+        if updating() {
+            write(&path, body.as_bytes());
+        } else {
+            check_bytes(&format!("known defect {file}"), &path, body.as_bytes());
+        }
+        defect_docs.push(json!({
+            "file": file,
+            "sha256": sha256_hex(body.as_bytes()),
+            "report": report,
+        }));
     }
 
+    // Pins: the harness and everything it uses. In check mode ANY moved pin fails, by name.
+    let pins = compute_pins();
     let manifest_path = dir.join("manifest.json");
     if updating() {
         let doc = json!({
-            "toolpath_rev": git(&["rev-parse", "HEAD"]),
-            "toolpath_dirty": !git(&["status", "--porcelain", "-uno", "--", "crates", "test-fixtures"]).is_empty(),
-            "path_version": env!("CARGO_PKG_VERSION"),
-            "cases": manifest,
-            "known_defect": {
-                "file": "known-defect/codex-to-claude-illegal-types.tsv",
-                "sha256": sha256_hex(defect.as_bytes()),
-                "report": "~/.lobby/ops/toolpath-transform-regression-goal.md (2026-09-29)",
+            "pins": pins,
+            // Informational, not pinned: HEAD moves with every commit, rustc comes from the dev shell.
+            "informational": {
+                "toolpath_rev": git(&["rev-parse", "HEAD"]),
+                "toolpath_dirty": !git(&["status", "--porcelain", "-uno", "--", "crates", "test-fixtures"]).is_empty(),
+                "rustc": Command::new("rustc").arg("--version").output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default(),
             },
+            "cases": manifest,
+            "known_defects": defect_docs,
         });
         write(
             &manifest_path,
             (serde_json::to_string_pretty(&doc).unwrap() + "\n").as_bytes(),
         );
     } else {
-        // The committed manifest must agree with the committed goldens and the fresh run.
         let doc: Value =
             serde_json::from_slice(&fs::read(&manifest_path).expect("goldens/manifest.json"))
                 .unwrap();
-        for (got, want) in manifest.iter().zip(doc["cases"].as_array().unwrap()) {
+        let mut moved = Vec::new();
+        diff_json("pins", &doc["pins"], &pins, &mut moved);
+        check_nix_pin(&doc["pins"]["nix_pinned_binary"], &mut moved);
+        let want_cases = doc["cases"].as_array().unwrap();
+        if want_cases.len() != manifest.len() {
+            moved.push(format!(
+                "cases: manifest lists {}, ran {} (a captured input was added or removed)",
+                want_cases.len(),
+                manifest.len()
+            ));
+        }
+        for (got, want) in manifest.iter().zip(want_cases) {
             for k in ["case", "input_sha256", "output_sha256", "command"] {
-                assert_eq!(
-                    got[k], want[k],
-                    "manifest {} field {k} is stale (run with GOLDENS_UPDATE=1)",
-                    got["case"]
+                if got[k] != want[k] {
+                    moved.push(format!(
+                        "cases.{}.{k}: manifest {} actual {}",
+                        got["case"], want[k], got[k]
+                    ));
+                }
+            }
+        }
+        for (got, want) in defect_docs
+            .iter()
+            .zip(doc["known_defects"].as_array().unwrap())
+        {
+            if got["sha256"] != want["sha256"] {
+                moved.push(format!("known_defects.{}.sha256", got["file"]));
+            }
+        }
+        assert!(
+            moved.is_empty(),
+            "PIN MOVED ({} item(s)); the manifest no longer describes this tree:\n  {}\nIf intended: GOLDENS_UPDATE=1 cargo test -p path-cli --test goldens",
+            moved.len(),
+            moved.join("\n  ")
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Known defect 2, pinned as EXPECTED CURRENT BEHAVIOUR (found 2026-10-08, see the demo report).
+// `path p export codex -o` writes the CALLER's working directory into every codex `cwd` field
+// instead of the source session's cwd. The harness runs from `/`, so the wrong value is `/`; a
+// fix makes `written_cwd` equal `source_cwd`, this golden fails, and regenerating it is the
+// deliberate acknowledgement.
+// ---------------------------------------------------------------------------------------------
+fn caller_cwd(input: &[u8], output: &[u8]) -> String {
+    let source = first_json(input, |v| v.get("cwd").cloned());
+    let mut written = BTreeSet::new();
+    for line in String::from_utf8_lossy(output).lines() {
+        let v: Value = serde_json::from_str(line).expect("output line is JSON");
+        if let Some(c) = v["payload"]["cwd"].as_str() {
+            written.insert(c.to_string());
+        }
+    }
+    let mut out = format!("source_cwd\t{}\n", source.as_str().unwrap());
+    for w in written {
+        out += &format!("written_cwd\t{w}\n");
+    }
+    out
+}
+
+fn sha_file(rel: &str) -> String {
+    sha256_hex(&fs::read(repo_root().join(rel)).unwrap_or_else(|e| panic!("pin {rel}: {e}")))
+}
+
+/// Everything the goldens depend on besides the fixtures: the harness itself, the dependency
+/// lock, the toolchain pin, the flake lock, and the `path` version under test.
+fn compute_pins() -> Value {
+    let toolchain = fs::read_to_string(repo_root().join("rust-toolchain.toml")).unwrap();
+    let channel = toolchain
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("channel"))
+        .map(|r| {
+            r.trim_start_matches([' ', '='])
+                .trim_matches('"')
+                .to_string()
+        })
+        .unwrap_or_default();
+    json!({
+        "harness": {
+            "crates/path-cli/tests/goldens.rs": sha_file("crates/path-cli/tests/goldens.rs"),
+            "scripts/goldens.sh": sha_file("scripts/goldens.sh"),
+            "scripts/capture-claude-session.sh": sha_file("scripts/capture-claude-session.sh"),
+        },
+        "cargo_lock_sha256": sha_file("Cargo.lock"),
+        "flake_lock_sha256": sha_file("flake.lock"),
+        "rust_toolchain": { "channel": channel, "file_sha256": sha_file("rust-toolchain.toml") },
+        "path_version": env!("CARGO_PKG_VERSION"),
+        "nix_pinned_binary": nix_pinned_binary(),
+    })
+}
+
+/// The nix-store `path` binary on PATH (what goldens-baseline/ uses), with its narHash; null if none.
+fn nix_pinned_binary() -> Value {
+    let found = std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .find_map(|d| {
+            let real = Path::new(d).join("path").canonicalize().ok()?;
+            let s = real.to_string_lossy().into_owned();
+            (s.starts_with("/nix/store/") && s.contains("toolpath-path-")).then_some(s)
+        });
+    let Some(bin) = found else { return Value::Null };
+    // /nix/store/<hash>-<name>/bin/path -> /nix/store/<hash>-<name>
+    let root: String = bin.split('/').take(4).collect::<Vec<_>>().join("/");
+    match nar_hash(&root) {
+        Some(h) => json!({ "store_path": root, "nar_hash": h }),
+        None => Value::Null,
+    }
+}
+
+fn nar_hash(store_path: &str) -> Option<String> {
+    let out = Command::new("nix")
+        .args(["path-info", "--json", "--json-format", "1", store_path])
+        .output()
+        .ok()?;
+    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    v[store_path]["narHash"].as_str().map(str::to_string)
+}
+
+/// A recorded nix store path is verified when it exists here; elsewhere the pin cannot be checked.
+fn check_nix_pin(recorded: &Value, moved: &mut Vec<String>) {
+    let Some(store) = recorded["store_path"].as_str() else {
+        return;
+    };
+    if !Path::new(store).exists() {
+        eprintln!("nix pin {store}: not present on this machine, narHash not verified");
+        return;
+    }
+    let actual = nar_hash(store);
+    if actual.as_deref() != recorded["nar_hash"].as_str() {
+        moved.push(format!(
+            "pins.nix_pinned_binary.nar_hash: manifest {} actual {:?}",
+            recorded["nar_hash"], actual
+        ));
+    }
+}
+
+/// Collect the leaf paths where `want` (the manifest) and `got` (this tree) disagree.
+/// The nix pin is checked separately.
+fn diff_json(prefix: &str, want: &Value, got: &Value, moved: &mut Vec<String>) {
+    match (want, got) {
+        (Value::Object(w), Value::Object(g)) => {
+            for k in w.keys().chain(g.keys().filter(|k| !w.contains_key(*k))) {
+                if k == "nix_pinned_binary" {
+                    continue;
+                }
+                diff_json(
+                    &format!("{prefix}.{k}"),
+                    w.get(k).unwrap_or(&Value::Null),
+                    g.get(k).unwrap_or(&Value::Null),
+                    moved,
                 );
             }
         }
-        assert_eq!(
-            doc["known_defect"]["sha256"],
-            sha256_hex(defect.as_bytes()),
-            "manifest known_defect sha256 is stale"
-        );
+        (w, g) if w != g => moved.push(format!("{prefix}: manifest {w} actual {g}")),
+        _ => {}
     }
 }

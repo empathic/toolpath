@@ -1,10 +1,43 @@
 {
   "cases": [
     {
+      "case": "copilot-to-claude",
+      "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive copilot --all && path p project claude -i {ir} -o {out}",
+      "fixture": "test-fixtures/copilot/convo.jsonl",
+      "input_sha256": "7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f",
+      "output_form": "raw bytes",
+      "output_sha256": "55ed7b9d8ebe6f4bc467acd91bf8ffcfa410a4eb3fdf2d3412923400e66c5bf5"
+    },
+    {
+      "case": "pi-to-claude",
+      "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive pi --project /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi --all && path p project claude -i {ir} -o {out}",
+      "fixture": "test-fixtures/pi/convo.jsonl",
+      "input_sha256": "846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c",
+      "output_form": "raw bytes",
+      "output_sha256": "dabbd206cdc0055caa1e725b66d4b5e09e9be82b08a9eb7e7c5d91252a811cd9"
+    },
+    {
+      "case": "claude-to-pi",
+      "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude --all && path p export pi -i {ir} -o {out}",
+      "fixture": "test-fixtures/claude/convo.jsonl",
+      "input_sha256": "c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644",
+      "output_form": "raw bytes",
+      "output_sha256": "f2d5923d1a59cf48a548c5456c1d86468e3b4e57076d28fb999a2aa13abb00b2"
+    },
+    {
+      "case": "claude-to-copilot",
+      "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude --all && path p export copilot -i {ir} -o {out}",
+      "fixture": "test-fixtures/claude/convo.jsonl",
+      "input_sha256": "c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644",
+      "output_form": "canonical (sorted keys, session id masked)",
+      "output_sha256": "8fa9ac22d58f93b1803b41c33fbc3e5274e61d81b04d29c8243eb53208b6e93b"
+    },
+    {
       "case": "codex-to-claude",
       "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive codex --all && path p project claude -i {ir} -o {out}",
       "fixture": "test-fixtures/codex/convo.jsonl",
       "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+      "output_form": "raw bytes",
       "output_sha256": "346555c475b5bb536ca600d7c6de099069b9455285a4f8bbc3148c275ba6ec1d"
     },
     {
@@ -12,6 +45,7 @@
       "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude --all && path p export codex -i {ir} -o {out}",
       "fixture": "test-fixtures/claude/convo.jsonl",
       "input_sha256": "c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644",
+      "output_form": "raw bytes",
       "output_sha256": "515df098c2c2e46d98888a3e3e3eaf17b949b5be6ffd0b6dff9fe2c6315fb82e"
     },
     {
@@ -19,15 +53,43 @@
       "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /work --all && path p export codex -i {ir} -o {out}",
       "fixture": "crates/toolpath-claude/tests/fixtures/compacted_session.jsonl",
       "input_sha256": "ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988",
+      "output_form": "raw bytes",
       "output_sha256": "0b1e04e6b2d66930c90713634b64fe14134021fc452fc00a0e5f86ccaf94deaf"
     }
   ],
-  "known_defect": {
-    "file": "known-defect/codex-to-claude-illegal-types.tsv",
-    "report": "~/.lobby/ops/toolpath-transform-regression-goal.md (2026-09-29)",
-    "sha256": "f0673d93c556d4827039db1fddef6ca0b7242241e173d3b92c8d8a6e7f1e70ff"
+  "informational": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+    "toolpath_dirty": true,
+    "toolpath_rev": "f040ec56dc8b57a8433896828881bb22282bbe3a"
   },
-  "path_version": "0.30.0",
-  "toolpath_dirty": true,
-  "toolpath_rev": "0d41170c9de77356d350c8eb1e16699eade32abd"
+  "known_defects": [
+    {
+      "file": "known-defect/codex-to-claude-illegal-types.tsv",
+      "report": "~/.lobby/ops/toolpath-transform-regression-goal.md (2026-09-29)",
+      "sha256": "f0673d93c556d4827039db1fddef6ca0b7242241e173d3b92c8d8a6e7f1e70ff"
+    },
+    {
+      "file": "known-defect/claude-to-codex-caller-cwd.tsv",
+      "report": "~/.lobby/ops/REPORT-demo-goldens-toolpath-2026-10-08.md (found 2026-10-08)",
+      "sha256": "8816483354bf0336ffbab64e358ef191a5854cf3242ccdd4f16ad97b2d93bf58"
+    }
+  ],
+  "pins": {
+    "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
+    "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+    "harness": {
+      "crates/path-cli/tests/goldens.rs": "f8f87c6281b172983166ff0aba9123a7db960e829abd8dc092ef66c029216f9d",
+      "scripts/capture-claude-session.sh": "299e9ef98b0604d2534f013c4bdf7a290f8a90708e41b424a872cc55c7307e0b",
+      "scripts/goldens.sh": "25a9f35a74784f3ac107c96171b9baa5601872ad7054d8dd86d68b44c3d72de7"
+    },
+    "nix_pinned_binary": {
+      "nar_hash": "sha256-ZH8NRe4eTLUhVd4ZJ3sNgDZPeK/Ys403FzeklfFrGI0=",
+      "store_path": "/nix/store/hxkr9ys8fv75xa8zk0bvab3ib5dp3lf9-toolpath-path-0.30.0"
+    },
+    "path_version": "0.30.0",
+    "rust_toolchain": {
+      "channel": "1.94.0",
+      "file_sha256": "99cdd6b18df373db90a35adc589a66c3de2c3fba8ebfa46279755fc3a04a03f7"
+    }
+  }
 }
