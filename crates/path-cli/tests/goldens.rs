@@ -45,7 +45,7 @@ fn updating() -> bool {
 /// How a case reaches the target format: derive from the source harness's store, then project.
 struct Case {
     name: &'static str,
-    /// Fixture, relative to `test-fixtures/`.
+    /// Fixture, relative to the repo root.
     fixture: &'static str,
     source: Source,
     /// Target step; `{ir}` and `{out}` are replaced with file paths.
@@ -60,13 +60,22 @@ enum Source {
 const CASES: &[Case] = &[
     Case {
         name: "codex-to-claude",
-        fixture: "codex/convo.jsonl",
+        fixture: "test-fixtures/codex/convo.jsonl",
         source: Source::Codex,
         target_args: &["p", "project", "claude", "-i", "{ir}", "-o", "{out}"],
     },
     Case {
         name: "claude-to-codex",
-        fixture: "claude/convo.jsonl",
+        fixture: "test-fixtures/claude/convo.jsonl",
+        source: Source::Claude,
+        target_args: &["p", "export", "codex", "-i", "{ir}", "-o", "{out}"],
+    },
+    // Synthetic (hand-written, not captured) but it carries a compaction boundary. It derives only
+    // because the file is placed as `<sessionId>.jsonl`: the adapter matches the file stem to the
+    // in-file sessionId, and a mismatched name gives "no documents produced" (goldens-baseline).
+    Case {
+        name: "claude-compacted-to-codex",
+        fixture: "crates/toolpath-claude/tests/fixtures/compacted_session.jsonl",
         source: Source::Claude,
         target_args: &["p", "export", "codex", "-i", "{ir}", "-o", "{out}"],
     },
@@ -121,7 +130,7 @@ fn first_json(input: &[u8], pick: impl Fn(&Value) -> Option<Value>) -> Value {
 }
 
 fn run_case(case: &Case) -> Run {
-    let input = fs::read(repo_root().join("test-fixtures").join(case.fixture)).unwrap();
+    let input = fs::read(repo_root().join(case.fixture)).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap();
 
@@ -365,7 +374,7 @@ fn goldens() {
         }
         manifest.push(json!({
             "case": case.name,
-            "fixture": format!("test-fixtures/{}", case.fixture),
+            "fixture": case.fixture,
             "input_sha256": sha256_hex(&run.input),
             "output_sha256": sha256_hex(&run.output),
             "command": run.command_line,

@@ -13,6 +13,13 @@
       "fixture": "test-fixtures/claude/convo.jsonl",
       "input_sha256": "c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644",
       "output_sha256": "515df098c2c2e46d98888a3e3e3eaf17b949b5be6ffd0b6dff9fe2c6315fb82e"
+    },
+    {
+      "case": "claude-compacted-to-codex",
+      "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /work --all && path p export codex -i {ir} -o {out}",
+      "fixture": "crates/toolpath-claude/tests/fixtures/compacted_session.jsonl",
+      "input_sha256": "ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988",
+      "output_sha256": "0b1e04e6b2d66930c90713634b64fe14134021fc452fc00a0e5f86ccaf94deaf"
     }
   ],
   "known_defect": {
@@ -21,6 +28,6 @@
     "sha256": "f0673d93c556d4827039db1fddef6ca0b7242241e173d3b92c8d8a6e7f1e70ff"
   },
   "path_version": "0.30.0",
-  "toolpath_dirty": false,
-  "toolpath_rev": "465de3ddcc084bb384cc16951748e641567e64a4"
+  "toolpath_dirty": true,
+  "toolpath_rev": "30028ddaf4b25450cec4f2765578f04e7e8ae6ce"
 }
