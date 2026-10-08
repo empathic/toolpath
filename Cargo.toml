@@ -38,8 +38,8 @@ toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.5.0", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.7.0", path = "crates/toolpath-md" }
 toolpath-pi = { version = "0.6.1", path = "crates/toolpath-pi" }
-toolpath-otel = { version = "0.1.2", path = "crates/toolpath-otel" }
-path-cli = { version = "0.29.0", path = "crates/path-cli" }
+toolpath-otel = { version = "0.1.3", path = "crates/toolpath-otel" }
+path-cli = { version = "0.30.0", path = "crates/path-cli" }
 pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
 
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }

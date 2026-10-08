@@ -22,26 +22,30 @@ divergence forks, and ids stay stable as the session grows.
 - **One session** produces a `Path`
 - **Several sessions** produce a `Graph` of paths
 - **Raw bytes** (files, request bodies) decode to those JSON bodies first
+- **A mixed or id-less batch** splits into sessions first
 
 The crate is pure: no filesystem, network, clock or logging.
 
 ## Usage
 
 ```rust,no_run
-use toolpath_otel::{DeriveConfig, decode_input, derive_path};
+use toolpath_otel::{DeriveConfig, decode_input, derive_session, group_sessions};
 
-let bytes = std::fs::read("session.ndjson")?;
-let requests = decode_input(&bytes, Some("session.ndjson"))?;
+let bytes = std::fs::read("capture.ndjson")?;
+let requests = decode_input(&bytes, Some("capture.ndjson"))?;
 
 // Tool categories come from the caller, here only Claude Code's Bash
 let config = DeriveConfig::default().with_tool_category(|harness, tool| {
     (harness == "claude-code" && tool == "Bash").then_some(toolpath_convo::ToolCategory::Shell)
 });
 
-// One session -> Path document, plus what was read but not derived
-let derived = derive_path(&requests, &config)?;
-println!("head {}", derived.output.path.head);
-println!("skipped {}", derived.skipped.total());
+// A batch of any number of sessions -> one Path per session
+let grouped = group_sessions(&requests, config.profile)?;
+for session in &grouped.output {
+    let derived = derive_session(session, &config)?;
+    println!("{} -> head {}", session.key, derived.output.path.head);
+}
+println!("skipped {}", grouped.skipped.total());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -59,12 +63,17 @@ println!("skipped {}", derived.skipped.total());
 | `StoredMessage`, `MessageHash` | A prompt message linked to the one before it (`parent`), stored once under its `hash()` |
 | `GenerationBatch` | `records` and `messages` (`BTreeMap<MessageHash, StoredMessage>`) |
 | `Remote` | What the stored path holds: `opened`, `fed` (its `meta.otel.generation_ids`), `stored` (any subset of its step ids), `harness` (its `meta.otel.harness`), `base` (a continuation's frozen step ids) |
+| `SourceHarness` | The agent recorded as `meta.otel.harness`: `as_str` and its inverse `from_name` |
 | `Settle` | `Settled` (default: only turns no later call can change) or `Final` (the session is over) |
 | `BatchLimits`, `Body`, `DeltaError` | Re-exported from `toolpath::v1::jsonl` |
 | `decode_input(bytes, name)` | One file or request body -> its OTLP/JSON bodies (1 GiB decompression budget) |
 | `decode_input_with_limit(bytes, name, limit)` | `decode_input` under the caller's decompression budget |
 | `decode_input_with_limits(bytes, name, limits)` / `DecodeLimits` | `decode_input` under the caller's decompression budget and entry cap (`decompressed`, `entries`; `Default` is 1 GiB and 1,048,576) |
 | `decode_protobuf(bytes)` / `encode_protobuf(value)` | One OTLP protobuf request <-> canonical OTLP/JSON (feature `protobuf`) |
+| `group_sessions(requests, profile)` | Split a batch into `SessionRequests`, one per session; the batch's skip counts |
+| `derive_session(session, config)` | Derive a Path from one `SessionRequests`, under its key |
+| `SessionRequests` | A session's `key`, client `session_id` and cut-down `requests`; `derived_session_id()` |
+| `derived_session_id(key)` | The UUID a session key derives to (`meta.otel.derived_session_id`) |
 | `DeriveConfig` | `profile`, an optional graph `title`, the shared `convo` derivation options (a `toolpath_convo::DeriveConfig`: toolpath-convo is a public dependency, so a breaking toolpath-convo release is a breaking release here), and `tool_category`, the caller's tool classifier (`with_tool_category(f)` sets it) |
 | `ToolClassifier` | Wraps `Fn(harness, tool_name) -> Option<ToolCategory>`; `harness` is the inferred harness id (`claude-code`, `codex`, `opencode`, `pi`, `unknown`) |
 | `ProfileSelection` | `Auto` (default: `openrouter`, then `semconv`), `OpenRouter`, `Semconv`, `OpenInference` |
@@ -103,14 +112,29 @@ built). A service decoding untrusted bodies passes its own to
 `413 Payload Too Large`. Other transport errors: `Json`, `Decompress`,
 `NotOtlpBody`, `Protobuf`, `Framing`.
 
-## Sessions
+## Session grouping
 
 The caller groups requests, or records by `GenerationRecord::session_id`,
-into sessions; order does not matter.
-Every generation that carries a client session id (`session.id`, or
-`gen_ai.conversation.id` for `semconv`) must carry the same one, or the call
-returns `OtelError::MixedSessions`. Generations without an id belong to the
-session as given.
+into sessions; order does not matter. Every generation that carries a
+client session id (`session.id`, or `gen_ai.conversation.id` for
+`semconv`) must carry the same one, or the call returns
+`OtelError::MixedSessions`; generations without an id belong to the
+session as given. For traffic that mixes sessions or carries no id,
+`group_sessions` groups generations in layer order, first match wins in
+start order:
+
+| Layer | Groups by | Session key |
+|---|---|---|
+| 1 | Client session id (`session.id`, `gen_ai.conversation.id`) | The id |
+| C | The session of the generation it continues | That session's |
+| 2 | Full-history requests without an id: the session whose latest prompt this one extends, per client key | `otel-cluster:<16 hex>` |
+| T | Delta requests: client key and trace | `otel-trace:<16 hex>` |
+
+Each session's `requests` are the bodies cut down to its own spans and log
+records, plus the other spans and records of its traces. `derive_path` over
+them gives what `derive_session` gives, except when a derived key equal to a
+client session id of the batch took a `-<n>` suffix, which only
+`derive_session` keeps.
 
 ## Tool categories
 

@@ -12,6 +12,7 @@ mod equivalence;
 mod equivalence_fixtures;
 mod fixture_hygiene;
 mod fixtures;
+mod group;
 mod lazy_read;
 mod openinference_profile;
 pub(crate) mod otel;

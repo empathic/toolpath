@@ -29,6 +29,31 @@ fn fields<'a, const N: usize>(v: &'a Value, names: [&str; N]) -> Option<[Option<
     }
 }
 
+pub(crate) const RESOURCE_SPANS: [&str; 2] = ["resource", "scopeSpans"];
+pub(crate) const SCOPE_SPANS: [&str; 2] = ["scope", "spans"];
+pub(crate) const SPAN: [&str; 9] = [
+    "traceId",
+    "spanId",
+    "parentSpanId",
+    "name",
+    "startTimeUnixNano",
+    "endTimeUnixNano",
+    "attributes",
+    "events",
+    "status",
+];
+pub(crate) const RESOURCE_LOGS: [&str; 2] = ["resource", "scopeLogs"];
+pub(crate) const SCOPE_LOGS: [&str; 2] = ["scope", "logRecords"];
+pub(crate) const LOG_RECORD: [&str; 7] = [
+    "timeUnixNano",
+    "observedTimeUnixNano",
+    "body",
+    "attributes",
+    "traceId",
+    "spanId",
+    "eventName",
+];
+
 /// A string field; anything else reads as empty.
 fn string(v: Option<&Value>) -> &str {
     v.and_then(Value::as_str).unwrap_or("")
@@ -95,8 +120,8 @@ pub struct ResourceSpans<'a> {
 }
 
 impl<'a> ResourceSpans<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
-        let [resource, scope_spans] = fields(v, ["resource", "scopeSpans"])?;
+    pub fn read(v: &'a Value) -> Option<Self> {
+        let [resource, scope_spans] = fields(v, RESOURCE_SPANS)?;
         Some(ResourceSpans {
             resource: lenient(resource, Resource::read),
             scope_spans: lenient_list(scope_spans, ScopeSpans::read),
@@ -111,8 +136,8 @@ pub struct ScopeSpans<'a> {
 }
 
 impl<'a> ScopeSpans<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
-        let [scope, spans] = fields(v, ["scope", "spans"])?;
+    pub fn read(v: &'a Value) -> Option<Self> {
+        let [scope, spans] = fields(v, SCOPE_SPANS)?;
         Some(ScopeSpans {
             scope: lenient(scope, Scope::read),
             spans: lenient_list(spans, Span::read),
@@ -182,20 +207,7 @@ impl<'a> Span<'a> {
             attributes,
             events,
             status,
-        ] = fields(
-            v,
-            [
-                "traceId",
-                "spanId",
-                "parentSpanId",
-                "name",
-                "startTimeUnixNano",
-                "endTimeUnixNano",
-                "attributes",
-                "events",
-                "status",
-            ],
-        )?;
+        ] = fields(v, SPAN)?;
         Some(Span {
             trace_id: hex_id(trace_id),
             span_id: hex_id(span_id),
@@ -236,8 +248,8 @@ pub struct ResourceLogs<'a> {
 }
 
 impl<'a> ResourceLogs<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
-        let [resource, scope_logs] = fields(v, ["resource", "scopeLogs"])?;
+    pub fn read(v: &'a Value) -> Option<Self> {
+        let [resource, scope_logs] = fields(v, RESOURCE_LOGS)?;
         Some(ResourceLogs {
             resource: lenient(resource, Resource::read),
             scope_logs: lenient_list(scope_logs, ScopeLogs::read),
@@ -252,8 +264,8 @@ pub struct ScopeLogs<'a> {
 }
 
 impl<'a> ScopeLogs<'a> {
-    fn read(v: &'a Value) -> Option<Self> {
-        let [scope, records] = fields(v, ["scope", "logRecords"])?;
+    pub fn read(v: &'a Value) -> Option<Self> {
+        let [scope, records] = fields(v, SCOPE_LOGS)?;
         Some(ScopeLogs {
             scope: lenient(scope, Scope::read),
             log_records: lenient_list(records, LogRecord::read),
@@ -300,18 +312,7 @@ impl<'a> LogRecord<'a> {
             trace_id,
             span_id,
             event_name,
-        ] = fields(
-            v,
-            [
-                "timeUnixNano",
-                "observedTimeUnixNano",
-                "body",
-                "attributes",
-                "traceId",
-                "spanId",
-                "eventName",
-            ],
-        )?;
+        ] = fields(v, LOG_RECORD)?;
         Some(LogRecord {
             time_unix_nano: time.unwrap_or(&NULL),
             observed_time_unix_nano: observed.unwrap_or(&NULL),
