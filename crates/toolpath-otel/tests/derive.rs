@@ -92,6 +92,36 @@ fn goldens_are_single_path_documents() {
     }
 }
 
+fn categories(v: &Value, out: &mut Vec<Value>) {
+    match v {
+        Value::Object(m) => {
+            if let Some(Value::Array(uses)) = m.get("tool_uses") {
+                out.extend(uses.iter().map(|u| u["category"].clone()));
+            }
+            m.values().for_each(|x| categories(x, out));
+        }
+        Value::Array(a) => a.iter().for_each(|x| categories(x, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn the_default_config_categorizes_no_tool() {
+    for file in CONVERSATIONS {
+        let mut with = Vec::new();
+        categories(
+            &json(derive_path(&openrouter(file), &config()).unwrap().output),
+            &mut with,
+        );
+        assert!(with.iter().any(|c| !c.is_null()), "{file}");
+        let mut without = Vec::new();
+        let path = derive_path(&openrouter(file), &DeriveConfig::default()).unwrap();
+        categories(&json(path.output), &mut without);
+        assert_eq!(without.len(), with.len(), "{file}");
+        assert!(without.iter().all(Value::is_null), "{file}: {without:?}");
+    }
+}
+
 #[test]
 fn request_order_does_not_change_the_path() {
     let mut reversed = openrouter("claude-code.ndjson");

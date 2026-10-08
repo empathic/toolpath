@@ -537,6 +537,71 @@ mod tests {
         assert!(extra(&p.path.head)["otel"].get("branch").is_none());
     }
 
+    fn structural(p: &toolpath::v1::Path, id: &str) -> Value {
+        let step = p.steps.iter().find(|s| s.step.id == id).unwrap();
+        let v = serde_json::to_value(step).unwrap();
+        v["change"].as_object().unwrap().values().next().unwrap()["structural"].clone()
+    }
+
+    #[test]
+    fn the_callers_classifier_gets_the_harness_and_drives_delegation() {
+        let mut s = fan_out();
+        for gi in [0, 4] {
+            s.generations[gi].messages[0].content = json!("You are Claude Code");
+        }
+        let g = stitch(&s);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::new()));
+        let log = seen.clone();
+        let classifier = crate::ToolClassifier::new(move |harness, name| {
+            log.lock().unwrap().insert(harness.to_string());
+            (name == "Agent").then_some(ToolCategory::Delegation)
+        });
+        let p = crate::derive::derive_session(&s, &Default::default(), Some(&classifier));
+        assert_eq!(
+            *seen.lock().unwrap(),
+            BTreeSet::from(["claude-code".to_string()])
+        );
+        let fan = structural(&p, &g.nodes[produced_by(&g, 0)].id);
+        assert_eq!(fan["tool_uses"][0]["category"], "delegation");
+        assert_eq!(fan["delegations"].as_array().unwrap().len(), 3);
+        let sub = structural(&p, &g.nodes[produced_by(&g, 2)].id);
+        assert_eq!(sub["otel"]["branch"], "subagent");
+        assert_eq!(sub["otel"]["delegation"], "c2");
+
+        let none = crate::derive::derive_session(&s, &Default::default(), None);
+        let fan = structural(&none, &g.nodes[produced_by(&g, 0)].id);
+        assert!(fan["tool_uses"][0]["category"].is_null());
+        assert!(fan["delegations"].as_array().is_none_or(Vec::is_empty));
+        let sub = structural(&none, &g.nodes[produced_by(&g, 2)].id);
+        assert_ne!(sub["otel"]["branch"], "subagent");
+    }
+
+    #[test]
+    fn a_tool_no_provider_knows_takes_the_callers_category() {
+        let mut s = fan_out();
+        for g in &mut s.generations {
+            for c in g
+                .completion
+                .tool_calls
+                .iter_mut()
+                .chain(g.messages.iter_mut().flat_map(|m| m.tool_calls.iter_mut()))
+            {
+                c.function.name = "frobnicate".into();
+            }
+        }
+        let g = stitch(&s);
+        let classifier = crate::ToolClassifier::new(|_, name| {
+            (name == "frobnicate").then_some(ToolCategory::Shell)
+        });
+        let p = crate::derive::derive_session(&s, &Default::default(), Some(&classifier));
+        let fan = structural(&p, &g.nodes[produced_by(&g, 0)].id);
+        assert_eq!(fan["tool_uses"][0]["name"], "frobnicate");
+        assert_eq!(fan["tool_uses"][0]["category"], "shell");
+        let providers = derive_path(&s, &Default::default());
+        let fan = structural(&providers, &g.nodes[produced_by(&g, 0)].id);
+        assert!(fan["tool_uses"][0]["category"].is_null());
+    }
+
     /// Background agents: the call's result is only an acknowledgement and
     /// each answer arrives later in a user notification.
     #[test]
