@@ -3253,3 +3253,26 @@ fn derive_jsonl_categorizes_with_the_configs_classifier() {
         }
     }
 }
+
+/// An unanswered `cd` holds later turns only when the classifier names
+/// its `Bash` a shell call, as the shell-write reader reads it.
+#[test]
+fn a_cd_holds_turns_only_under_a_shell_category() {
+    let [g1, g2, g3, _] = off_ancestry_cd();
+    let early = session(vec![g1, g2, g3]);
+    let (id, _) = write_step(&derive_path(&early));
+    let sent = |bash: Option<toolpath_convo::ToolCategory>| {
+        let c = crate::ToolClassifier::new(move |_, name| if name == "Bash" { bash } else { None });
+        let bodies = super::send(
+            &early,
+            &convo(),
+            Some(&c),
+            &Remote::default(),
+            false,
+            limits(0),
+        );
+        step_ids(&lines(bodies.unwrap()).concat())
+    };
+    assert!(!sent(Some(toolpath_convo::ToolCategory::Shell)).contains(&id));
+    assert!(sent(None).contains(&id));
+}
