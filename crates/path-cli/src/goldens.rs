@@ -10,7 +10,7 @@
 //! Layout under the root: `goldens/manifest.json`, `goldens/<name>/input.jsonl`,
 //! `goldens/<name>/to-<target>.jsonl`, `goldens/known-defect/*.tsv`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -111,6 +111,15 @@ pub enum GoldensCommand {
         /// Only this set (default: all)
         name: Option<String>,
     },
+    /// What information is shed when a transcript becomes a Toolpath document and is projected out:
+    /// per stage events and bytes in/out, key paths lost, renames, dropped fields with one example
+    Shed {
+        /// Only this set (default: all)
+        name: Option<String>,
+        /// Write goldens/shed/<set>.json (listed in the manifest) instead of only printing
+        #[arg(long)]
+        json: bool,
+    },
     /// Capture the standard sets from the repo's own fixtures
     Init,
     /// Capture a golden set from a fixture, hermetically, to every target; with --all re-capture
@@ -189,6 +198,7 @@ pub fn run(args: GoldensArgs) -> Result<()> {
     match args.command {
         GoldensCommand::List => g.list(),
         GoldensCommand::Roundtrip { name } => g.roundtrip_report(name.as_deref()),
+        GoldensCommand::Shed { name, json } => g.shed(name.as_deref(), json),
         GoldensCommand::Init => {
             for (name, harness, fixture) in STANDARD_SETS {
                 g.capture(*harness, &g.root.join(fixture), name, None, None)?;
@@ -1166,6 +1176,17 @@ impl Goldens {
             }
             fresh_runs.push((name, run));
         }
+        // Shed reports are evidence: the files listed in the manifest must be the ones on disk.
+        for d in m["shed"].as_array().into_iter().flatten() {
+            let file = d["file"].as_str().unwrap_or("?");
+            match fs::read(self.root.join(file)) {
+                Ok(b) if Some(sha256_hex(&b).as_str()) == d["sha256"].as_str() => {}
+                Ok(_) => r.problems.push(format!(
+                    "{file} does not match the manifest sha256 (hand-edited?)"
+                )),
+                Err(e) => r.problems.push(format!("{file} unreadable: {e}")),
+            }
+        }
         // Known defects: recomputed from fresh output, compared to the pinned file.
         for def in DEFECTS {
             let Some((_, run)) = fresh_runs.iter().find(|(n, _)| n == def.set) else {
@@ -1771,6 +1792,320 @@ impl Goldens {
                     Err(e) => println!("{name:<18} ERROR {e}"),
                 }
             }
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shed: what is lost between a transcript, the Toolpath document, and a projection
+// ---------------------------------------------------------------------------------------------
+
+/// `type` or `type/payload.type`, the way a transcript line names its event.
+fn event_type(v: &Value) -> String {
+    let t = v["type"].as_str().unwrap_or("?");
+    match v["payload"]["type"].as_str() {
+        Some(p) => format!("{t}/{p}"),
+        None => t.to_string(),
+    }
+}
+
+fn type_counts(text: &str) -> BTreeMap<String, usize> {
+    let mut m = BTreeMap::new();
+    for l in text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    {
+        *m.entry(event_type(&l)).or_default() += 1;
+    }
+    m
+}
+
+fn string_chars(v: &Value) -> usize {
+    match v {
+        Value::String(s) => s.chars().count(),
+        Value::Array(a) => a.iter().map(string_chars).sum(),
+        Value::Object(m) => m.values().map(string_chars).sum(),
+        _ => 0,
+    }
+}
+
+/// Leaf key paths (arrays collapsed) of every line, each with the first example value seen.
+fn raw_paths(text: &str) -> BTreeMap<String, String> {
+    fn walk(prefix: &str, v: &Value, out: &mut BTreeMap<String, String>) {
+        match v {
+            Value::Object(m) => m
+                .iter()
+                .for_each(|(k, x)| walk(&format!("{prefix}.{k}"), x, out)),
+            Value::Array(a) => a.iter().for_each(|x| walk(&format!("{prefix}[]"), x, out)),
+            leaf => {
+                let s = match leaf {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                out.entry(prefix.trim_start_matches('.').to_string())
+                    .or_insert(s);
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for l in text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    {
+        walk("", &l, &mut out);
+    }
+    out
+}
+
+/// An example value for a dropped field, clipped to 40 chars; never anything the leak rules would flag.
+fn example_value(path: &str, value: &str) -> String {
+    let last = path.rsplit(['.', ']']).next().unwrap_or("").to_lowercase();
+    let sensitive = [
+        "token",
+        "secret",
+        "password",
+        "signature",
+        "apikey",
+        "auth",
+        "cookie",
+    ]
+    .iter()
+    .any(|s| last.contains(s))
+        || is_identifier_key(&last)
+        || last.ends_with("id")
+        || last.ends_with("uuid")
+        || (value.len() > 40 && !value.contains(' '));
+    if sensitive {
+        return "<withheld>".into();
+    }
+    let flat: String = value
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if flat.chars().count() > 40 {
+        format!("{}…", flat.chars().take(40).collect::<String>())
+    } else {
+        flat
+    }
+}
+
+fn snake_case(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_uppercase() {
+            out.push('_');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+impl Goldens {
+    /// Project an IR document to `target` in a fresh temp HOME (used for the same-format round trip).
+    fn project_ir(&self, ir: &[u8], target: &str) -> std::result::Result<Vec<u8>, String> {
+        let tmp = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let home = tmp.path().canonicalize().map_err(|e| e.to_string())?;
+        let (irf, out) = (home.join("ir.json"), home.join("out.jsonl"));
+        fs::write(&irf, ir).map_err(|e| e.to_string())?;
+        let mut a: Vec<String> = if target == "claude" {
+            vec!["p".into(), "project".into(), "claude".into()]
+        } else {
+            vec!["p".into(), "export".into(), target.into()]
+        };
+        a.extend([
+            "-i".into(),
+            irf.to_string_lossy().into_owned(),
+            "-o".into(),
+            out.to_string_lossy().into_owned(),
+        ]);
+        Self::exec(self.hermetic(&home).args(&a))?;
+        fs::read(&out).map_err(|e| e.to_string())
+    }
+
+    fn shed_set(&self, e: &Value) -> Result<Value> {
+        let name = e["name"].as_str().unwrap_or("?");
+        let harness = Harness::parse(e["harness"]["name"].as_str().unwrap_or(""))?;
+        let input = fs::read(self.root.join(e["fixture"].as_str().unwrap_or("")))?;
+        let src = String::from_utf8_lossy(&input).into_owned();
+        let run = self.run_set(harness, &input, e["project"].as_str())?;
+        let ir: Value = serde_json::from_slice(&run.ir)?;
+        let (steps, text_chars, tool_uses) = ir_counts(&ir);
+        let projections: Vec<Value> = run
+            .targets
+            .iter()
+            .filter_map(|t| {
+                let bytes = t.result.as_ref().ok()?;
+                let text = String::from_utf8_lossy(bytes);
+                let chars: usize = text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).map(|v| string_chars(&v)).sum();
+                Some(json!({ "target": t.target, "lines": text.lines().count(), "bytes": bytes.len(), "string_chars": chars, "by_type": type_counts(&text) }))
+            })
+            .collect();
+        // Same-format round trip: source -> IR -> source projection.
+        let back = self.project_ir(&run.ir, harness.name());
+        let same = match back {
+            Ok(bytes) => {
+                let back_text = String::from_utf8_lossy(&bytes).into_owned();
+                let (before, after) = (raw_paths(&src), raw_paths(&back_text));
+                let (tb, ta) = (type_counts(&src), type_counts(&back_text));
+                let mut by_type = serde_json::Map::new();
+                for (t, n) in &tb {
+                    let m = ta.get(t).copied().unwrap_or(0);
+                    if m < *n {
+                        by_type.insert(t.clone(), json!({ "source": n, "after": m }));
+                    }
+                }
+                let lost: Vec<&String> =
+                    before.keys().filter(|k| !after.contains_key(*k)).collect();
+                let gained: Vec<&String> =
+                    after.keys().filter(|k| !before.contains_key(*k)).collect();
+                let renamed: Vec<Value> = lost
+                    .iter()
+                    .filter_map(|l| {
+                        gained
+                            .iter()
+                            .find(|g| **g != *l && snake_case(g) == snake_case(l))
+                            .map(|g| json!({ "from": l, "to": g }))
+                    })
+                    .collect();
+                let dropped: Vec<Value> = lost
+                    .iter()
+                    .map(|k| json!({ "path": k, "example": example_value(k, &before[*k]) }))
+                    .collect();
+                json!({
+                    "lines": back_text.lines().count(), "bytes": bytes.len(),
+                    "event_types_shed": by_type,
+                    "key_paths": { "source": before.len(), "after": after.len(), "lost": lost.len(), "gained": gained.len() },
+                    "renamed": renamed, "dropped": dropped,
+                })
+            }
+            Err(err) => json!({ "error": err }),
+        };
+        Ok(json!({
+            "set": name, "harness": harness.name(),
+            "source": {
+                "lines": src.lines().count(), "bytes": input.len(),
+                "string_chars": src.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).map(|v| string_chars(&v)).sum::<usize>(),
+                "by_type": type_counts(&src),
+            },
+            "ir": { "bytes": run.ir.len(), "string_chars": string_chars(&ir), "steps": steps, "text_chars": text_chars, "tool_uses": tool_uses },
+            "projections": projections,
+            "same_format": same,
+        }))
+    }
+
+    /// `path goldens shed [set] [--json]`.
+    fn shed(&self, only: Option<&str>, json_out: bool) -> Result<()> {
+        let mut m = self.read_manifest()?;
+        let sets: Vec<Value> = m["goldens"].as_array().cloned().unwrap_or_default();
+        println!(
+            "{:<17} {:<7} {:>9} {:>9} {:>9}  {:<30} {:>5} {:>6} {:>7}",
+            "set",
+            "stage",
+            "bytes",
+            "chars",
+            "lines",
+            "same-format round trip",
+            "lost",
+            "gained",
+            "renamed"
+        );
+        for e in sets.iter().filter(|e| only.is_none_or(|n| e["name"] == n)) {
+            let r = self.shed_set(e)?;
+            let name = r["set"].as_str().unwrap_or("?");
+            println!(
+                "{:<17} {:<7} {:>9} {:>9} {:>9}",
+                name,
+                "source",
+                r["source"]["bytes"],
+                r["source"]["string_chars"],
+                r["source"]["lines"]
+            );
+            println!(
+                "{:<17} {:<7} {:>9} {:>9} {:>9}  ({} steps, {} text chars, {} tool uses)",
+                "",
+                "IR",
+                r["ir"]["bytes"],
+                r["ir"]["string_chars"],
+                "-",
+                r["ir"]["steps"],
+                r["ir"]["text_chars"],
+                r["ir"]["tool_uses"]
+            );
+            for p in r["projections"].as_array().into_iter().flatten() {
+                println!(
+                    "{:<17} {:<7} {:>9} {:>9} {:>9}",
+                    "",
+                    p["target"].as_str().unwrap_or(""),
+                    p["bytes"],
+                    p["string_chars"],
+                    p["lines"]
+                );
+            }
+            let s = &r["same_format"];
+            if let Some(err) = s["error"].as_str() {
+                println!("{:<17} same-format round trip failed: {err}", "");
+            } else {
+                let shed: Vec<String> = s["event_types_shed"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(t, c)| format!("{t} {}->{}", c["source"], c["after"]))
+                    .collect();
+                println!(
+                    "{:<17} {:<7} {:>9} {:>9} {:>9}  {:<30} {:>5} {:>6} {:>7}",
+                    "",
+                    "→source",
+                    s["bytes"],
+                    "-",
+                    s["lines"],
+                    "",
+                    s["key_paths"]["lost"],
+                    s["key_paths"]["gained"],
+                    s["renamed"].as_array().map_or(0, Vec::len)
+                );
+                if !shed.is_empty() {
+                    println!("{:<17} event types shed: {}", "", shed.join(", "));
+                }
+                for d in s["dropped"].as_array().into_iter().flatten().take(6) {
+                    println!(
+                        "{:<17}   dropped {}  e.g. {:?}",
+                        "",
+                        d["path"].as_str().unwrap_or(""),
+                        d["example"].as_str().unwrap_or("")
+                    );
+                }
+                for d in s["renamed"].as_array().into_iter().flatten() {
+                    println!(
+                        "{:<17}   renamed {} -> {}",
+                        "",
+                        d["from"].as_str().unwrap_or(""),
+                        d["to"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            if json_out {
+                let file = format!("goldens/shed/{name}.json");
+                let body = serde_json::to_string_pretty(&r)? + "\n";
+                write(&self.root.join(&file), body.as_bytes())?;
+                let doc = json!({ "file": file, "sha256": sha256_hex(body.as_bytes()) });
+                if m["shed"].is_null() {
+                    m["shed"] = json!([]);
+                }
+                let list = m["shed"]
+                    .as_array_mut()
+                    .ok_or_else(|| anyhow!("shed not an array"))?;
+                match list.iter_mut().find(|d| d["file"] == file.as_str()) {
+                    Some(slot) => *slot = doc,
+                    None => list.push(doc),
+                }
+                list.sort_by(|a, b| a["file"].as_str().cmp(&b["file"].as_str()));
+            }
+        }
+        if json_out {
+            self.write_manifest(&m)?;
         }
         Ok(())
     }

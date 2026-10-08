@@ -1,0 +1,119 @@
+{
+  "harness": "pi",
+  "ir": {
+    "bytes": 16131,
+    "steps": 12,
+    "string_chars": 11163,
+    "text_chars": 5296,
+    "tool_uses": 10
+  },
+  "projections": [
+    {
+      "by_type": {
+        "assistant": 11,
+        "permission-mode": 1,
+        "user": 11
+      },
+      "bytes": 21018,
+      "lines": 23,
+      "string_chars": 13387,
+      "target": "claude"
+    },
+    {
+      "by_type": {
+        "event_msg/agent_message": 6,
+        "event_msg/exec_command_end": 4,
+        "event_msg/token_count": 11,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 10,
+        "response_item/message": 12,
+        "response_item/reasoning": 6,
+        "session_meta": 1,
+        "turn_context": 11
+      },
+      "bytes": 26956,
+      "lines": 72,
+      "string_chars": 18855,
+      "target": "codex"
+    },
+    {
+      "by_type": {
+        "assistant.message": 11,
+        "assistant.turn_end": 11,
+        "assistant.turn_start": 11,
+        "session.start": 1,
+        "tool.execution_complete": 10,
+        "tool.execution_start": 10,
+        "user.message": 1
+      },
+      "bytes": 24724,
+      "lines": 55,
+      "string_chars": 16915,
+      "target": "copilot"
+    }
+  ],
+  "same_format": {
+    "bytes": 16897,
+    "dropped": [
+      {
+        "example": "<withheld>",
+        "path": "message.content[].thinkingSignature"
+      },
+      {
+        "example": "-1 scratch — feature elicitation +1 fixt…",
+        "path": "message.details.diff"
+      },
+      {
+        "example": "1",
+        "path": "message.details.firstChangedLine"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.responseId"
+      },
+      {
+        "example": "<withheld>",
+        "path": "modelId"
+      },
+      {
+        "example": "ollama",
+        "path": "provider"
+      },
+      {
+        "example": "medium",
+        "path": "thinkingLevel"
+      }
+    ],
+    "event_types_shed": {
+      "model_change": {
+        "after": 0,
+        "source": 1
+      },
+      "thinking_level_change": {
+        "after": 0,
+        "source": 1
+      }
+    },
+    "key_paths": {
+      "after": 36,
+      "gained": 1,
+      "lost": 7,
+      "source": 42
+    },
+    "lines": 23,
+    "renamed": []
+  },
+  "set": "pi",
+  "source": {
+    "by_type": {
+      "message": 22,
+      "model_change": 1,
+      "session": 1,
+      "thinking_level_change": 1
+    },
+    "bytes": 17912,
+    "lines": 25,
+    "string_chars": 10903
+  }
+}

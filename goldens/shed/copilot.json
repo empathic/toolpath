@@ -1,0 +1,416 @@
+{
+  "harness": "copilot",
+  "ir": {
+    "bytes": 47872,
+    "steps": 14,
+    "string_chars": 41719,
+    "text_chars": 4594,
+    "tool_uses": 11
+  },
+  "projections": [
+    {
+      "by_type": {
+        "assistant": 11,
+        "permission-mode": 1,
+        "session.model_change": 1,
+        "system.message": 1,
+        "user": 12
+      },
+      "bytes": 26510,
+      "lines": 26,
+      "string_chars": 18275,
+      "target": "claude"
+    },
+    {
+      "by_type": {
+        "event_msg/agent_message": 11,
+        "event_msg/exec_command_end": 1,
+        "event_msg/token_count": 11,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 11,
+        "response_item/function_call_output": 11,
+        "response_item/message": 12,
+        "response_item/reasoning": 11,
+        "session_meta": 1,
+        "turn_context": 11
+      },
+      "bytes": 32500,
+      "lines": 81,
+      "string_chars": 24158,
+      "target": "codex"
+    },
+    {
+      "by_type": {
+        "message": 23,
+        "session": 1
+      },
+      "bytes": 23105,
+      "lines": 24,
+      "string_chars": 15909,
+      "target": "pi"
+    }
+  ],
+  "same_format": {
+    "bytes": 32846,
+    "dropped": [
+      {
+        "example": "<withheld>",
+        "path": "agentId"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.apiCallId"
+      },
+      {
+        "example": "/tmp/elicit-scratch/notes.md",
+        "path": "data.codeChanges.filesModified[]"
+      },
+      {
+        "example": "10",
+        "path": "data.codeChanges.linesAdded"
+      },
+      {
+        "example": "1",
+        "path": "data.codeChanges.linesRemoved"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.conversationTokens"
+      },
+      {
+        "example": "claude-haiku-4.5",
+        "path": "data.currentModel"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.currentTokens"
+      },
+      {
+        "example": "idle",
+        "path": "data.delivery"
+      },
+      {
+        "example": "failure",
+        "path": "data.error.code"
+      },
+      {
+        "example": "Path does not exist",
+        "path": "data.error.message"
+      },
+      {
+        "example": "87319",
+        "path": "data.eventsFileSizeBytes"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.interactionId"
+      },
+      {
+        "example": "0.33",
+        "path": "data.modelMetrics.claude-haiku-4.5.requests.cost"
+      },
+      {
+        "example": "13",
+        "path": "data.modelMetrics.claude-haiku-4.5.requests.count"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.cache_read.tokenCount"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.cache_write.tokenCount"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.input.tokenCount"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.output.tokenCount"
+      },
+      {
+        "example": "6439490000",
+        "path": "data.modelMetrics.claude-haiku-4.5.totalNanoAiu"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.cacheReadTokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.cacheWriteTokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.inputTokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.outputTokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.reasoningTokens"
+      },
+      {
+        "example": "auto",
+        "path": "data.newModel"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.parentAgentTaskId"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.parentToolCallId"
+      },
+      {
+        "example": "null",
+        "path": "data.reasoningEffort"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.reasoningOpaque"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.requestId"
+      },
+      {
+        "example": "system",
+        "path": "data.role"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.serviceRequestId"
+      },
+      {
+        "example": "1783006095745",
+        "path": "data.sessionStartTime"
+      },
+      {
+        "example": "false",
+        "path": "data.shellToolInfo.hasWriteFileRedirection"
+      },
+      {
+        "example": "/tmp/elicit-scratch/count.sh",
+        "path": "data.shellToolInfo.possiblePaths[]"
+      },
+      {
+        "example": "routine",
+        "path": "data.shutdownType"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.systemTokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.tokenDetails.cache_read.tokenCount"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.tokenDetails.cache_write.tokenCount"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.tokenDetails.input.tokenCount"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.tokenDetails.output.tokenCount"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.toolDefinitionsTokens"
+      },
+      {
+        "example": "view the file at /tmp/elicit-scratch.",
+        "path": "data.toolRequests[].intentionSummary"
+      },
+      {
+        "example": "function",
+        "path": "data.toolRequests[].type"
+      },
+      {
+        "example": "30000",
+        "path": "data.toolTelemetry.metrics.commandTimeout"
+      },
+      {
+        "example": "1",
+        "path": "data.toolTelemetry.metrics.file_count"
+      },
+      {
+        "example": "1",
+        "path": "data.toolTelemetry.metrics.numberOfToolCallsMadeByAgent"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.toolTelemetry.metrics.responseTokenLimit"
+      },
+      {
+        "example": "380",
+        "path": "data.toolTelemetry.metrics.response_length"
+      },
+      {
+        "example": "0",
+        "path": "data.toolTelemetry.metrics.resultForLlmLength"
+      },
+      {
+        "example": "0",
+        "path": "data.toolTelemetry.metrics.resultLength"
+      },
+      {
+        "example": "10",
+        "path": "data.toolTelemetry.metrics.result_length"
+      },
+      {
+        "example": "task",
+        "path": "data.toolTelemetry.properties.agent_name"
+      },
+      {
+        "example": "task",
+        "path": "data.toolTelemetry.properties.agent_type"
+      },
+      {
+        "example": "false",
+        "path": "data.toolTelemetry.properties.asyncOnlyShell"
+      },
+      {
+        "example": "false",
+        "path": "data.toolTelemetry.properties.customTimeout"
+      },
+      {
+        "example": "false",
+        "path": "data.toolTelemetry.properties.detached"
+      },
+      {
+        "example": "sync",
+        "path": "data.toolTelemetry.properties.executionMode"
+      },
+      {
+        "example": "sync",
+        "path": "data.toolTelemetry.properties.execution_mode"
+      },
+      {
+        "example": "true",
+        "path": "data.toolTelemetry.properties.files_found"
+      },
+      {
+        "example": "[\"path\",\"command\"]",
+        "path": "data.toolTelemetry.properties.inputs"
+      },
+      {
+        "example": "true",
+        "path": "data.toolTelemetry.properties.matches_found"
+      },
+      {
+        "example": "<withheld>",
+        "path": "data.toolTelemetry.properties.options"
+      },
+      {
+        "example": "files_with_matches",
+        "path": "data.toolTelemetry.properties.output_mode"
+      },
+      {
+        "example": "105",
+        "path": "data.toolTelemetry.properties.prompt_length"
+      },
+      {
+        "example": "380",
+        "path": "data.toolTelemetry.properties.response_length"
+      },
+      {
+        "example": "false",
+        "path": "data.toolTelemetry.properties.sandboxApplied"
+      },
+      {
+        "example": "false",
+        "path": "data.toolTelemetry.properties.sandboxOptOutRequested"
+      },
+      {
+        "example": "directory",
+        "path": "data.toolTelemetry.properties.viewType"
+      },
+      {
+        "example": "task",
+        "path": "data.toolTelemetry.restrictedProperties.agent_name"
+      },
+      {
+        "example": ".",
+        "path": "data.toolTelemetry.restrictedProperties.path"
+      },
+      {
+        "example": "note*",
+        "path": "data.toolTelemetry.restrictedProperties.pattern"
+      },
+      {
+        "example": "38053",
+        "path": "data.totalApiDurationMs"
+      },
+      {
+        "example": "6439490000",
+        "path": "data.totalNanoAiu"
+      },
+      {
+        "example": "0.33",
+        "path": "data.totalPremiumRequests"
+      },
+      {
+        "example": "<current_datetime>2026-07-02T11:28:18.42…",
+        "path": "data.transformedContent"
+      }
+    ],
+    "event_types_shed": {
+      "assistant.message": {
+        "after": 11,
+        "source": 13
+      },
+      "session.model_change": {
+        "after": 0,
+        "source": 1
+      },
+      "session.shutdown": {
+        "after": 0,
+        "source": 1
+      },
+      "subagent.completed": {
+        "after": 0,
+        "source": 1
+      },
+      "system.message": {
+        "after": 0,
+        "source": 1
+      }
+    },
+    "key_paths": {
+      "after": 62,
+      "gained": 3,
+      "lost": 77,
+      "source": 136
+    },
+    "lines": 58,
+    "renamed": []
+  },
+  "set": "copilot",
+  "source": {
+    "by_type": {
+      "assistant.message": 13,
+      "assistant.turn_end": 11,
+      "assistant.turn_start": 11,
+      "session.model_change": 1,
+      "session.shutdown": 1,
+      "session.start": 1,
+      "subagent.completed": 1,
+      "subagent.started": 1,
+      "system.message": 1,
+      "tool.execution_complete": 11,
+      "tool.execution_start": 11,
+      "user.message": 1
+    },
+    "bytes": 86345,
+    "lines": 64,
+    "string_chars": 70894
+  }
+}

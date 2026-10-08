@@ -1,0 +1,95 @@
+{
+  "harness": "claude",
+  "ir": {
+    "bytes": 3610,
+    "steps": 7,
+    "string_chars": 1563,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "projections": [
+    {
+      "by_type": {
+        "event_msg/agent_message": 3,
+        "event_msg/token_count": 3,
+        "event_msg/user_message": 3,
+        "response_item/function_call": 2,
+        "response_item/function_call_output": 2,
+        "response_item/message": 6,
+        "session_meta": 1,
+        "turn_context": 3
+      },
+      "bytes": 4461,
+      "lines": 23,
+      "string_chars": 2145,
+      "target": "codex"
+    },
+    {
+      "by_type": {
+        "message": 8,
+        "session": 1
+      },
+      "bytes": 3048,
+      "lines": 9,
+      "string_chars": 1133,
+      "target": "pi"
+    },
+    {
+      "by_type": {
+        "assistant.message": 3,
+        "assistant.turn_end": 3,
+        "assistant.turn_start": 3,
+        "session.start": 1,
+        "tool.execution_complete": 2,
+        "tool.execution_start": 2,
+        "user.message": 3
+      },
+      "bytes": 5416,
+      "lines": 17,
+      "string_chars": 3109,
+      "target": "copilot"
+    }
+  ],
+  "same_format": {
+    "bytes": 3918,
+    "dropped": [
+      {
+        "example": "true",
+        "path": "isCompactSummary"
+      },
+      {
+        "example": "true",
+        "path": "isVisibleInTranscriptOnly"
+      },
+      {
+        "example": "tool_use",
+        "path": "message.stop_reason"
+      }
+    ],
+    "event_types_shed": {},
+    "key_paths": {
+      "after": 50,
+      "gained": 25,
+      "lost": 3,
+      "source": 28
+    },
+    "lines": 10,
+    "renamed": [
+      {
+        "from": "message.stop_reason",
+        "to": "message.stopReason"
+      }
+    ]
+  },
+  "set": "claude-compacted",
+  "source": {
+    "by_type": {
+      "assistant": 3,
+      "compact_boundary": 1,
+      "user": 5
+    },
+    "bytes": 2751,
+    "lines": 9,
+    "string_chars": 1189
+  }
+}
