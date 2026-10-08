@@ -868,20 +868,22 @@ fn share_explicit(
     };
     let uploaded =
         crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)?;
-    // The stamp was taken before the derive read the source, so steps
-    // appended during the upload count as not yet sent.
-    let stamp = derived
-        .provenance
-        .as_ref()
-        .map_or((None, None), |p| (p.modified, p.size));
-    crate::cmd_export::record_remotes(
-        harness,
-        session,
-        project.as_deref(),
-        &derived.doc,
-        &uploaded,
-        stamp,
-    );
+    // The record goes on the manifest entry the cache record sits
+    // under: the provenance names the session by the id sync
+    // enumerates (a Claude chain's head, a Codex rollout's full id),
+    // which the caller's `session` need not be. Its stamp was taken
+    // before the derive read the source, so steps appended during the
+    // upload count as not yet sent.
+    if let Some(source) = &derived.provenance {
+        crate::cmd_export::record_remotes(
+            harness,
+            &source.id,
+            source.path.as_deref(),
+            &derived.doc,
+            &uploaded,
+            (source.modified, source.size),
+        );
+    }
     Ok(())
 }
 
@@ -1731,6 +1733,50 @@ mod tests {
                 .unwrap();
             assert_eq!(remote.source_stamp, crate::sync::stamp_string(stamp));
             assert!(rec.cache_id.is_some(), "the share also cached the document");
+        });
+    }
+
+    /// A share named by a successor segment records on the chain head,
+    /// the entry the cache record sits under, and leaves no entry under
+    /// the segment id.
+    #[test]
+    fn share_by_a_successor_id_records_on_the_chain_head() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            // The successor's first entry carries the predecessor's
+            // sessionId (the bridge).
+            std::fs::write(
+                claude.join("projects/-test-project/s2.jsonl"),
+                concat!(
+                    r#"{"type":"user","uuid":"u-s2-0","timestamp":"2024-01-02T01:00:00Z","sessionId":"s1","cwd":"/test/project","message":{"role":"user","content":"bridge"}}"#,
+                    "\n",
+                    r#"{"type":"assistant","uuid":"a-s2-1","timestamp":"2024-01-02T01:00:01Z","sessionId":"s2","message":{"role":"assistant","content":"after rotation"}}"#,
+                    "\n",
+                ),
+            )
+            .unwrap();
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s2")
+                .unwrap()
+                .doc;
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s2", &server.base()).unwrap();
+
+            let manifest =
+                crate::sync::load_manifest(&crate::config::config_dir().unwrap()).unwrap();
+            let ids: Vec<&String> = manifest["claude"].keys().collect();
+            assert_eq!(ids, ["s1"], "{:?}", manifest["claude"]);
+            let rec = &manifest["claude"]["s1"];
+            assert!(rec.cache_id.is_some());
+            assert_eq!(rec.remotes.len(), 1, "{:?}", rec.remotes);
+            assert!(rec.remotes.keys().next().unwrap().ends_with(SERVER_PATH_ID));
         });
     }
 
