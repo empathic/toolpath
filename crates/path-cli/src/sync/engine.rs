@@ -44,6 +44,91 @@ pub(crate) struct SyncRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) size: Option<u64>,
     pub(crate) synced_at: DateTime<Utc>,
+    /// Where this session's path lives remotely, keyed by the path's
+    /// own URL (see [`RemoteRecord`]). Empty when it was never pushed
+    /// to a remote.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) remotes: BTreeMap<String, RemoteRecord>,
+}
+
+/// What one remote holds of a session's path. The remote's copy is a
+/// prefix of the local derive: `steps` steps, the last of them
+/// `last_step`. The key the record sits under is the path's URL on
+/// that remote — on Pathbase
+/// `<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>` — so the
+/// containing graph is the key without its last two segments and is
+/// not stored. Nothing reads these yet; incremental append and
+/// `share --all` will.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RemoteRecord {
+    /// How many steps of the derive the remote holds.
+    pub(crate) steps: usize,
+    /// Id of the derive's step `steps - 1`.
+    pub(crate) last_step: String,
+    /// The head the remote was last told.
+    pub(crate) head: String,
+    /// The local source's stamp ([`stamp_string`]) when those steps
+    /// were sent.
+    pub(crate) source_stamp: String,
+}
+
+impl RemoteRecord {
+    /// The record for a remote holding every step of `path`, taken
+    /// while the local source was at `stamp`. `None` for a path with
+    /// no steps: there is nothing to hold.
+    pub(crate) fn of(path: &toolpath::v1::Path, stamp: sources::Stamp) -> Option<Self> {
+        let last = path.steps.last()?;
+        Some(Self {
+            steps: path.steps.len(),
+            last_step: last.step.id.clone(),
+            head: path.path.head.clone(),
+            source_stamp: stamp_string(stamp),
+        })
+    }
+}
+
+/// A source stamp as one string, `<modified>/<size>`, each part empty
+/// when the source does not provide it. The same stamp the stat gate
+/// compares, so a pass can skip a session whose source has not moved
+/// since the record was written.
+pub(crate) fn stamp_string((modified, size): sources::Stamp) -> String {
+    format!(
+        "{}/{}",
+        modified
+            .map(|m| m.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+            .unwrap_or_default(),
+        size.map(|s| s.to_string()).unwrap_or_default()
+    )
+}
+
+/// Write `record` under `url` on the session's manifest record,
+/// replacing any earlier record at that URL. A session the manifest
+/// does not know yet (a `--no-cache` share) gets a known-but-uncached
+/// record at `path`, which the next sync materializes.
+pub(crate) fn record_remote(
+    config_dir: &Path,
+    artifact_type: ArtifactType,
+    id: &str,
+    path: Option<&str>,
+    url: &str,
+    record: RemoteRecord,
+) -> Result<()> {
+    update_manifest(config_dir, |manifest| {
+        manifest
+            .entry(artifact_type.name().to_string())
+            .or_default()
+            .entry(id.to_string())
+            .or_insert_with(|| SyncRecord {
+                path: path.map(str::to_string),
+                cache_id: None,
+                modified: None,
+                size: None,
+                synced_at: Utc::now(),
+                remotes: BTreeMap::new(),
+            })
+            .remotes
+            .insert(url.to_string(), record);
+    })
 }
 
 /// The sync manifest: artifact type (`"claude"`, `"codex"`, …) →
@@ -153,6 +238,15 @@ fn newest_first(artifacts: &[ArtifactRef]) -> Vec<&ArtifactRef> {
     order
 }
 
+/// Replace `id`'s record, keeping its remotes: sync and import rewrite
+/// the source fingerprint, never where the path lives.
+fn put_record(records: &mut BTreeMap<String, SyncRecord>, id: String, mut rec: SyncRecord) {
+    if let Some(prev) = records.get_mut(&id) {
+        rec.remotes = std::mem::take(&mut prev.remotes);
+    }
+    records.insert(id, rec);
+}
+
 /// Merge staged records into the manifest under the lock and clear
 /// the stage.
 fn flush_writes(
@@ -165,10 +259,10 @@ fn flush_writes(
     let batch = std::mem::take(pending);
     update_manifest(config_dir, move |manifest| {
         for (name, records) in batch {
-            manifest
-                .entry(name.to_string())
-                .or_default()
-                .extend(records);
+            let target = manifest.entry(name.to_string()).or_default();
+            for (id, rec) in records {
+                put_record(target, id, rec);
+            }
         }
     })
 }
@@ -241,6 +335,7 @@ fn sync_artifacts(
                             modified: artifact.modified,
                             size: artifact.size,
                             synced_at: Utc::now(),
+                            remotes: BTreeMap::new(),
                         },
                     );
                     unflushed += 1;
@@ -276,6 +371,7 @@ fn sync_artifacts(
                         modified: artifact.modified,
                         size: artifact.size,
                         synced_at: Utc::now(),
+                        remotes: BTreeMap::new(),
                     },
                 );
                 unflushed += 1;
@@ -310,19 +406,20 @@ pub(crate) fn record_artifact(
 ) -> Result<()> {
     let config_dir = config.config_dir()?;
     update_manifest(&config_dir, |manifest| {
-        manifest
-            .entry(artifact.artifact_type.name().to_string())
-            .or_default()
-            .insert(
-                artifact.id.clone(),
-                SyncRecord {
-                    path: artifact.path.clone(),
-                    cache_id: Some(cache_id.to_string()),
-                    modified: artifact.modified,
-                    size: artifact.size,
-                    synced_at: Utc::now(),
-                },
-            );
+        put_record(
+            manifest
+                .entry(artifact.artifact_type.name().to_string())
+                .or_default(),
+            artifact.id.clone(),
+            SyncRecord {
+                path: artifact.path.clone(),
+                cache_id: Some(cache_id.to_string()),
+                modified: artifact.modified,
+                size: artifact.size,
+                synced_at: Utc::now(),
+                remotes: BTreeMap::new(),
+            },
+        );
     })
 }
 
@@ -352,9 +449,10 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
 
 /// The cache entry for an artifact, when the manifest says it is
 /// materialized and a fresh stat shows its source unchanged since —
-/// i.e. re-deriving would reproduce the cached doc byte-for-byte.
-/// Used by `share` to upload straight from the cache. The stat
-/// targets one artifact directly — no enumeration of its siblings.
+/// i.e. re-deriving would reproduce the cached doc byte-for-byte —
+/// with that stamp. Used by `share` to upload straight from the cache.
+/// The stat targets one artifact directly — no enumeration of its
+/// siblings.
 ///
 /// Transitional: loads a [`Config`] per call. New code takes the
 /// config directory as a parameter.
@@ -363,7 +461,7 @@ pub(crate) fn fresh_cache_id(
     artifact_type: ArtifactType,
     project: Option<&str>,
     id: &str,
-) -> Option<String> {
+) -> Option<(String, sources::Stamp)> {
     let config_dir = Config::load().ok()?.config_dir().ok()?;
     let manifest = load_manifest(&config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
@@ -375,7 +473,23 @@ pub(crate) fn fresh_cache_id(
         && rec.modified == modified
         && rec.size == size
         && crate::cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
-    .then_some(cache_id)
+    .then_some((cache_id, (modified, size)))
+}
+
+/// The session a cache entry was derived from, with the source stamp
+/// its record carries: what `p export pathbase <cache id>` records an
+/// upload against. `None` when no manifest record names the entry.
+pub(crate) fn session_of_cache_id(
+    cache_id: &str,
+) -> Option<(ArtifactType, String, sources::Stamp)> {
+    let manifest = load_manifest(&crate::config::config_dir().ok()?).ok()?;
+    manifest.iter().find_map(|(name, records)| {
+        let artifact_type = ArtifactType::parse(name)?;
+        records
+            .iter()
+            .find(|(_, rec)| rec.cache_id.as_deref() == Some(cache_id))
+            .map(|(id, rec)| (artifact_type, id.clone(), (rec.modified, rec.size)))
+    })
 }
 
 /// `p cache rm` eviction: the doc is gone, so any record pointing
@@ -528,6 +642,17 @@ mod tests {
         doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
     }
 
+    const PATH_URL: &str = "https://a/u/me/x/graphs/g1/paths/p1";
+
+    fn remote_record(steps: usize) -> RemoteRecord {
+        RemoteRecord {
+            steps,
+            last_step: format!("s{}", steps - 1),
+            head: format!("s{}", steps - 1),
+            source_stamp: "2026-01-01T00:00:00Z/10".to_string(),
+        }
+    }
+
     fn make_ref(artifact_type: ArtifactType, id: &str) -> ArtifactRef {
         ArtifactRef {
             artifact_type,
@@ -552,10 +677,201 @@ mod tests {
                     modified: Some("2024-01-02T00:00:01.123456789Z".parse().unwrap()),
                     size: Some(4096),
                     synced_at: "2026-07-09T00:00:00Z".parse().unwrap(),
+                    remotes: BTreeMap::new(),
                 },
             );
             save_manifest(config_dir, &manifest).unwrap();
             assert_eq!(load_manifest(config_dir).unwrap(), manifest);
+            let json = std::fs::read_to_string(manifest_path(config_dir)).unwrap();
+            assert!(
+                !json.contains("remotes"),
+                "empty remotes are not written: {json}"
+            );
+
+            manifest
+                .get_mut("claude")
+                .unwrap()
+                .get_mut("sess-1")
+                .unwrap()
+                .remotes
+                .insert(PATH_URL.to_string(), remote_record(3));
+            save_manifest(config_dir, &manifest).unwrap();
+            assert_eq!(load_manifest(config_dir).unwrap(), manifest);
+        });
+    }
+
+    #[test]
+    fn manifest_without_remotes_loads() {
+        with_cfg(|_, config_dir| {
+            std::fs::create_dir_all(config_dir).unwrap();
+            std::fs::write(
+                manifest_path(config_dir),
+                r#"{"claude":{"sess-1":{"path":"/p","cache_id":"claude-p1","size":4096,"synced_at":"2026-07-09T00:00:00Z"}}}"#,
+            )
+            .unwrap();
+            let manifest = load_manifest(config_dir).unwrap();
+            let rec = &manifest["claude"]["sess-1"];
+            assert_eq!(rec.cache_id.as_deref(), Some("claude-p1"));
+            assert!(rec.remotes.is_empty());
+        });
+    }
+
+    #[test]
+    fn remote_record_serializes_as_the_spec_shape() {
+        let json = serde_json::to_value(remote_record(412)).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "steps": 412,
+                "last_step": "s411",
+                "head": "s411",
+                "source_stamp": "2026-01-01T00:00:00Z/10",
+            })
+        );
+    }
+
+    #[test]
+    fn stamp_string_leaves_absent_parts_empty() {
+        let at: DateTime<Utc> = "2024-01-02T00:00:01.123456789Z".parse().unwrap();
+        assert_eq!(
+            stamp_string((Some(at), Some(7))),
+            "2024-01-02T00:00:01.123456789Z/7"
+        );
+        assert_eq!(
+            stamp_string((Some(at), None)),
+            "2024-01-02T00:00:01.123456789Z/"
+        );
+        assert_eq!(stamp_string((None, Some(7))), "/7");
+        assert_eq!(stamp_string((None, None)), "/");
+    }
+
+    #[test]
+    fn remote_record_of_takes_the_path_tail_and_head() {
+        let mut path = toolpath::v1::Path {
+            path: toolpath::v1::PathIdentity {
+                id: "p".into(),
+                base: None,
+                head: "s2".into(),
+                graph_ref: None,
+            },
+            steps: Vec::new(),
+            meta: None,
+        };
+        assert_eq!(RemoteRecord::of(&path, (None, None)), None);
+        for id in ["s0", "s1", "s2"] {
+            path.steps.push(toolpath::v1::Step {
+                step: toolpath::v1::StepIdentity {
+                    id: id.into(),
+                    parents: Vec::new(),
+                    actor: "a".into(),
+                    timestamp: "2024-01-01T00:00:00Z".into(),
+                },
+                change: Default::default(),
+                meta: None,
+            });
+        }
+        let rec = RemoteRecord::of(&path, (None, Some(9))).unwrap();
+        assert_eq!(rec.steps, 3);
+        assert_eq!(rec.last_step, "s2");
+        assert_eq!(rec.head, "s2");
+        assert_eq!(rec.source_stamp, "/9");
+    }
+
+    #[test]
+    fn record_remote_creates_the_session_and_replaces_per_url() {
+        with_cfg(|_, cfg| {
+            let other = "https://a/u/me/x/graphs/g2/paths/p2";
+            record_remote(
+                cfg,
+                ArtifactType::Claude,
+                "s1",
+                Some("/p"),
+                PATH_URL,
+                remote_record(1),
+            )
+            .unwrap();
+            record_remote(
+                cfg,
+                ArtifactType::Claude,
+                "s1",
+                None,
+                other,
+                remote_record(2),
+            )
+            .unwrap();
+            record_remote(
+                cfg,
+                ArtifactType::Claude,
+                "s1",
+                None,
+                PATH_URL,
+                remote_record(3),
+            )
+            .unwrap();
+            let m = load_manifest(cfg).unwrap();
+            let rec = &m["claude"]["s1"];
+            assert_eq!(rec.path.as_deref(), Some("/p"));
+            assert_eq!(rec.cache_id, None, "known but not materialized");
+            let got: Vec<(&str, usize)> = rec
+                .remotes
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.steps))
+                .collect();
+            assert_eq!(got, [(PATH_URL, 3), (other, 2)]);
+        });
+    }
+
+    #[test]
+    fn sync_and_import_rewrites_keep_remotes() {
+        with_cfg(|_, cfg| {
+            record_remote(
+                cfg,
+                ArtifactType::Claude,
+                "s1",
+                None,
+                PATH_URL,
+                remote_record(1),
+            )
+            .unwrap();
+            let artifact = ArtifactRef {
+                artifact_type: ArtifactType::Claude,
+                id: "s1".into(),
+                path: Some("/p".into()),
+                modified: Some("2026-03-01T00:00:00Z".parse().unwrap()),
+                size: Some(99),
+            };
+            let config = Config::load().unwrap();
+            record_artifact(&config, &artifact, "claude-s1").unwrap();
+            let m = load_manifest(cfg).unwrap();
+            let rec = &m["claude"]["s1"];
+            assert_eq!(rec.cache_id.as_deref(), Some("claude-s1"));
+            assert_eq!(rec.size, Some(99));
+            assert_eq!(rec.remotes.len(), 1, "record_artifact must keep remotes");
+
+            let mut pending = BTreeMap::new();
+            pending
+                .entry("claude")
+                .or_insert_with(BTreeMap::new)
+                .insert(
+                    "s1".to_string(),
+                    SyncRecord {
+                        path: Some("/p".into()),
+                        cache_id: Some("claude-s1".into()),
+                        modified: None,
+                        size: Some(100),
+                        synced_at: Utc::now(),
+                        remotes: BTreeMap::new(),
+                    },
+                );
+            flush_writes(cfg, &mut pending).unwrap();
+            let m = load_manifest(cfg).unwrap();
+            let rec = &m["claude"]["s1"];
+            assert_eq!(rec.size, Some(100));
+            assert_eq!(
+                rec.remotes[PATH_URL],
+                remote_record(1),
+                "flush_writes must keep remotes"
+            );
         });
     }
 
@@ -1096,7 +1412,7 @@ mod tests {
             );
 
             sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
-            let cache_id = fresh_cache_id(
+            let (cache_id, _) = fresh_cache_id(
                 &bundle,
                 ArtifactType::Claude,
                 Some("/test/project"),

@@ -40,8 +40,11 @@ pub(crate) struct User {
 /// `id` is the graph UUID; `url` is the server-rendered share URL.
 #[derive(Debug, Clone)]
 pub(crate) struct AnonGraphResponse {
-    pub id: String,
+    pub id: uuid::Uuid,
     pub url: String,
+    /// The stored paths in document order; empty from a server that
+    /// predates the field.
+    pub paths: Vec<pathbase_client::types::CreatedPath>,
 }
 
 /// Response from `POST /api/v1/u/{owner}/repos/{repo}/graphs`.
@@ -54,9 +57,51 @@ pub(crate) struct AnonGraphResponse {
 /// request.
 #[derive(Debug, Clone)]
 pub(crate) struct CreatedGraph {
-    pub id: String,
+    pub id: uuid::Uuid,
     pub url: String,
     pub visibility: pathbase_client::types::Visibility,
+    /// The stored paths in document order, each with the `path.id` the
+    /// document gave it and the server id the path routes address it
+    /// by; empty from a server that predates the field.
+    pub paths: Vec<pathbase_client::types::CreatedPath>,
+}
+
+/// The URL a path is addressed by on a Pathbase server,
+/// `<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>`: the key a
+/// `sync::RemoteRecord` sits under. One spelling per path, however
+/// the parts were typed: scheme and host lowercase, no trailing slash
+/// on the server, owner and repo percent-encoded exactly once as in
+/// the API routes, the ids lowercase and hyphenated.
+pub(crate) fn remote_path_url(
+    base_url: &str,
+    owner: &str,
+    repo: &str,
+    graph_id: &uuid::Uuid,
+    path_id: &uuid::Uuid,
+) -> String {
+    use pathbase_client::encode_segment;
+    use percent_encoding::percent_decode_str;
+
+    let segment = |s: &str| encode_segment(&percent_decode_str(s).decode_utf8_lossy());
+    let base = base_url.trim_end_matches('/');
+    let server = match base.split_once("://") {
+        Some((scheme, rest)) => {
+            let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            format!(
+                "{}://{}{path}",
+                scheme.to_ascii_lowercase(),
+                host.to_ascii_lowercase()
+            )
+        }
+        None => base.to_string(),
+    };
+    format!(
+        "{server}/u/{}/{}/graphs/{}/paths/{}",
+        segment(owner),
+        segment(repo),
+        graph_id.hyphenated(),
+        path_id.hyphenated()
+    )
 }
 
 // ── URL + prompt helpers ────────────────────────────────────────────────
@@ -486,8 +531,9 @@ pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<An
         Ok(resp) => {
             let inner = resp.into_inner();
             Ok(AnonGraphResponse {
-                id: inner.id.to_string(),
+                id: inner.id,
                 url: inner.url,
+                paths: inner.paths,
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => {
@@ -557,9 +603,10 @@ pub(crate) fn graphs_post(
         Ok(resp) => {
             let inner = resp.into_inner();
             Ok(CreatedGraph {
-                id: inner.id.to_string(),
+                id: inner.id,
                 url: inner.url,
                 visibility: inner.visibility,
+                paths: inner.paths,
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => {
@@ -819,12 +866,15 @@ pub(crate) fn graphs_post_streamed(
         meta: doc.meta.clone(),
     };
     let shell_json = serde_json::to_string(&shell).context("serialize graph")?;
-    let created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
-    let graph_id = uuid::Uuid::parse_str(&created.id).context("graph id is not a UUID")?;
+    let mut created = graphs_post(base_url, token, owner, repo, name, &shell_json, public)?;
+    let graph_id = created.id;
 
     let client = BatchClient::new(base_url, token)?;
     match stream_paths(&client, owner, repo, &graph_id, doc, budget) {
-        Ok(()) => Ok(created),
+        Ok(paths) => {
+            created.paths = paths;
+            Ok(created)
+        }
         Err(e) => {
             if let Ok(typed) = pathbase_client(base_url, Some(token)) {
                 let _ = block_on(typed.delete_graph(owner, repo, &graph_id));
@@ -870,6 +920,8 @@ struct StreamError {
     opening_path: bool,
 }
 
+/// Stream each inline path of `doc` into the graph. Returns the opened
+/// paths in document order, as `POST /graphs` lists them.
 fn stream_paths(
     client: &BatchClient,
     owner: &str,
@@ -877,7 +929,7 @@ fn stream_paths(
     graph_id: &uuid::Uuid,
     doc: &toolpath::v1::Graph,
     budget: usize,
-) -> std::result::Result<(), StreamError> {
+) -> std::result::Result<Vec<pathbase_client::types::CreatedPath>, StreamError> {
     use toolpath::v1::PathOrRef;
 
     let paths: Vec<&toolpath::v1::Path> = doc
@@ -888,6 +940,7 @@ fn stream_paths(
             PathOrRef::Ref(_) => None,
         })
         .collect();
+    let mut opened = Vec::with_capacity(paths.len());
     for (pi, path) in paths.iter().enumerate() {
         let reordered;
         let path = match parents_first_order(&path.steps) {
@@ -934,8 +987,12 @@ fn stream_paths(
                     post_batch(client, &url, &batch.body).map_err(stream_error)?;
             }
         }
+        opened.push(pathbase_client::types::CreatedPath {
+            id: path.path.id.clone(),
+            server_id: path_id,
+        });
     }
-    Ok(())
+    Ok(opened)
 }
 
 fn error_message(body: &str) -> Option<String> {
@@ -1377,6 +1434,108 @@ pub(crate) mod tests {
         )
     }
 
+    /// A `GraphCreatedResponse` body: [`graph_document_json`] plus the
+    /// stored paths, `(path.id, server_id)` each.
+    pub(crate) fn graph_created_json(paths: &[(&str, &str)]) -> String {
+        let mut body: serde_json::Value = serde_json::from_str(&graph_document_json()).unwrap();
+        body["document"] = serde_json::json!({});
+        body["path_count"] = serde_json::json!(paths.len());
+        body["paths"] = paths
+            .iter()
+            .map(|(id, server_id)| serde_json::json!({"id": id, "server_id": server_id}))
+            .collect();
+        body.to_string()
+    }
+
+    #[test]
+    fn remote_path_url_encodes_owner_and_repo_under_the_server() {
+        let graph_id: uuid::Uuid = TEST_UUID.parse().unwrap();
+        let path_id: uuid::Uuid = PATH_ID.parse().unwrap();
+        assert_eq!(
+            remote_path_url("https://pathbase.dev/", "a b", "r/s", &graph_id, &path_id),
+            format!("https://pathbase.dev/u/a%20b/r%2Fs/graphs/{TEST_UUID}/paths/{PATH_ID}")
+        );
+        assert_eq!(
+            remote_path_url(
+                "http://127.0.0.1:8080",
+                "me",
+                "pathstash",
+                &graph_id,
+                &path_id
+            ),
+            format!("http://127.0.0.1:8080/u/me/pathstash/graphs/{TEST_UUID}/paths/{PATH_ID}")
+        );
+    }
+
+    /// The same path reached through differently typed parts gets one
+    /// key: the server's case and trailing slash, an already-encoded
+    /// owner or repo, and the ids' case all normalise away.
+    #[test]
+    fn remote_path_url_is_one_spelling_per_path() {
+        let graph_id: uuid::Uuid = TEST_UUID.parse().unwrap();
+        let path_id: uuid::Uuid = PATH_ID.parse().unwrap();
+        let key = remote_path_url("https://pathbase.dev", "a b", "r/s", &graph_id, &path_id);
+        assert_eq!(
+            remote_path_url(
+                "HTTPS://Pathbase.DEV/",
+                "a%20b",
+                "r%2Fs",
+                &TEST_UUID.to_uppercase().parse().unwrap(),
+                &PATH_ID.to_uppercase().parse().unwrap()
+            ),
+            key
+        );
+        assert_eq!(
+            remote_path_url("https://pathbase.dev//", "a b", "r/s", &graph_id, &path_id),
+            key
+        );
+        // A path under the host is the server's, not the key's, and keeps its case.
+        assert_eq!(
+            remote_path_url("HTTP://Host:8080/Base/", "me", "r", &graph_id, &path_id),
+            format!("http://host:8080/Base/u/me/r/graphs/{TEST_UUID}/paths/{PATH_ID}")
+        );
+    }
+
+    #[test]
+    fn graphs_post_returns_the_stored_paths() {
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            Box::leak(graph_created_json(&[("p1", PATH_ID)]).into_boxed_str()),
+        );
+        let created = graphs_post(
+            &server.base(),
+            "tok",
+            "alex",
+            "pathstash",
+            None,
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!(created.paths.len(), 1);
+        assert_eq!(created.paths[0].id, "p1");
+        assert_eq!(created.paths[0].server_id.to_string(), PATH_ID);
+    }
+
+    #[test]
+    fn graphs_post_accepts_a_response_without_paths() {
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            Box::leak(graph_document_json().into_boxed_str()),
+        );
+        let created = graphs_post(
+            &server.base(),
+            "tok",
+            "alex",
+            "pathstash",
+            None,
+            r#"{"graph":{"id":"g"},"paths":[]}"#,
+            false,
+        )
+        .unwrap();
+        assert!(created.paths.is_empty());
+    }
+
     #[test]
     fn graphs_post_wraps_document_with_name_and_visibility() {
         let server = MockServer::start(
@@ -1393,7 +1552,7 @@ pub(crate) mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
         assert_eq!(
             created.visibility,
             pathbase_client::types::Visibility::Unlisted
@@ -1470,7 +1629,7 @@ pub(crate) mod tests {
             Box::leak(graph_document_json().into_boxed_str()),
         );
         let resp = anon_graphs_post(&server.base(), r#"{"graph":{"id":"g"},"paths":[]}"#).unwrap();
-        assert_eq!(resp.id, TEST_UUID);
+        assert_eq!(resp.id.to_string(), TEST_UUID);
         assert!(resp.url.ends_with(TEST_UUID));
 
         let req = String::from_utf8(server.request()).unwrap();
@@ -1571,7 +1730,7 @@ pub(crate) mod tests {
     // TOOLPATH_CONFIG_DIR + a tempdir-credentials file to drive the
     // logged-in path through the same MockServer used elsewhere.
 
-    fn write_credentials(dir: &std::path::Path, url: &str) {
+    pub(crate) fn write_credentials(dir: &std::path::Path, url: &str) {
         let creds = StoredSession {
             url: url.to_string(),
             token: "tok".into(),
@@ -1585,7 +1744,7 @@ pub(crate) mod tests {
         store_session(&dir.join(crate::config::CREDENTIALS_FILE_NAME), &creds).unwrap();
     }
 
-    fn me_response_body(username: &str) -> String {
+    pub(crate) fn me_response_body(username: &str) -> String {
         // The generated User type requires id (uuid), username, created_at,
         // updated_at. Mock the bare minimum that parses cleanly.
         format!(
@@ -1909,6 +2068,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn graphs_post_streamed_returns_the_opened_paths() {
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", path_opened(1, Some("step-001"))),
+        ]);
+        let path = crate::projection::test_support::make_convo_path("claude-code://s");
+        let created = post_streamed(&server, &path, BATCH_BUDGET).unwrap();
+        assert_eq!(created.paths.len(), 1);
+        assert_eq!(created.paths[0].id, path.path.id);
+        assert_eq!(created.paths[0].server_id.to_string(), PATH_ID);
+    }
+
+    #[test]
     fn graphs_post_streamed_sends_graph_then_batches() {
         let path = stream_path(8, 200);
         let batches = pack(&path, 1000);
@@ -1929,7 +2101,7 @@ pub(crate) mod tests {
         let server = MockServer::start_sequence(responses);
 
         let created = post_streamed(&server, &path, 1000).unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), batches.len() + 1);
@@ -2156,7 +2328,7 @@ pub(crate) mod tests {
             ("HTTP/1.1 201 Created", graph_document_json()),
         ]);
         let created = post_streamed(&server, &path, 1000).unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
 
         let reqs = server.requests();
         assert_eq!(reqs.len(), 4);
@@ -2188,7 +2360,7 @@ pub(crate) mod tests {
             ("HTTP/1.1 201 Created", older),
         ]);
         let created = post_streamed(&server, &path, 1000).unwrap();
-        assert_eq!(created.id, TEST_UUID);
+        assert_eq!(created.id.to_string(), TEST_UUID);
         let reqs = server.requests();
         assert_eq!(reqs.len(), 4);
         assert_eq!(
