@@ -55,6 +55,7 @@ toolpath-pi = { workspace = true }
 toolpath-convo = { workspace = true }
 toolpath-github = { workspace = true }
 pathbase-client = { workspace = true }
+percent-encoding = { workspace = true }
 git2 = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }

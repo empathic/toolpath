@@ -980,16 +980,18 @@ pub(crate) fn run_pathbase_inner(
     };
     use pathbase_client::types::Visibility;
 
-    let uploaded_paths =
-        |owner: &str, repo: &str, graph_id: &str, paths: &[pathbase_client::types::CreatedPath]| {
-            paths
-                .iter()
-                .map(|p| UploadedPath {
-                    id: p.id.clone(),
-                    url: remote_path_url(&base_url, owner, repo, graph_id, &p.server_id),
-                })
-                .collect()
-        };
+    let uploaded_paths = |owner: &str,
+                          repo: &str,
+                          graph_id: &uuid::Uuid,
+                          paths: &[pathbase_client::types::CreatedPath]| {
+        paths
+            .iter()
+            .map(|p| UploadedPath {
+                id: p.id.clone(),
+                url: remote_path_url(&base_url, owner, repo, graph_id, &p.server_id),
+            })
+            .collect()
+    };
 
     // Validate locally so we give a clean error rather than relying on
     // the server to reject malformed payloads.

@@ -3135,6 +3135,7 @@ dependencies = [
  "jaq-std",
  "jsonschema",
  "pathbase-client",
+ "percent-encoding",
  "predicates",
  "rand 0.9.4",
  "ratatui",
