@@ -774,6 +774,7 @@ Verified by enumerating handler modules under
 | Tool | Category | Handler | Notes |
 |---|---|---|---|
 | `shell` | Shell | `ShellCommandHandler` | Classic shell runtime |
+| `shell_command` | Shell | `ShellCommandHandler` | Command as one shell string |
 | `exec_command` | Shell | `UnifiedExecHandler` | Unified exec; observed |
 | `write_stdin` | Shell | `UnifiedExecHandler` | Write to running session; observed |
 | `apply_patch` | FileWrite | `ApplyPatchHandler` | Custom-tool-call style; observed |

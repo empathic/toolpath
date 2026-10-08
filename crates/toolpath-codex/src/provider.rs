@@ -123,7 +123,7 @@ pub fn tool_category(name: &str) -> Option<ToolCategory> {
             Some(ToolCategory::FileSearch)
         }
         "write_file" | "apply_patch" | "replace" | "edit" => Some(ToolCategory::FileWrite),
-        "shell" | "exec_command" | "unified_exec" | "write_stdin" | "js_repl" => {
+        "shell" | "shell_command" | "exec_command" | "unified_exec" | "write_stdin" | "js_repl" => {
             Some(ToolCategory::Shell)
         }
         "web_fetch" | "web_search" | "google_web_search" => Some(ToolCategory::Network),
@@ -1556,6 +1556,15 @@ mod tests {
         assert_eq!(tool_category("web_fetch"), Some(ToolCategory::Network));
         assert_eq!(tool_category("spawn_agent"), Some(ToolCategory::Delegation));
         assert_eq!(tool_category("unknown_xyz"), None);
+    }
+
+    #[test]
+    fn shell_command_is_a_shell_tool() {
+        assert_eq!(tool_category("shell_command"), Some(ToolCategory::Shell));
+        assert_eq!(
+            native_name(ToolCategory::Shell, &serde_json::json!({})),
+            Some("exec_command")
+        );
     }
 
     #[test]

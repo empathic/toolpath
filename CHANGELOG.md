@@ -37,6 +37,8 @@ All notable changes to the Toolpath workspace are documented here.
   with no shell writes derive unchanged; no public API change. V4A patch
   text is read with `toolpath_convo::shell_writes::parse_patch`. Requires
   `toolpath-convo` 0.11.2.
+- **`toolpath-codex`**: `tool_category("shell_command")` is now
+  `ToolCategory::Shell` (previously uncategorized).
 
 ## toolpath-convo 0.11.2 — 2026-10-01
 
