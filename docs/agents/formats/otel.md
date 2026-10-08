@@ -231,9 +231,12 @@ stays the same a longer prefix emits every root a shorter one emits: tool
 results and echoes are only added, a thread's sub-agent match and the
 main line, once found, never move, and a root's children only grow. So
 each run of one harness along the feed is searched by doubling from its
-start, then bisecting. Across a harness change emission is not monotone (a
-sub-agent's tree settles under Claude Code's `Agent`, then a developer
-message makes the session codex's, where `Agent` delegates nothing), so
+start, then bisecting. Every probe asks the caller's classifier (Tool
+categories) under the prefix's harness, since a delegation call decides
+what waits. Across a harness change emission is not monotone (with the
+provider crates' classifiers, a sub-agent's tree settles under Claude
+Code's `Agent`, then a developer message makes the session codex's, where
+`Agent` delegates nothing), so
 the search restarts at every change; the rules change their answer only a
 few times along any feed. A session that never settles, such as
 independent prompts under one session id, costs about two stitches of the
@@ -954,6 +957,11 @@ every turn and is passed once the session is over.
   working directory). A name the crate does not record is
   `OtelError::UnknownHarness`. `base`: every step id of the frozen path a
   continuation continues (Continuation, below); empty otherwise.
+- **Classifier.** `config.tool_category` categorizes every derivation of
+  the call, the settle search included. Pass the same classifier on every
+  send of a session (and its continuations): a stored step derived under
+  another classifier compares as changed (`Amended`), or goes out changed
+  when `stored` omits it.
 - **Bodies.** The first body starts with the meta line: a `PathOpen` when
   `opened` is false, else a `PathMeta` patch carrying every meta key. Either
   holds the new feed order as `meta.otel.generation_ids`, so the feed order

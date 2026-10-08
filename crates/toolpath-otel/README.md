@@ -176,6 +176,9 @@ for body in &sent.output {
   (resend everything settled) is correct until Pathbase can list a path's
   step ids. Claiming a step the path lacks is not. The lookup must return
   the message stored under exactly the hash asked for; it is not checked.
+  `config.tool_category` categorizes tools and decides delegation calls for
+  every derivation of the call; pass the same classifier on every send of
+  a session, or a stored step compares as changed (`Amended`).
 - **One copy of each call.** Of two records of one call (with `Auto`, an
   app-side `semconv` span and OpenRouter's Broadcast root share its
   `gen-…` id), `derive_jsonl` derives the first received and counts the
@@ -208,7 +211,8 @@ for body in &sent.output {
   everything outside a tree a missing continuation started until the main
   line is decided (the first tree's second produced turn), a
   side request until `Settle::Final`, and a delegating thread's turns after a
-  `Task`/`Agent` call until that sub-agent's answer is found, because the
+  delegation call (one the classifier names `Delegation`, such as Claude
+  Code's `Task`/`Agent`) until that sub-agent's answer is found, because the
   turn that receives it gains an extra parent. A sub-agent's turns go out
   as soon as they settle, marked with their call.
 - **Harness fixed at the first settled turn.** The harness (tool

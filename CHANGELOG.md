@@ -53,10 +53,11 @@ All notable changes to the Toolpath workspace are documented here.
   A turn settles only once its marks and parents are known too: unmarked
   turns outside a tree a missing continuation started wait until the main
   line is decided, side requests wait for
-  `Settle::Final`, and a delegating thread's turns after a `Task`/`Agent` call
-  wait until the sub-agent's answer is found (the receiving turn gains an
-  extra parent); a turn goes out only after all its parents, extra
-  parents included. The harness is decided by the generations that settle
+  `Settle::Final`, and a delegating thread's turns after a delegation call
+  (a tool the caller's classifier, `DeriveConfig::tool_category`, names
+  `Delegation`) wait until the sub-agent's answer is found (the receiving
+  turn gains an extra parent); a turn goes out only after all its parents,
+  extra parents included. The harness is decided by the generations that settle
   the session's first turn and frozen for the rest of it: stored as
   `meta.otel.harness` and passed back as `Remote::harness`, whose unknown
   name is `OtelError::UnknownHarness`. `derive_path` decides the harness
