@@ -1,6 +1,7 @@
 //! Session → Toolpath `Path` via `toolpath_convo::derive_path`, plus the
 //! otel path meta and per-step retention extras.
 
+use crate::ToolClassifier;
 use crate::branch::{BranchKind, Branches, classify};
 use crate::generation::{Cost, Generation};
 use crate::harness::{SourceHarness, infer_harness, signals};
@@ -19,11 +20,16 @@ pub const EXTRA_KEY: &str = PROVIDER;
 /// Dropped texts by the generation index that stores them.
 type Homes = BTreeMap<usize, BTreeMap<String, String>>;
 
-pub fn derive_session(session: &Session, config: &DeriveConfig) -> Path {
+pub fn derive_session(
+    session: &Session,
+    config: &DeriveConfig,
+    classifier: Option<&ToolClassifier>,
+) -> Path {
     let graph = stitch(session);
     let harness = infer_harness(&signals(session));
-    let branches = classify(&graph, harness);
-    let mut view = view_from_graph(session, &graph, &branches, harness);
+    let category = |name: &str| classifier.and_then(|c| c.classify(harness.as_str(), name));
+    let branches = classify(&graph, &category);
+    let mut view = view_from_graph(session, &graph, &branches, harness, &category);
     let placed: BTreeSet<usize> = graph.nodes.iter().filter_map(|n| n.producer).collect();
     view.turns.extend(unplaced_turns(session, &graph, &placed));
     let mut path = toolpath_convo::derive_path(&view, config);

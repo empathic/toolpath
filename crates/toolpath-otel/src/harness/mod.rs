@@ -3,7 +3,6 @@
 
 pub mod cwd;
 pub mod mutations;
-pub mod tools;
 
 use crate::normalize::{content_text, is_system_like};
 use crate::session::Session;

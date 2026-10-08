@@ -30,8 +30,6 @@
 //! decided no turn is marked side, so a turn left unmarked then can become
 //! side once it is.
 
-use crate::harness::SourceHarness;
-use crate::harness::tools::tool_category;
 use crate::normalize::content_text;
 use crate::stitch::TurnGraph;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -85,7 +83,7 @@ struct Call {
     prompt: String,
 }
 
-pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
+pub fn classify(graph: &TurnGraph, category: &dyn Fn(&str) -> Option<ToolCategory>) -> Branches {
     let nodes = &graph.nodes;
     let n = nodes.len();
     let index: HashMap<&str, usize> = nodes
@@ -116,7 +114,7 @@ pub fn classify(graph: &TurnGraph, harness: SourceHarness) -> Branches {
     let mut calls: Vec<Call> = Vec::new();
     for (i, x) in nodes.iter().enumerate() {
         for c in &x.message.tool_calls {
-            if tool_category(harness, &c.function.name) != Some(ToolCategory::Delegation) {
+            if category(&c.function.name) != Some(ToolCategory::Delegation) {
                 continue;
             }
             let args = c.function.parsed_arguments();
@@ -361,12 +359,16 @@ fn order_parents_first(parent: &[Option<usize>]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::derive::derive_session;
     use crate::generation::{Completion, Cost, FunctionCall, Generation, Message, ToolCall};
     use crate::session::Session;
     use crate::stitch::stitch;
+    use crate::tests::otel::derive_path;
     use serde_json::{Value, json};
     use toolpath::v1::query;
+
+    fn unknown(name: &str) -> Option<ToolCategory> {
+        crate::tests::classifier::provider_tool_category("unknown", name)
+    }
 
     fn m(v: Value) -> Message {
         serde_json::from_value(v).unwrap()
@@ -471,7 +473,7 @@ mod tests {
     fn parallel_sub_agents_are_attributed_and_merge_back() {
         let s = fan_out();
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         let fan = produced_by(&g, 0);
         let calls: Vec<&str> = b.delegations[&fan]
             .iter()
@@ -500,7 +502,7 @@ mod tests {
     fn sub_agent_steps_are_not_dead_ends_and_side_steps_say_so() {
         let s = fan_out();
         let g = stitch(&s);
-        let p = derive_session(&s, &Default::default());
+        let p = derive_path(&s, &Default::default());
         assert_eq!(p.path.head, g.nodes[produced_by(&g, 4)].id);
         let dead: Vec<&str> = query::dead_ends(&p.steps, &p.path.head)
             .into_iter()
@@ -549,7 +551,7 @@ mod tests {
             json!({"role": "user", "content": "<task-notification>B done</task-notification>"}),
         ));
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         let note = g
             .nodes
             .iter()
@@ -575,7 +577,7 @@ mod tests {
             json!({"role": "user", "content": "<task-notification>OK</task-notification>"}),
         ));
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         let note = g
             .nodes
             .iter()
@@ -594,7 +596,7 @@ mod tests {
         let mut s = fan_out();
         s.generations.truncate(4);
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert!(b.merges.is_empty());
         assert_eq!(b.head, Some(produced_by(&g, 0)));
     }
@@ -615,7 +617,7 @@ mod tests {
             )],
         );
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert_eq!(
             b.delegations[&produced_by(&g, 0)],
             [Delegation {
@@ -635,7 +637,7 @@ mod tests {
         let title = s.generations.pop().unwrap();
         s.generations.insert(0, title);
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert_eq!(b.kind[produced_by(&g, 0)], Some(BranchKind::Side));
         assert_eq!(b.head, Some(produced_by(&g, 5)));
         assert_prefixes_agree(&s);
@@ -650,7 +652,7 @@ mod tests {
         s.generations.insert(0, title);
         s.generations.truncate(2);
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert!(!b.kind.contains(&Some(BranchKind::Side)));
     }
 
@@ -661,7 +663,7 @@ mod tests {
         type Marks = HashMap<String, (Option<BranchKind>, Vec<Delegation>)>;
         let marks = |s: &Session| -> Marks {
             let g = stitch(s);
-            let mut b = classify(&g, SourceHarness::Unknown);
+            let mut b = classify(&g, &unknown);
             g.nodes
                 .iter()
                 .enumerate()
@@ -693,7 +695,7 @@ mod tests {
     /// main line yet, so its unmarked turns may later be side.
     fn assert_prefixes_agree(s: &Session) {
         let whole = stitch(s);
-        let all = classify(&whole, SourceHarness::Unknown);
+        let all = classify(&whole, &unknown);
         let full_merges = id_merges(&whole, &all);
         let kind: HashMap<&str, &Option<BranchKind>> = whole
             .nodes
@@ -705,7 +707,7 @@ mod tests {
             let mut prefix = s.clone();
             prefix.generations.truncate(k);
             let g = stitch(&prefix);
-            let b = classify(&g, SourceHarness::Unknown);
+            let b = classify(&g, &unknown);
             let undecided = !b.kind.contains(&Some(BranchKind::Side));
             for (x, mark) in g.nodes.iter().zip(&b.kind) {
                 let whole = kind[x.id.as_str()];
@@ -752,7 +754,7 @@ mod tests {
                 ],
             );
             let g = stitch(&s);
-            let b = classify(&g, SourceHarness::Unknown);
+            let b = classify(&g, &unknown);
             let call = |id: &str| {
                 let gi = s.generations.iter().position(|x| x.id == id).unwrap();
                 b.kind[produced_by(&g, gi)].clone()
@@ -770,7 +772,7 @@ mod tests {
     fn a_sub_agent_answering_twice_merges_at_its_first_answer() {
         let s = answering_twice();
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         let noted = produced_by(&g, 2);
         assert_eq!(b.merges, [(noted, produced_by(&g, 1))]);
         assert_prefixes_agree(&s);
@@ -868,7 +870,7 @@ mod tests {
         let g3 = generation("g3", 30, main, text("all done"));
         let s = Session::new("s".into(), None, vec![g0, g1, g2, g3]);
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         let system = g
             .nodes
             .iter()
@@ -926,7 +928,7 @@ mod tests {
         let g3 = generation("g3", 30, main, text("all done"));
         let s = Session::new("s".into(), None, vec![g0, g1, g2, g3]);
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         let system = g
             .nodes
             .iter()
@@ -980,7 +982,7 @@ mod tests {
             ],
         );
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert_eq!(g.missing_continuations, ["gX"]);
         assert_eq!(g.nodes[produced_by(&g, 2)].parent, None);
         assert!(b.kind.iter().all(Option::is_none), "{:?}", b.kind);
@@ -1035,7 +1037,7 @@ mod tests {
             ],
         );
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert_eq!(g.missing_continuations, ["gX"]);
         assert_eq!(b.kind[produced_by(&g, 3)], Some(BranchKind::Side));
         assert_eq!(b.kind[produced_by(&g, 4)], Some(BranchKind::Side));
@@ -1061,7 +1063,7 @@ mod tests {
             ],
         );
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert_eq!(b.kind[produced_by(&g, 1)], Some(BranchKind::Side));
         assert_eq!(b.kind[produced_by(&g, 3)], Some(BranchKind::Side));
         for gi in [0, 2, 4] {
@@ -1199,7 +1201,7 @@ mod tests {
                         roles.iter().map(|(_, g)| g.clone()).collect(),
                     );
                     let g = stitch(&s);
-                    let b = classify(&g, SourceHarness::Unknown);
+                    let b = classify(&g, &unknown);
                     for (i, x) in g.nodes.iter().enumerate() {
                         let want = match roles[x.first_generation].0 {
                             Role::Main => None,
@@ -1318,7 +1320,7 @@ mod tests {
     fn a_long_main_line_merges_every_answer() {
         let s = long_session(2000);
         let g = stitch(&s);
-        let b = classify(&g, SourceHarness::Unknown);
+        let b = classify(&g, &unknown);
         assert_eq!(b.merges.len(), 9);
         for &(node, from) in &b.merges {
             assert_eq!(g.nodes[node].message.role, "user");
@@ -1334,7 +1336,7 @@ mod tests {
         for steps in [500, 1000, 2000, 4000] {
             let g = stitch(&long_session(steps));
             let start = std::time::Instant::now();
-            classify(&g, SourceHarness::Unknown);
+            classify(&g, &unknown);
             println!("{} turns: {:?}", g.nodes.len(), start.elapsed());
         }
     }

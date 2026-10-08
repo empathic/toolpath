@@ -24,7 +24,10 @@ use walk::SkipReason;
 
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::fmt;
+use std::sync::Arc;
 use toolpath::v1::{Graph, GraphIdentity, GraphMeta, Path, PathOrRef};
+use toolpath_convo::ToolCategory;
 
 /// Configuration for deriving Toolpath documents from OTLP telemetry.
 #[derive(Debug, Clone, Default)]
@@ -35,6 +38,48 @@ pub struct DeriveConfig {
     pub title: Option<String>,
     /// Per-path options for the shared conversation derivation.
     pub convo: toolpath_convo::DeriveConfig,
+    /// Names each tool call's [`ToolCategory`]. Without one no tool call is
+    /// categorized, so no sub-agent is recognized (that needs
+    /// [`ToolCategory::Delegation`]) and no file change is read from a tool
+    /// call's input (that needs [`ToolCategory::FileWrite`]).
+    pub tool_category: Option<ToolClassifier>,
+}
+
+impl DeriveConfig {
+    /// Set [`DeriveConfig::tool_category`] to `f`.
+    pub fn with_tool_category(
+        mut self,
+        f: impl Fn(&str, &str) -> Option<ToolCategory> + Send + Sync + 'static,
+    ) -> Self {
+        self.tool_category = Some(ToolClassifier::new(f));
+        self
+    }
+}
+
+/// A caller's tool classifier: `(harness, tool name) → category`, where
+/// `harness` is the coding agent inferred from the telemetry
+/// (`"claude-code"`, `"codex"`, `"opencode"`, `"pi"`, or `"unknown"`; the
+/// value recorded as `meta.extra.otel.harness`).
+#[derive(Clone)]
+pub struct ToolClassifier(Arc<ClassifyFn>);
+
+type ClassifyFn = dyn Fn(&str, &str) -> Option<ToolCategory> + Send + Sync;
+
+impl ToolClassifier {
+    pub fn new(f: impl Fn(&str, &str) -> Option<ToolCategory> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+
+    /// The category of tool `name` called in a `harness` session.
+    pub fn classify(&self, harness: &str, name: &str) -> Option<ToolCategory> {
+        (self.0)(harness, name)
+    }
+}
+
+impl fmt::Debug for ToolClassifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ToolClassifier(..)")
+    }
 }
 
 /// A derived document and what was left out of it.
@@ -165,7 +210,7 @@ pub fn derive_path(requests: &[Value], config: &DeriveConfig) -> Result<Derived<
         .ok_or(OtelError::NoGenerations { skipped })?;
     session.truncated = truncated;
     Ok(Derived {
-        output: derive::derive_session(&session, &config.convo),
+        output: derive::derive_session(&session, &config.convo, config.tool_category.as_ref()),
         skipped,
     })
 }

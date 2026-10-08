@@ -12,6 +12,14 @@ use toolpath_otel::{
     DeriveConfig, OtelError, ProfileSelection, SkipCounts, derive, derive_graph, derive_path,
 };
 
+#[path = "../src/tests/classifier.rs"]
+mod classifier;
+
+/// Tool categories from the provider crates' classifiers.
+fn config() -> DeriveConfig {
+    DeriveConfig::default().with_tool_category(classifier::provider_tool_category)
+}
+
 const CONVERSATIONS: [&str; 5] = [
     "claude-code.ndjson",
     "codex.ndjson",
@@ -55,9 +63,7 @@ fn golden(file: &str) -> PathBuf {
 fn m0_paths_match_their_goldens() {
     let bless = std::env::var_os("TOOLPATH_OTEL_BLESS").is_some();
     for file in CONVERSATIONS {
-        let path = derive_path(&openrouter(file), &DeriveConfig::default())
-            .unwrap()
-            .output;
+        let path = derive_path(&openrouter(file), &config()).unwrap().output;
         let got = serde_json::to_value(Graph::from_path(path)).unwrap();
         if bless {
             std::fs::write(
@@ -90,7 +96,7 @@ fn goldens_are_single_path_documents() {
 fn request_order_does_not_change_the_path() {
     let mut reversed = openrouter("claude-code.ndjson");
     reversed.reverse();
-    let cfg = DeriveConfig::default();
+    let cfg = config();
     assert_eq!(
         json(derive_path(&reversed, &cfg).unwrap().output),
         json(
@@ -105,7 +111,7 @@ fn request_order_does_not_change_the_path() {
 fn derive_wraps_one_session_and_derive_graph_keeps_one_path_per_session() {
     let cfg = DeriveConfig {
         title: Some("two".into()),
-        ..Default::default()
+        ..config()
     };
     let claude = openrouter("claude-code.ndjson");
     let codex = openrouter("codex.ndjson");
@@ -134,7 +140,7 @@ fn derive_wraps_one_session_and_derive_graph_keeps_one_path_per_session() {
 fn derive_keeps_the_title_for_a_single_session() {
     let cfg = DeriveConfig {
         title: Some("Release".into()),
-        ..Default::default()
+        ..config()
     };
     let one = derive(&[&openrouter("claude-code.ndjson")], &cfg)
         .unwrap()
@@ -147,7 +153,7 @@ fn derive_keeps_the_title_for_a_single_session() {
 
 #[test]
 fn errors_name_non_otlp_input_and_empty_sessions() {
-    let cfg = DeriveConfig::default();
+    let cfg = config();
     assert!(matches!(
         derive_path(&[serde_json::json!({"sessions": {}})], &cfg),
         Err(OtelError::NotOtlp)
@@ -167,11 +173,9 @@ fn the_profile_selection_chooses_the_dialect() {
     let semconv = requests("semconv/openai-chat/span/traces.json");
     let only = |profile| DeriveConfig {
         profile,
-        ..Default::default()
+        ..config()
     };
-    let auto = derive_path(&semconv, &DeriveConfig::default())
-        .unwrap()
-        .output;
+    let auto = derive_path(&semconv, &config()).unwrap().output;
     assert_eq!(
         json(auto),
         json(
@@ -186,7 +190,7 @@ fn the_profile_selection_chooses_the_dialect() {
     ));
     let openinference = requests("openinference/openai-chat/traces.json");
     assert!(matches!(
-        derive_path(&openinference, &DeriveConfig::default()),
+        derive_path(&openinference, &config()),
         Err(OtelError::NoGenerations { .. })
     ));
     let p = derive_path(&openinference, &only(ProfileSelection::OpenInference))
@@ -198,19 +202,16 @@ fn the_profile_selection_chooses_the_dialect() {
 #[test]
 fn event_mode_logs_derive_the_same_turns_as_span_mode() {
     let dir = "semconv/openai-chat";
-    let span = derive_path(
-        &requests(&format!("{dir}/span/traces.json")),
-        &DeriveConfig::default(),
-    )
-    .unwrap()
-    .output;
+    let span = derive_path(&requests(&format!("{dir}/span/traces.json")), &config())
+        .unwrap()
+        .output;
     let event = derive_path(
         &[
             requests(&format!("{dir}/event/traces.json")),
             requests(&format!("{dir}/event/logs.json")),
         ]
         .concat(),
-        &DeriveConfig::default(),
+        &config(),
     )
     .unwrap()
     .output;
@@ -229,7 +230,7 @@ fn session_id(p: &toolpath::v1::Path) -> Option<&str> {
 
 #[test]
 fn requests_that_mix_session_ids_are_an_error() {
-    let cfg = DeriveConfig::default();
+    let cfg = config();
     let claude = openrouter("claude-code.ndjson");
     let codex = openrouter("codex.ndjson");
     let mut want = vec![
@@ -258,7 +259,7 @@ fn requests_that_mix_session_ids_are_an_error() {
 
 #[test]
 fn one_session_id_or_none_derives() {
-    let cfg = DeriveConfig::default();
+    let cfg = config();
     let claude = derive_path(&openrouter("claude-code.ndjson"), &cfg).unwrap();
     assert!(session_id(&claude.output).is_some());
 
@@ -273,7 +274,7 @@ fn one_session_id_or_none_derives() {
 
 #[test]
 fn same_opening_sessions_without_an_id_get_distinct_path_ids() {
-    let cfg = DeriveConfig::default();
+    let cfg = config();
     let pi = openrouter("pi.ndjson");
     let mut other = pi[..1].to_vec();
     let text = serde_json::to_string(&other[0])
@@ -324,9 +325,7 @@ fn generation(id: &str, prompt: &str) -> Value {
 const GOOD: &str = r#"{"messages":[{"role":"user","content":"hi"}]}"#;
 
 fn skips(requests: &[Value]) -> SkipCounts {
-    derive_path(requests, &DeriveConfig::default())
-        .unwrap()
-        .skipped
+    derive_path(requests, &config()).unwrap().skipped
 }
 
 #[test]
@@ -354,19 +353,11 @@ fn skip_counts_count_each_reason() {
     assert_eq!((err.error_status, err.total()), (1, 1));
 
     let claude = openrouter("claude-code.ndjson");
-    let twice = derive_path(
-        &[&claude[..], &claude[..]].concat(),
-        &DeriveConfig::default(),
-    )
-    .unwrap();
+    let twice = derive_path(&[&claude[..], &claude[..]].concat(), &config()).unwrap();
     assert_eq!((twice.skipped.duplicate, twice.skipped.total()), (5, 5));
     assert_eq!(
         json(twice.output),
-        json(
-            derive_path(&claude, &DeriveConfig::default())
-                .unwrap()
-                .output
-        )
+        json(derive_path(&claude, &config()).unwrap().output)
     );
 
     let cut = skips(&[
@@ -401,7 +392,7 @@ fn a_truncated_generation_marks_a_session_without_a_session_id() {
             without_session_id(generation("g1", GOOD)),
             without_session_id(generation("g2", r#"{"messages":[{"role""#)),
         ],
-        &DeriveConfig::default(),
+        &config(),
     )
     .unwrap();
     assert_eq!(idless.skipped.truncated, 1);
@@ -411,7 +402,7 @@ fn a_truncated_generation_marks_a_session_without_a_session_id() {
 
 #[test]
 fn skip_counts_ride_on_no_generations_and_sum_over_a_graph() {
-    let cfg = DeriveConfig::default();
+    let cfg = config();
     match derive_path(&openrouter("connection-test.json"), &cfg) {
         Err(OtelError::NoGenerations { skipped }) => assert_eq!(skipped.connection_test, 1),
         other => panic!("expected NoGenerations, got {other:?}"),

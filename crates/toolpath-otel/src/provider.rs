@@ -5,7 +5,6 @@ use crate::generation::{Generation, Usage};
 use crate::harness::SourceHarness;
 use crate::harness::cwd::find_cwd;
 use crate::harness::mutations::{fallback_path, file_mutations};
-use crate::harness::tools::tool_category;
 use crate::hash::derived_session_id;
 use crate::normalize::{content_text, is_system_like};
 use crate::session::Session;
@@ -13,23 +12,27 @@ use crate::stitch::{Node, TurnGraph};
 use chrono::{DateTime, SecondsFormat, Utc};
 use std::collections::BTreeMap;
 use toolpath_convo::{
-    ConversationView, DelegatedWork, ProducerInfo, Role, SessionBase, TokenUsage, ToolInvocation,
-    ToolResult, Turn,
+    ConversationView, DelegatedWork, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
+    ToolInvocation, ToolResult, Turn,
 };
 
 /// `view.provider_id`, `meta.source`, the extras key, and `producer.name`
 /// when the harness is unknown.
 pub const PROVIDER: &str = "otel";
 
+/// The view with tool categories from the provider crates' classifiers.
 #[cfg(test)]
 pub fn session_to_view(session: &Session) -> ConversationView {
     let graph = crate::stitch::stitch(session);
     let harness = crate::harness::infer_harness(&crate::harness::signals(session));
+    let category =
+        |name: &str| crate::tests::classifier::provider_tool_category(harness.as_str(), name);
     view_from_graph(
         session,
         &graph,
-        &crate::branch::classify(&graph, harness),
+        &crate::branch::classify(&graph, &category),
         harness,
+        &category,
     )
 }
 
@@ -38,13 +41,14 @@ pub fn view_from_graph(
     graph: &TurnGraph,
     branches: &Branches,
     harness: SourceHarness,
+    category: &dyn Fn(&str) -> Option<ToolCategory>,
 ) -> ConversationView {
     let gens = &session.generations;
     let turns: Vec<Turn> = graph
         .nodes
         .iter()
         .enumerate()
-        .map(|(ni, n)| to_turn(n, gens, harness, delegations(n, ni, branches)))
+        .map(|(ni, n)| to_turn(n, gens, category, delegations(n, ni, branches)))
         .collect();
     let mut files_changed: Vec<String> = Vec::new();
     for t in &turns {
@@ -113,7 +117,7 @@ fn delegations(n: &Node, ni: usize, branches: &Branches) -> Vec<DelegatedWork> {
 fn to_turn(
     n: &Node,
     gens: &[Generation],
-    harness: SourceHarness,
+    category: &dyn Fn(&str) -> Option<ToolCategory>,
     delegations: Vec<DelegatedWork>,
 ) -> Turn {
     let produced = n.producer.map(|i| &gens[i]);
@@ -133,7 +137,7 @@ fn to_turn(
                 content: r.content.clone(),
                 is_error: r.is_error,
             }),
-            category: tool_category(harness, &c.function.name),
+            category: category(&c.function.name),
         })
         .collect();
     let file_mutations = tool_uses.iter().flat_map(file_mutations).collect();
@@ -234,7 +238,6 @@ mod tests {
     use super::*;
     use crate::generation::{Completion, FunctionCall, Message, ToolCall};
     use serde_json::{Value, json};
-    use toolpath_convo::ToolCategory;
 
     fn usage(input: u64, output: u64, reasoning: Option<u64>) -> Usage {
         Usage {

@@ -181,8 +181,7 @@ pub fn parse_patch(patch: &str) -> Vec<FileMutation> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::SourceHarness;
-    use crate::harness::tools::tool_category;
+    use crate::tests::classifier::provider_tool_category;
     use toolpath_convo::{ConversationView, DeriveConfig, Role, Turn, derive_path, unified_diff};
 
     fn tool(id: &str, name: &str, input: Value) -> ToolInvocation {
@@ -191,7 +190,7 @@ mod tests {
             name: name.into(),
             input,
             result: None,
-            category: tool_category(SourceHarness::Unknown, name),
+            category: provider_tool_category("unknown", name),
         }
     }
 
@@ -312,7 +311,7 @@ mod tests {
     #[test]
     fn opencode_delete_is_a_delete_operation() {
         let t = ToolInvocation {
-            category: tool_category(SourceHarness::Opencode, "delete"),
+            category: provider_tool_category("opencode", "delete"),
             ..tool("d", "delete", json!({"filePath": "/w/gone.txt"}))
         };
         let m = file_mutations(&t);

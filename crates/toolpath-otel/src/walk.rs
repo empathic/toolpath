@@ -474,7 +474,8 @@ mod tests {
     /// Paths byte-identical and skip counts identical for every delivery
     /// order of `requests`.
     fn assert_order_independent(requests: &[Value]) -> crate::Derived<toolpath::v1::Path> {
-        let config = crate::DeriveConfig::default();
+        let config = crate::DeriveConfig::default()
+            .with_tool_category(crate::tests::classifier::provider_tool_category);
         let bytes =
             |p: &toolpath::v1::Path| crate::hash::canonical_json(&serde_json::to_value(p).unwrap());
         let one = crate::derive_path(requests, &config).unwrap();

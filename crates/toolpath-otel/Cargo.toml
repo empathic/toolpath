@@ -17,3 +17,9 @@ serde_json = { workspace = true }
 serde_json_canonicalizer = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+toolpath-claude = { workspace = true }
+toolpath-codex = { workspace = true }
+toolpath-opencode = { workspace = true }
+toolpath-pi = { workspace = true }
