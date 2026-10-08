@@ -909,7 +909,8 @@ pub(crate) struct UploadedPath {
 /// Record where each uploaded path of `doc` now lives, on the manifest
 /// record of the session (`artifact_type`, `id`) it was derived from.
 /// `stamp` is the session source's stamp when `doc` was derived. A
-/// manifest failure warns; the upload itself is done.
+/// manifest failure warns, as does a server that listed no paths for
+/// a document that had some; the upload itself is done.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn record_remotes(
     artifact_type: crate::artifact::ArtifactType,
@@ -919,6 +920,14 @@ pub(crate) fn record_remotes(
     uploaded: &[UploadedPath],
     stamp: crate::sync::Stamp,
 ) {
+    let inline = doc.paths.iter().filter_map(|p| match p {
+        toolpath::v1::PathOrRef::Path(p) => Some(p.as_ref()),
+        toolpath::v1::PathOrRef::Ref(_) => None,
+    });
+    if uploaded.is_empty() && inline.clone().any(|p| !p.steps.is_empty()) {
+        eprintln!("warning: remote record not written: the server did not list the stored paths");
+        return;
+    }
     let config_dir = match crate::config::config_dir() {
         Ok(dir) => dir,
         Err(e) => {
@@ -926,10 +935,7 @@ pub(crate) fn record_remotes(
             return;
         }
     };
-    for path in doc.paths.iter().filter_map(|p| match p {
-        toolpath::v1::PathOrRef::Path(p) => Some(p.as_ref()),
-        toolpath::v1::PathOrRef::Ref(_) => None,
-    }) {
+    for path in inline {
         let Some(url) = uploaded
             .iter()
             .find(|u| u.id == path.path.id)
