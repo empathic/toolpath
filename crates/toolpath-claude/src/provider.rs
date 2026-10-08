@@ -337,11 +337,12 @@ fn item_turn_mut(item: &mut Item) -> Option<&mut Turn> {
 /// Merge a tool-result-only message into the turns already pushed onto
 /// `items`. Equivalent to [`merge_tool_results`] but operating on the
 /// interleaved item stream — non-turn items (events, compaction) are skipped.
+/// Each result walks the items backwards and stops at the first turn with
+/// a matching open tool use, so a carrier normally touches one or two turns.
 fn merge_tool_results_into_items(items: &mut [Item], msg: &Message) -> bool {
-    let mut turns: Vec<&mut Turn> = items.iter_mut().filter_map(item_turn_mut).collect();
     let mut merged = false;
     for tr in msg.tool_results() {
-        for turn in turns.iter_mut().rev() {
+        for turn in items.iter_mut().rev().filter_map(item_turn_mut) {
             if let Some(invocation) = turn
                 .tool_uses
                 .iter_mut()
