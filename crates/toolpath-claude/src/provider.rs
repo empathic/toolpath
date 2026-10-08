@@ -425,15 +425,17 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // into the post-compaction context). Current 2.1.x in-file compaction
     // has not been observed writing such a block, and the format docs in
     // docs/agents/formats/claude-code/ don't describe one, so this guards
-    // the shape rather than documents it. We keep only the FIRST
-    // occurrence of each uuid: the original carries the true lineage, and
-    // a re-emission is a context-window artifact, not provenance.
-    // Stripping must happen here, before
-    // `derive_path` — its dedup skips byte-identical replays, but the
-    // group-total token stamping below (`canonicalize_message_usage`) can
-    // make a replayed copy differ from its original and survive as a
-    // renamed step.
-    let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // the shape rather than documents it. Only a byte-identical re-emission
+    // is stripped: the original carries the true lineage, and an identical
+    // copy is a context-window artifact, not provenance. An entry with a
+    // seen uuid and a different body is data and goes through to
+    // `derive_path`, which renames it `<uuid>#2`. Stripping must happen
+    // here, before `derive_path` — its dedup skips byte-identical replays,
+    // but the group-total token stamping below
+    // (`canonicalize_message_usage`) can make a replayed copy differ from
+    // its original and survive as a renamed step. The comparison is on the
+    // source entry, which nothing has stamped yet.
+    let mut seen_entries: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
 
     for line in convo.lines() {
         let entry = match line {
@@ -450,17 +452,22 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             Line::Entry(entry) => entry,
         };
 
-        // Strip re-emitted entries: any non-boundary entry whose uuid already
-        // appeared earlier in this conversation. Boundary entries are exempt
-        // so every compaction marker survives into the item stream — a
-        // continuation file can repeat its parent's boundary verbatim
-        // (session-chains.md §Duplicate compact_boundary), and a
-        // byte-identical copy collapses later, in `derive_path`.
+        // Strip re-emitted entries: a non-boundary entry byte-identical to
+        // one with the same uuid earlier in this conversation. Boundary
+        // entries are exempt so every compaction marker survives into the
+        // item stream — a continuation file can repeat its parent's
+        // boundary verbatim (session-chains.md §Duplicate
+        // compact_boundary), and a byte-identical copy collapses later, in
+        // `derive_path`.
         if !is_compact_boundary(entry)
             && !entry.uuid.is_empty()
-            && !seen_uuids.insert(entry.uuid.clone())
+            && let Ok(source) = serde_json::to_value(entry)
         {
-            continue;
+            let variants = seen_entries.entry(entry.uuid.clone()).or_default();
+            if variants.contains(&source) {
+                continue;
+            }
+            variants.push(source);
         }
 
         let Some(msg) = &entry.message else {
@@ -1472,6 +1479,41 @@ mod tests {
             .and_then(|t| t.tool_uses[0].result.as_ref())
             .expect("tool result assembled");
         assert_eq!(result.content, "file a contents");
+    }
+
+    #[test]
+    fn test_same_uuid_with_different_body_is_kept() {
+        // Only a byte-identical re-emission is a replay. Two assistant
+        // entries sharing a uuid but carrying different texts are both data:
+        // both reach the view, and derive_path keeps both as steps, the
+        // later one renamed.
+        let temp = TempDir::new().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let project_dir = claude_dir.join("projects/-test-project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let entries = [
+            r#"{"uuid":"u1","type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"reply one"}],"stop_reason":"end_turn"}}"#,
+            r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"reply two, different content"}],"stop_reason":"end_turn"}}"#,
+        ];
+        fs::write(project_dir.join("s1.jsonl"), entries.join("\n")).unwrap();
+
+        let resolver = PathResolver::new().with_claude_dir(&claude_dir);
+        let provider = ClaudeConvo::with_resolver(resolver);
+        let view =
+            ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
+
+        assert_eq!(item_ids(&view), vec!["u1", "a1", "a1"]);
+        let texts: Vec<&str> = view.turns().map(|t| t.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["Hello", "reply one", "reply two, different content"]
+        );
+
+        let path = toolpath_convo::derive_path(&view, &toolpath_convo::DeriveConfig::default());
+        let step_ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(step_ids, vec!["u1", "a1", "a1#2"]);
     }
 
     #[test]
