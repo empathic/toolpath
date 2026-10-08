@@ -257,80 +257,44 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         // Fallback (un-migrated providers): for any `FileWrite`-category
         // tool with no matching mutation, synthesize from `tool.input`
         // via `file_write_change`.
+        //
+        // Both kinds are applied in tool-call order, so the last write to
+        // a path wins and keeps its own call's attribution. Providers may
+        // list a folded mutation at its path's first touch, so mutations
+        // are ordered by their call first; one naming no call of this turn
+        // keeps its place right after the mutation listed before it.
         let attributed: std::collections::HashSet<String> = turn
             .file_mutations
             .iter()
             .filter_map(|fm| fm.tool_id.clone())
             .collect();
+        let mut tool_pos: HashMap<&str, usize> = HashMap::new();
+        for (i, t) in turn.tool_uses.iter().enumerate() {
+            tool_pos.entry(t.id.as_str()).or_insert(i);
+        }
+        let call_pos =
+            |fm: &crate::FileMutation| fm.tool_id.as_deref().and_then(|id| tool_pos.get(id));
+        let mut ordered: Vec<(usize, &crate::FileMutation)> = Vec::new();
+        let mut key = 0;
         for fm in &turn.file_mutations {
-            let mut t_extra: HashMap<String, serde_json::Value> = HashMap::new();
-            if let Some(tid) = &fm.tool_id {
-                t_extra.insert(
-                    "tool_id".to_string(),
-                    serde_json::Value::String(tid.clone()),
-                );
-                if let Some(tool) = turn.tool_uses.iter().find(|t| &t.id == tid) {
-                    t_extra.insert(
-                        "tool".to_string(),
-                        serde_json::Value::String(tool.name.clone()),
-                    );
+            if let Some(&pos) = call_pos(fm) {
+                key = pos;
+            }
+            ordered.push((key, fm));
+        }
+        ordered.sort_by_key(|(k, _)| *k);
+        let mut next_fallback = 0;
+        for (_, fm) in ordered {
+            if let Some(&pos) = call_pos(fm) {
+                while next_fallback < pos {
+                    insert_fallback_write(&mut step, &turn.tool_uses[next_fallback], &attributed);
+                    next_fallback += 1;
                 }
             }
-            if let Some(op) = &fm.operation {
-                t_extra.insert(
-                    "operation".to_string(),
-                    serde_json::Value::String(op.clone()),
-                );
-            }
-            if let Some(b) = &fm.before {
-                t_extra.insert("before".to_string(), serde_json::Value::String(b.clone()));
-            }
-            if let Some(a) = &fm.after {
-                t_extra.insert("after".to_string(), serde_json::Value::String(a.clone()));
-            }
-            if let Some(rt) = &fm.rename_to {
-                t_extra.insert(
-                    "rename_to".to_string(),
-                    serde_json::Value::String(rt.clone()),
-                );
-            }
-            step.change.insert(
-                fm.path.clone(),
-                ArtifactChange {
-                    raw: fm.raw_diff.clone(),
-                    structural: Some(StructuralChange {
-                        change_type: "file.write".to_string(),
-                        extra: t_extra,
-                    }),
-                },
-            );
+            insert_file_mutation(&mut step, turn, fm);
         }
-        for tool in &turn.tool_uses {
-            if tool.category != Some(ToolCategory::FileWrite) || attributed.contains(&tool.id) {
-                continue;
-            }
-            let Some(path) = extract_file_path(tool) else {
-                continue;
-            };
-            let (raw, mut t_extra) = file_write_change(tool, &path, None);
-            t_extra.insert(
-                "tool".to_string(),
-                serde_json::Value::String(tool.name.clone()),
-            );
-            t_extra.insert(
-                "tool_id".to_string(),
-                serde_json::Value::String(tool.id.clone()),
-            );
-            step.change.insert(
-                path,
-                ArtifactChange {
-                    raw,
-                    structural: Some(StructuralChange {
-                        change_type: "file.write".to_string(),
-                        extra: t_extra,
-                    }),
-                },
-            );
+        for tool in &turn.tool_uses[next_fallback..] {
+            insert_fallback_write(&mut step, tool, &attributed);
         }
 
         let final_id = push_step_and_dedup(&mut steps, &mut by_id, step);
@@ -560,6 +524,82 @@ fn record_actor(
         }
     };
     actors.insert(actor.to_string(), def);
+}
+
+fn insert_file_mutation(step: &mut Step, turn: &Turn, fm: &crate::FileMutation) {
+    let mut t_extra: HashMap<String, serde_json::Value> = HashMap::new();
+    if let Some(tid) = &fm.tool_id {
+        t_extra.insert(
+            "tool_id".to_string(),
+            serde_json::Value::String(tid.clone()),
+        );
+        if let Some(tool) = turn.tool_uses.iter().find(|t| &t.id == tid) {
+            t_extra.insert(
+                "tool".to_string(),
+                serde_json::Value::String(tool.name.clone()),
+            );
+        }
+    }
+    if let Some(op) = &fm.operation {
+        t_extra.insert(
+            "operation".to_string(),
+            serde_json::Value::String(op.clone()),
+        );
+    }
+    if let Some(b) = &fm.before {
+        t_extra.insert("before".to_string(), serde_json::Value::String(b.clone()));
+    }
+    if let Some(a) = &fm.after {
+        t_extra.insert("after".to_string(), serde_json::Value::String(a.clone()));
+    }
+    if let Some(rt) = &fm.rename_to {
+        t_extra.insert(
+            "rename_to".to_string(),
+            serde_json::Value::String(rt.clone()),
+        );
+    }
+    step.change.insert(
+        fm.path.clone(),
+        ArtifactChange {
+            raw: fm.raw_diff.clone(),
+            structural: Some(StructuralChange {
+                change_type: "file.write".to_string(),
+                extra: t_extra,
+            }),
+        },
+    );
+}
+
+fn insert_fallback_write(
+    step: &mut Step,
+    tool: &ToolInvocation,
+    attributed: &std::collections::HashSet<String>,
+) {
+    if tool.category != Some(ToolCategory::FileWrite) || attributed.contains(&tool.id) {
+        return;
+    }
+    let Some(path) = extract_file_path(tool) else {
+        return;
+    };
+    let (raw, mut t_extra) = file_write_change(tool, &path, None);
+    t_extra.insert(
+        "tool".to_string(),
+        serde_json::Value::String(tool.name.clone()),
+    );
+    t_extra.insert(
+        "tool_id".to_string(),
+        serde_json::Value::String(tool.id.clone()),
+    );
+    step.change.insert(
+        path,
+        ArtifactChange {
+            raw,
+            structural: Some(StructuralChange {
+                change_type: "file.write".to_string(),
+                extra: t_extra,
+            }),
+        },
+    );
 }
 
 fn extract_file_path(tool: &ToolInvocation) -> Option<String> {
@@ -1710,5 +1750,142 @@ mod tests {
         assert_eq!(back.steps.len(), 2);
         assert_eq!(back.steps[1].step.parents, vec!["t1".to_string()]);
         assert!(back.steps[1].change.contains_key("x.rs"));
+    }
+
+    fn shell_tool(id: &str) -> ToolInvocation {
+        ToolInvocation {
+            id: id.to_string(),
+            name: "exec_command".to_string(),
+            input: serde_json::json!({"cmd": "cat > p.rs <<'EOF'\nlater\nEOF"}),
+            result: None,
+            category: Some(ToolCategory::Shell),
+        }
+    }
+
+    fn supplied_write(tool_id: &str) -> crate::FileMutation {
+        crate::FileMutation {
+            path: "p.rs".into(),
+            tool_id: Some(tool_id.into()),
+            operation: Some("add".into()),
+            raw_diff: Some("@@ -0,0 +1 @@\n+later".into()),
+            after: Some("later\n".into()),
+            ..Default::default()
+        }
+    }
+
+    fn multi_edit(id: &str) -> ToolInvocation {
+        fw_tool(
+            "MultiEdit",
+            id,
+            serde_json::json!({
+                "file_path": "p.rs",
+                "edits": [{"old_string": "a", "new_string": "earlier"}],
+            }),
+        )
+    }
+
+    fn p_change(turn: Turn) -> (Option<String>, HashMap<String, serde_json::Value>) {
+        let path = derive_path(&view_with(vec![turn]), &DeriveConfig::default());
+        let change = &path.steps[0].change["p.rs"];
+        (
+            change.raw.clone(),
+            change.structural.as_ref().unwrap().extra.clone(),
+        )
+    }
+
+    #[test]
+    fn later_supplied_mutation_beats_earlier_fallback_write() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![multi_edit("edit-1"), shell_tool("sh-2")];
+        turn.file_mutations = vec![supplied_write("sh-2")];
+        let (raw, extra) = p_change(turn);
+        assert_eq!(raw.as_deref(), Some("@@ -0,0 +1 @@\n+later"));
+        assert_eq!(extra["tool_id"], "sh-2");
+        assert_eq!(extra["tool"], "exec_command");
+        assert_eq!(extra["after"], "later\n");
+    }
+
+    #[test]
+    fn later_fallback_write_beats_earlier_supplied_mutation() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![shell_tool("sh-1"), multi_edit("edit-2")];
+        turn.file_mutations = vec![supplied_write("sh-1")];
+        let (raw, extra) = p_change(turn);
+        assert_eq!(extra["tool_id"], "edit-2");
+        assert_eq!(extra["tool"], "MultiEdit");
+        assert!(raw.is_some_and(|r| r.contains("+earlier")));
+    }
+
+    fn q_edit(id: &str) -> crate::FileMutation {
+        crate::FileMutation {
+            path: "q.rs".into(),
+            tool_id: Some(id.into()),
+            raw_diff: Some("@@ -1 +1 @@\n-a\n+edited".into()),
+            ..Default::default()
+        }
+    }
+
+    fn q_multi_edit(id: &str) -> ToolInvocation {
+        fw_tool(
+            "MultiEdit",
+            id,
+            serde_json::json!({
+                "file_path": "q.rs",
+                "edits": [{"old_string": "edited", "new_string": "multi"}],
+            }),
+        )
+    }
+
+    #[test]
+    fn a_folded_mutation_listed_first_does_not_drag_later_fallbacks_ahead() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![
+            shell_tool("sh-1"),
+            fw_tool("Edit", "ed-2", serde_json::json!({"file_path": "q.rs"})),
+            q_multi_edit("me-3"),
+            shell_tool("sh-4"),
+        ];
+        // A provider folding both heredocs into p.rs's first-touch entry.
+        turn.file_mutations = vec![supplied_write("sh-4"), q_edit("ed-2")];
+        let path = derive_path(&view_with(vec![turn]), &DeriveConfig::default());
+        let q = &path.steps[0].change["q.rs"];
+        let extra = &q.structural.as_ref().unwrap().extra;
+        assert_eq!(extra["tool_id"], "me-3");
+        assert!(q.raw.as_deref().is_some_and(|r| r.contains("+multi")));
+        assert_eq!(
+            path.steps[0].change["p.rs"]
+                .structural
+                .as_ref()
+                .unwrap()
+                .extra["tool_id"],
+            "sh-4"
+        );
+    }
+
+    #[test]
+    fn a_mutation_naming_no_call_follows_the_mutation_before_it() {
+        let mut turn = base_turn("t1", Role::Assistant);
+        turn.tool_uses = vec![q_multi_edit("me-1"), shell_tool("sh-2")];
+        let orphan = crate::FileMutation {
+            tool_id: None,
+            ..q_edit("x")
+        };
+        turn.file_mutations = vec![orphan.clone(), supplied_write("sh-2")];
+        let path = derive_path(&view_with(vec![turn.clone()]), &DeriveConfig::default());
+        let extra = &path.steps[0].change["q.rs"]
+            .structural
+            .as_ref()
+            .unwrap()
+            .extra;
+        assert_eq!(
+            extra["tool_id"], "me-1",
+            "leading orphan goes before every call"
+        );
+
+        turn.file_mutations = vec![supplied_write("sh-2"), orphan];
+        let path = derive_path(&view_with(vec![turn]), &DeriveConfig::default());
+        let q = &path.steps[0].change["q.rs"];
+        assert!(!q.structural.as_ref().unwrap().extra.contains_key("tool_id"));
+        assert!(q.raw.as_deref().is_some_and(|r| r.contains("+edited")));
     }
 }
