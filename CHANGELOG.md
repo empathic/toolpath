@@ -78,9 +78,8 @@ non-turn entries survive import/export.
   surrounding turns instead of after them, pinned through
   derive → extract. The synthesized chain runs over the merged
   item stream, so events sit between the turns they separate.
-- **`toolpath-gemini`** (0.7.0): all-zero token usage is dropped,
-  split assistant messages group via `group_id` with the snapshot
-  counted once, and colliding wire ids dedup with `#N` suffixes.
+- **`toolpath-gemini`** (0.7.0): split assistant messages group via
+  `group_id` with the snapshot counted once.
 - **`toolpath-opencode`** (0.6.0): compaction parts become in-position
   `part.compaction` events (previously a trailing events vec), chained
   onto the preceding item; the turn that follows chains onto the

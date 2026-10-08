@@ -104,20 +104,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
         .collect();
     let file_mutations = compute_file_mutations(msg.tool_calls());
 
-    // An all-zero counter block decodes as `None` (matching claude/pi/
-    // opencode): gemini writes degenerate `{input: 0}` records on aborted
-    // generations, and stamping them as measurements breaks cross-harness
-    // accounting.
-    let token_usage = msg.tokens.as_ref().map(tokens_to_usage).filter(|u| {
-        [
-            u.input_tokens,
-            u.output_tokens,
-            u.cache_read_tokens,
-            u.cache_write_tokens,
-        ]
-        .iter()
-        .any(|v| v.unwrap_or(0) > 0)
-    });
+    let token_usage = msg.tokens.as_ref().map(tokens_to_usage);
 
     let environment = working_dir.map(|wd| EnvironmentSnapshot {
         working_dir: Some(wd.to_string()),
@@ -461,11 +448,8 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // total to the surviving turn. Only consecutive same-id ASSISTANT turns
     // group; a user turn sharing an id with the next assistant does not.
     //
-    // Compare BASE ids (the `#N` disambiguation suffix below stripped) so
-    // the grouping survives a project→read round-trip: after the first read
-    // the split's second turn carries `<id>#1`, and on the way back through
-    // Gemini's wire (which has no group field) the boundary is re-detected
-    // only if `<id>` and `<id>#1` are recognized as the same message.
+    // Compare BASE ids (a `#N` suffix stripped) so a turn whose id carries
+    // a `derive_path` rename still groups with the message it came from.
     {
         let mut i = 0;
         while i < turns.len() {
@@ -487,27 +471,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             } else {
                 i += 1;
             }
-        }
-    }
-
-    // Gemini reuses the same wire `id` across paired messages (a user
-    // prompt and the assistant response it triggered can share one id),
-    // so turn ids are not unique as-is. Disambiguate here by suffixing
-    // repeats with `#N` *before* the parent chain is built, so the chain
-    // links to the right turn. (`derive_path` also re-IDs same-id
-    // collisions, but only after parents are resolved on the colliding
-    // ids — doing it up front keeps the Gemini parent graph correct.)
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for t in turns.iter_mut() {
-        if !seen.insert(t.id.clone()) {
-            let mut n = 1;
-            let mut candidate = format!("{}#{}", t.id, n);
-            while seen.contains(&candidate) {
-                n += 1;
-                candidate = format!("{}#{}", t.id, n);
-            }
-            t.id = candidate.clone();
-            seen.insert(candidate);
         }
     }
 
@@ -1035,36 +998,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_view_uniquifies_duplicate_turn_ids() {
-        // Gemini reuses the same wire `id` across paired messages, so two
-        // turns can share an id. `to_view` must disambiguate them (else the
-        // unique-step-id enforcement in `derive_path` drops the collisions),
-        // while keeping the sequential parent chain consistent.
-        let chat_json = r#"{"sessionId":"s","projectHash":"","messages":[
-  {"id":"dup","timestamp":"ts","type":"user","content":[{"text":"a"}]},
-  {"id":"dup","timestamp":"ts","type":"gemini","content":"b"},
-  {"id":"dup","timestamp":"ts","type":"user","content":[{"text":"c"}]},
-  {"id":"uniq","timestamp":"ts","type":"gemini","content":"d"}
-]}"#;
-        let chat: ChatFile = serde_json::from_str(chat_json).unwrap();
-        let convo = Conversation::new("s".into(), chat);
-        let view = to_view(&convo);
-
-        let ids: Vec<&str> = view.turns().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, vec!["dup", "dup#1", "dup#2", "uniq"]);
-
-        let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), ids.len(), "turn ids must be unique");
-
-        // Sequential parent chain references the uniquified ids.
-        let turns: Vec<&Turn> = view.turns().collect();
-        assert!(turns[0].parent_id.is_none());
-        assert_eq!(turns[1].parent_id.as_deref(), Some("dup"));
-        assert_eq!(turns[2].parent_id.as_deref(), Some("dup#1"));
-        assert_eq!(turns[3].parent_id.as_deref(), Some("dup#2"));
-    }
-
-    #[test]
     fn test_split_assistant_message_shares_group_id_and_counts_tokens_once() {
         // Gemini writes one assistant message across two consecutive lines
         // sharing a wire id (an empty flush, then the same id with tool
@@ -1226,33 +1159,5 @@ mod tests {
         // a.json attaches to the task (first delegation), b.json is leftover
         assert_eq!(delegations[0].agent_id, "a");
         assert_eq!(delegations[1].agent_id, "b");
-    }
-
-    #[test]
-    fn all_zero_tokens_decode_as_no_usage() {
-        // Gemini writes degenerate `{input: 0}` token records on aborted
-        // generations (seen in real sessions). Placeholder counters must
-        // decode as `None`, matching the claude/pi/opencode convention —
-        // otherwise cross-harness legs that apply the convention drop the
-        // entry and accounting sequences diverge.
-        let msg: GeminiMessage = serde_json::from_value(serde_json::json!({
-            "id": "m1",
-            "timestamp": "2026-05-11T17:30:00Z",
-            "type": "gemini",
-            "content": "partial",
-            "tokens": {"input": 0}
-        }))
-        .unwrap();
-        assert_eq!(to_turn(&msg).token_usage, None);
-
-        let real: GeminiMessage = serde_json::from_value(serde_json::json!({
-            "id": "m2",
-            "timestamp": "2026-05-11T17:30:01Z",
-            "type": "gemini",
-            "content": "answer",
-            "tokens": {"input": 3, "output": 7}
-        }))
-        .unwrap();
-        assert!(to_turn(&real).token_usage.is_some());
     }
 }
