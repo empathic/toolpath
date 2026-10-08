@@ -229,22 +229,28 @@ a tool's output can quote a marker.
 
 ### Tool categories
 
-A tool call's category comes from the inferred harness's own table, the
-same mapping its provider crate uses (`toolpath-claude`, `toolpath-codex`,
-`toolpath-opencode`, `toolpath-pi`; pi lowercases and treats any name
-containing `task` or `agent` as delegation). One addition: under codex,
-`shell_command` (codex-rs `core/src/tools/spec.rs`) is `shell`;
-`toolpath-codex` does not list it. For an `unknown` harness a name gets a
-category only when every harness table that lists it exactly (those four
-plus Gemini CLI, Copilot CLI and Cursor) agrees, so `ls`, `list`,
-`list_dir` and `list_directory` stay uncategorized. These tables live in
-`crates/toolpath-otel/src/harness/tools.rs` for now; a later otel-only
-change replaces them with the shared `toolpath_convo::tools` tables once
-those land.
+`toolpath-otel` holds no tool tables. A tool call's category comes from
+the caller's classifier, `DeriveConfig::tool_category`, a
+`ToolClassifier` built from `Fn(harness, tool_name) -> Option<ToolCategory>`
+(or set with `DeriveConfig::with_tool_category`). `harness` is the inferred
+harness as recorded in `meta.extra.otel.harness` (`claude-code`, `codex`,
+`opencode`, `pi`, `unknown`), so a caller dispatches to each harness's own
+provider crate (`toolpath_claude::provider::tool_category`,
+`toolpath_codex::tool_category`, `toolpath_opencode::tool_category`,
+`toolpath_pi::provider::classify_tool`) and decides what an `unknown`
+harness gets. A caller wiring otel into `path` passes those provider-crate
+classifiers; the crate's own tests do the same, giving `unknown` a category
+only where every one of the four agrees.
+
+Without a classifier (`DeriveConfig::default()`) no tool call is
+categorized, and what depends on categories is off: no sub-agent thread is
+recognized (that needs `delegation`), so sub-agent turns are marked as any
+other thread, and no file change is read from a tool call's input (that
+needs `file_write`).
 
 ### File changes
 
-File changes come from edit/write tool calls (`Write`, `Edit`,
+File changes come from tool calls the classifier names `file_write`: edit/write calls (`Write`, `Edit`,
 `MultiEdit`, `NotebookEdit`, `write`, `edit`, `write_file`; opencode and pi
 key spellings are canonicalized onto Claude's) and `apply_patch`/`patch`
 text (one change per file, `operation` `add`/`update`/`delete`,

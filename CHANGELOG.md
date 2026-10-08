@@ -38,9 +38,12 @@ All notable changes to the Toolpath workspace are documented here.
     `<environment_context>` user message, the system prompt otherwise);
     a known harness whose marker is absent gives no cwd, and only an
     `unknown` harness takes any harness's marker.
-  - Tool categories follow the inferred harness's own provider-crate
-    table; an `unknown` harness gets a category only where every harness
-    table listing the name agrees.
+  - Tool categories come from the caller: `DeriveConfig::tool_category`
+    (a `ToolClassifier`, or `DeriveConfig::with_tool_category(f)`) is
+    asked `(harness, tool_name)`, `harness` being the inferred harness id.
+    The crate holds no per-harness tool tables. Without a classifier no
+    tool call is categorized, so no sub-agent is recognized and no file
+    change is read from a tool call.
   - Token classes are additive: `input_tokens` excludes cache reads and
     writes for every profile; `extra.otel.usage.cache_basis` records
     whether the source's count was `inclusive` or `exclusive`.

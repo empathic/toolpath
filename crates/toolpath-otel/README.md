@@ -35,8 +35,13 @@ let requests: Vec<serde_json::Value> = text
     .map(serde_json::from_str)
     .collect::<Result<_, _>>()?;
 
+// Tool categories come from the caller, here only Claude Code's Bash
+let config = DeriveConfig::default().with_tool_category(|harness, tool| {
+    (harness == "claude-code" && tool == "Bash").then_some(toolpath_convo::ToolCategory::Shell)
+});
+
 // One session -> Path document, plus what was read but not derived
-let derived = derive_path(&requests, &DeriveConfig::default())?;
+let derived = derive_path(&requests, &config)?;
 println!("head {}", derived.output.path.head);
 println!("skipped {}", derived.skipped.total());
 # Ok::<(), Box<dyn std::error::Error>>(())
@@ -49,7 +54,8 @@ println!("skipped {}", derived.skipped.total());
 | `derive(sessions, config)` | Main entry point. One session -> single-path Graph, several -> one path each |
 | `derive_path(requests, config)` | Derive a Path from the request bodies of one session |
 | `derive_graph(sessions, config)` | Derive a Graph, one path per session; skip counts are summed |
-| `DeriveConfig` | `profile`, an optional graph `title`, and the shared `convo` derivation options (a `toolpath_convo::DeriveConfig`: toolpath-convo is a public dependency, so a breaking toolpath-convo release is a breaking release here) |
+| `DeriveConfig` | `profile`, an optional graph `title`, the shared `convo` derivation options (a `toolpath_convo::DeriveConfig`: toolpath-convo is a public dependency, so a breaking toolpath-convo release is a breaking release here), and `tool_category`, the caller's tool classifier (`with_tool_category(f)` sets it) |
+| `ToolClassifier` | Wraps `Fn(harness, tool_name) -> Option<ToolCategory>`; `harness` is the inferred harness id (`claude-code`, `codex`, `opencode`, `pi`, `unknown`) |
 | `ProfileSelection` | `Auto` (default: `openrouter`, then `semconv`), `OpenRouter`, `Semconv`, `OpenInference` |
 | `Derived<T>` | The derived document (`output`) and `skipped: SkipCounts` |
 | `SkipCounts` | Telemetry read but not derived, by reason, and `total()` |
@@ -62,6 +68,17 @@ Every generation that carries a client session id (`session.id`, or
 `gen_ai.conversation.id` for `semconv`) must carry the same one, or the call
 returns `OtelError::MixedSessions`. Generations without an id belong to the
 session as given.
+
+## Tool categories
+
+The crate knows no harness's tool names. A tool call's `ToolCategory` comes
+from the classifier in `DeriveConfig::tool_category`, asked with the
+inferred harness id and the tool name; pass each harness's provider-crate
+classifier (e.g. `toolpath_claude::provider::tool_category`) to categorize
+as that harness's own deriver does. `DeriveConfig::default()` has no
+classifier, so no tool call is categorized: no sub-agent is recognized
+(that needs `Delegation`) and no file change is read from a tool call (that
+needs `FileWrite`).
 
 ## Profiles
 
