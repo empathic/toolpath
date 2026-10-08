@@ -15,6 +15,7 @@ use serde_json::Value;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
     EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    base_id,
 };
 
 // ── Role/tool mapping ────────────────────────────────────────────────
@@ -545,20 +546,6 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             name: "gemini-cli".into(),
             version: None,
         }),
-    }
-}
-
-/// Strip a trailing `#N` disambiguation suffix added when two turns share a
-/// wire id, recovering the original Gemini message id. `<uuid>#1` → `<uuid>`;
-/// ids without the suffix pass through unchanged.
-fn base_id(id: &str) -> &str {
-    match id.rsplit_once('#') {
-        Some((base, suffix))
-            if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) =>
-        {
-            base
-        }
-        _ => id,
     }
 }
 
@@ -1107,18 +1094,6 @@ mod tests {
         let total = view.total_usage.as_ref().expect("total usage");
         assert_eq!(total.output_tokens, Some(20));
         assert_eq!(total.input_tokens, Some(100));
-    }
-
-    #[test]
-    fn test_base_id_strips_numeric_suffix_only() {
-        assert_eq!(base_id("abc"), "abc");
-        assert_eq!(base_id("abc#1"), "abc");
-        assert_eq!(base_id("abc#12"), "abc");
-        // Non-numeric or empty suffix is left intact (not a dedup suffix).
-        assert_eq!(base_id("abc#x"), "abc#x");
-        assert_eq!(base_id("abc#"), "abc#");
-        // A uuid containing no '#' passes through.
-        assert_eq!(base_id("d1a8c61a-247c"), "d1a8c61a-247c");
     }
 
     #[test]

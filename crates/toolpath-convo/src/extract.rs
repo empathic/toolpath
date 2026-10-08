@@ -12,12 +12,20 @@ use std::collections::{HashMap, HashSet};
 use chrono::DateTime;
 use toolpath::v1::{Path, Step};
 
+use crate::derive::base_id;
 use crate::{
     ConversationEvent, ConversationView, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
     ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Extract a [`ConversationView`] from a toolpath [`Path`] document.
+///
+/// An item's id is its step's id with the `#<n>` suffix `derive_path`
+/// appends on a collision stripped ([`base_id`]), so the view carries the
+/// id the source recorded. An item's `parent_id` is the id of the step it
+/// chained onto, suffix included: the source id alone would not say which
+/// of two same-id steps that was, and `derive_path` resolves a renamed step
+/// id directly, so deriving the extracted view reproduces the path.
 ///
 /// Steps are walked in order (they are already topologically sorted in the
 /// path). Structural changes with types `conversation.init`,
@@ -192,7 +200,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     }
 
                     view.items.push(Item::Event(ConversationEvent {
-                        id: step.step.id.clone(),
+                        id: base_id(&step.step.id).to_string(),
                         timestamp: step.step.timestamp.clone(),
                         parent_id: step.step.parents.first().cloned(),
                         event_type,
@@ -334,7 +342,7 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .and_then(|v| serde_json::from_value::<TokenUsage>(v.clone()).ok());
 
     Turn {
-        id: step.step.id.clone(),
+        id: base_id(&step.step.id).to_string(),
         parent_id,
         group_id,
         role,
@@ -1551,5 +1559,67 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(turns[0].text, "hello");
         assert_eq!(events[0].event_type, "system");
+    }
+
+    #[test]
+    fn test_renamed_duplicate_ids_extract_to_their_source_id() {
+        use crate::DeriveConfig;
+
+        // Two turns and two events share an id with different bodies, so
+        // derive renames the later of each to `<id>#2` and the turn that
+        // chains onto the duplicate turn resolves to the renamed step.
+        // Extract hands every item back under the id the source recorded;
+        // a parent keeps naming the step it chained onto, and a second
+        // derivation reproduces the first.
+        let mut a1_other = bare_turn("a1", Some("u1"), Role::Assistant, "2026-01-01T00:00:03Z");
+        a1_other.text = "a different answer".into();
+        let mut e1_other = bare_event("e1", "attachment", "2026-01-01T00:00:02Z");
+        e1_other.parent_id = Some("u1".into());
+        e1_other.data.insert("k".into(), serde_json::json!("v2"));
+        let mut e1 = bare_event("e1", "attachment", "2026-01-01T00:00:01Z");
+        e1.parent_id = Some("u1".into());
+        let source = ConversationView {
+            id: "sess-1".into(),
+            items: vec![
+                Item::Turn(bare_turn("u1", None, Role::User, "2026-01-01T00:00:00Z")),
+                Item::Event(e1),
+                Item::Event(e1_other),
+                Item::Turn(bare_turn(
+                    "a1",
+                    Some("u1"),
+                    Role::Assistant,
+                    "2026-01-01T00:00:03Z",
+                )),
+                Item::Turn(a1_other),
+                Item::Turn(bare_turn(
+                    "u2",
+                    Some("a1"),
+                    Role::User,
+                    "2026-01-01T00:00:04Z",
+                )),
+            ],
+            provider_id: Some("claude-code".into()),
+            ..Default::default()
+        };
+
+        let path = crate::derive::derive_path(&source, &DeriveConfig::default());
+        let step_ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(step_ids, vec!["u1", "e1", "e1#2", "a1", "a1#2", "u2"]);
+        assert_eq!(path.steps[5].step.parents, vec!["a1#2".to_string()]);
+
+        let view = extract_conversation(&path);
+        let turn_ids: Vec<&str> = view.turns().map(|t| t.id.as_str()).collect();
+        assert_eq!(turn_ids, vec!["u1", "a1", "a1", "u2"]);
+        let event_ids: Vec<&str> = view.events().map(|e| e.id.as_str()).collect();
+        assert_eq!(event_ids, vec!["e1", "e1"]);
+        let u2 = view.turns().find(|t| t.id == "u2").unwrap();
+        assert_eq!(u2.parent_id.as_deref(), Some("a1#2"));
+
+        let again = crate::derive::derive_path(&view, &DeriveConfig::default());
+        assert_eq!(
+            serde_json::to_value(&path.steps).unwrap(),
+            serde_json::to_value(&again.steps).unwrap(),
+            "the step sequence re-derived from the extracted view differs"
+        );
     }
 }

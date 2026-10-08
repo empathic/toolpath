@@ -415,11 +415,19 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     );
                 }
 
-                let final_id = push_step(&mut steps, &mut by_id, step);
                 // Map the turn's native id to whatever id its step ended up
                 // with, so later turns chaining off it resolve correctly even
-                // when this one was renamed or dropped as a duplicate.
-                turn_to_step.insert(turn.id.clone(), final_id);
+                // when this one was renamed. A renamed step is reachable under
+                // its new id as well: a view rebuilt by `extract_conversation`
+                // names it that way. A dropped duplicate changes nothing — the
+                // id keeps naming the latest step pushed under it, which is
+                // all a path can record.
+                if let Some(final_id) = push_step(&mut steps, &mut by_id, step) {
+                    if final_id != turn.id {
+                        turn_to_step.insert(final_id.clone(), final_id.clone());
+                    }
+                    turn_to_step.insert(turn.id.clone(), final_id);
+                }
             }
 
             // Events become `conversation.event` steps so that attachments,
@@ -515,10 +523,15 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         }),
                     },
                 );
-                let final_id = push_step(&mut steps, &mut by_id, step);
                 // An event's native id maps like a turn's, so an item whose
-                // reader chained it onto this event resolves its parent.
-                if !event.id.is_empty() {
+                // reader chained it onto this event resolves its parent; a
+                // renamed event is reachable under its new id as well.
+                if let Some(final_id) = push_step(&mut steps, &mut by_id, step)
+                    && !event.id.is_empty()
+                {
+                    if final_id != event.id {
+                        turn_to_step.insert(final_id.clone(), final_id.clone());
+                    }
                     turn_to_step.insert(event.id.clone(), final_id);
                 }
             }
@@ -582,33 +595,62 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
 }
 
 /// Push `step` into `steps`, resolving an id collision with an
-/// already-emitted step. A byte-identical re-emission (same id, parents,
-/// actor, timestamp, change) is dropped — keeping it would only duplicate a
-/// step that already exists — and a same-id-but-different step is re-IDed to a
-/// fresh `<id>#<n>` so the original id stays recoverable and no data is lost.
-/// Returns the id the step ended up under (the surviving id when dropped, the
-/// new id when re-IDed), which the caller records in `turn_to_step` so the
-/// DAG keeps pointing at a real step.
-fn push_step(steps: &mut Vec<Step>, by_id: &mut HashMap<String, usize>, mut step: Step) -> String {
+/// already-emitted step. A byte-identical re-emission (same parents, actor,
+/// timestamp, change) of a step holding the id, or holding a `<id>#<n>`
+/// rename of it, is dropped — keeping it would only duplicate a step that
+/// already exists — and a same-id-but-different step is re-IDed to the first
+/// free `<id>#<n>` so no data is lost and the original id stays recoverable
+/// (see [`base_id`]).
+/// Returns the id the step was pushed under (its own, or the new one when
+/// re-IDed), which the caller records in `turn_to_step` so the DAG keeps
+/// pointing at a real step, or `None` when the step was dropped.
+fn push_step(
+    steps: &mut Vec<Step>,
+    by_id: &mut HashMap<String, usize>,
+    mut step: Step,
+) -> Option<String> {
     let id = step.step.id.clone();
     let Some(&existing) = by_id.get(&id) else {
         by_id.insert(id.clone(), steps.len());
         steps.push(step);
-        return id;
+        return Some(id);
     };
     if steps_content_eq(&steps[existing], &step) {
-        return id;
+        return None;
     }
     let mut n = 2u32;
     let mut renamed = format!("{id}#{n}");
-    while by_id.contains_key(&renamed) {
+    while let Some(&existing) = by_id.get(&renamed) {
+        step.step.id = renamed.clone();
+        if steps_content_eq(&steps[existing], &step) {
+            return None;
+        }
         n += 1;
         renamed = format!("{id}#{n}");
     }
     step.step.id = renamed.clone();
     by_id.insert(renamed.clone(), steps.len());
     steps.push(step);
-    renamed
+    Some(renamed)
+}
+
+/// Strip the trailing `#<n>` suffix [`derive_path`] appends to a step id
+/// when two items share one, recovering the source id: `<id>#2` → `<id>`.
+/// An id without the suffix (no `#`, a non-numeric or empty tail) passes
+/// through unchanged.
+///
+/// `extract_conversation` applies this so a view rebuilt from a path carries
+/// the ids the source recorded, and a reader that compares ids across a
+/// project → read round-trip (gemini's split-message grouping) uses it too.
+pub fn base_id(id: &str) -> &str {
+    match id.rsplit_once('#') {
+        Some((base, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => id,
+    }
 }
 
 /// Whether two steps are the same entry — equal once serialized, so dropping
@@ -1051,6 +1093,59 @@ mod tests {
             vec!["dup#2".to_string()],
             "child parents on the renamed later duplicate, not the first `dup`"
         );
+    }
+
+    #[test]
+    fn test_base_id_strips_numeric_suffix_only() {
+        assert_eq!(base_id("abc"), "abc");
+        assert_eq!(base_id("abc#2"), "abc");
+        assert_eq!(base_id("abc#12"), "abc");
+        // Non-numeric or empty suffix is left intact (not a rename suffix).
+        assert_eq!(base_id("abc#x"), "abc#x");
+        assert_eq!(base_id("abc#"), "abc#");
+        // A uuid containing no '#' passes through.
+        assert_eq!(base_id("d1a8c61a-247c"), "d1a8c61a-247c");
+    }
+
+    #[test]
+    fn test_duplicate_identical_to_a_renamed_holder_is_dropped() {
+        // The id `t0` is held by a turn and, after a collision, by the event
+        // `t0#2`. A later event that resolves to the same content as `t0#2`
+        // is the same entry and is dropped, not kept as `t0#3`.
+        let t0 = base_turn("t0", Role::User);
+        let t4 = base_turn("t4", Role::User);
+        let mut t4_other = base_turn("t4", Role::User);
+        t4_other.text = "different".into();
+        let mut view = view_with(vec![t0, t4, t4_other]);
+        view.items.push(Item::Event(event_with_parent("t0", None)));
+        view.items
+            .push(Item::Event(event_with_parent("t0", Some("t4"))));
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["t0", "t4", "t4#2", "t0#2"]);
+        assert_eq!(path.steps[3].step.parents, vec!["t4#2".to_string()]);
+    }
+
+    #[test]
+    fn test_dropped_duplicate_does_not_rebind_its_id() {
+        // `a1` is pushed, a differing `a1` is renamed `a1#2`, and a third
+        // `a1` collapses into the first. The id keeps naming the latest
+        // step pushed under it, so the child chains onto `a1#2`.
+        let u1 = base_turn("u1", Role::User);
+        let a1 = base_turn("a1", Role::Assistant);
+        let mut a1_other = base_turn("a1", Role::Assistant);
+        a1_other.text = "different".into();
+        let mut a1_copy = base_turn("a1", Role::Assistant);
+        a1_copy.parent_id = Some("missing".into());
+        let mut child = base_turn("u2", Role::User);
+        child.parent_id = Some("a1".into());
+
+        let view = view_with(vec![u1, a1, a1_other, a1_copy, child]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, vec!["u1", "a1", "a1#2", "u2"]);
+        assert_eq!(path.steps[3].step.parents, vec!["a1#2".to_string()]);
     }
 
     #[test]

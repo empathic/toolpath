@@ -4,7 +4,7 @@ pub mod derive;
 pub mod extract;
 pub mod project;
 
-pub use derive::{DeriveConfig, derive_path, file_write_diff, unified_diff};
+pub use derive::{DeriveConfig, base_id, derive_path, file_write_diff, unified_diff};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
