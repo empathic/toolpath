@@ -220,7 +220,8 @@ fn send(
         }
     };
     if !final_ {
-        let mut emitted = emitted_turns(&graph, &branches, false);
+        let category = categories(classifier, harness);
+        let mut emitted = emitted_turns(&graph, &branches, false, &category);
         // An unplaced step never changes; it goes out under its parent.
         emitted.extend(unplaced_step_ids(&feed, &graph));
         path.steps.retain(|s| emitted.contains(&s.step.id));

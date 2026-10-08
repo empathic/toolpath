@@ -3,6 +3,8 @@
 
 pub mod cwd;
 pub mod mutations;
+pub mod shell;
+pub mod shell_writes;
 
 use crate::normalize::{content_text, is_system_like};
 use crate::session::Session;

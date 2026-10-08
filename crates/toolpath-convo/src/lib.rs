@@ -3,6 +3,7 @@
 pub mod derive;
 pub mod extract;
 pub mod project;
+pub mod shell_writes;
 
 pub use derive::{DeriveConfig, derive_path, file_write_diff, unified_diff};
 
