@@ -13,8 +13,14 @@ All notable changes to the Toolpath workspace are documented here.
   are skipped and counted, and one stderr summary line reports the
   sessions, the non-zero skip counts, `unclaimed` and `not-otlp`.
   `--session` takes the client session id, the session key or the derived
-  id. `path resume` of an otel document pre-selects the harness recorded
-  in `meta.otel.harness`.
+  id. Tool calls are categorized by the inferred harness's own provider
+  crate (`toolpath-claude`, `-codex`, `-opencode`, `-pi`); an `unknown`
+  harness, such as a Gemini CLI session, gets a category only where every
+  provider crate that names the tool agrees, `toolpath-gemini`, `-copilot`
+  and `-cursor` included, so Gemini CLI's `run_shell_command` is a shell
+  call. The classifier is passed to `toolpath-otel` as its
+  `DeriveConfig::tool_category`. `path resume` of an
+  otel document pre-selects the harness recorded in `meta.otel.harness`.
 - **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
 
 ## toolpath-otel 0.1.3 — 2026-10-01
@@ -25,7 +31,8 @@ All notable changes to the Toolpath workspace are documented here.
   prompt-prefix clustering per client key, trace for delta requests) and
   returns each session's `SessionRequests`: its key, client session id and
   the request bodies cut down to its own spans and log records, with the
-  batch's `SkipCounts`. `derive_session` derives one under its key;
+  batch's `SkipCounts`. `derive_session` derives one under its key, with
+  the config's tool classifier;
   `derive_path` over its `requests` gives the same document unless the key
   took a `-<n>` collision suffix. `derived_session_id` is public.
   `SourceHarness` (the agent recorded as `meta.otel.harness`) is public,

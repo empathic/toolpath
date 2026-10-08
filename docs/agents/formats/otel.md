@@ -546,9 +546,18 @@ harness as recorded in `meta.extra.otel.harness` (`claude-code`, `codex`,
 provider crate (`toolpath_claude::provider::tool_category`,
 `toolpath_codex::tool_category`, `toolpath_opencode::tool_category`,
 `toolpath_pi::provider::classify_tool`) and decides what an `unknown`
-harness gets. A caller wiring otel into `path` passes those provider-crate
-classifiers; the crate's own tests do the same, giving `unknown` a category
-only where every one of the four agrees.
+harness gets. `path` does exactly that (`crates/path-cli/src/otel_tools.rs`,
+for every otel derivation it runs), giving `unknown` a category only where
+every provider crate that names the tool agrees. That includes the crates
+of harnesses otel does not infer (`toolpath_gemini::provider::tool_category`,
+`toolpath_copilot::tool_category`, `toolpath_cursor::tool_category` by
+name), since their sessions infer as `unknown`: Gemini CLI's
+`run_shell_command` is a `shell` call, while a name the providers
+categorize differently (`ls`, `list_directory`) gets none. The crate's own
+tests use the same rule over the four inferred harnesses' crates. The wasm
+build of `path` has no opencode or cursor crate, so there an `opencode`
+session's tools are not categorized and the `unknown` rule asks the other
+five.
 
 Without a classifier (`DeriveConfig::default()`) no tool call is
 categorized, and what depends on categories is off: no sub-agent thread is
@@ -1526,7 +1535,8 @@ path p import otel --input <file|dir> [--profile auto|openrouter|semconv|openinf
 The global import flags `--no-cache`, `--force` and `--pretty` apply. The
 CLI decodes each file with `decode_input`, groups everything read with
 `group_sessions` under `--profile` (default `auto`), and derives each
-session with `derive_session`: one cached document per session, cache id
+session with `derive_session` under the provider crates' tool classifiers
+(Tool categories): one cached document per session, cache id
 `otel-<derived session id>`. It records no sync-manifest provenance (OTLP
 files are no artifact type), and prefixes every decode error with the
 file it came from.
