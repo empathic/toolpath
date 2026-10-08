@@ -14,7 +14,7 @@
         "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "0545c9287b3bb3afaaa3b03823bc0ddbc73b6bbe0d0501a4d8100f32749e5b36",
+          "crates/path-cli/src/goldens.rs": "44a9d6b7e05f06792144836c3f878e1479e7b688625510dc54128cf1969bf162",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
         "nix_pinned_binary": {
@@ -69,7 +69,7 @@
         "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "0545c9287b3bb3afaaa3b03823bc0ddbc73b6bbe0d0501a4d8100f32749e5b36",
+          "crates/path-cli/src/goldens.rs": "44a9d6b7e05f06792144836c3f878e1479e7b688625510dc54128cf1969bf162",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
         "nix_pinned_binary": {
@@ -124,7 +124,7 @@
         "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "0545c9287b3bb3afaaa3b03823bc0ddbc73b6bbe0d0501a4d8100f32749e5b36",
+          "crates/path-cli/src/goldens.rs": "44a9d6b7e05f06792144836c3f878e1479e7b688625510dc54128cf1969bf162",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
         "nix_pinned_binary": {
@@ -179,7 +179,7 @@
         "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "0545c9287b3bb3afaaa3b03823bc0ddbc73b6bbe0d0501a4d8100f32749e5b36",
+          "crates/path-cli/src/goldens.rs": "44a9d6b7e05f06792144836c3f878e1479e7b688625510dc54128cf1969bf162",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
         "nix_pinned_binary": {
@@ -234,7 +234,7 @@
         "cargo_lock_sha256": "cc5cb96b2d43e34983f919ad6b730a1b3becbffb735c4571e4e769e2f7724bf0",
         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
         "harness": {
-          "crates/path-cli/src/goldens.rs": "0545c9287b3bb3afaaa3b03823bc0ddbc73b6bbe0d0501a4d8100f32749e5b36",
+          "crates/path-cli/src/goldens.rs": "44a9d6b7e05f06792144836c3f878e1479e7b688625510dc54128cf1969bf162",
           "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
         },
         "nix_pinned_binary": {
@@ -279,7 +279,7 @@
   "informational": {
     "rustc": "",
     "toolpath_dirty": true,
-    "toolpath_rev": "633f530a0f3685f364f43bff9ba9ad3acd8953a5"
+    "toolpath_rev": "1b2c276f68a1c07bef0b0f94b10b50fbfd54dc6d"
   },
   "known_defects": [
     {

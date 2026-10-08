@@ -557,7 +557,13 @@ impl Goldens {
         let sets = m["goldens"]
             .as_array_mut()
             .ok_or_else(|| anyhow!("manifest: goldens is not an array"))?;
-        let entry = json!({
+        // A live capture's leak-check record survives a re-capture of the same set.
+        let prev_leak_check = sets
+            .iter()
+            .find(|e| e["name"] == name)
+            .map(|e| e["leak_check"].clone())
+            .filter(|v| !v.is_null());
+        let mut entry = json!({
             "name": name,
             // The AGENT that produced the input (not the CLI under test).
             "harness": agent.unwrap_or_else(|| self.fixture_agent(harness, &input, fixture)),
@@ -567,6 +573,9 @@ impl Goldens {
             "pins": self.pins(),
             "targets": targets,
         });
+        if let Some(v) = prev_leak_check {
+            entry["leak_check"] = v;
+        }
         match sets.iter_mut().find(|e| e["name"] == name) {
             Some(slot) => *slot = entry,
             None => sets.push(entry),
@@ -1185,7 +1194,10 @@ fn check_nix_pin(recorded: &Value, moved: &mut Vec<String>) {
 // capture-claude: one real `claude -p` session, captured hermetically
 // ---------------------------------------------------------------------------------------------
 
-const CAPTURE_PROMPT: &str = "List the files in the current directory, then read the file notes.txt and tell me its first line.";
+/// `ls` with no flags, so no owner, size or date columns (machine-specific) enter the transcript.
+const CAPTURE_PROMPT: &str = "Run the shell command `ls` exactly, with no arguments or flags, to list the file names in the current directory. Then read the file notes.txt and tell me its first line.";
+/// Exactly `ls`; `Bash(ls:*)` would also permit `ls -la`.
+const CAPTURE_TOOLS: [&str; 3] = ["Read", "Glob", "Bash(ls)"];
 
 /// Which environment variable a credential belongs in.
 #[derive(Debug, PartialEq, Eq)]
@@ -1349,9 +1361,14 @@ fn declared_version(harness: Harness, input: &[u8]) -> Option<String> {
         })
 }
 
-fn has_email(text: &str) -> bool {
+/// Claude Code's own Co-Authored-By attribution constant, injected into the transcript inside a
+/// system-reminder. It is not the user's address; it is the ONLY address the leak check allows.
+const ATTRIBUTION_ADDRESS: &str = "noreply@anthropic.com";
+
+/// Every email-address-shaped word in `text`.
+fn emails(text: &str) -> Vec<String> {
     text.split(|c: char| !(c.is_ascii_alphanumeric() || "@._%+-".contains(c)))
-        .any(|w| {
+        .filter(|w| {
             w.split_once('@').is_some_and(|(l, d)| {
                 !l.is_empty()
                     && d.contains('.')
@@ -1361,6 +1378,26 @@ fn has_email(text: &str) -> bool {
                     })
             })
         })
+        .map(str::to_string)
+        .collect()
+}
+
+/// `word` appearing as a whole word (not inside a longer alphanumeric run).
+fn has_word(text: &str, word: &str) -> bool {
+    !word.is_empty()
+        && text
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w == word)
+}
+
+/// The local username, for the leak check (`id -un`).
+fn local_username() -> Option<String> {
+    Command::new("id")
+        .arg("-un")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|u| !u.is_empty())
 }
 
 impl Goldens {
@@ -1424,10 +1461,8 @@ impl Goldens {
                 "--output-format",
                 "json",
                 "--allowedTools",
-                "Read",
-                "Glob",
-                "Bash(ls:*)",
             ])
+            .args(CAPTURE_TOOLS)
             .stdin(Stdio::null())
             .stdout(fs::File::create(&result_json)?)
             .stderr(fs::File::create(base.join("claude.stderr"))?)
@@ -1495,8 +1530,16 @@ impl Goldens {
         if text.contains(&token) {
             leaks.push("the credential");
         }
-        if has_email(&text) {
-            leaks.push("an email address");
+        // Exactly one address is allowed: Claude Code's attribution constant. Any other is a leak.
+        let found = emails(&text);
+        let attribution_present = found.iter().any(|e| e == ATTRIBUTION_ADDRESS);
+        if found.iter().any(|e| e != ATTRIBUTION_ADDRESS) {
+            leaks.push("an email address other than the attribution address");
+        }
+        if let Some(u) = local_username()
+            && has_word(&text, &u)
+        {
+            leaks.push("the local username");
         }
         if !leaks.is_empty() {
             say(&format!(
@@ -1525,7 +1568,7 @@ impl Goldens {
             "input_sha256": sha256_hex(&bytes),
             "claude_version": version,
             "model": a.model,
-            "command": format!("cd <tmp>/project && env -i HOME=<tmp>/home XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp>/home/.claude {}=<redacted> claude -p <prompt> --model {} --output-format json --allowedTools Read Glob Bash(ls:*) < /dev/null", kind.var(), a.model),
+            "command": format!("cd <tmp>/project && env -i HOME=<tmp>/home XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp>/home/.claude {}=<redacted> claude -p <prompt> --model {} --output-format json --allowedTools Read Glob Bash(ls) < /dev/null", kind.var(), a.model),
             "prompt": CAPTURE_PROMPT,
         });
         write(
@@ -1543,13 +1586,28 @@ impl Goldens {
             "binary_sha256": hash_file(&bin).unwrap_or_default(),
             "captured_at": now_utc(),
         });
-        self.capture(
+        let captured = self.capture(
             Harness::Claude,
             &out.join("input.jsonl"),
             &a.name,
             None,
             Some(pin),
-        )
+        );
+        captured?;
+        // Record which address the leak check let through, in the set's manifest entry.
+        let mut m = self.read_manifest()?;
+        if let Some(e) = m["goldens"]
+            .as_array_mut()
+            .and_then(|s| s.iter_mut().find(|e| e["name"] == a.name))
+        {
+            e["leak_check"] = json!({
+                "refused": ["real home directory", "credential", "local username", "email address other than the allowed one"],
+                "allowed_addresses": [ATTRIBUTION_ADDRESS],
+                "allowed_address_present": attribution_present,
+                "reason": "noreply@anthropic.com is Claude Code's own Co-Authored-By attribution constant, injected in a system-reminder; it is not the user's address",
+            });
+        }
+        self.write_manifest(&m)
     }
 }
 
@@ -1588,8 +1646,24 @@ mod tests {
 
     #[test]
     fn email_detection() {
-        assert!(has_email("contact a.b+c@example.com now"));
-        assert!(!has_email("user@host and @mention and a@b"));
+        assert_eq!(
+            emails("contact a.b+c@example.com now"),
+            ["a.b+c@example.com"]
+        );
+        assert!(emails("user@host and @mention and a@b").is_empty());
+        // Only the attribution address is allowed; anything else beside it still counts.
+        let found = emails("Co-Authored-By: Claude <noreply@anthropic.com> and bobby@empathic.dev");
+        assert!(found.iter().any(|e| e == ATTRIBUTION_ADDRESS));
+        assert_eq!(
+            found.iter().filter(|e| *e != ATTRIBUTION_ADDRESS).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn username_is_matched_as_a_whole_word() {
+        assert!(has_word("-rw-r--r--  1 bobby  staff 12 notes.txt", "bobby"));
+        assert!(!has_word("bobbysocks and abobby", "bobby"));
     }
 
     #[test]
