@@ -12,12 +12,12 @@ All notable changes to the Toolpath workspace are documented here.
   told, and the local source's stamp at the time. `path share` and
   `p export pathbase` write one after a successful upload (for a cache
   id, against the session the entry was derived from; anonymous uploads
-  included); `path resume <pathbase url>` writes one on the session it
-  projects, after one request for the graph's path listing, which
-  supplies the server id the fetched document does not carry. Sync and
-  import keep the records when they rewrite a session's fingerprint.
-  Nothing reads them yet; incremental append and `share --all` will.
-  Manifests without the field load unchanged.
+  included; a server that lists no paths in its create response leaves
+  no record and warns). `path resume` writes none: a pulled path
+  becomes a new local session. Sync and import keep the records when
+  they rewrite a session's fingerprint. Nothing reads them yet;
+  incremental append and `share --all` will. Manifests without the
+  field load unchanged.
 - **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
   whose `POST /graphs` answers `GraphCreatedResponse`: an empty
   `document` and `paths[]` naming each stored path's `path.id` and
