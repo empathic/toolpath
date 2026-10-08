@@ -1,10 +1,17 @@
-# Hermetic goldens demo
-Inputs are real or committed sessions; `path` runs under an empty env (temp HOME/XDG/store dirs, cwd `/`), so nothing real is read or written.
-1. `scripts/goldens.sh check`: all cases (codex/claude/copilot/pi origins, claude/codex/pi/copilot targets) match, and every pin matches; prints `test goldens ... ok`.
-2. `scripts/goldens.sh defect`: the two pinned known defects: codex->claude foreign entry types, and `export codex -o` writing the caller's cwd (`written_cwd /` vs `source_cwd ...`).
-3. Pin drift: `jq '.pins.rust_toolchain.channel="1.93.0"' goldens/manifest.json > /tmp/m && cp /tmp/m goldens/manifest.json`, then `scripts/goldens.sh check` prints `PIN MOVED ... pins.rust_toolchain.channel`; restore with `git checkout goldens/manifest.json`.
-4. Real Claude session (your terminal, not a Claude session; token from `$CLAUDE_CODE_OAUTH_TOKEN`/`$ANTHROPIC_API_KEY` or Keychain `claude-code-oauth-token`): `scripts/capture-claude-session.sh`, then `scripts/goldens.sh capture`, commit. Model output varies per run: capture once; the TEST is deterministic over the committed input.
-`goldens/manifest.json` pins per case input/output sha256 and command, plus the harness files, Cargo.lock, flake.lock, rust-toolchain, `path` version and the nix store `path` binary (narHash). Any move fails check by name.
-Change a golden on purpose: fix the code, `scripts/goldens.sh capture`, review `git diff goldens/`, commit. Never hand-edit. A fix to either defect fails check and empties its `known-defect/*.tsv`: that is the signal.
-Findings: `export codex -o` stamps the caller's cwd (harness pins `/`); the claude adapter needs `<sessionId>.jsonl`; `export copilot` is nondeterministic (random session id, key order), so that golden is canonical form.
-Needs `nix`; the nix pin is verified only where its store path exists. Repo rev is recorded, not pinned (HEAD moves with every commit).
+# Capturing goldens: `path goldens`
+Capture is a tool, not a script: hermetic (empty env, temp HOME/XDG/store dirs, cwd `/`), to every target, with a pinned manifest. `scripts/goldens.sh <args>` = `cargo run -p path-cli -- goldens <args>`; the test calls the same library.
+1. `path goldens init`: captures the repo fixtures (codex, claude, copilot, pi, claude-compacted) to every other format; one `captured <src> -> <dst> (raw bytes|canonical, N bytes)` line each. One fixture: `path goldens capture <harness> <fixture> [--name N] [--project P]`.
+2. `path goldens check [name]`: re-runs; prints `ok <src> -> <dst>` per golden, the two known defects `(still present)`, ends `17 ok, 0 problem(s)`; exit 1 with a path-named line diff or `PIN MOVED <item>` otherwise. `path goldens diff <name>` shows more diff; `path goldens list` shows sets, agent versions, targets.
+3. `path goldens capture-claude`: one REAL `claude -p` session, hermetic (token from `$CLAUDE_CODE_OAUTH_TOKEN`/`$ANTHROPIC_API_KEY` or Keychain `claude-code-oauth-token`, hex-decoded and prefix-routed, never printed or written; run in your own terminal), leak-checked, captured as set `claude-session`; commit `goldens/`. Model output varies per run: capture once; check is deterministic over the committed input.
+Regenerate on purpose: fix the code, `path goldens capture --all`, review `git diff goldens/`, commit. Never hand-edit; check refuses a golden that disagrees with its manifest sha.
+Manifest pins per set: input sha256, each output sha256 + command + form, harness files, Cargo.lock, flake.lock, rust-toolchain, `path` version, nix `path` binary narHash. Drift demo: edit a set's `pins.rust_toolchain.channel`, `path goldens check <set>` prints `PIN MOVED pins.rust_toolchain.channel`; `git checkout goldens/manifest.json`.
+Each set's `harness` records the AGENT that wrote the input. Fixtures of unknown origin get the version the input declares (else `unknown`) plus the commit that first added them; a live capture gets the binary path, `--version` and sha256. A changed local agent is `info`, never a failure.
+| set | agent | version | first seen | local binary now (not the producer) |
+|---|---|---|---|---|
+| claude | claude | 2.1.132 (declared) | 1f4bb25 | 2.1.285, sha 51f09bd1e021d9fa |
+| codex | codex | 0.128.0 (declared) | 1f4bb25 | 0.159.2, sha 16593cc2f422d5f3 |
+| copilot | copilot | 1.0.68 (declared) | c8bdff0 | 1.0.61, sha f8c4b6ff86ec96cd |
+| pi | pi | unknown | 1f4bb25 | 0.84.3, sha b0b3a33c18bc81df |
+| claude-compacted | claude | unknown (synthetic) | 1682861 | as claude |
+Known defects (`goldens/known-defect/`): codex->claude emits foreign entry types; `export codex -o` writes the caller's cwd. A fix fails check with a diff: recapture to acknowledge.
+Findings: `export copilot` is nondeterministic (random session id, key order), so capture's two-run probe stores canonical form; the claude adapter needs the file named `<sessionId>.jsonl`. Needs `nix` for the wrapper; the nix pin is verified only where its store path exists; repo rev and rustc are recorded, not pinned.
