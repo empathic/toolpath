@@ -47,7 +47,7 @@ impl Default for DeriveConfig {
 ///
 /// Step ids must be unique within a path (a toolpath invariant), so a
 /// collision is resolved as the steps are emitted rather than surfaced as an
-/// error: a byte-identical re-emission (e.g. a Claude compaction replay of an
+/// error: an identical re-emission (e.g. a Claude compaction replay of an
 /// unchanged message) is dropped, and a same-id-but-different step is renamed
 /// to a fresh id. Either way the derivation always succeeds and the result is
 /// collision-free.
@@ -137,15 +137,16 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let mut turn_idx = 0usize;
     let mut event_idx = 0usize;
 
-    // Group ids of turns in stream order, so a turn can tell whether it's
-    // the last of its message group (message-level token accounting, below).
-    let turn_groups: Vec<Option<String>> = view.turns().map(|t| t.group_id.clone()).collect();
+    // The last turn step emitted and its group id, for message-level token
+    // accounting (below).
+    let mut last_turn_step: Option<(usize, Option<String>)> = None;
 
     for item in &view.items {
         match item {
             Item::Turn(turn) => {
                 let idx = turn_idx;
                 turn_idx += 1;
+                let steps_before = steps.len();
 
                 // Step id: use the turn's native id when set so it round-trips
                 // through `extract_conversation`; otherwise synthesize sequentially.
@@ -218,18 +219,14 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 }
 
                 // Message-group accounting: a message's total `token_usage`
-                // lands once, on the group's last turn, so summing over a
-                // path's steps yields session totals. A turn with no `group_id`
-                // is its own group.
-                let last_of_group = match &turn.group_id {
-                    None => true,
-                    Some(mid) => match turn_groups.get(idx + 1) {
-                        Some(Some(next)) => next != mid,
-                        _ => true,
-                    },
-                };
-                if last_of_group
-                    && let Some(usage) = &turn.token_usage
+                // lands once, on the group's last emitted step, so summing
+                // over a path's steps yields session totals. Every turn step
+                // carries its usage when pushed; the next turn step of the
+                // same group takes it off (after `push_step`, below). Deciding
+                // from the steps already emitted rather than the turns still
+                // to come keeps each step's id a function of the items at or
+                // before it, and a dropped replay cannot split a group.
+                if let Some(usage) = &turn.token_usage
                     && let Ok(v) = serde_json::to_value(usage)
                 {
                     extra.insert("token_usage".to_string(), v);
@@ -381,6 +378,16 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         turn_to_step.insert(final_id.clone(), final_id.clone());
                     }
                     turn_to_step.insert(turn.id.clone(), final_id);
+                    if let Some((prev, Some(prev_group))) = &last_turn_step
+                        && turn.group_id.as_ref() == Some(prev_group)
+                        && let Some(sc) = steps[*prev]
+                            .change
+                            .get_mut(&conv_artifact_key)
+                            .and_then(|c| c.structural.as_mut())
+                    {
+                        sc.extra.remove("token_usage");
+                    }
+                    last_turn_step = Some((steps_before, turn.group_id.clone()));
                 }
             }
 
@@ -537,10 +544,10 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
 }
 
 /// Push `step` into `steps`, resolving an id collision with an
-/// already-emitted step. A byte-identical re-emission (same parents, actor,
-/// timestamp, change) of a step holding the id, or holding a `<id>#<n>`
-/// rename of it, is dropped — keeping it would only duplicate a step that
-/// already exists — and a same-id-but-different step is re-IDed to the first
+/// already-emitted step. A re-emission equal to a step holding the id, or
+/// holding a `<id>#<n>` rename of it (same parents, actor, timestamp, change;
+/// see [`steps_content_eq`]), is dropped — keeping it would only duplicate a
+/// step that already exists — and a same-id-but-different step is re-IDed to the first
 /// free `<id>#<n>` so no data is lost and the original id stays recoverable
 /// (see [`base_id`]).
 /// Returns the id the step was pushed under (its own, or the new one when
@@ -598,8 +605,30 @@ pub fn base_id(id: &str) -> &str {
 /// Whether two steps are the same entry — equal once serialized, so dropping
 /// one is lossless. Step doesn't implement `PartialEq`, and serializing only
 /// happens on an actual id collision (rare), so the cost is negligible.
+///
+/// A grouped `conversation.append` step's `token_usage` is left out of the
+/// comparison: it is the message's usage, not the step's, and whether a step
+/// still holds it depends on whether a later step of its group has been
+/// emitted yet, so comparing it would make the drop-or-rename decision
+/// depend on that rather than on the step.
 fn steps_content_eq(a: &Step, b: &Step) -> bool {
-    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+    let normalized = |s: &Step| {
+        let mut v = serde_json::to_value(s).ok()?;
+        if let Some(changes) = v.get_mut("change").and_then(|c| c.as_object_mut()) {
+            for change in changes.values_mut() {
+                if let Some(sc) = change
+                    .get_mut("structural")
+                    .and_then(|sc| sc.as_object_mut())
+                    && sc.get("type").and_then(|t| t.as_str()) == Some("conversation.append")
+                    && sc.contains_key("group_id")
+                {
+                    sc.remove("token_usage");
+                }
+            }
+        }
+        Some(v)
+    };
+    normalized(a) == normalized(b)
 }
 
 fn actor_for_turn(turn: &Turn, provider: &str) -> String {
@@ -1869,6 +1898,29 @@ mod tests {
             assert_eq!(c.extra["group_id"], serde_json::json!("msg_01"));
         }
         assert_eq!(changes[3].extra["group_id"], serde_json::json!("msg_02"));
+    }
+
+    #[test]
+    fn test_dropped_group_replay_leaves_usage_on_last_emitted_step() {
+        // A compaction replay of the group's first turn arrives after the
+        // group's last turn and is dropped; the group's usage stays on the
+        // last step emitted.
+        let grouped = |id: &str| {
+            let mut t = base_turn(id, Role::Assistant);
+            t.group_id = Some("msg_01".into());
+            t.token_usage = Some(usage(997));
+            t
+        };
+        let view = view_with(vec![grouped("t1"), grouped("t2"), grouped("t1")]);
+        let path = derive_path(&view, &DeriveConfig::default());
+        let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
+        assert_eq!(ids, ["t1", "t2"]);
+        let changes: Vec<&StructuralChange> = path.steps.iter().map(conv_change).collect();
+        assert!(!changes[0].extra.contains_key("token_usage"));
+        assert_eq!(
+            changes[1].extra["token_usage"]["output_tokens"],
+            serde_json::json!(997)
+        );
     }
 
     #[test]
