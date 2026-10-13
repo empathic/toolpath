@@ -131,8 +131,22 @@ their position in that stream.
   leaves no record and warns). A session keeps one record per
   destination (server, owner, repo): a repeat share replaces the
   earlier entry. `path resume` writes none: a pulled path becomes a new
-  local session. Nothing reads them yet; incremental append and
-  `share --all` will.
+  local session.
+- **`path-cli`** (0.30.0): path sync client. An authed `path share`
+  pushes only settled steps (the open message group and an unanswered
+  trailing tool call wait for the next turn) and, when the session
+  already has a record on the destination, appends the steps it gained
+  to that path instead of uploading another graph: by position when the
+  record still matches the derive, by step id when it does not. A frozen
+  remote path is continued in a new graph whose path names it as
+  `parent`; a remote path the server no longer has is recreated.
+  `path share --all` shares every session in scope through the same
+  code: new sessions are created, recorded ones whose source stamp is
+  unchanged are skipped without deriving, the rest are brought up to
+  date. `--project-under <dir>` and `--harness` narrow the scope; a plan
+  heading precedes the confirmation (`--yes` skips it, `--dry-run` stops
+  there); a summary of outcomes and failures ends the pass, which exits
+  non-zero if any session failed. Requires login.
 - **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
   whose `POST /graphs` answers `GraphCreatedResponse`: an empty
   `document` and `paths[]` naming each stored path's `path.id` and
