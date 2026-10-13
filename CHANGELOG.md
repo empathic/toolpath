@@ -2,6 +2,40 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.8.0 — 2026-10-07
+
+- **`toolpath`** (0.8.0): `PathIdentity.parent` names the step in
+  another path that a path descends from: the document `uri` and the
+  parent `path` and `step` ids, all required. Every root step of the
+  path has the parent step as its implicit parent. The path is a
+  continuation when `parent.step` is the parent path's head and a fork
+  when it is any other step; nothing is declared. `PathOpen` carries
+  it in JSONL. `Path::with_parent` and `Parent::new` build it. `base` keeps its
+  meaning as the project context the path runs against, the
+  `toolpath:<path-id>/<step-id>` form included; a path may carry both
+  `base` and `parent`. The RFC states the first-parent convention:
+  `step.parents[0]` is the main line and further parents are branches
+  merging in, which is how a delegated subagent appears inside its
+  parent path. `PathIdentity` struct literals must initialise the new
+  field.
+- **`toolpath-md`** (0.8.0): the path header, transcript header and
+  front matter print `path.parent` (document, path, step) after the
+  base, so a rendered continuation shows what it resumed from.
+- **`toolpath-dot`** (0.6.0): the path layout draws a `PARENT` node
+  into each root step the way it draws `BASE`.
+- **`toolpath-claude`** (0.14.0): `resolve_chain_with_map` and
+  `build_succession_map` are public. `build_succession_map` builds the
+  predecessor to successor map over `(stem, first sessionId)` pairs
+  under the rule the on-disk index applies: a dotted stem (a rotation
+  artifact) continues nothing. This change was prepared as 0.13.4,
+  never published, and ships here with the `toolpath 0.8` bump.
+- Cascading minor bumps for the dependency on the new `toolpath 0.8`
+  major, with no behaviour change: `toolpath-claude` 0.14.0,
+  `toolpath-convo` 0.12.0, `toolpath-git` 0.7.0, `toolpath-github`
+  0.7.0, `toolpath-gemini` 0.7.0, `toolpath-codex` 0.7.0,
+  `toolpath-copilot` 0.2.0, `toolpath-opencode` 0.6.0,
+  `toolpath-cursor` 0.3.0, `toolpath-pi` 0.7.0.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
@@ -77,11 +111,6 @@ All notable changes to the Toolpath workspace are documented here.
   the local project directory and records the destination and the
   remote directory under `path.meta.remote`. `-C` is the remote project
   directory, defaulting as for `resume --remote`.
-- **`toolpath-claude`** (0.13.4): `resolve_chain_with_map` and
-  `build_succession_map` are public. `build_succession_map` builds the
-  predecessor to successor map over `(stem, first sessionId)` pairs
-  under the rule the on-disk index applies: a dotted stem (a rotation
-  artifact) continues nothing.
 - **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.26.0 — 2026-09-16

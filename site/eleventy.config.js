@@ -131,6 +131,10 @@ export default function (eleventyConfig) {
         file: "path-04-exploration.path.json",
         name: "Path: exploration & merge",
       },
+      {
+        file: "path-05-continuation.path.json",
+        name: "Path: continuation & delegation",
+      },
       { file: "graph-01-release.json", name: "Graph: parallel agent attempts" },
     ];
     return examples.map((e) => ({

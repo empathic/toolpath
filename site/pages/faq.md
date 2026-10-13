@@ -38,7 +38,7 @@ Toolpath is not the right tool for:
 
 ### Can I use Toolpath without a VCS?
 
-Yes. A path's `base` can use a `toolpath:` URI to branch from another path's step, creating a pure Toolpath chain with no VCS backing. You can also use `file:///` URIs for local-only provenance.
+Yes. A path's `base` can use a `toolpath:` URI to name a step in another path as its project context, creating a pure Toolpath chain with no VCS backing. You can also use `file:///` URIs for local-only provenance. Lineage between paths &mdash; which earlier work a path continues or forks from &mdash; is `path.parent`, not `base`.
 
 ### How does Toolpath compare to W3C PROV?
 

@@ -532,6 +532,7 @@ mod native {
                 }),
                 head,
                 graph_ref: None,
+                parent: None,
             },
             steps,
             meta: Some(meta),
