@@ -1720,7 +1720,7 @@ mod tests {
             assert_eq!(
                 *url,
                 format!(
-                    "{base}/u/me/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/{SERVER_PATH_ID}"
+                    "{base}/api/v1/u/me/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/{SERVER_PATH_ID}"
                 )
             );
             assert_eq!(remote.steps, path.steps.len());

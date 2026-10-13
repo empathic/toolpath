@@ -378,7 +378,9 @@ pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Res
 
     let token = stored.as_ref().map(|s| s.token.as_str());
 
-    let PathRef { owner, repo, id } = ref_;
+    let PathRef {
+        owner, repo, id, ..
+    } = ref_;
     let body = graphs_download(&base_url, token, &owner, &repo, &id)?;
     let cache_id = crate::cache::pathbase_cache_id(&owner, &repo, &id);
     let doc = Graph::from_json(&body)
@@ -399,13 +401,16 @@ pub(crate) struct PathRef {
     pub(crate) owner: String,
     pub(crate) repo: String,
     pub(crate) id: String,
+    /// The path within the graph, when the ref was a path's API URL.
+    pub(crate) path: Option<String>,
 }
 
 /// Parse a positional ref for `path import pathbase`. Returns `(override_base, ref)`.
 ///
 /// Accepted shapes (trailing identifier must be a UUID):
 /// - Full URL: `https://host/u/<owner>/repos/<repo>/graphs/<uuid>` —
-///   host overrides the server URL. Also accepts the older
+///   host overrides the server URL. Also accepts a path's API URL
+///   (`https://host/api/v1/u/<owner>/repos/<repo>/graphs/<uuid>/paths/<uuid>`), the older
 ///   `https://host/<owner>/<repo>/{paths|graphs}/<uuid>` shape and the
 ///   short `https://host/<owner>/<repo>/<uuid>` form.
 /// - `<owner>/<repo>/<uuid>` — bare triple, used with `--url` or the
@@ -451,40 +456,52 @@ pub(crate) fn parse_pathbase_ref(
 
 /// Pull (owner, repo, uuid) from a slash-split URL path. Accepts all of:
 ///
+/// - `/api/v1/u/<owner>/repos/<repo>/graphs/<uuid>/paths/<uuid>` — a
+///   path's API resource URL, the key a `sync::RemoteRecord` sits
+///   under; the last uuid is the path's.
 /// - `/u/<owner>/repos/<repo>/graphs/<uuid>` — current canonical form.
 /// - `/<owner>/<repo>/{paths|graphs}/<uuid>` — short SvelteKit route.
 /// - `/<owner>/<repo>/<uuid>` — bare triple.
 ///
 /// The trailing segment must parse as a UUID (the only addressing
-/// scheme Pathbase 1.1+ accepts for graphs).
+/// scheme Pathbase 1.1+ accepts for graphs). In the short and bare
+/// forms neither owner nor repo may be a route keyword or a UUID, so a
+/// longer URL that matches none of the forms is rejected rather than
+/// read with route segments as names.
 #[cfg(not(target_os = "emscripten"))]
 fn extract_triple(segs: &[&str]) -> Option<PathRef> {
+    let is_uuid = |s: &str| uuid::Uuid::parse_str(s).is_ok();
+    let is_name =
+        |s: &str| !s.is_empty() && !matches!(s, "u" | "repos" | "graphs" | "paths") && !is_uuid(s);
     let n = segs.len();
-    if n < 3 {
+    if n < 3 || !is_uuid(segs[n - 1]) {
         return None;
     }
-    let id = segs[n - 1];
-    if uuid::Uuid::parse_str(id).is_err() {
-        return None;
-    }
+    let at = |i: usize, keyword: &str| n >= i && segs[n - i] == keyword;
 
-    // Look back through the canonical layouts in order of specificity.
-    let (owner, repo) =
-        if n >= 6 && segs[n - 6] == "u" && segs[n - 4] == "repos" && segs[n - 2] == "graphs" {
-            (segs[n - 5], segs[n - 3])
-        } else if n >= 4 && (segs[n - 2] == "paths" || segs[n - 2] == "graphs") {
-            (segs[n - 4], segs[n - 3])
-        } else {
-            (segs[n - 3], segs[n - 2])
-        };
+    let (owner, repo, id, path) = if at(8, "u")
+        && at(6, "repos")
+        && at(4, "graphs")
+        && at(2, "paths")
+        && is_uuid(segs[n - 3])
+    {
+        (segs[n - 7], segs[n - 5], segs[n - 3], Some(segs[n - 1]))
+    } else if at(6, "u") && at(4, "repos") && at(2, "graphs") {
+        (segs[n - 5], segs[n - 3], segs[n - 1], None)
+    } else if (at(2, "paths") || at(2, "graphs")) && n >= 4 {
+        (segs[n - 4], segs[n - 3], segs[n - 1], None)
+    } else {
+        (segs[n - 3], segs[n - 2], segs[n - 1], None)
+    };
 
-    if owner.is_empty() || repo.is_empty() {
+    if !is_name(owner) || !is_name(repo) {
         return None;
     }
     Some(PathRef {
         owner: owner.to_string(),
         repo: repo.to_string(),
         id: id.to_string(),
+        path: path.map(str::to_string),
     })
 }
 
@@ -505,6 +522,7 @@ mod tests {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
                 id: UUID.into(),
+                path: None,
             }
         );
     }
@@ -520,6 +538,7 @@ mod tests {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
                 id: UUID.into(),
+                path: None,
             }
         );
     }
@@ -535,6 +554,7 @@ mod tests {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
                 id: UUID.into(),
+                path: None,
             }
         );
     }
@@ -557,6 +577,7 @@ mod tests {
                 owner: "alex".into(),
                 repo: "pathstash".into(),
                 id: UUID.into(),
+                path: None,
             }
         );
     }
@@ -575,6 +596,7 @@ mod tests {
                 owner: "anon".into(),
                 repo: "pathstash".into(),
                 id: UUID.into(),
+                path: None,
             }
         );
     }
@@ -591,6 +613,65 @@ mod tests {
     fn parse_pathbase_ref_rejects_too_few_segments() {
         assert!(parse_pathbase_ref("https://pathbase.dev/just-one", None).is_err());
         assert!(parse_pathbase_ref("just/two", None).is_err());
+    }
+
+    const PATH_UUID: &str = "22222222-2222-2222-2222-222222222222";
+
+    #[test]
+    fn parse_pathbase_ref_reads_a_path_api_url() {
+        let url = format!(
+            "https://pathbase.dev/api/v1/u/alex/repos/pathstash/graphs/{UUID}/paths/{PATH_UUID}"
+        );
+        let (base, ref_) = parse_pathbase_ref(&url, None).unwrap();
+        assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
+        assert_eq!(
+            ref_,
+            PathRef {
+                owner: "alex".into(),
+                repo: "pathstash".into(),
+                id: UUID.into(),
+                path: Some(PATH_UUID.into()),
+            }
+        );
+    }
+
+    /// The record key `remote_path_url` builds reads back as the parts
+    /// it was built from.
+    #[test]
+    fn parse_pathbase_ref_round_trips_remote_path_url() {
+        let graph: uuid::Uuid = UUID.parse().unwrap();
+        let path: uuid::Uuid = PATH_UUID.parse().unwrap();
+        let key = crate::cmd_pathbase::remote_path_url(
+            "HTTPS://Pathbase.dev/",
+            "alex",
+            "pathstash",
+            &graph,
+            &path,
+        );
+        let (base, ref_) = parse_pathbase_ref(&key, None).unwrap();
+        assert_eq!(base.as_deref(), Some("https://pathbase.dev"));
+        assert_eq!(
+            ref_,
+            PathRef {
+                owner: "alex".into(),
+                repo: "pathstash".into(),
+                id: UUID.into(),
+                path: Some(PATH_UUID.into()),
+            }
+        );
+    }
+
+    /// A graph-then-path URL in no accepted form is rejected, not read
+    /// with `graphs` as the owner and the graph id as the repo.
+    #[test]
+    fn parse_pathbase_ref_rejects_route_segments_as_names() {
+        for url in [
+            format!("https://pathbase.dev/u/alex/pathstash/graphs/{UUID}/paths/{PATH_UUID}"),
+            format!("https://pathbase.dev/alex/graphs/{UUID}"),
+            format!("https://pathbase.dev/alex/{UUID}/{PATH_UUID}"),
+        ] {
+            assert!(parse_pathbase_ref(&url, None).is_err(), "{url}");
+        }
     }
 
     #[test]
