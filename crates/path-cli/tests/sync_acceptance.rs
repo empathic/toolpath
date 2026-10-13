@@ -2,10 +2,11 @@
 //! a running Pathbase, as the design's "Acceptance test" section lays
 //! out (docs/superpowers/specs/2026-10-13-path-sync-client-design.md).
 //!
-//! Gated on `TEST_PATHBASE_URL` and `TEST_PATHBASE_TOKEN` (a CLI token
-//! for a user on that server, as `path auth login` stores it); without
-//! both, each test prints why and passes. The server's public URL must
-//! be `TEST_PATHBASE_URL`, since continuations name their parent by it.
+//! The tests are ignored by default: they need a running Pathbase.
+//! `just acceptance` runs them, with `TEST_PATHBASE_URL` (the server's
+//! API base) and `TEST_PATHBASE_TOKEN` (a CLI token for a user on that
+//! server, as `path auth login` stores it) set. Run without both, each
+//! test fails saying what to set.
 //!
 //! Each test copies a real session from `test-fixtures/` into a temp
 //! harness home, truncated, runs a pass of the real `path` binary, and
@@ -36,13 +37,15 @@ struct Server {
 }
 
 impl Server {
-    fn from_env() -> Option<Self> {
+    fn from_env() -> Self {
         let (Ok(url), Ok(token)) = (
             std::env::var("TEST_PATHBASE_URL"),
             std::env::var("TEST_PATHBASE_TOKEN"),
         ) else {
-            eprintln!("skipping: set TEST_PATHBASE_URL and TEST_PATHBASE_TOKEN to run");
-            return None;
+            panic!(
+                "set TEST_PATHBASE_URL (a running Pathbase's API base) and \
+                 TEST_PATHBASE_TOKEN (a CLI token for a user there) to run the acceptance tests"
+            );
         };
         let url = url.trim_end_matches('/').to_string();
         let http = reqwest::blocking::Client::builder()
@@ -59,12 +62,12 @@ impl Server {
             .json()
             .unwrap();
         let owner = me["username"].as_str().unwrap().to_string();
-        Some(Self {
+        Self {
             url,
             token,
             owner,
             http,
-        })
+        }
     }
 
     /// A fresh repo for one test, so runs do not see each other.
@@ -85,9 +88,18 @@ impl Server {
     }
 
     fn step_ids(&self, path_url: &str) -> Vec<String> {
+        self.read_step_ids(&format!("{path_url}/step-ids"))
+    }
+
+    /// The path's step ids followed by its parents', nearest first.
+    fn step_ids_through_parents(&self, path_url: &str) -> Vec<String> {
+        self.read_step_ids(&format!("{path_url}/step-ids?through_parents=true"))
+    }
+
+    fn read_step_ids(&self, url: &str) -> Vec<String> {
         let v: Value = self
             .http
-            .get(format!("{path_url}/step-ids"))
+            .get(url)
             .bearer_auth(&self.token)
             .send()
             .unwrap()
@@ -123,6 +135,22 @@ impl Server {
         assert!(resp.status().is_success(), "delete: {}", resp.status());
     }
 
+    /// The URL the server gives the graph holding `path_url`: what a
+    /// child path's `parent.uri` names it by.
+    fn graph_page_url(&self, path_url: &str) -> String {
+        let meta: Value = self
+            .http
+            .get(format!("{}/meta", graph_url(path_url)))
+            .bearer_auth(&self.token)
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .unwrap();
+        meta["url"].as_str().unwrap().to_string()
+    }
+
     /// The stored document of the graph holding `path_url`.
     fn document(&self, path_url: &str) -> Value {
         self.http
@@ -141,13 +169,6 @@ impl Server {
 fn graph_url(path_url: &str) -> &str {
     let cut = path_url.rfind("/paths/").expect("a path API URL");
     &path_url[..cut]
-}
-
-/// The graph page URL Pathbase resolves `path.parent.uri` against.
-fn graph_page_url(path_url: &str) -> String {
-    graph_url(path_url)
-        .replacen("/api/v1/u/", "/u/", 1)
-        .replacen("/repos/", "/", 1)
 }
 
 // ── A logging forward proxy ─────────────────────────────────────────
@@ -597,8 +618,7 @@ fn run_loop(
         want = settled(&cli.derive(&derive_args));
         assert!(
             want.starts_with(&before),
-            "the {harness} derive is not prefix-stable at {at} lines \
-             (expected to hold once toolpath #144 is merged):\n  before: {before:?}\n  now:    {want:?}"
+            "the {harness} derive is not prefix-stable at {at} lines:\n  before: {before:?}\n  now:    {want:?}"
         );
         let sent: Vec<String> = cli
             .proxy
@@ -634,26 +654,43 @@ fn run_loop(
     );
 
     // 4. Freeze, grow, pass: a continuation of the frozen path holding
-    // only the new steps, its parent the frozen path's head.
+    // only the new steps, its parent the frozen graph by the server's
+    // own URL, at the step the first new step follows.
     let (_, frozen_record) = cli.record(harness, id);
     server.freeze(&key);
+    let frozen_ids = server.step_ids(&key);
     let before = want.clone();
     lines.extend(session.exchange(&lines, 100, true));
     lines.extend(session.exchange(&lines, 101, false));
     write_lines(&session.file(), &lines);
     let stderr = cli.pass(harness);
     assert!(stderr.contains("continued"), "{stderr}");
-    want = settled(&cli.derive(&derive_args));
+    let steps = cli.derive(&derive_args);
+    want = settled(&steps);
     let (new_key, record) = cli.record(harness, id);
     assert_ne!(new_key, key, "the record is re-keyed to the continuation");
     assert_eq!(server.step_ids(&new_key), want[before.len()..]);
+    assert_eq!(
+        server.step_ids_through_parents(&new_key),
+        [&want[before.len()..], &frozen_ids[..]].concat(),
+        "the continuation is linked to the frozen path"
+    );
     assert_eq!(record["steps"], want.len());
+    assert_eq!(record["owned_from"], before.len());
     let doc = server.document(&new_key);
     let path_id = cli.derive_doc_path_id(&derive_args);
     let parent = &doc["paths"][0]["path"]["parent"];
-    assert_eq!(parent["uri"], graph_page_url(&key).as_str(), "{doc}");
+    assert_eq!(parent["uri"], server.graph_page_url(&key).as_str(), "{doc}");
     assert_eq!(parent["path"], path_id.as_str());
-    assert_eq!(parent["step"], frozen_record["head"]);
+    let first_parent = steps
+        .iter()
+        .find(|s| s["step"]["id"] == want[before.len()].as_str())
+        .and_then(|s| s["step"]["parents"][0].as_str())
+        .filter(|p| frozen_ids.iter().any(|id| id == p));
+    match first_parent {
+        Some(p) => assert_eq!(parent["step"], p),
+        None => assert_eq!(parent["step"], frozen_record["head"]),
+    }
     key = new_key;
 
     // A pass with more growth appends to the continuation.
@@ -703,19 +740,29 @@ impl Cli {
 }
 
 #[test]
+#[ignore = "needs a running Pathbase: set TEST_PATHBASE_URL and TEST_PATHBASE_TOKEN, run `just acceptance`"]
 fn claude_session_syncs_incrementally() {
-    let Some(server) = Server::from_env() else {
-        return;
-    };
-    run_loop(&server, "claude", CLAUDE_ID, "claude/convo.jsonl", 20, 15);
+    run_loop(
+        &Server::from_env(),
+        "claude",
+        CLAUDE_ID,
+        "claude/convo.jsonl",
+        20,
+        15,
+    );
 }
 
-/// The Codex deriver became prefix-stable with toolpath #144; before
-/// that merge this test failed at the prefix assertion in the loop.
+/// The loop asserts the Codex derive is prefix-stable at every growth
+/// step, as it is for Claude.
 #[test]
+#[ignore = "needs a running Pathbase: set TEST_PATHBASE_URL and TEST_PATHBASE_TOKEN, run `just acceptance`"]
 fn codex_session_syncs_incrementally() {
-    let Some(server) = Server::from_env() else {
-        return;
-    };
-    run_loop(&server, "codex", CODEX_ID, "codex/convo.jsonl", 12, 8);
+    run_loop(
+        &Server::from_env(),
+        "codex",
+        CODEX_ID,
+        "codex/convo.jsonl",
+        12,
+        8,
+    );
 }
