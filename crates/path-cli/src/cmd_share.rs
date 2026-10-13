@@ -812,14 +812,7 @@ fn share_explicit(
         let uploaded =
             crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)?;
         if let Ok(doc) = toolpath::v1::Graph::from_json(&body) {
-            crate::cmd_export::record_remotes(
-                harness,
-                session,
-                project.as_deref(),
-                &doc,
-                &uploaded,
-                stamp,
-            );
+            crate::cmd_export::record_remotes(harness, session, &doc, &uploaded, stamp);
         }
         return Ok(());
     }
@@ -868,8 +861,8 @@ fn share_explicit(
     };
     let uploaded =
         crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)?;
-    // The record goes on the manifest entry the cache record sits
-    // under: the provenance names the session by the id sync
+    // The record goes under the session the cache record sits under:
+    // the provenance names the session by the id sync
     // enumerates (a Claude chain's head, a Codex rollout's full id),
     // which the caller's `session` need not be. Its stamp was taken
     // before the derive read the source, so steps appended during the
@@ -878,7 +871,6 @@ fn share_explicit(
         crate::cmd_export::record_remotes(
             harness,
             &source.id,
-            source.path.as_deref(),
             &derived.doc,
             &uploaded,
             (source.modified, source.size),
@@ -1689,6 +1681,18 @@ mod tests {
         )
     }
 
+    fn remotes_of(session: &str) -> crate::sync::SessionRemotes {
+        load_remotes_all()
+            .remove(&format!("claude:{session}"))
+            .unwrap_or_default()
+    }
+
+    fn load_remotes_all() -> std::collections::BTreeMap<String, crate::sync::SessionRemotes> {
+        crate::sync::load_remotes(&crate::config::config_dir().unwrap())
+            .unwrap()
+            .sessions
+    }
+
     fn manifest_record(session: &str) -> Option<crate::sync::SyncRecord> {
         let manifest = crate::sync::load_manifest(&crate::config::config_dir().unwrap()).unwrap();
         manifest.get("claude")?.get(session).cloned()
@@ -1715,8 +1719,9 @@ mod tests {
             run_single("s1", &base).unwrap();
 
             let rec = manifest_record("s1").unwrap();
-            assert_eq!(rec.remotes.len(), 1, "{:?}", rec.remotes);
-            let (url, remote) = rec.remotes.iter().next().unwrap();
+            let remotes = remotes_of("s1");
+            assert_eq!(remotes.len(), 1, "{remotes:?}");
+            let (url, remote) = remotes.iter().next().unwrap();
             assert_eq!(
                 *url,
                 format!(
@@ -1773,10 +1778,18 @@ mod tests {
                 crate::sync::load_manifest(&crate::config::config_dir().unwrap()).unwrap();
             let ids: Vec<&String> = manifest["claude"].keys().collect();
             assert_eq!(ids, ["s1"], "{:?}", manifest["claude"]);
-            let rec = &manifest["claude"]["s1"];
-            assert!(rec.cache_id.is_some());
-            assert_eq!(rec.remotes.len(), 1, "{:?}", rec.remotes);
-            assert!(rec.remotes.keys().next().unwrap().ends_with(SERVER_PATH_ID));
+            assert!(manifest["claude"]["s1"].cache_id.is_some());
+            let remotes = load_remotes_all();
+            let keys: Vec<&String> = remotes.keys().collect();
+            assert_eq!(keys, ["claude:s1"], "{remotes:?}");
+            assert_eq!(remotes["claude:s1"].len(), 1);
+            assert!(
+                remotes["claude:s1"]
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .ends_with(SERVER_PATH_ID)
+            );
         });
     }
 
@@ -1793,7 +1806,10 @@ mod tests {
             ]);
             run_single("s1", &server.base()).unwrap();
             let rec = manifest_record("s1").unwrap();
-            assert!(rec.remotes.is_empty(), "an older server lists no paths");
+            assert!(
+                remotes_of("s1").is_empty(),
+                "an older server lists no paths"
+            );
 
             let cache_id = rec.cache_id.unwrap();
             let json =
@@ -1808,9 +1824,9 @@ mod tests {
                 ),
             ]);
             run_single("s1", &server.base()).unwrap();
-            let rec = manifest_record("s1").unwrap();
-            assert_eq!(rec.remotes.len(), 1);
-            assert!(rec.remotes.keys().next().unwrap().ends_with(SERVER_PATH_ID));
+            let remotes = remotes_of("s1");
+            assert_eq!(remotes.len(), 1);
+            assert!(remotes.keys().next().unwrap().ends_with(SERVER_PATH_ID));
         });
     }
 
@@ -1827,7 +1843,7 @@ mod tests {
                 ),
             ]);
             run_single("s1", &server.base()).unwrap_err();
-            assert!(manifest_record("s1").unwrap().remotes.is_empty());
+            assert!(remotes_of("s1").is_empty());
         });
     }
 }

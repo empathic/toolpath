@@ -892,7 +892,7 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         if let Some((artifact_type, id, stamp)) = session
             && let Ok(doc) = toolpath::v1::Graph::from_json(&body)
         {
-            record_remotes(artifact_type, &id, None, &doc, &uploaded, stamp);
+            record_remotes(artifact_type, &id, &doc, &uploaded, stamp);
         }
         Ok(())
     }
@@ -906,16 +906,15 @@ pub(crate) struct UploadedPath {
     pub(crate) url: String,
 }
 
-/// Record where each uploaded path of `doc` now lives, on the manifest
-/// record of the session (`artifact_type`, `id`) it was derived from.
-/// `stamp` is the session source's stamp when `doc` was derived. A
-/// manifest failure warns, as does a server that listed no paths for
-/// a document that had some; the upload itself is done.
+/// Record where each uploaded path of `doc` now lives, under the
+/// session (`artifact_type`, `id`) it was derived from, in the remotes
+/// file. `stamp` is the session source's stamp when `doc` was derived.
+/// A write failure warns, as does a server that listed no paths for a
+/// document that had some; the upload itself is done.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn record_remotes(
     artifact_type: crate::artifact::ArtifactType,
     id: &str,
-    project: Option<&str>,
     doc: &toolpath::v1::Graph,
     uploaded: &[UploadedPath],
     stamp: crate::sync::Stamp,
@@ -931,7 +930,7 @@ pub(crate) fn record_remotes(
     let config_dir = match crate::config::config_dir() {
         Ok(dir) => dir,
         Err(e) => {
-            eprintln!("warning: sync manifest not updated: {e}");
+            eprintln!("warning: remote record not written: {e}");
             return;
         }
     };
@@ -946,10 +945,8 @@ pub(crate) fn record_remotes(
         let Some(record) = crate::sync::RemoteRecord::of(path, stamp) else {
             continue;
         };
-        if let Err(e) =
-            crate::sync::record_remote(&config_dir, artifact_type, id, project, url, record)
-        {
-            eprintln!("warning: sync manifest not updated: {e}");
+        if let Err(e) = crate::sync::record_remote(&config_dir, artifact_type, id, url, record) {
+            eprintln!("warning: remote record not written: {e}");
         }
     }
 }
@@ -2178,6 +2175,15 @@ mod tests {
         crate::sync::record_artifact(&config, &artifact, "claude-sess").unwrap();
     }
 
+    /// The remote records of Claude session `sess`.
+    fn remotes_of_sess(config_dir: &std::path::Path) -> crate::sync::SessionRemotes {
+        crate::sync::load_remotes(config_dir)
+            .unwrap()
+            .sessions
+            .remove("claude:sess")
+            .unwrap_or_default()
+    }
+
     /// `p export pathbase <input>` to `alex/pathstash` on `base`.
     fn export_to(config_dir: &std::path::Path, input: &str, base: &str) -> Result<()> {
         crate::cmd_pathbase::tests::write_credentials(config_dir, base);
@@ -2215,10 +2221,9 @@ mod tests {
             let base = server.base();
             export_to(config_dir, "claude-sess", &base).unwrap();
 
-            let manifest = crate::sync::load_manifest(config_dir).unwrap();
-            let rec = &manifest["claude"]["sess"];
-            assert_eq!(rec.remotes.len(), 1);
-            let (url, remote) = rec.remotes.iter().next().unwrap();
+            let remotes = remotes_of_sess(config_dir);
+            assert_eq!(remotes.len(), 1);
+            let (url, remote) = remotes.iter().next().unwrap();
             assert_eq!(
                 *url,
                 format!(
@@ -2241,8 +2246,7 @@ mod tests {
                 ),
             ]);
             export_to(config_dir, file.to_str().unwrap(), &server.base()).unwrap();
-            let manifest = crate::sync::load_manifest(config_dir).unwrap();
-            assert_eq!(manifest["claude"]["sess"].remotes.len(), 1);
+            assert_eq!(remotes_of_sess(config_dir).len(), 1);
         });
     }
 
@@ -2286,9 +2290,9 @@ mod tests {
             writer.join().unwrap();
 
             let manifest = crate::sync::load_manifest(config_dir).unwrap();
-            let rec = &manifest["claude"]["sess"];
-            assert_eq!(rec.size, Some(100));
-            let remote = rec.remotes.values().next().unwrap();
+            assert_eq!(manifest["claude"]["sess"].size, Some(100));
+            let remotes = remotes_of_sess(config_dir);
+            let remote = remotes.values().next().unwrap();
             assert_eq!(remote.source_stamp, "2026-03-01T00:00:00Z/99");
         });
     }
