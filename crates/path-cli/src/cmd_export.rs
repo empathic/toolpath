@@ -889,7 +889,8 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
         let uploaded = run_pathbase_inner(auth, base_url, upload, &body, &summary_source)?;
-        if let Some((artifact_type, id, stamp)) = session
+        if let Some(uploaded) = uploaded
+            && let Some((artifact_type, id, stamp)) = session
             && let Ok(doc) = toolpath::v1::Graph::from_json(&body)
         {
             record_remotes(artifact_type, &id, &doc, &uploaded, stamp);
@@ -969,6 +970,9 @@ pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
     resolve_url(None)
 }
 
+/// Upload `body` and say where each of its paths landed: `None` for an
+/// anonymous upload, which is recorded nowhere since nobody owns the
+/// graph it made.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn run_pathbase_inner(
     auth: crate::cmd_pathbase::AuthMode,
@@ -976,7 +980,7 @@ pub(crate) fn run_pathbase_inner(
     args: PathbaseUploadArgs,
     body: &str,
     summary_source: &str,
-) -> Result<Vec<UploadedPath>> {
+) -> Result<Option<Vec<UploadedPath>>> {
     use crate::cmd_pathbase::{
         AuthMode, BATCH_BUDGET, anon_graphs_post, graphs_post, graphs_post_streamed,
         remote_path_url, repos_post,
@@ -1021,7 +1025,7 @@ pub(crate) fn run_pathbase_inner(
                 body.len()
             );
             println!("{printable}");
-            return Ok(uploaded_paths("anon", "pathstash", &resp.id, &resp.paths));
+            return Ok(None);
         }
         AuthMode::Authed { token, username } => (token, username),
     };
@@ -1092,7 +1096,12 @@ pub(crate) fn run_pathbase_inner(
         body.len()
     );
     println!("{}", created.url);
-    Ok(uploaded_paths(&owner, &repo, &created.id, &created.paths))
+    Ok(Some(uploaded_paths(
+        &owner,
+        &repo,
+        &created.id,
+        &created.paths,
+    )))
 }
 
 /// Default display label for a graph uploaded via `export pathbase`.
@@ -2135,6 +2144,7 @@ mod tests {
             &serde_json::to_string(doc).unwrap(),
             "test",
         )
+        .map(|uploaded| uploaded.expect("an authed upload says where its paths landed"))
     }
 
     /// Run `f` with the config directory pinned to a fresh tempdir,
@@ -2359,9 +2369,10 @@ mod tests {
         );
     }
 
-    /// An anonymous upload lands under `anon/pathstash`.
+    /// An anonymous upload says nowhere its paths landed: nobody owns
+    /// the graph, so there is nothing to record.
     #[test]
-    fn pathbase_anon_upload_names_the_stored_path() {
+    fn pathbase_anon_upload_names_no_path() {
         use crate::cmd_pathbase::tests::{MockServer, graph_created_json};
         let server = MockServer::start(
             "HTTP/1.1 201 Created",
@@ -2370,10 +2381,9 @@ mod tests {
                     .into_boxed_str(),
             ),
         );
-        let base = server.base();
         let uploaded = run_pathbase_inner(
             crate::cmd_pathbase::AuthMode::Anon,
-            base.clone(),
+            server.base(),
             PathbaseUploadArgs {
                 url: None,
                 anon: true,
@@ -2385,12 +2395,7 @@ mod tests {
             "test",
         )
         .unwrap();
-        assert_eq!(
-            uploaded[0].url,
-            format!(
-                "{base}/api/v1/u/anon/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
-            )
-        );
+        assert!(uploaded.is_none());
     }
 
     fn pad_first_step(doc: &mut toolpath::v1::Graph, bytes: usize) {

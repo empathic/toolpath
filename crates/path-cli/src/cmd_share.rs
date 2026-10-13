@@ -811,7 +811,9 @@ fn share_explicit(
         };
         let uploaded =
             crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)?;
-        if let Ok(doc) = toolpath::v1::Graph::from_json(&body) {
+        if let Some(uploaded) = uploaded
+            && let Ok(doc) = toolpath::v1::Graph::from_json(&body)
+        {
             crate::cmd_export::record_remotes(harness, session, &doc, &uploaded, stamp);
         }
         return Ok(());
@@ -867,7 +869,9 @@ fn share_explicit(
     // which the caller's `session` need not be. Its stamp was taken
     // before the derive read the source, so steps appended during the
     // upload count as not yet sent.
-    if let Some(source) = &derived.provenance {
+    if let Some(uploaded) = uploaded
+        && let Some(source) = &derived.provenance
+    {
         crate::cmd_export::record_remotes(
             harness,
             &source.id,
@@ -1827,6 +1831,52 @@ mod tests {
             let remotes = remotes_of("s1");
             assert_eq!(remotes.len(), 1);
             assert!(remotes.keys().next().unwrap().ends_with(SERVER_PATH_ID));
+        });
+    }
+
+    /// An anonymous share writes no remote record, and leaves the
+    /// records already there as they were.
+    #[test]
+    fn anon_share_leaves_remotes_untouched() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s1")
+                .unwrap()
+                .doc;
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s1", &server.base()).unwrap();
+            let remotes_file = crate::config::config_dir()
+                .unwrap()
+                .join(crate::config::REMOTES_FILE_NAME);
+            let before = std::fs::read(&remotes_file).unwrap();
+
+            let server = MockServer::start(
+                "HTTP/1.1 201 Created",
+                Box::leak(graph_created_json(&[(&path_id, SERVER_PATH_ID)]).into_boxed_str()),
+            );
+            let args = ShareArgs {
+                anon: true,
+                harness: Some(Harness::Claude),
+                project: Some(PathBuf::from("/test/project")),
+                ..share_args()
+            };
+            share_explicit(
+                ArtifactType::Claude,
+                "s1",
+                &args,
+                crate::cmd_pathbase::AuthMode::Anon,
+                server.base(),
+            )
+            .unwrap();
+            assert_eq!(std::fs::read(&remotes_file).unwrap(), before);
         });
     }
 

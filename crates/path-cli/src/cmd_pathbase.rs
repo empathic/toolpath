@@ -42,9 +42,6 @@ pub(crate) struct User {
 pub(crate) struct AnonGraphResponse {
     pub id: uuid::Uuid,
     pub url: String,
-    /// The stored paths in document order; empty from a server that
-    /// predates the field.
-    pub paths: Vec<pathbase_client::types::CreatedPath>,
 }
 
 /// Response from `POST /api/v1/u/{owner}/repos/{repo}/graphs`.
@@ -533,7 +530,6 @@ pub(crate) fn anon_graphs_post(base_url: &str, document_json: &str) -> Result<An
             Ok(AnonGraphResponse {
                 id: inner.id,
                 url: inner.url,
-                paths: inner.paths,
             })
         }
         Err(pathbase_client::Error::ErrorResponse(resp)) => {
