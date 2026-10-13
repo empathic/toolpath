@@ -7,6 +7,7 @@
 //! manifest's lock.
 
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,9 +36,29 @@ pub(crate) struct RemoteRecord {
     pub(crate) last_step: String,
     /// The head the remote was last told.
     pub(crate) head: String,
-    /// The local source's stamp ([`stamp_string`]) when those steps
-    /// were sent.
-    pub(crate) source_stamp: String,
+    /// The local source's stamp when those steps were sent; absent
+    /// when the source provides neither part, so freshness cannot be
+    /// told by stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_stamp: Option<SourceStamp>,
+}
+
+/// A source's stat-level stamp as the manifest record stores it:
+/// mtime or updated-at, and size, each absent when the source does
+/// not provide it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct SourceStamp {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) modified: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) size: Option<u64>,
+}
+
+impl SourceStamp {
+    /// `stamp` as a record field: `None` when both parts are unknown.
+    pub(crate) fn known((modified, size): sources::Stamp) -> Option<Self> {
+        (modified.is_some() || size.is_some()).then_some(Self { modified, size })
+    }
 }
 
 impl RemoteRecord {
@@ -50,23 +71,9 @@ impl RemoteRecord {
             steps: path.steps.len(),
             last_step: last.step.id.clone(),
             head: path.path.head.clone(),
-            source_stamp: stamp_string(stamp),
+            source_stamp: SourceStamp::known(stamp),
         })
     }
-}
-
-/// A source stamp as one string, `<modified>/<size>`, each part empty
-/// when the source does not provide it. The same stamp the stat gate
-/// compares, so a pass can skip a session whose source has not moved
-/// since the record was written.
-pub(crate) fn stamp_string((modified, size): sources::Stamp) -> String {
-    format!(
-        "{}/{}",
-        modified
-            .map(|m| m.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
-            .unwrap_or_default(),
-        size.map(|s| s.to_string()).unwrap_or_default()
-    )
 }
 
 /// One session's records: path URL → record.
@@ -144,15 +151,23 @@ fn save_remotes(config_dir: &Path, remotes: &Remotes) -> Result<()> {
 
 /// Move remote records a 0.30.0 pre-release build wrote into the
 /// manifest (`<type> → <id> → { remotes: { <url>: record } }`) into the
-/// remotes file, rekeyed to the path's API URL. A record already in the
-/// remotes file at that URL wins. The caller holds the manifest lock
+/// remotes file, rekeyed to the path's API URL and with the stamp
+/// typed. A record already in the remotes file at that URL wins. The caller holds the manifest lock
 /// and saves the manifest next, which drops the field. An unreadable
 /// manifest is left for `load_manifest` to report.
 pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
     #[derive(Deserialize)]
     struct LegacyRecord {
         #[serde(default)]
-        remotes: SessionRemotes,
+        remotes: BTreeMap<String, LegacyRemote>,
+    }
+    #[derive(Deserialize)]
+    struct LegacyRemote {
+        steps: usize,
+        last_step: String,
+        head: String,
+        /// `<modified>/<size>`, each part empty when unknown.
+        source_stamp: String,
     }
 
     let json = match std::fs::read_to_string(config_dir.join(MANIFEST_FILE_NAME)) {
@@ -170,7 +185,13 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
             continue;
         };
         for (id, rec) in records {
-            for (url, remote) in rec.remotes {
+            for (url, old) in rec.remotes {
+                let remote = RemoteRecord {
+                    steps: old.steps,
+                    last_step: old.last_step,
+                    head: old.head,
+                    source_stamp: parse_stamp_string(&old.source_stamp),
+                };
                 lifted.push((session_key(artifact_type, &id), api_url(&url), remote));
             }
         }
@@ -188,6 +209,13 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
             .or_insert(remote);
     }
     save_remotes(config_dir, &remotes)
+}
+
+/// A pre-release `<modified>/<size>` stamp string, typed. A part that
+/// is empty or does not parse is unknown.
+fn parse_stamp_string(stamp: &str) -> Option<SourceStamp> {
+    let (modified, size) = stamp.rsplit_once('/')?;
+    SourceStamp::known((modified.parse().ok(), size.parse().ok()))
 }
 
 /// The API URL for a key in the pre-release spelling
@@ -215,7 +243,10 @@ mod tests {
             steps,
             last_step: format!("s{}", steps - 1),
             head: format!("s{}", steps - 1),
-            source_stamp: "2026-01-01T00:00:00Z/10".to_string(),
+            source_stamp: Some(SourceStamp {
+                modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
+                size: Some(10),
+            }),
         }
     }
 
@@ -290,7 +321,12 @@ mod tests {
                 "path": "/p",
                 "synced_at": "2026-07-09T00:00:00Z",
                 "remotes": {
-                    "https://a/u/me/x/graphs/g1/paths/p1": remote_record(4),
+                    "https://a/u/me/x/graphs/g1/paths/p1": {
+                        "steps": 4,
+                        "last_step": "s3",
+                        "head": "s3",
+                        "source_stamp": "2026-01-01T00:00:00Z/10",
+                    },
                 },
             }},
         });
@@ -318,7 +354,12 @@ mod tests {
         let legacy = serde_json::json!({
             "claude": {"s1": {
                 "synced_at": "2026-07-09T00:00:00Z",
-                "remotes": {"https://a/u/me/x/graphs/g1/paths/p1": remote_record(1)},
+                "remotes": {"https://a/u/me/x/graphs/g1/paths/p1": {
+                    "steps": 1,
+                    "last_step": "s0",
+                    "head": "s0",
+                    "source_stamp": "/",
+                }},
             }},
         });
         std::fs::write(cfg.join(MANIFEST_FILE_NAME), legacy.to_string()).unwrap();
@@ -362,24 +403,47 @@ mod tests {
                 "steps": 412,
                 "last_step": "s411",
                 "head": "s411",
-                "source_stamp": "2026-01-01T00:00:00Z/10",
+                "source_stamp": {"modified": "2026-01-01T00:00:00Z", "size": 10},
             })
         );
     }
 
+    /// A stamp with neither part is left out of the record and reads
+    /// back as unknown; a partial one keeps only the part it has.
     #[test]
-    fn stamp_string_leaves_absent_parts_empty() {
-        let at: chrono::DateTime<chrono::Utc> = "2024-01-02T00:00:01.123456789Z".parse().unwrap();
+    fn an_unknown_stamp_is_absent() {
+        let unknown = RemoteRecord {
+            source_stamp: SourceStamp::known((None, None)),
+            ..remote_record(1)
+        };
+        let json = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(json.get("source_stamp"), None, "{json}");
+        let back: RemoteRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(back.source_stamp, None);
+
+        let partial = RemoteRecord {
+            source_stamp: SourceStamp::known((None, Some(7))),
+            ..remote_record(1)
+        };
         assert_eq!(
-            stamp_string((Some(at), Some(7))),
-            "2024-01-02T00:00:01.123456789Z/7"
+            serde_json::to_value(&partial).unwrap()["source_stamp"],
+            serde_json::json!({"size": 7})
+        );
+    }
+
+    #[test]
+    fn parse_stamp_string_reads_each_part_or_none() {
+        let at: DateTime<Utc> = "2024-01-02T00:00:01.123456789Z".parse().unwrap();
+        assert_eq!(
+            parse_stamp_string("2024-01-02T00:00:01.123456789Z/7"),
+            SourceStamp::known((Some(at), Some(7)))
         );
         assert_eq!(
-            stamp_string((Some(at), None)),
-            "2024-01-02T00:00:01.123456789Z/"
+            parse_stamp_string("/7"),
+            SourceStamp::known((None, Some(7)))
         );
-        assert_eq!(stamp_string((None, Some(7))), "/7");
-        assert_eq!(stamp_string((None, None)), "/");
+        assert_eq!(parse_stamp_string("/"), None);
+        assert_eq!(parse_stamp_string("garbage"), None);
     }
 
     #[test]
@@ -411,6 +475,6 @@ mod tests {
         assert_eq!(rec.steps, 3);
         assert_eq!(rec.last_step, "s2");
         assert_eq!(rec.head, "s2");
-        assert_eq!(rec.source_stamp, "/9");
+        assert_eq!(rec.source_stamp, SourceStamp::known((None, Some(9))));
     }
 }

@@ -12,7 +12,8 @@ All notable changes to the Toolpath workspace are documented here.
   (`<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`)
   and holds how many steps of the derive the remote has, the id of the
   last of them, the head the remote was last told, and the local
-  source's stamp at the time. `path share` and `p export pathbase`
+  source's stamp at the time (`modified` and `size`, typed as in the
+  manifest, absent when the source provides neither). `path share` and `p export pathbase`
   write one after a successful upload (for a cache id, against the
   session the entry was derived from; anonymous uploads included; a
   server that lists no paths in its create response leaves no record

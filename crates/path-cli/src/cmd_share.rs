@@ -1736,7 +1736,7 @@ mod tests {
                 .unwrap()
                 .stamp(Some("/test/project"), "s1")
                 .unwrap();
-            assert_eq!(remote.source_stamp, crate::sync::stamp_string(stamp));
+            assert_eq!(remote.source_stamp, crate::sync::SourceStamp::known(stamp));
             assert!(rec.cache_id.is_some(), "the share also cached the document");
         });
     }
