@@ -16,6 +16,7 @@ use super::engine::{lock_manifest, write_config_file};
 use super::sources;
 use crate::artifact::ArtifactType;
 use crate::config::{MANIFEST_FILE_NAME, REMOTES_FILE_NAME};
+use crate::derive::PathRef;
 
 /// The remotes file format this build reads and writes.
 const REMOTES_VERSION: u32 = 1;
@@ -102,8 +103,10 @@ pub(crate) fn session_key(artifact_type: ArtifactType, id: &str) -> String {
     format!("{}:{id}", artifact_type.name())
 }
 
-/// Write `record` under `url` for the session (`artifact_type`, `id`),
-/// replacing any earlier record at that URL.
+/// Write `record` under `url` for the session (`artifact_type`, `id`).
+/// A session keeps one record per destination: any earlier record at
+/// that URL, or at another path on the same server, owner, and repo, is
+/// replaced.
 pub(crate) fn record_remote(
     config_dir: &Path,
     artifact_type: ArtifactType,
@@ -113,12 +116,34 @@ pub(crate) fn record_remote(
 ) -> Result<()> {
     let _lock = lock_manifest(config_dir)?;
     let mut remotes = load_remotes(config_dir)?;
-    remotes
+    let session = remotes
         .sessions
         .entry(session_key(artifact_type, id))
-        .or_default()
-        .insert(url.to_string(), record);
+        .or_default();
+    let dest = destination(url);
+    if dest.is_some() {
+        session.retain(|key, _| destination(key) != dest);
+    }
+    session.insert(url.to_string(), record);
     save_remotes(config_dir, &remotes)
+}
+
+/// Where a record key points: the server (scheme and host), owner, and
+/// repo of a Pathbase path API URL. `None` for any other key, which
+/// shares a destination with nothing.
+fn destination(key: &str) -> Option<(String, String, String)> {
+    match crate::derive::parse_pathbase_ref(key, None).ok()? {
+        (
+            Some(server),
+            PathRef {
+                owner,
+                repo,
+                path: Some(_),
+                ..
+            },
+        ) => Some((server, owner, repo)),
+        _ => None,
+    }
 }
 
 /// The remotes file; empty when there is none.
@@ -152,7 +177,9 @@ fn save_remotes(config_dir: &Path, remotes: &Remotes) -> Result<()> {
 /// Move remote records a 0.30.0 pre-release build wrote into the
 /// manifest (`<type> → <id> → { remotes: { <url>: record } }`) into the
 /// remotes file, rekeyed to the path's API URL and with the stamp
-/// typed. A record already in the remotes file at that URL wins. The caller holds the manifest lock
+/// typed. A record already in the remotes file for that destination
+/// wins; among several pre-release records for one destination, which
+/// nothing orders, the first by URL is kept. The caller holds the manifest lock
 /// and saves the manifest next, which drops the field. An unreadable
 /// manifest is left for `load_manifest` to report.
 pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
@@ -201,12 +228,14 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
     }
     let mut remotes = load_remotes(config_dir)?;
     for (key, url, remote) in lifted {
-        remotes
-            .sessions
-            .entry(key)
-            .or_default()
-            .entry(url)
-            .or_insert(remote);
+        let session = remotes.sessions.entry(key).or_default();
+        let dest = destination(&url);
+        let taken = session
+            .keys()
+            .any(|k| *k == url || (dest.is_some() && destination(k) == dest));
+        if !taken {
+            session.insert(url, remote);
+        }
     }
     save_remotes(config_dir, &remotes)
 }
@@ -236,7 +265,18 @@ mod tests {
     use super::*;
     use crate::sync::{evict_cache_id, load_manifest};
 
-    const PATH_URL: &str = "https://a/api/v1/u/me/repos/x/graphs/g1/paths/p1";
+    const G: &str = "00000000-0000-0000-0000-00000000000a";
+    const P: &str = "00000000-0000-0000-0000-00000000000b";
+    const PATH_URL: &str = "https://a/api/v1/u/me/repos/x/graphs/00000000-0000-0000-0000-00000000000a/paths/00000000-0000-0000-0000-00000000000b";
+    /// [`PATH_URL`] in the pre-release spelling.
+    const LEGACY_KEY: &str = "https://a/u/me/x/graphs/00000000-0000-0000-0000-00000000000a/paths/00000000-0000-0000-0000-00000000000b";
+
+    /// A path API URL on `server`, repo `me/<repo>`, ids ending in `n`.
+    fn path_url(server: &str, repo: &str, n: u8) -> String {
+        format!(
+            "https://{server}/api/v1/u/me/repos/{repo}/graphs/00000000-0000-0000-0000-0000000000a{n}/paths/00000000-0000-0000-0000-0000000000b{n}"
+        )
+    }
 
     fn remote_record(steps: usize) -> RemoteRecord {
         RemoteRecord {
@@ -266,7 +306,7 @@ mod tests {
     fn record_remote_writes_the_versioned_file_and_replaces_per_url() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path();
-        let other = "https://a/api/v1/u/me/repos/x/graphs/g2/paths/p2";
+        let other = &path_url("a", "y", 2);
         record_remote(cfg, ArtifactType::Claude, "s1", PATH_URL, remote_record(1)).unwrap();
         record_remote(cfg, ArtifactType::Claude, "s1", other, remote_record(2)).unwrap();
         record_remote(cfg, ArtifactType::Claude, "s1", PATH_URL, remote_record(3)).unwrap();
@@ -281,6 +321,59 @@ mod tests {
             !cfg.join(MANIFEST_FILE_NAME).exists(),
             "a record does not touch the manifest"
         );
+    }
+
+    /// Two shares of one session to one destination leave the second;
+    /// another repo or server is a separate destination.
+    #[test]
+    fn record_remote_keeps_one_record_per_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path();
+        let first = &path_url("a", "x", 1);
+        let second = &path_url("a", "x", 2);
+        let other_repo = &path_url("a", "y", 3);
+        let other_server = &path_url("b", "x", 4);
+        record_remote(cfg, ArtifactType::Claude, "s1", first, remote_record(1)).unwrap();
+        record_remote(cfg, ArtifactType::Claude, "s1", second, remote_record(2)).unwrap();
+        assert_eq!(
+            session(cfg, "s1"),
+            [(second.to_string(), remote_record(2))].into()
+        );
+
+        record_remote(
+            cfg,
+            ArtifactType::Claude,
+            "s1",
+            other_repo,
+            remote_record(3),
+        )
+        .unwrap();
+        record_remote(
+            cfg,
+            ArtifactType::Claude,
+            "s1",
+            other_server,
+            remote_record(4),
+        )
+        .unwrap();
+        let keys: Vec<String> = session(cfg, "s1").into_keys().collect();
+        assert_eq!(keys, [second, other_repo, other_server].map(String::clone));
+        assert!(
+            session(cfg, "s2").is_empty(),
+            "other sessions are untouched"
+        );
+    }
+
+    #[test]
+    fn destination_is_server_owner_and_repo_of_a_path_api_url() {
+        let dest = |s: &str, o: &str, r: &str| Some((s.into(), o.into(), r.into()));
+        assert_eq!(destination(PATH_URL), dest("https://a", "me", "x"));
+        assert_eq!(
+            destination(&format!("https://a/u/me/repos/x/graphs/{G}")),
+            None
+        );
+        assert_eq!(destination(LEGACY_KEY), None);
+        assert_eq!(destination("s3://bucket/key"), None);
     }
 
     #[test]
@@ -321,7 +414,7 @@ mod tests {
                 "path": "/p",
                 "synced_at": "2026-07-09T00:00:00Z",
                 "remotes": {
-                    "https://a/u/me/x/graphs/g1/paths/p1": {
+                    LEGACY_KEY: {
                         "steps": 4,
                         "last_step": "s3",
                         "head": "s3",
@@ -345,16 +438,18 @@ mod tests {
         );
     }
 
-    /// A newer record at the same URL is not overwritten by a lifted one.
+    /// A lifted record does not join or replace a newer record for the
+    /// same destination.
     #[test]
     fn a_lifted_record_does_not_replace_a_newer_one() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path();
-        record_remote(cfg, ArtifactType::Claude, "s1", PATH_URL, remote_record(5)).unwrap();
+        let newer = path_url("a", "x", 2);
+        record_remote(cfg, ArtifactType::Claude, "s1", &newer, remote_record(5)).unwrap();
         let legacy = serde_json::json!({
             "claude": {"s1": {
                 "synced_at": "2026-07-09T00:00:00Z",
-                "remotes": {"https://a/u/me/x/graphs/g1/paths/p1": {
+                "remotes": {LEGACY_KEY: {
                     "steps": 1,
                     "last_step": "s0",
                     "head": "s0",
@@ -364,7 +459,7 @@ mod tests {
         });
         std::fs::write(cfg.join(MANIFEST_FILE_NAME), legacy.to_string()).unwrap();
         evict_cache_id(cfg, "none").unwrap();
-        assert_eq!(session(cfg, "s1")[PATH_URL], remote_record(5));
+        assert_eq!(session(cfg, "s1"), [(newer, remote_record(5))].into());
     }
 
     /// The manifest's parse error says to delete it; doing so loses no
@@ -385,10 +480,10 @@ mod tests {
 
     #[test]
     fn api_url_rewrites_only_the_pre_release_spelling() {
-        assert_eq!(api_url("https://a/u/me/x/graphs/g1/paths/p1"), PATH_URL);
+        assert_eq!(api_url(LEGACY_KEY), PATH_URL);
         assert_eq!(
-            api_url("http://h:8080/base/u/me/x/graphs/g1/paths/p1"),
-            "http://h:8080/base/api/v1/u/me/repos/x/graphs/g1/paths/p1"
+            api_url(&format!("http://h:8080/base/u/me/x/graphs/{G}/paths/{P}")),
+            format!("http://h:8080/base/api/v1/u/me/repos/x/graphs/{G}/paths/{P}")
         );
         assert_eq!(api_url(PATH_URL), PATH_URL);
         assert_eq!(api_url("s3://bucket/key"), "s3://bucket/key");
