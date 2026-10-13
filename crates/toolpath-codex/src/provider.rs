@@ -191,6 +191,9 @@ pub fn to_turn(line_payload: &ResponseItem) -> Option<Turn> {
 struct Builder<'a> {
     session: &'a Session,
     turns: Vec<Turn>,
+    /// Whether each turn of `turns` reaches the view, decided when it is
+    /// pushed (see `push_turn`).
+    kept: Vec<bool>,
     /// Events paired with a turn watermark: the number of turns already
     /// pushed when the event arrived. Assembly merges the two streams on
     /// that watermark so `items` preserves the rollout's interleaving.
@@ -219,6 +222,7 @@ impl<'a> Builder<'a> {
         Self {
             session,
             turns: Vec::new(),
+            kept: Vec::new(),
             events: Vec::new(),
             pending_reasoning_plaintext: Vec::new(),
             current_round_id: None,
@@ -323,20 +327,13 @@ impl<'a> Builder<'a> {
             version: Some(m.cli_version.clone()),
         });
 
-        // Filter empty carrier turns (no text, no thinking, no tool calls).
-        // Previously done inside `derive_path_from_view`; moved here so the
-        // canonical `derive_path` sees only meaningful turns. We compute a
-        // keep-mask instead of `retain`-ing in place so the event watermarks
-        // (which index the unfiltered turn stream) stay valid.
-        let keep: Vec<bool> = self
-            .turns
-            .iter()
-            .map(|t| !(t.text.is_empty() && t.thinking.is_none() && t.tool_uses.is_empty()))
-            .collect();
+        // Empty turns are dropped through the keep-mask fixed at push time
+        // rather than `retain`-ed, so the event watermarks (which index the
+        // unfiltered turn stream) stay valid.
+        let keep = std::mem::take(&mut self.kept);
 
         // Assign synthetic ids to surviving turns whose source message didn't
-        // carry one. Numbering follows the post-filter position to match the
-        // prior `retain`-then-enumerate id.
+        // carry one, numbered by position among the surviving turns.
         let mut surviving = 0usize;
         // Final id of each surviving turn, indexed by its position in
         // `self.turns`; `None` for dropped turns. Seeds the event-id
@@ -550,20 +547,24 @@ impl<'a> Builder<'a> {
             category,
         };
 
-        let turn_idx = match self.last_assistant_turn_index() {
-            Some(idx) => idx,
-            None => {
-                let t = synthetic_assistant_turn(
+        let (turn_idx, tool_idx) = match self.last_assistant_turn_index() {
+            Some(idx) if self.kept[idx] => {
+                self.turns[idx].tool_uses.push(invocation);
+                (idx, self.turns[idx].tool_uses.len() - 1)
+            }
+            // No turn yet, or the latest one was dropped as empty when it was
+            // pushed: the call opens a synthetic assistant turn of its own.
+            _ => {
+                let mut t = synthetic_assistant_turn(
                     timestamp,
                     self.working_dir.as_deref(),
                     self.current_model.as_deref(),
                 );
+                t.tool_uses.push(invocation);
                 self.push_turn(t);
-                self.turns.len() - 1
+                (self.turns.len() - 1, 0)
             }
         };
-        let tool_idx = self.turns[turn_idx].tool_uses.len();
-        self.turns[turn_idx].tool_uses.push(invocation);
         self.call_index.insert(call_id, (turn_idx, tool_idx));
     }
 
@@ -647,11 +648,18 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Push a turn and decide, from what it carries now, whether it reaches
+    /// the view: a turn with no text, thinking or tool calls is dropped.
+    /// Nothing read later revives a dropped turn (a tool call opens its own
+    /// turn instead), so deriving a growing rollout yields a prefix of the
+    /// later derive.
     fn push_turn(&mut self, mut turn: Turn) {
         self.drain_pending_onto(&mut turn);
         if turn.role == Role::Assistant && turn.group_id.is_none() {
             turn.group_id = self.current_round_id.clone();
         }
+        self.kept
+            .push(!(turn.text.is_empty() && turn.thinking.is_none() && turn.tool_uses.is_empty()));
         self.turns.push(turn);
     }
 

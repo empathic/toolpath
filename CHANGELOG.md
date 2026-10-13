@@ -88,7 +88,12 @@ their position in that stream.
   rollout position — a `compacted` marker now derives between its
   surrounding turns instead of after them, pinned through
   derive → extract. The synthesized chain runs over the merged
-  item stream, so events sit between the turns they separate.
+  item stream, so events sit between the turns they separate. Whether
+  a turn is kept is decided when its line is read: an empty assistant
+  message stays dropped, and a function call after it opens a synthetic
+  assistant turn instead of reviving it, so the step ids and parents
+  derived from a growing rollout only grow (`tests/prefix_stability.rs`
+  pins every line prefix of the fixtures).
 - **`toolpath-gemini`** (0.7.0): split assistant messages group via
   `group_id` with the snapshot counted once.
 - **`toolpath-opencode`** (0.6.0): `items` holds the turns followed by
