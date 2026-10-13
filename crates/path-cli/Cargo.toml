@@ -1,6 +1,6 @@
 [package]
 name = "path-cli"
-version = "0.29.0"
+version = "0.30.0"
 edition.workspace = true
 license.workspace = true
 repository = "https://github.com/empathic/toolpath"
@@ -55,6 +55,7 @@ toolpath-pi = { workspace = true }
 toolpath-convo = { workspace = true }
 toolpath-github = { workspace = true }
 pathbase-client = { workspace = true }
+percent-encoding = { workspace = true }
 git2 = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }

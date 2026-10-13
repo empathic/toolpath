@@ -2,6 +2,37 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.30.0 — 2026-10-07
+
+- **`path-cli`** (0.30.0): path-cli records where each session's path
+  lives remotely, in `$CONFIG_DIR/remotes.json` (`version` 1, then
+  harness → session id → path URL → record, keyed as the manifest is),
+  apart from the manifest, which older path-cli
+  builds rewrite without unknown fields. A record sits under the path's
+  API URL
+  (`<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`)
+  and holds how many steps of the derive the remote has, the id of the
+  last of them, the head the remote was last told, and the local
+  source's stamp at the time (`modified` and `size`, typed as in the
+  manifest, absent when the source provides neither). `path share` and
+  `p export pathbase` write one after a successful upload (for a cache
+  id, against the session the entry was derived from; anonymous uploads
+  write none; a server that lists no paths in its create response
+  leaves no record and warns). A session keeps one record per
+  destination (server, owner, repo): a repeat share replaces the
+  earlier entry. `path resume` writes none: a pulled path becomes a new
+  local session. Nothing reads them yet; incremental append and
+  `share --all` will.
+- **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
+  whose `POST /graphs` answers `GraphCreatedResponse`: an empty
+  `document` and `paths[]` naming each stored path's `path.id` and
+  `server_id`, for the anonymous route too. `create_graph` and
+  `create_anon_graph` return that type instead of
+  `GraphDocumentResponse`, hence the minor bump. `build.rs` makes
+  `paths` and `TracePath.mutability` optional at generation time, as it
+  does `Graph.mutability`, so an older server's response still decodes.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a

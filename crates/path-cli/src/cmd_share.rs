@@ -781,7 +781,7 @@ fn share_explicit(
     // already in the cache, upload the cached doc instead of re-deriving
     // — a derive would reproduce it byte-for-byte anyway.
     if !args.no_cache
-        && let Some(cache_id) = crate::sync::fresh_cache_id(
+        && let Some((cache_id, stamp)) = crate::sync::fresh_cache_id(
             &HarnessBundle::from_environment(),
             harness,
             project.as_deref(),
@@ -809,7 +809,14 @@ fn share_explicit(
             name: args.name.clone(),
             public: args.public,
         };
-        return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
+        let uploaded =
+            crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)?;
+        if let Some(uploaded) = uploaded
+            && let Ok(doc) = toolpath::v1::Graph::from_json(&body)
+        {
+            crate::cmd_export::record_remotes(harness, session, &doc, &uploaded, stamp);
+        }
+        return Ok(());
     }
 
     let derived = derive_session(harness, project.as_deref(), session)?;
@@ -854,7 +861,26 @@ fn share_explicit(
         name: args.name.clone(),
         public: args.public,
     };
-    crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)
+    let uploaded =
+        crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)?;
+    // The record goes under the session the cache record sits under:
+    // the provenance names the session by the id sync
+    // enumerates (a Claude chain's head, a Codex rollout's full id),
+    // which the caller's `session` need not be. Its stamp was taken
+    // before the derive read the source, so steps appended during the
+    // upload count as not yet sent.
+    if let Some(uploaded) = uploaded
+        && let Some(source) = &derived.provenance
+    {
+        crate::cmd_export::record_remotes(
+            harness,
+            &source.id,
+            &derived.doc,
+            &uploaded,
+            (source.modified, source.size),
+        );
+    }
+    Ok(())
 }
 
 /// The directory a derived session document belongs to: its single
@@ -1597,5 +1623,283 @@ mod tests {
             assert_eq!(status, HarnessStatus::unresolved());
             assert!(!status.exists);
         }
+    }
+
+    // ── Upload flows against a mock server ──────────────────────────
+    //
+    // Each test pins `$HOME` and `$TOOLPATH_CONFIG_DIR` under a tempdir,
+    // so the harness bundle, the derive, the cache and the manifest all
+    // land there.
+
+    use crate::cmd_pathbase::tests::{MockServer, graph_created_json};
+
+    const SERVER_PATH_ID: &str = "22222222-2222-2222-2222-222222222222";
+
+    /// `repos_post` ensuring `pathstash` exists: it already does.
+    fn repo_409() -> (&'static str, String) {
+        (
+            "HTTP/1.1 409 Conflict",
+            r#"{"code":"conflict","error":"already exists"}"#.to_string(),
+        )
+    }
+
+    /// Run `f` with the environment pinned under a fresh tempdir, which
+    /// `f` receives. Holds `TEST_ENV_LOCK` for the duration.
+    fn with_home<R>(f: impl FnOnce(&Path) -> R) -> R {
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = TempDir::new().unwrap();
+        let prior_home = std::env::var_os("HOME");
+        let prior_cfg = std::env::var_os(crate::config::CONFIG_DIR_ENV);
+        unsafe {
+            std::env::set_var("HOME", temp.path());
+            std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path().join(".toolpath"));
+        }
+        let result = f(temp.path());
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prior_cfg {
+                Some(v) => std::env::set_var(crate::config::CONFIG_DIR_ENV, v),
+                None => std::env::remove_var(crate::config::CONFIG_DIR_ENV),
+            }
+        }
+        result
+    }
+
+    fn run_single(session: &str, base_url: &str) -> Result<()> {
+        let args = ShareArgs {
+            harness: Some(Harness::Claude),
+            project: Some(PathBuf::from("/test/project")),
+            ..share_args()
+        };
+        share_explicit(
+            ArtifactType::Claude,
+            session,
+            &args,
+            authed(),
+            base_url.to_string(),
+        )
+    }
+
+    fn remotes_of(session: &str) -> crate::sync::SessionRemotes {
+        load_remotes_all()
+            .get_mut("claude")
+            .and_then(|sessions| sessions.remove(session))
+            .unwrap_or_default()
+    }
+
+    fn load_remotes_all() -> std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, crate::sync::SessionRemotes>,
+    > {
+        crate::sync::load_remotes(&crate::config::config_dir().unwrap())
+            .unwrap()
+            .sessions
+    }
+
+    fn manifest_record(session: &str) -> Option<crate::sync::SyncRecord> {
+        let manifest = crate::sync::load_manifest(&crate::config::config_dir().unwrap()).unwrap();
+        manifest.get("claude")?.get(session).cloned()
+    }
+
+    #[test]
+    fn share_records_where_the_path_landed() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            // The server lists the path under the document's own id.
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s1")
+                .unwrap()
+                .doc;
+            let path = doc.single_path().unwrap();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path.path.id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            let base = server.base();
+            run_single("s1", &base).unwrap();
+
+            let rec = manifest_record("s1").unwrap();
+            let remotes = remotes_of("s1");
+            assert_eq!(remotes.len(), 1, "{remotes:?}");
+            let (url, remote) = remotes.iter().next().unwrap();
+            assert_eq!(
+                *url,
+                format!(
+                    "{base}/api/v1/u/me/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/{SERVER_PATH_ID}"
+                )
+            );
+            assert_eq!(remote.steps, path.steps.len());
+            assert_eq!(remote.last_step, path.steps.last().unwrap().step.id);
+            assert_eq!(remote.head, path.path.head);
+            let bundle = HarnessBundle::from_environment();
+            let stamp = crate::sync::sources::source_for(&bundle, ArtifactType::Claude)
+                .unwrap()
+                .stamp(Some("/test/project"), "s1")
+                .unwrap();
+            assert_eq!(remote.source_stamp, crate::sync::SourceStamp::known(stamp));
+            assert!(rec.cache_id.is_some(), "the share also cached the document");
+        });
+    }
+
+    /// A share named by a successor segment records on the chain head,
+    /// the entry the cache record sits under, and leaves no entry under
+    /// the segment id.
+    #[test]
+    fn share_by_a_successor_id_records_on_the_chain_head() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            // The successor's first entry carries the predecessor's
+            // sessionId (the bridge).
+            std::fs::write(
+                claude.join("projects/-test-project/s2.jsonl"),
+                concat!(
+                    r#"{"type":"user","uuid":"u-s2-0","timestamp":"2024-01-02T01:00:00Z","sessionId":"s1","cwd":"/test/project","message":{"role":"user","content":"bridge"}}"#,
+                    "\n",
+                    r#"{"type":"assistant","uuid":"a-s2-1","timestamp":"2024-01-02T01:00:01Z","sessionId":"s2","message":{"role":"assistant","content":"after rotation"}}"#,
+                    "\n",
+                ),
+            )
+            .unwrap();
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s2")
+                .unwrap()
+                .doc;
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s2", &server.base()).unwrap();
+
+            let manifest =
+                crate::sync::load_manifest(&crate::config::config_dir().unwrap()).unwrap();
+            let ids: Vec<&String> = manifest["claude"].keys().collect();
+            assert_eq!(ids, ["s1"], "{:?}", manifest["claude"]);
+            assert!(manifest["claude"]["s1"].cache_id.is_some());
+            let remotes = load_remotes_all();
+            let keys: Vec<&String> = remotes.keys().collect();
+            assert_eq!(keys, ["claude"], "{remotes:?}");
+            let sessions: Vec<&String> = remotes["claude"].keys().collect();
+            assert_eq!(sessions, ["s1"], "{remotes:?}");
+            assert_eq!(remotes["claude"]["s1"].len(), 1);
+            assert!(
+                remotes["claude"]["s1"]
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .ends_with(SERVER_PATH_ID)
+            );
+        });
+    }
+
+    /// A share whose source is already current in the cache uploads the
+    /// cached document and records that upload too.
+    #[test]
+    fn share_from_the_cache_records_the_upload() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                ("HTTP/1.1 201 Created", graph_created_json(&[])),
+            ]);
+            run_single("s1", &server.base()).unwrap();
+            let rec = manifest_record("s1").unwrap();
+            assert!(
+                remotes_of("s1").is_empty(),
+                "an older server lists no paths"
+            );
+
+            let cache_id = rec.cache_id.unwrap();
+            let json =
+                std::fs::read_to_string(crate::cache::cache_path(&cache_id).unwrap()).unwrap();
+            let doc = toolpath::v1::Graph::from_json(&json).unwrap();
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s1", &server.base()).unwrap();
+            let remotes = remotes_of("s1");
+            assert_eq!(remotes.len(), 1);
+            assert!(remotes.keys().next().unwrap().ends_with(SERVER_PATH_ID));
+        });
+    }
+
+    /// An anonymous share writes no remote record, and leaves the
+    /// records already there as they were.
+    #[test]
+    fn anon_share_leaves_remotes_untouched() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s1")
+                .unwrap()
+                .doc;
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s1", &server.base()).unwrap();
+            let remotes_file = crate::config::config_dir()
+                .unwrap()
+                .join(crate::config::REMOTES_FILE_NAME);
+            let before = std::fs::read(&remotes_file).unwrap();
+
+            let server = MockServer::start(
+                "HTTP/1.1 201 Created",
+                Box::leak(graph_created_json(&[(&path_id, SERVER_PATH_ID)]).into_boxed_str()),
+            );
+            let args = ShareArgs {
+                anon: true,
+                harness: Some(Harness::Claude),
+                project: Some(PathBuf::from("/test/project")),
+                ..share_args()
+            };
+            share_explicit(
+                ArtifactType::Claude,
+                "s1",
+                &args,
+                crate::cmd_pathbase::AuthMode::Anon,
+                server.base(),
+            )
+            .unwrap();
+            assert_eq!(std::fs::read(&remotes_file).unwrap(), before);
+        });
+    }
+
+    #[test]
+    fn failed_share_records_nothing() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 500 Internal Server Error",
+                    r#"{"error":"no"}"#.to_string(),
+                ),
+            ]);
+            run_single("s1", &server.base()).unwrap_err();
+            assert!(remotes_of("s1").is_empty());
+        });
     }
 }
