@@ -2233,7 +2233,13 @@ mod tests {
             assert_eq!(remote.steps, 2);
             assert_eq!(remote.last_step, "step-002");
             assert_eq!(remote.head, "step-002");
-            assert_eq!(remote.source_stamp, "2026-03-01T00:00:00Z/99");
+            assert_eq!(
+                remote.source_stamp,
+                crate::sync::SourceStamp::known((
+                    Some("2026-03-01T00:00:00Z".parse().unwrap()),
+                    Some(99)
+                ))
+            );
 
             // The same document from a file: no session to record on.
             let file = config_dir.join("doc.json");
@@ -2293,7 +2299,13 @@ mod tests {
             assert_eq!(manifest["claude"]["sess"].size, Some(100));
             let remotes = remotes_of_sess(config_dir);
             let remote = remotes.values().next().unwrap();
-            assert_eq!(remote.source_stamp, "2026-03-01T00:00:00Z/99");
+            assert_eq!(
+                remote.source_stamp,
+                crate::sync::SourceStamp::known((
+                    Some("2026-03-01T00:00:00Z".parse().unwrap()),
+                    Some(99)
+                ))
+            );
         });
     }
 
