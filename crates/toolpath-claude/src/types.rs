@@ -399,7 +399,9 @@ pub struct Conversation {
     /// Lines without a `uuid` (`permission-mode`, `last-prompt`,
     /// `ai-title`, `file-history-snapshot`, ...), kept verbatim at their
     /// file position relative to `entries`. Ordered by `before`, then by
-    /// file order within one `before`.
+    /// file order within one `before`; [`Conversation::lines`] orders by
+    /// `before` itself, so a list built out of order still writes each line
+    /// before the entry it names.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headerless: Vec<HeaderlessLine>,
 }
@@ -466,9 +468,12 @@ impl Conversation {
     }
 
     /// Every line in file order: each headerless line before the entry
-    /// it precedes, trailing ones after the last entry.
+    /// it precedes, trailing ones after the last entry. Headerless lines
+    /// sharing a `before` keep their order in `headerless`.
     pub fn lines(&self) -> impl Iterator<Item = Line<'_>> {
-        let mut headerless = self.headerless.iter().peekable();
+        let mut sorted: Vec<&HeaderlessLine> = self.headerless.iter().collect();
+        sorted.sort_by_key(|h| h.before);
+        let mut headerless = sorted.into_iter().peekable();
         let mut entries = self.entries.iter().enumerate().peekable();
         std::iter::from_fn(move || {
             let next_entry = entries.peek().map_or(usize::MAX, |(i, _)| *i);
@@ -754,6 +759,40 @@ mod tests {
                 .map(|h| h.before)
                 .collect::<Vec<_>>(),
             vec![0, 1, 1, 2]
+        );
+    }
+
+    #[test]
+    fn lines_order_an_unsorted_headerless_list_by_position() {
+        let mut convo = Conversation::new("s".to_string());
+        for (uuid, ts) in [("u1", "00"), ("a1", "01"), ("u2", "02")] {
+            convo.add_entry(entry(&format!(
+                r#"{{"uuid":"{uuid}","type":"user","timestamp":"2024-01-01T00:00:{ts}Z","message":{{"role":"user","content":"x"}}}}"#
+            )));
+        }
+        let line = |before: usize, ty: &str| HeaderlessLine {
+            before,
+            raw: serde_json::json!({ "type": ty }),
+        };
+        convo.headerless = vec![line(2, "ai-title"), line(0, "mode"), line(2, "last-prompt")];
+
+        let types: Vec<String> = convo
+            .lines()
+            .map(|line| match line {
+                Line::Headerless(raw) => raw["type"].as_str().unwrap().to_string(),
+                Line::Entry(e) => format!("entry:{}", e.uuid),
+            })
+            .collect();
+        assert_eq!(
+            types,
+            vec![
+                "mode",
+                "entry:u1",
+                "entry:a1",
+                "ai-title",
+                "last-prompt",
+                "entry:u2"
+            ]
         );
     }
 
