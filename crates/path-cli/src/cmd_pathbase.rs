@@ -66,12 +66,12 @@ pub(crate) struct CreatedGraph {
     pub paths: Vec<pathbase_client::types::CreatedPath>,
 }
 
-/// The URL a path is addressed by on a Pathbase server,
-/// `<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>`: the key a
-/// `sync::RemoteRecord` sits under. One spelling per path, however
-/// the parts were typed: scheme and host lowercase, no trailing slash
-/// on the server, owner and repo percent-encoded exactly once as in
-/// the API routes, the ids lowercase and hyphenated.
+/// The path's API resource URL on a Pathbase server,
+/// `<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`:
+/// the key a `sync::RemoteRecord` sits under. One spelling per path,
+/// however the parts were typed: scheme and host lowercase, no
+/// trailing slash on the server, owner and repo percent-encoded
+/// exactly once as in the API routes, the ids lowercase and hyphenated.
 pub(crate) fn remote_path_url(
     base_url: &str,
     owner: &str,
@@ -96,7 +96,7 @@ pub(crate) fn remote_path_url(
         None => base.to_string(),
     };
     format!(
-        "{server}/u/{}/{}/graphs/{}/paths/{}",
+        "{server}/api/v1/u/{}/repos/{}/graphs/{}/paths/{}",
         segment(owner),
         segment(repo),
         graph_id.hyphenated(),
@@ -1425,7 +1425,7 @@ pub(crate) mod tests {
                 "toolpath_id": "tp-1",
                 "document": {{"graph": {{"id":"g"}}, "paths": []}},
                 "path_count": 0,
-                "url": "https://pathbase.dev/u/alex/repos/pathstash/graphs/{TEST_UUID}",
+                "url": "https://pathbase.dev/u/alex/pathstash/graphs/{TEST_UUID}",
                 "visibility": "unlisted",
                 "mutability": "mutable",
                 "created_at": "2024-01-01T00:00:00Z",
@@ -1453,7 +1453,9 @@ pub(crate) mod tests {
         let path_id: uuid::Uuid = PATH_ID.parse().unwrap();
         assert_eq!(
             remote_path_url("https://pathbase.dev/", "a b", "r/s", &graph_id, &path_id),
-            format!("https://pathbase.dev/u/a%20b/r%2Fs/graphs/{TEST_UUID}/paths/{PATH_ID}")
+            format!(
+                "https://pathbase.dev/api/v1/u/a%20b/repos/r%2Fs/graphs/{TEST_UUID}/paths/{PATH_ID}"
+            )
         );
         assert_eq!(
             remote_path_url(
@@ -1463,7 +1465,9 @@ pub(crate) mod tests {
                 &graph_id,
                 &path_id
             ),
-            format!("http://127.0.0.1:8080/u/me/pathstash/graphs/{TEST_UUID}/paths/{PATH_ID}")
+            format!(
+                "http://127.0.0.1:8080/api/v1/u/me/repos/pathstash/graphs/{TEST_UUID}/paths/{PATH_ID}"
+            )
         );
     }
 
@@ -1492,7 +1496,7 @@ pub(crate) mod tests {
         // A path under the host is the server's, not the key's, and keeps its case.
         assert_eq!(
             remote_path_url("HTTP://Host:8080/Base/", "me", "r", &graph_id, &path_id),
-            format!("http://host:8080/Base/u/me/r/graphs/{TEST_UUID}/paths/{PATH_ID}")
+            format!("http://host:8080/Base/api/v1/u/me/repos/r/graphs/{TEST_UUID}/paths/{PATH_ID}")
         );
     }
 

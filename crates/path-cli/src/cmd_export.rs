@@ -2222,7 +2222,7 @@ mod tests {
             assert_eq!(
                 *url,
                 format!(
-                    "{base}/u/alex/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
+                    "{base}/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
                 )
             );
             assert_eq!(remote.steps, 2);
@@ -2312,7 +2312,7 @@ mod tests {
         assert_eq!(
             uploaded[0].url,
             format!(
-                "{base}/u/alex/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
+                "{base}/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
             )
         );
     }
@@ -2338,7 +2338,7 @@ mod tests {
         assert_eq!(
             uploaded[0].url,
             format!(
-                "{base}/u/alex/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/11111111-1111-1111-1111-111111111111"
+                "{base}/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/11111111-1111-1111-1111-111111111111"
             )
         );
     }
@@ -2372,7 +2372,7 @@ mod tests {
         assert_eq!(
             uploaded[0].url,
             format!(
-                "{base}/u/anon/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
+                "{base}/api/v1/u/anon/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
             )
         );
     }

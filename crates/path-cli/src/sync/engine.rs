@@ -53,12 +53,12 @@ pub(crate) struct SyncRecord {
 
 /// What one remote holds of a session's path. The remote's copy is a
 /// prefix of the local derive: `steps` steps, the last of them
-/// `last_step`. The key the record sits under is the path's URL on
-/// that remote — on Pathbase
-/// `<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>` — so the
-/// containing graph is the key without its last two segments and is
-/// not stored. Nothing reads these yet; incremental append and
-/// `share --all` will.
+/// `last_step`. The key the record sits under is the path's resource
+/// URL on that remote — on Pathbase its API URL,
+/// `<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`
+/// (`cmd_pathbase::remote_path_url`) — so the containing graph is the
+/// key without its last two segments and is not stored. Nothing reads
+/// these yet; incremental append and `share --all` will.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RemoteRecord {
     /// How many steps of the derive the remote holds.
@@ -642,7 +642,7 @@ mod tests {
         doc.single_path().map(|p| p.steps.len()).unwrap_or(0)
     }
 
-    const PATH_URL: &str = "https://a/u/me/x/graphs/g1/paths/p1";
+    const PATH_URL: &str = "https://a/api/v1/u/me/repos/x/graphs/g1/paths/p1";
 
     fn remote_record(steps: usize) -> RemoteRecord {
         RemoteRecord {
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn record_remote_creates_the_session_and_replaces_per_url() {
         with_cfg(|_, cfg| {
-            let other = "https://a/u/me/x/graphs/g2/paths/p2";
+            let other = "https://a/api/v1/u/me/repos/x/graphs/g2/paths/p2";
             record_remote(
                 cfg,
                 ArtifactType::Claude,

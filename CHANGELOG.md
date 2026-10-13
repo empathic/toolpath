@@ -5,8 +5,8 @@ All notable changes to the Toolpath workspace are documented here.
 ## path-cli 0.30.0 — 2026-10-07
 
 - **`path-cli`** (0.30.0): the sync manifest records where each
-  session's path lives remotely. A record sits under the path's own URL
-  (`<server>/u/<owner>/<repo>/graphs/<graph>/paths/<path>`) on the
+  session's path lives remotely. A record sits under the path's API URL
+  (`<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`) on the
   session's manifest entry and holds how many steps of the derive the
   remote has, the id of the last of them, the head the remote was last
   told, and the local source's stamp at the time. `path share` and
