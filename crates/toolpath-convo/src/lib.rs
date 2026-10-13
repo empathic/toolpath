@@ -403,7 +403,7 @@ pub struct ConversationView {
 }
 
 impl ConversationView {
-    /// All turns, in order, skipping events and compaction boundaries.
+    /// All turns, in order, skipping events.
     pub fn turns(&self) -> impl Iterator<Item = &Turn> {
         self.items.iter().filter_map(Item::as_turn)
     }

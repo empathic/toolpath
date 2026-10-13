@@ -15,11 +15,10 @@
 //! One position the IR cannot express: a tool-result carrier is absorbed
 //! into the assistant turn it answers, so a headerless run written between
 //! that turn and the carrier is indistinguishable from one written right
-//! after the carrier. The projector puts the run before the carrier (the
-//! shape Claude Code writes far more often); the captured fixture has two
-//! runs of the other shape, so the fixture comparison is exact over every
-//! line except the carriers, and the hand-written fixture is exact over
-//! every line.
+//! after the carrier. The projector puts the run before the carrier, a
+//! guess; the captured fixture has two runs after the carrier, so the
+//! fixture comparison is exact over every line except the carriers, and
+//! the hand-written fixture is exact over every line.
 //!
 //! What is NOT pinned: `parentUuid` values. 19 of the fixture's 71 entries
 //! legitimately diverge — the projector re-synthesizes tool-result carrier
@@ -141,14 +140,13 @@ fn headerless_lines_keep_their_position_through_derive_and_extract() {
     );
 }
 
-/// Appending lines to a session file only appends steps to the derived
-/// path: for every prefix of the fixture, the derived `(id, parents)`
-/// sequence is a prefix of the full derivation's. Headerless lines used to
-/// break this — they all derived at the front, so each turn's
-/// `last-prompt`/`ai-title`/`mode` group inserted steps before the first
-/// turn.
+/// Appending lines to a session file only appends step ids and parents to
+/// the derived path: for every prefix of the fixture, the derived
+/// `(id, parents)` sequence is a prefix of the full derivation's. Step
+/// bodies are not compared: an assistant step's tool results fill in when
+/// the result line arrives.
 #[test]
-fn derived_step_sequence_is_append_only_under_file_growth() {
+fn derived_step_ids_and_parents_only_grow_under_file_growth() {
     use toolpath_convo::{DeriveConfig, derive_path};
 
     let source = std::fs::read_to_string(fixture_path()).expect("read fixture");

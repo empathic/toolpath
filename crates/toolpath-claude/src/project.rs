@@ -126,10 +126,9 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // Tool-result carriers for the last assistant entry, held back until the
     // next uuid-bearing item. The carrier was absorbed into the assistant
     // turn, so the IR cannot say whether a headerless line that follows the
-    // turn was written before or after the carrier; Claude Code writes the
-    // prompt-submission group (last-prompt, ai-title, mode, ...) before a
-    // still-running tool's result far more often than after it, so the
-    // headerless lines go first.
+    // turn was written before or after the carrier. The headerless lines go
+    // first; that order is a guess (the captured session in
+    // test-fixtures/claude/convo.jsonl has both such runs after the carrier).
     let mut pending_results: Vec<ConversationEntry> = Vec::new();
 
     // Iterate the full item stream (not just turns) so a compaction boundary

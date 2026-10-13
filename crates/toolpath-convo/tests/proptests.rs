@@ -1,7 +1,7 @@
 //! Property tests for the derive/extract core.
 //!
 //! These own the interaction surface that example-based tests sample:
-//! arbitrary interleavings of turns/events/compactions, with deliberate id
+//! arbitrary interleavings of turns and events, with deliberate id
 //! collisions and dangling parents, driven through the three properties the
 //! whole pipeline is built on:
 //!

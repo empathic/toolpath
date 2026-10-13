@@ -181,5 +181,6 @@ The one position the IR cannot express: a tool-result carrier entry is
 absorbed into the assistant turn it answers, so a headerless run written
 between that assistant entry and the carrier cannot be told from one
 written right after the carrier. The projector writes the run before the
-carrier — Claude Code writes the prompt-submission group while a tool is
-still running far more often than after its result lands.
+carrier. That is a guess, not an observed preference: the one captured
+session in the repository (`test-fixtures/claude/convo.jsonl`) has both of
+its post-tool-call runs after the carrier.

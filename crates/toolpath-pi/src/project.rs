@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Item, Result, Role, ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
 };
 
 use crate::reader::PiSession;
@@ -160,16 +160,11 @@ fn project_view(
         })
         .collect();
 
-    // Walk `view.items` in order so compaction boundaries land at their
-    // true position in the entry stream (between the surrounding turns).
-    for item in view.items.iter() {
-        match item {
-            Item::Turn(turn) => {
-                let pi = pi_extras(turn).cloned().unwrap_or_default();
-                emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
-            }
-            Item::Event(_) => {}
-        }
+    // Only turns project to entries; events are dropped. A Pi compaction,
+    // read as a System turn, projects like any other System turn.
+    for turn in view.turns() {
+        let pi = pi_extras(turn).cloned().unwrap_or_default();
+        emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
     }
 
     Ok(PiSession {

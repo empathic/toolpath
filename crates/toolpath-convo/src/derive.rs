@@ -122,9 +122,8 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
 
     // Single ordered pass over `view.items`, dispatching per variant so each
-    // emitted step lands at its true position relative to its neighbors —
-    // crucial for compaction boundaries, which must sit between the turns
-    // they separate.
+    // emitted step lands at its true position relative to its neighbors — an
+    // event (a compaction marker, say) sits between the turns it separates.
     //
     // Per-variant counters drive the synthetic step ids: turns synthesize
     // `step-{:04}` indexed by turn count, events `event-{:04}` by event count.

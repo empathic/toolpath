@@ -181,9 +181,11 @@ fn project_view(
     // emit it after the turn, so a re-read differences it back to the same
     // per-step spend.
     let mut running = toolpath_convo::TokenUsage::default();
-    // Only turns project to rollout lines: events carry raw rollout payloads
-    // the projector re-derives from the turns themselves (session_meta,
-    // turn_context, token_count), so they are dropped rather than replayed.
+    // Only turns project to rollout lines; events are dropped. session_meta,
+    // turn_context, user_message, agent_message, token_count,
+    // exec_command_end and patch_apply_end lines are rebuilt from the turns;
+    // `compacted`, `session_state`, task_started/task_complete and unknown
+    // lines are lost.
     for (idx, turn) in view.turns().enumerate() {
         if matches!(turn.role, Role::Assistant) {
             let group = group_of(idx, turn);
