@@ -465,8 +465,8 @@ fn wrap_path(src: &DocSource, path: &Path, out: &mut Vec<serde_json::Value>) {
     }
 }
 
-/// The `path` context attached to every step: the parent path's `id`, `base`,
-/// and `meta`.
+/// The `path` context attached to every step: the containing path's `id`,
+/// `base`, `parent`, and `meta`.
 fn path_context(path: &Path) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert(
@@ -477,6 +477,11 @@ fn path_context(path: &Path) -> serde_json::Value {
         && let Ok(v) = serde_json::to_value(base)
     {
         m.insert("base".to_string(), v);
+    }
+    if let Some(parent) = &path.path.parent
+        && let Ok(v) = serde_json::to_value(parent)
+    {
+        m.insert("parent".to_string(), v);
     }
     if let Some(meta) = &path.meta
         && let Ok(v) = serde_json::to_value(meta)
