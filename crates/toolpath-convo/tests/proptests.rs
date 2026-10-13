@@ -2,19 +2,22 @@
 //!
 //! These own the interaction surface that example-based tests sample:
 //! arbitrary interleavings of turns and events, with deliberate id
-//! collisions and dangling parents, driven through the three properties the
-//! whole pipeline is built on:
+//! collisions, dangling parents, message groups and token usage, driven
+//! through the four properties the whole pipeline is built on:
 //!
 //! 1. a derived path's step ids are unique;
 //! 2. derive → extract → derive is stable at generation one;
 //! 3. in a stream whose turns chain, every turn step is an ancestor of the
 //!    head however the events are linked — an event with no parent or a
-//!    dangling one cannot orphan the session.
+//!    dangling one cannot orphan the session;
+//! 4. deriving any prefix of a stream (a session file that has not grown
+//!    yet) yields step ids and parents that the derive of the whole stream
+//!    starts with.
 
 use proptest::prelude::*;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationEvent, ConversationView, DeriveConfig, Item, Role, Turn, derive_path,
+    ConversationEvent, ConversationView, DeriveConfig, Item, Role, TokenUsage, Turn, derive_path,
     extract_conversation,
 };
 
@@ -42,23 +45,31 @@ fn turn(id: &str, parent: Option<&str>, role: Role, text: &str) -> Turn {
 #[derive(Debug, Clone)]
 enum Elem {
     /// (id-pool slot, parent slot among earlier elems or None, kind,
-    /// file-mutation count). Kind: 0 = user, 1 = assistant with a model,
-    /// 2 = harness-synthetic assistant (`model == "<synthetic>"`, e.g. an
-    /// API-error message), 3 = assistant with no model. Mutations give the
-    /// step sibling `file.write` changes next to its `conversation.append` —
-    /// the shape that made hash-order step classification (the pi kept-run
-    /// loss) reachable.
-    Turn(u8, Option<u8>, u8, u8),
+    /// file-mutation count, group). Kind: 0 = user, 1 = assistant with a
+    /// model, 2 = harness-synthetic assistant (`model == "<synthetic>"`,
+    /// e.g. an API-error message), 3 = assistant with no model. Mutations
+    /// give the step sibling `file.write` changes next to its
+    /// `conversation.append` — the shape that made hash-order step
+    /// classification (the pi kept-run loss) reachable.
+    Turn(u8, Option<u8>, u8, u8, Group),
     /// (id slot, parent slot or None). Slot 0 = id-less; 1–3 = `e<slot>`
     /// (repeats collide, the Claude reused-attachment-uuid shape); 4 = `t0`
     /// (collides with the turn id pool).
     Event(u8, Option<u8>),
 }
 
+/// A turn's message group and token usage: (`group_id` slot from a small
+/// pool so neighbouring turns share one, output tokens).
+type Group = (Option<u8>, Option<u16>);
+
+fn group() -> impl Strategy<Value = Group> {
+    (proptest::option::of(0u8..2), proptest::option::of(0u16..3))
+}
+
 fn elem() -> impl Strategy<Value = Elem> {
     prop_oneof![
-        4 => (0u8..6, proptest::option::of(0u8..8), 0u8..4, 0u8..4)
-            .prop_map(|(id, p, kind, muts)| Elem::Turn(id, p, kind, muts)),
+        4 => (0u8..6, proptest::option::of(0u8..8), 0u8..4, 0u8..4, group())
+            .prop_map(|(id, p, kind, muts, g)| Elem::Turn(id, p, kind, muts, g)),
         1 => (0u8..5, proptest::option::of(0u8..8))
             .prop_map(|(id_slot, p)| Elem::Event(id_slot, p)),
     ]
@@ -82,7 +93,7 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
     };
     for e in elems {
         match e {
-            Elem::Turn(id_slot, p, kind, muts) => {
+            Elem::Turn(id_slot, p, kind, muts, (group, output)) => {
                 let id = format!("t{id_slot}");
                 let parent = resolve(p, &ids);
                 let role = if kind == 0 {
@@ -97,6 +108,11 @@ fn build_view(elems: Vec<Elem>) -> ConversationView {
                     2 => Some("<synthetic>".into()),
                     _ => None,
                 };
+                t.group_id = group.map(|g| format!("g{g}"));
+                t.token_usage = output.map(|n| TokenUsage {
+                    output_tokens: Some(n.into()),
+                    ..Default::default()
+                });
                 t.file_mutations = (0..muts)
                     .map(|i| toolpath_convo::FileMutation {
                         path: format!("f{i}.txt"),
@@ -257,5 +273,33 @@ proptest! {
             serde_json::to_value(&gen2).unwrap(),
             "derive → extract → derive changed the document"
         );
+    }
+
+    #[test]
+    fn derive_is_prefix_stable(elems in proptest::collection::vec(elem(), 0..12)) {
+        let view = build_view(elems);
+        let linkage = |items: &[Item]| -> Vec<(String, Vec<String>)> {
+            let prefix = ConversationView {
+                items: items.to_vec(),
+                ..view.clone()
+            };
+            derive_path(&prefix, &DeriveConfig::default())
+                .steps
+                .into_iter()
+                .map(|s| (s.step.id, s.step.parents))
+                .collect()
+        };
+        let full = linkage(&view.items);
+        for k in 0..view.items.len() {
+            let prefix = linkage(&view.items[..k]);
+            prop_assert!(
+                full.starts_with(&prefix),
+                "derive of the first {} items is not a prefix of the full derive:\n\
+                 prefix: {:?}\nfull:   {:?}",
+                k,
+                prefix,
+                full
+            );
+        }
     }
 }

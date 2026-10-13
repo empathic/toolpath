@@ -42,10 +42,13 @@ their position in that stream.
   target drops events resolves parents with `KeptAncestors`: built from
   the view and the target's rule for which items it keeps, it maps a
   parent id to the nearest kept ancestor (`Item::id` and
-  `Item::parent_id` read either kind). New proptest suite pins unique step ids and
-  derive → extract → derive stability over randomized interleavings
-  with id collisions, and that every turn of a chained stream is an
-  ancestor of the head however its events are linked.
+  `Item::parent_id` read either kind). New proptest suite pins unique
+  step ids, derive → extract → derive stability over randomized
+  interleavings with id collisions, that every turn of a chained stream
+  is an ancestor of the head however its events are linked, and that
+  the step ids and parents derived from any prefix of a stream start the
+  full stream's derive; generated turns carry message groups and token
+  usage.
 - **`toolpath-claude`** (0.14.0): the projector emits events inline at
   their item position — real Claude interleaves attachments and system
   entries with turns; the old trailing pass regrouped them at end of
