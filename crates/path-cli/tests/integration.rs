@@ -394,6 +394,22 @@ fn merge_accepts_path_jsonl() {
         .stdout(predicate::str::contains("\"paths\":"));
 }
 
+#[test]
+fn continuation_example_jsonl_matches_json_parent() {
+    use toolpath::v1::{Graph, Path};
+
+    let jsonl =
+        std::fs::read_to_string(examples_dir().join("path-05-continuation.path.jsonl")).unwrap();
+    let from_jsonl = Path::from_jsonl_str(&jsonl).unwrap();
+
+    let json =
+        std::fs::read_to_string(examples_dir().join("path-05-continuation.path.json")).unwrap();
+    let from_json = Graph::from_json(&json).unwrap().into_single_path().unwrap();
+
+    assert!(from_json.path.parent.is_some());
+    assert_eq!(from_jsonl.path.parent, from_json.path.parent);
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────
 
 #[test]
