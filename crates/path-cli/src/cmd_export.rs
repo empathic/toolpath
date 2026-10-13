@@ -2190,7 +2190,8 @@ mod tests {
         crate::sync::load_remotes(config_dir)
             .unwrap()
             .sessions
-            .remove("claude:sess")
+            .get_mut("claude")
+            .and_then(|sessions| sessions.remove("sess"))
             .unwrap_or_default()
     }
 

@@ -5,8 +5,9 @@ All notable changes to the Toolpath workspace are documented here.
 ## path-cli 0.30.0 — 2026-10-07
 
 - **`path-cli`** (0.30.0): path-cli records where each session's path
-  lives remotely, in `$CONFIG_DIR/remotes.json` (`version` 1, session
-  → path URL → record), apart from the manifest, which older path-cli
+  lives remotely, in `$CONFIG_DIR/remotes.json` (`version` 1, then
+  harness → session id → path URL → record, keyed as the manifest is),
+  apart from the manifest, which older path-cli
   builds rewrite without unknown fields. A record sits under the path's
   API URL
   (`<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`)
