@@ -34,6 +34,15 @@ trait Harness {
     /// Some harnesses don't have a JSON/JSONL wire (opencode is SQL);
     /// those can return Ok(()) with the rationale documented inline.
     fn schema_validates(&self, view: &ConversationView) -> Result<(), String>;
+    /// Project the IR view and list every parent link in the native
+    /// output that names no entry of that output, as `(entry, parent)`.
+    /// For Claude, an entry of a type Claude Code does not write counts
+    /// as missing.
+    /// Only harnesses whose projector writes the IR's parent ids check
+    /// anything; the others synthesize their own chain or write none.
+    fn dangling_parents(&self, _view: &ConversationView) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -78,6 +87,33 @@ impl Harness for ClaudeHarness {
         toolpath_claude::ConversationReader::read_conversation(tmp.path())
             .map_err(|e| format!("re-read: {}", e))?;
         Ok(())
+    }
+    fn dangling_parents(&self, view: &ConversationView) -> Vec<(String, String)> {
+        let convo = toolpath_claude::ClaudeProjector
+            .project(view)
+            .expect("claude project");
+        // The uuid-bearing entry types Claude Code writes
+        // (docs/agents/formats/claude-code/entry-types.md).
+        const CLAUDE_TYPES: &[&str] = &[
+            "user",
+            "assistant",
+            "system",
+            "attachment",
+            "progress",
+            "compact_boundary",
+        ];
+        let uuids: BTreeSet<&str> = convo
+            .entries
+            .iter()
+            .filter(|e| CLAUDE_TYPES.contains(&e.entry_type.as_str()))
+            .map(|e| e.uuid.as_str())
+            .collect();
+        convo
+            .entries
+            .iter()
+            .filter_map(|e| Some((e.uuid.clone(), e.parent_uuid.clone()?)))
+            .filter(|(_, parent)| !uuids.contains(parent.as_str()))
+            .collect()
     }
 }
 
@@ -198,6 +234,18 @@ impl Harness for PiHarness {
         toolpath_pi::reader::read_session_from_file(tmp.path())
             .map_err(|e| format!("re-read: {}", e))?;
         Ok(())
+    }
+    fn dangling_parents(&self, view: &ConversationView) -> Vec<(String, String)> {
+        let session = toolpath_pi::project::PiProjector::new()
+            .project(view)
+            .expect("pi project");
+        let ids: BTreeSet<&str> = session.entries.iter().map(|e| e.entry_id()).collect();
+        session
+            .entries
+            .iter()
+            .filter_map(|e| Some((e.entry_id().to_string(), e.parent_entry_id()?.to_string())))
+            .filter(|(_, parent)| !ids.contains(parent.as_str()))
+            .collect()
     }
 }
 
@@ -1008,6 +1056,16 @@ fn run_cell(
     let view_second = ir_roundtrip(&target.roundtrip(&view_first));
 
     let mut failures: Vec<String> = Vec::new();
+    // The first A→B leg must write a self-consistent native session: every
+    // parent it writes names an entry it wrote.
+    for (entry, parent) in target.dangling_parents(&view_after_source) {
+        failures.push(format!(
+            "{} entry {} names parent {}, which is not in the written session",
+            target.name(),
+            entry,
+            parent
+        ));
+    }
     invariants::turn_count_and_role_sequence(&view_first, &view_second, &mut failures);
     invariants::turn_text(&view_first, &view_second, &mut failures);
     invariants::tool_calls(&view_first, &view_second, &mut failures);
