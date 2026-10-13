@@ -97,9 +97,15 @@ fn relax_for_older_servers(spec: &mut Value) {
             "paths",
         ),
     ] {
-        if let Some(Value::Array(required)) = spec.pointer_mut(required) {
-            required.retain(|v| v.as_str() != Some(field));
-        }
+        let Some(Value::Array(list)) = spec.pointer_mut(required) else {
+            panic!("relax_for_older_servers: {required} is not an array in openapi.json");
+        };
+        let before = list.len();
+        list.retain(|v| v.as_str() != Some(field));
+        assert!(
+            list.len() < before,
+            "relax_for_older_servers: {required} does not list {field:?}"
+        );
     }
 }
 

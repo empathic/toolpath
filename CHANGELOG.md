@@ -163,7 +163,14 @@ their position in that stream.
   `create_anon_graph` return that type instead of
   `GraphDocumentResponse`, hence the minor bump. `build.rs` makes
   `paths` and `TracePath.mutability` optional at generation time, as it
-  does `Graph.mutability`, so an older server's response still decodes.
+  does `Graph.mutability`, so an older server's response still decodes,
+  and fails the build when the spec no longer lists one of them. The
+  spec also carries `path.parent` and the routes around it: the error
+  codes `invalid_parent`, `parent_not_frozen`, `parent_unavailable` and
+  `inherited_step_redefined` (and the `409` on `create_graph`), the
+  step-ids route with `truncated_at`, graph meta, freeze, the graph and
+  repo dependents routes, a path's children, branch, line, composed and
+  structure views.
 - **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
 
 ## toolpath 0.8.0 — 2026-10-07
