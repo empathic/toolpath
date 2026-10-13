@@ -1687,11 +1687,15 @@ mod tests {
 
     fn remotes_of(session: &str) -> crate::sync::SessionRemotes {
         load_remotes_all()
-            .remove(&format!("claude:{session}"))
+            .get_mut("claude")
+            .and_then(|sessions| sessions.remove(session))
             .unwrap_or_default()
     }
 
-    fn load_remotes_all() -> std::collections::BTreeMap<String, crate::sync::SessionRemotes> {
+    fn load_remotes_all() -> std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, crate::sync::SessionRemotes>,
+    > {
         crate::sync::load_remotes(&crate::config::config_dir().unwrap())
             .unwrap()
             .sessions
@@ -1785,10 +1789,12 @@ mod tests {
             assert!(manifest["claude"]["s1"].cache_id.is_some());
             let remotes = load_remotes_all();
             let keys: Vec<&String> = remotes.keys().collect();
-            assert_eq!(keys, ["claude:s1"], "{remotes:?}");
-            assert_eq!(remotes["claude:s1"].len(), 1);
+            assert_eq!(keys, ["claude"], "{remotes:?}");
+            let sessions: Vec<&String> = remotes["claude"].keys().collect();
+            assert_eq!(sessions, ["s1"], "{remotes:?}");
+            assert_eq!(remotes["claude"]["s1"].len(), 1);
             assert!(
-                remotes["claude:s1"]
+                remotes["claude"]["s1"]
                     .keys()
                     .next()
                     .unwrap()

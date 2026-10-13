@@ -80,12 +80,13 @@ impl RemoteRecord {
 /// One session's records: path URL → record.
 pub(crate) type SessionRemotes = BTreeMap<String, RemoteRecord>;
 
-/// The remotes file: `{ "version": 1, "sessions": { <session key>:
-/// { <path URL>: record } } }`, the session key being [`session_key`].
+/// The remotes file: `{ "version": 1, "sessions": { <type>: { <id>:
+/// { <path URL>: record } } } }`, sessions addressed as the manifest
+/// addresses them, by artifact type name and then id.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Remotes {
     pub(crate) version: u32,
-    pub(crate) sessions: BTreeMap<String, SessionRemotes>,
+    pub(crate) sessions: BTreeMap<String, BTreeMap<String, SessionRemotes>>,
 }
 
 impl Default for Remotes {
@@ -95,12 +96,6 @@ impl Default for Remotes {
             sessions: BTreeMap::new(),
         }
     }
-}
-
-/// The key a session's records sit under: the manifest's artifact type
-/// and id, `<type>:<id>`.
-pub(crate) fn session_key(artifact_type: ArtifactType, id: &str) -> String {
-    format!("{}:{id}", artifact_type.name())
 }
 
 /// Write `record` under `url` for the session (`artifact_type`, `id`).
@@ -118,7 +113,9 @@ pub(crate) fn record_remote(
     let mut remotes = load_remotes(config_dir)?;
     let session = remotes
         .sessions
-        .entry(session_key(artifact_type, id))
+        .entry(artifact_type.name().to_string())
+        .or_default()
+        .entry(id.to_string())
         .or_default();
     let dest = destination(url);
     if dest.is_some() {
@@ -208,9 +205,6 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
     };
     let mut lifted = Vec::new();
     for (name, records) in manifest {
-        let Some(artifact_type) = ArtifactType::parse(&name) else {
-            continue;
-        };
         for (id, rec) in records {
             for (url, old) in rec.remotes {
                 let remote = RemoteRecord {
@@ -219,7 +213,7 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
                     head: old.head,
                     source_stamp: parse_stamp_string(&old.source_stamp),
                 };
-                lifted.push((session_key(artifact_type, &id), api_url(&url), remote));
+                lifted.push((name.clone(), id.clone(), api_url(&url), remote));
             }
         }
     }
@@ -227,8 +221,13 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
         return Ok(());
     }
     let mut remotes = load_remotes(config_dir)?;
-    for (key, url, remote) in lifted {
-        let session = remotes.sessions.entry(key).or_default();
+    for (name, id, url, remote) in lifted {
+        let session = remotes
+            .sessions
+            .entry(name)
+            .or_default()
+            .entry(id)
+            .or_default();
         let dest = destination(&url);
         let taken = session
             .keys()
@@ -294,7 +293,8 @@ mod tests {
         load_remotes(config_dir)
             .unwrap()
             .sessions
-            .remove(&session_key(ArtifactType::Claude, id))
+            .get_mut("claude")
+            .and_then(|sessions| sessions.remove(id))
             .unwrap_or_default()
     }
 
@@ -315,8 +315,8 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(cfg.join(REMOTES_FILE_NAME)).unwrap())
                 .unwrap();
         assert_eq!(json["version"], 1);
-        assert_eq!(json["sessions"]["claude:s1"][PATH_URL]["steps"], 3);
-        assert_eq!(json["sessions"]["claude:s1"][other]["steps"], 2);
+        assert_eq!(json["sessions"]["claude"]["s1"][PATH_URL]["steps"], 3);
+        assert_eq!(json["sessions"]["claude"]["s1"][other]["steps"], 2);
         assert!(
             !cfg.join(MANIFEST_FILE_NAME).exists(),
             "a record does not touch the manifest"
