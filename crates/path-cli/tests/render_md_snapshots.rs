@@ -41,7 +41,7 @@ snapshot_test!(render_md_step_05_dead_end, "step-05-dead-end.json");
 snapshot_test!(render_md_step_06_signed, "step-06-signed.json");
 snapshot_test!(render_md_step_07_merge, "step-07-merge.json");
 
-// Paths (4)
+// Paths (5)
 snapshot_test!(render_md_path_01_pr, "path-01-pr.path.json");
 snapshot_test!(
     render_md_path_02_local_session,
@@ -51,6 +51,10 @@ snapshot_test!(render_md_path_03_signed_pr, "path-03-signed-pr.path.json");
 snapshot_test!(
     render_md_path_04_exploration,
     "path-04-exploration.path.json"
+);
+snapshot_test!(
+    render_md_path_05_continuation,
+    "path-05-continuation.path.json"
 );
 
 // Graphs (1)
