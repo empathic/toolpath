@@ -549,6 +549,7 @@ mod tests {
                 base: None,
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: Vec::new(),
             meta: None,

@@ -1903,6 +1903,7 @@ pub(crate) mod tests {
                 base: None,
                 head: steps.last().unwrap().step.id.clone(),
                 graph_ref: None,
+                parent: None,
             },
             steps,
             meta: Some(PathMeta {
