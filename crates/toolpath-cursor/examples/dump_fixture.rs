@@ -26,8 +26,8 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, EnvironmentSnapshot, ProducerInfo, Role, SessionBase,
-    ToolInvocation, Turn,
+    ConversationProjector, ConversationView, EnvironmentSnapshot, Item, ProducerInfo, Role,
+    SessionBase, ToolInvocation, Turn,
 };
 use toolpath_cursor::project::CursorProjector;
 use toolpath_cursor::provider::tool_category;
@@ -154,8 +154,8 @@ fn capture_from_jsonl(path: &str) -> CursorSession {
     let view = view_from_jsonl(&content, &composer_id, &workspace);
     eprintln!(
         "parsed JSONL: {} turns ({} tool uses)",
-        view.turns.len(),
-        view.turns.iter().map(|t| t.tool_uses.len()).sum::<usize>(),
+        view.turns().count(),
+        view.turns().map(|t| t.tool_uses.len()).sum::<usize>(),
     );
     CursorProjector::new()
         .with_composer_id(composer_id)
@@ -304,7 +304,7 @@ fn view_from_jsonl(
             vcs_revision: None,
             vcs_remote: None,
         }),
-        turns,
+        items: turns.into_iter().map(Item::Turn).collect(),
         ..Default::default()
     }
 }

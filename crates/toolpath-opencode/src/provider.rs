@@ -21,7 +21,8 @@
 //!      by the derive layer to fetch file diffs.
 //!    - `extra["opencode"]["patches"]` ← any `patch` parts (their
 //!      `{hash, files}` records).
-//! 3. Non-turn parts land in `ConversationView.events`:
+//! 3. Non-turn parts land in `ConversationView.items` as events, after
+//!    the turns:
 //!    `compaction`, `retry`, unknown types.
 //! 4. `subtask` parts are captured on the turn's `delegations`
 //!    (empty-turn list — the sub-agent's own session lives under
@@ -40,8 +41,8 @@ use crate::types::{
 };
 use toolpath_convo::{
     ConversationEvent, ConversationMeta, ConversationProvider, ConversationView,
-    ConvoError as ConvoTraitError, DelegatedWork, EnvironmentSnapshot, FileMutation, ProducerInfo,
-    Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    ConvoError as ConvoTraitError, DelegatedWork, EnvironmentSnapshot, FileMutation, Item,
+    ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 /// Provider for opencode sessions.
@@ -229,7 +230,7 @@ impl<'a> Builder<'a> {
         // Refresh files_changed so it matches what landed on turns.
         let mut seen = std::collections::HashSet::new();
         let mut ordered = Vec::new();
-        for turn in &view.turns {
+        for turn in view.turns() {
             for fm in &turn.file_mutations {
                 if seen.insert(fm.path.clone()) {
                     ordered.push(fm.path.clone());
@@ -261,7 +262,12 @@ impl<'a> Builder<'a> {
             id: self.session.id.clone(),
             started_at: Utc.timestamp_millis_opt(self.session.time_created).single(),
             last_activity: Utc.timestamp_millis_opt(self.session.time_updated).single(),
-            turns: self.turns,
+            items: self
+                .turns
+                .into_iter()
+                .map(Item::Turn)
+                .chain(self.events.into_iter().map(Item::Event))
+                .collect(),
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -270,7 +276,6 @@ impl<'a> Builder<'a> {
             provider_id: Some("opencode".into()),
             files_changed: self.files_changed_order,
             session_ids: vec![self.session.id.clone()],
-            events: self.events,
             ..Default::default()
         }
     }
@@ -963,13 +968,14 @@ mod tests {
 
         assert_eq!(view.id, "ses_x");
         assert_eq!(view.provider_id.as_deref(), Some("opencode"));
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "make a pickle");
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "done!");
+        let turns: Vec<_> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "make a pickle");
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "done!");
         assert_eq!(
-            view.turns[1].thinking.as_deref(),
+            turns[1].thinking.as_deref(),
             Some("I should write main.cpp")
         );
     }
@@ -978,7 +984,7 @@ mod tests {
     fn tool_invocations_paired() {
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
-        let assistant = &view.turns[1];
+        let assistant = view.turns().nth(1).unwrap();
         assert_eq!(assistant.tool_uses.len(), 2);
         let bash = &assistant.tool_uses[0];
         assert_eq!(bash.name, "bash");
@@ -1000,7 +1006,7 @@ mod tests {
     fn step_finish_drives_token_usage() {
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
-        let u = view.turns[1].token_usage.as_ref().unwrap();
+        let u = view.turns().nth(1).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.input_tokens, Some(100));
         // output (20) + reasoning (5): opencode reports reasoning as a
         // separate additive category, folded into output here.
@@ -1036,7 +1042,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let u = view.turns[0].token_usage.as_ref().unwrap();
+        let u = view.turns().next().unwrap().token_usage.as_ref().unwrap();
         assert_eq!(u.output_tokens, Some(20));
         assert!(u.breakdowns.is_empty());
     }
@@ -1058,7 +1064,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let u = view.turns[0].token_usage.as_ref().unwrap();
+        let u = view.turns().next().unwrap().token_usage.as_ref().unwrap();
         // output total: (20+5) + (4+7) = 36; reasoning slice: 5+7 = 12.
         assert_eq!(u.output_tokens, Some(36));
         assert_eq!(
@@ -1081,7 +1087,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(view.turns[0].token_usage.is_none());
+        assert!(view.turns().next().unwrap().token_usage.is_none());
     }
 
     #[test]
@@ -1098,7 +1104,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         let r = tool.result.as_ref().unwrap();
         assert!(r.is_error);
         assert_eq!(r.content, "exit 1");
@@ -1118,11 +1124,27 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(
-            view.events
-                .iter()
-                .any(|e| e.event_type == "part.compaction")
-        );
+        assert!(view.events().any(|e| e.event_type == "part.compaction"));
+    }
+
+    #[test]
+    fn attachment_only_user_message_still_emits_turn() {
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1,1,'{"role":"user","time":{"created":1},"agent":"b","model":{"providerID":"o","modelID":"m"}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m1','s',1,1,'{"type":"file","mime":"image/png","url":"file:///tmp/shot.png"}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        let turns: Vec<_> = view.turns().collect();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "");
     }
 
     #[test]
@@ -1138,7 +1160,7 @@ mod tests {
         "#;
         let (_t, mgr) = setup(body);
         let view = to_view(&mgr.read_session("s").unwrap());
-        assert!(view.events.iter().any(|e| e.event_type == "part.unknown"));
+        assert!(view.events().any(|e| e.event_type == "part.unknown"));
     }
 
     #[test]
@@ -1159,6 +1181,6 @@ mod tests {
         let ids = ConversationProvider::list_conversations(&mgr, "").unwrap();
         assert_eq!(ids, vec!["ses_x".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "ses_x").unwrap();
-        assert_eq!(v.turns.len(), 2);
+        assert_eq!(v.turns().count(), 2);
     }
 }
