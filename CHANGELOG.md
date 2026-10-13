@@ -17,7 +17,8 @@ All notable changes to the Toolpath workspace are documented here.
   write one after a successful upload (for a cache id, against the
   session the entry was derived from; anonymous uploads included; a
   server that lists no paths in its create response leaves no record
-  and warns). `path resume` writes none: a pulled path becomes a new
+  and warns). A session keeps one record per destination (server,
+  owner, repo): a repeat share replaces the earlier entry. `path resume` writes none: a pulled path becomes a new
   local session. Nothing reads them yet; incremental append and
   `share --all` will.
 - **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
