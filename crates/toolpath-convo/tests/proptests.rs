@@ -225,6 +225,73 @@ fn build_chained_view(elems: Vec<ChainedElem>) -> ConversationView {
     }
 }
 
+/// Property 2: derive → extract → derive reproduces the document.
+fn assert_round_trip_stable(view: &ConversationView) {
+    let gen1 = derive_path(view, &DeriveConfig::default());
+    let gen2 = derive_path(&extract_conversation(&gen1), &DeriveConfig::default());
+    assert_eq!(
+        serde_json::to_value(&gen1).unwrap(),
+        serde_json::to_value(&gen2).unwrap(),
+        "derive → extract → derive changed the document"
+    );
+}
+
+/// Property 4: the step ids and parents of every prefix derive are a prefix
+/// of the full derive's.
+fn assert_prefix_stable(view: &ConversationView) {
+    let linkage = |items: &[Item]| -> Vec<(String, Vec<String>)> {
+        let prefix = ConversationView {
+            items: items.to_vec(),
+            ..view.clone()
+        };
+        derive_path(&prefix, &DeriveConfig::default())
+            .steps
+            .into_iter()
+            .map(|s| (s.step.id, s.step.parents))
+            .collect()
+    };
+    let full = linkage(&view.items);
+    for k in 0..view.items.len() {
+        let prefix = linkage(&view.items[..k]);
+        assert!(
+            full.starts_with(&prefix),
+            "derive of the first {k} items is not a prefix of the full derive:\n\
+             prefix: {prefix:?}\nfull:   {full:?}"
+        );
+    }
+}
+
+/// Shrunk failing input: a same-group replay that differed from the first
+/// emission only by its token usage. Whether it was dropped or renamed hung
+/// on whether a later turn of the group followed it, so the derive of the
+/// first two items renamed it and the full derive dropped it.
+#[test]
+fn regression_group_usage_does_not_decide_a_collision_by_lookahead() {
+    let view = build_view(vec![
+        Elem::Turn(2, None, 3, 3, (Some(0), None)),
+        Elem::Turn(2, None, 3, 3, (Some(0), Some(0))),
+        Elem::Turn(0, None, 0, 0, (Some(0), None)),
+    ]);
+    assert_prefix_stable(&view);
+    assert_round_trip_stable(&view);
+}
+
+/// Shrunk failing input: a dropped replay (`t5`) between two turns of one
+/// group. Placing the group's usage by the next turn in the stream rather
+/// than the next step emitted gave `t0` its usage at generation one and took
+/// it away once extract had removed the replay between them.
+#[test]
+fn regression_dropped_replay_does_not_split_a_group() {
+    let view = build_view(vec![
+        Elem::Turn(5, None, 1, 1, (None, Some(1))),
+        Elem::Turn(0, None, 0, 0, (Some(1), Some(0))),
+        Elem::Turn(5, None, 1, 1, (None, Some(1))),
+        Elem::Turn(0, None, 0, 0, (Some(1), None)),
+    ]);
+    assert_prefix_stable(&view);
+    assert_round_trip_stable(&view);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
@@ -266,40 +333,11 @@ proptest! {
         // `conversation.append` step, so identity is only representable once
         // there is at least one turn.
         prop_assume!(view.turns().next().is_some());
-        let gen1 = derive_path(&view, &DeriveConfig::default());
-        let gen2 = derive_path(&extract_conversation(&gen1), &DeriveConfig::default());
-        prop_assert_eq!(
-            serde_json::to_value(&gen1).unwrap(),
-            serde_json::to_value(&gen2).unwrap(),
-            "derive → extract → derive changed the document"
-        );
+        assert_round_trip_stable(&view);
     }
 
     #[test]
     fn derive_is_prefix_stable(elems in proptest::collection::vec(elem(), 0..12)) {
-        let view = build_view(elems);
-        let linkage = |items: &[Item]| -> Vec<(String, Vec<String>)> {
-            let prefix = ConversationView {
-                items: items.to_vec(),
-                ..view.clone()
-            };
-            derive_path(&prefix, &DeriveConfig::default())
-                .steps
-                .into_iter()
-                .map(|s| (s.step.id, s.step.parents))
-                .collect()
-        };
-        let full = linkage(&view.items);
-        for k in 0..view.items.len() {
-            let prefix = linkage(&view.items[..k]);
-            prop_assert!(
-                full.starts_with(&prefix),
-                "derive of the first {} items is not a prefix of the full derive:\n\
-                 prefix: {:?}\nfull:   {:?}",
-                k,
-                prefix,
-                full
-            );
-        }
+        assert_prefix_stable(&build_view(elems));
     }
 }
