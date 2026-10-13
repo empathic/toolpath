@@ -476,7 +476,7 @@ mod tests {
         );
         let mut w = ConversationWatcher::new(mgr, "/abs/myrepo".into(), "session-uuid".into());
         let (view, events) = w.poll_with_view().unwrap();
-        assert_eq!(view.turns.len(), 1);
+        assert_eq!(view.turns().count(), 1);
         assert_eq!(events.len(), 1);
     }
 
