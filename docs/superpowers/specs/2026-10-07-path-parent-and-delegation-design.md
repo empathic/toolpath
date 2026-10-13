@@ -16,12 +16,13 @@ path, forked at the tool-use step that spawned it and merged back at the
 tool-result step. The RFC's step DAG already represents this; the only
 convention added is that `step.parents[0]` is the main line.
 
-`path.base` keeps its current meaning: the state of the artifacts the work
-started from. For a project tracked in git that is a repository and a
-`ref`; for a project tracked in Toolpath it is a step, written as the RFC's
+`path.base` keeps its current meaning: the project context the path runs
+against. For a project tracked in git that is a repository and a `ref`;
+for a project tracked in Toolpath it is a step, written as the RFC's
 `toolpath:<path-id>/<step-id>` base. That form stays. `base` says which
-artifact state the work began at; `parent` says which earlier work this
-work continues. A path may carry both.
+project the work ran against; `parent` says which earlier work this work
+continues. A path may carry both, and a continuation usually shares its
+parent's base.
 
 ## Why not `base.from`
 
@@ -194,7 +195,7 @@ here takes `freeze_after` or `expected_generation`.
 - `toolpath`: `PathIdentity.parent: Option<Parent>`; `Parent { uri, path,
   step }`. `PathOpen` carries it. Schema and RFC updated; the RFC's Base Context section says what
   `base` is for next to `parent`, and the `toolpath:` base form keeps its
-  meaning as an artifact state.
+  meaning as project context.
 - Claude deriver: derive sidechain transcripts into the same path. The
   `tool_use` id links the spawning step to the subagent file; the matching
   `tool_result` line is the merge. Emit subagent steps before the merge
