@@ -12,7 +12,8 @@ use crate::types::{
 use serde_json::json;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    ConversationEvent, ConversationProjector, ConversationView, ConvoError, Item, KeptAncestors,
+    Result, Role, ToolInvocation, Turn,
 };
 
 // ── ClaudeProjector ───────────────────────────────────────────────────
@@ -56,6 +57,31 @@ impl ConversationProjector for ClaudeProjector {
 /// points at — synthesizing a new one breaks the chain.
 const TOOL_RESULT_USER_EVENT: &str = "tool_result_user";
 
+/// Event types written back as uuid-bearing Claude entries: the entry types
+/// Claude Code writes with a uuid, which the reader keeps as events when
+/// they carry no message, plus the tool-result marker. Any other event
+/// without a headerless `raw` line (a Codex `token_count`, say) has no
+/// Claude form and is dropped.
+const CLAUDE_ENTRY_EVENT_TYPES: &[&str] = &[
+    "user",
+    "assistant",
+    "system",
+    "attachment",
+    "progress",
+    "compact_boundary",
+    TOOL_RESULT_USER_EVENT,
+];
+
+/// A headerless line, written back verbatim from `data["raw"]`.
+fn is_headerless(event: &ConversationEvent) -> bool {
+    event.data.contains_key("raw")
+}
+
+/// An event written back as a uuid-bearing entry.
+fn is_claude_entry(event: &ConversationEvent) -> bool {
+    !is_headerless(event) && CLAUDE_ENTRY_EVENT_TYPES.contains(&event.event_type.as_str())
+}
+
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
     let mut convo = Conversation::new(view.id.clone());
 
@@ -64,16 +90,17 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // ride in `view.items` as events carrying the original line verbatim
     // under `data["raw"]`; they are written back at their item position. A
     // headerless event is identified by that `raw` key — no enumerated
-    // type list. Indexed id → parent: a headerless line has no uuid, so a
-    // parent naming one resolves past it (see `wire_parent`).
-    let headerless_parents: HashMap<&str, Option<&str>> = view
-        .events()
-        .filter(|event| event.data.contains_key("raw"))
-        .map(|event| (event.id.as_str(), event.parent_id.as_deref()))
-        .collect();
+    // type list. Events of other harnesses are dropped. Only turns and
+    // events written as uuid-bearing entries can be named as a parent, so
+    // a parent naming a headerless line or a dropped event resolves past
+    // it (see `wire_parent`).
+    let kept = KeptAncestors::new(view, |item| match item {
+        Item::Turn(_) => true,
+        Item::Event(event) => is_claude_entry(event),
+    });
     // Cross-harness views won't carry a Claude headerless line; emit a
     // default permission-mode line so Claude Code can resume them.
-    if headerless_parents.is_empty() {
+    if !view.events().any(is_headerless) {
         convo.add_headerless(json!({
             "type": "permission-mode",
             "permissionMode": "default",
@@ -140,11 +167,14 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // stay with the by-parent mechanism (their position must follow the
     // assistant entry that isn't 1:1 with an item on cross-harness views).
     for item in &view.items {
-        if let toolpath_convo::Item::Event(event) = item
-            && let Some(raw) = event.data.get("raw")
-        {
-            convo.add_headerless(raw.clone());
-            continue;
+        if let Item::Event(event) = item {
+            if let Some(raw) = event.data.get("raw") {
+                convo.add_headerless(raw.clone());
+                continue;
+            }
+            if !is_claude_entry(event) {
+                continue;
+            }
         }
         for entry in pending_results.drain(..) {
             convo.add_entry(entry);
@@ -159,11 +189,8 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 }
                 consumed_event_ids.insert(event.id.clone());
                 let mut entry = project_event(event, &view.id);
-                entry.parent_uuid = wire_parent(
-                    event.parent_id.as_deref(),
-                    &parent_rewrites,
-                    &headerless_parents,
-                );
+                entry.parent_uuid =
+                    wire_parent(event.parent_id.as_deref(), &parent_rewrites, &kept);
                 // A compact_boundary carries its prior entry in
                 // `logicalParentUuid` and writes `parentUuid: null`.
                 if crate::provider::is_compact_boundary(&entry) {
@@ -174,11 +201,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
             }
         };
 
-        let effective_parent = wire_parent(
-            turn.parent_id.as_deref(),
-            &parent_rewrites,
-            &headerless_parents,
-        );
+        let effective_parent = wire_parent(turn.parent_id.as_deref(), &parent_rewrites, &kept);
 
         match &turn.role {
             Role::User => {
@@ -256,7 +279,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // Events the item loop did not write: tool-result events whose
     // assistant turn is gone (rare).
     for event in view.events() {
-        if event.data.contains_key("raw") || consumed_event_ids.contains(&event.id) {
+        if !is_claude_entry(event) || consumed_event_ids.contains(&event.id) {
             continue;
         }
         // Tool-result events without a matching parent turn — emit them
@@ -273,23 +296,15 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     Ok(convo)
 }
 
-/// An item's wire parent: its IR parent, resolved past any headerless
-/// events (no uuid to name) and redirected to the last synthesized
-/// tool_result entry when one was emitted after that parent.
+/// An item's wire parent: its IR parent, resolved past headerless events
+/// (no uuid to name) and dropped events, and redirected to the last
+/// synthesized tool_result entry when one was emitted after that parent.
 fn wire_parent(
     parent_id: Option<&str>,
     rewrites: &HashMap<String, String>,
-    headerless_parents: &HashMap<&str, Option<&str>>,
+    kept: &KeptAncestors<'_>,
 ) -> Option<String> {
-    let mut pid = parent_id?;
-    let mut hops = headerless_parents.len();
-    while let Some(next) = headerless_parents.get(pid) {
-        if hops == 0 {
-            return None;
-        }
-        hops -= 1;
-        pid = (*next)?;
-    }
+    let pid = kept.resolve(parent_id)?;
     Some(
         rewrites
             .get(pid)
@@ -1146,6 +1161,58 @@ mod tests {
     /// Helper: return all conversation entries (headerless lines are separate).
     fn content_entries(convo: &Conversation) -> &[ConversationEntry] {
         &convo.entries
+    }
+
+    // ── Events of other harnesses ────────────────────────────────────
+
+    #[test]
+    fn test_foreign_events_are_dropped_and_parents_resolve_past_them() {
+        // The Codex reader chains every item onto the one before it, events
+        // included. Claude Code has no form for a Codex event, so it is not
+        // written, and a turn chained onto it names the turn before it.
+        let event = |id: &str, parent: &str, event_type: &str| {
+            Item::Event(ConversationEvent {
+                id: id.to_string(),
+                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                parent_id: Some(parent.to_string()),
+                event_type: event_type.to_string(),
+                data: HashMap::new(),
+            })
+        };
+        let mut a1 = assistant_turn("a1", "hello");
+        a1.parent_id = Some("task_started-1".to_string());
+        let mut u2 = user_turn("u2", "again");
+        u2.parent_id = Some("token_count-1".to_string());
+        let mut view = make_view("s", vec![]);
+        view.items = vec![
+            Item::Turn(user_turn("u1", "hi")),
+            event("turn_context-1", "u1", "turn_context"),
+            event("task_started-1", "turn_context-1", "task_started"),
+            Item::Turn(a1),
+            event("token_count-1", "a1", "token_count"),
+            Item::Turn(u2),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+        let linkage: Vec<(&str, &str, Option<&str>)> = convo
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.entry_type.as_str(),
+                    e.uuid.as_str(),
+                    e.parent_uuid.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            linkage,
+            [
+                ("user", "u1", None),
+                ("assistant", "a1", Some("u1")),
+                ("user", "u2", Some("a1")),
+            ]
+        );
     }
 
     // ── Message-group usage re-expansion ─────────────────────────────

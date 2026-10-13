@@ -74,7 +74,11 @@ their position in that stream.
   uuid-bearing entry after a run chains onto the run's last event when
   its wire parent is the item the run hangs from, so the run sits on the
   head's ancestry; the projector resolves that link back past the run
-  (`claude-headerless-N` ids). One position the IR cannot express: a
+  (`claude-headerless-N` ids). Events of other harnesses (a Codex
+  `token_count`, `turn_context`, `agent_message`, …) have no Claude
+  form: the projector drops them and resolves parents past them with
+  `KeptAncestors`, so an exported session's entries name only user,
+  assistant and other Claude entries. One position the IR cannot express: a
   headerless run between an assistant tool-use entry and its absorbed
   tool-result carrier projects before the carrier. That order is a
   guess: the one captured session in the repository records both of
