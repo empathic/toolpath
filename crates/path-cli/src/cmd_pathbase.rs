@@ -10,6 +10,7 @@
 //! on reqwest and must build on emscripten) can reuse it.
 
 use anyhow::{Context, Result, anyhow, bail};
+use pathbase_client::types::ApiErrorCode;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -494,10 +495,15 @@ fn decode_response<T: serde::de::DeserializeOwned>(
     text: &str,
 ) -> std::result::Result<T, BatchFailure> {
     if !status.is_success() {
+        let body = error_body(text);
+        let code = body.as_ref().and_then(|b| b.code);
+        let message = body
+            .and_then(|b| b.error)
+            .unwrap_or_else(|| short_body(text));
         return Err(BatchFailure::Status {
             status: status.as_u16(),
-            code: error_code(text),
-            message: error_message(text).unwrap_or_else(|| short_body(text)),
+            code,
+            message,
         });
     }
     match serde_json::from_str::<serde_json::Value>(text) {
@@ -663,28 +669,22 @@ pub(crate) fn graphs_post(
                     body.error
                 )
             };
-            Err(Refusal::error(Some(body.code.to_string()), message))
-        }
-        // A declared status whose body the generated client cannot decode:
-        // an error code newer than its copy of the API description.
-        Err(pathbase_client::Error::InvalidResponsePayload(bytes, _)) => {
-            let body = String::from_utf8_lossy(&bytes);
-            let msg = error_message(&body).unwrap_or_else(|| short_body(&body));
-            Err(Refusal::error(
-                error_code(&body),
-                format!("upload to {owner}/{repo} failed: {msg}"),
-            ))
+            Err(Refusal::error(Some(body.code), message))
         }
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
             let status = resp.status();
             let body = block_on(resp.text()).unwrap_or_default();
-            let message = match error_message(&body).unwrap_or_else(|| body.clone()) {
-                msg if msg.is_empty() => {
+            let parsed = error_body(&body).unwrap_or(ErrorBody {
+                code: None,
+                error: None,
+            });
+            let message = match parsed.error.as_deref().unwrap_or(&body) {
+                "" => {
                     format!("upload to {owner}/{repo} returned unexpected status: HTTP {status}")
                 }
                 msg => format!("upload to {owner}/{repo} failed ({status}): {msg}"),
             };
-            Err(Refusal::error(error_code(&body), message))
+            Err(Refusal::error(parsed.code, message))
         }
         Err(pathbase_client::Error::CommunicationError(e)) => {
             bail!("upload to {owner}/{repo} failed: {}", reqwest_hint(&e))
@@ -706,8 +706,11 @@ pub(crate) struct Refusal {
 }
 
 impl Refusal {
-    fn error(code: Option<String>, message: String) -> anyhow::Error {
-        anyhow::Error::new(Self { code, message })
+    fn error(code: Option<ApiErrorCode>, message: String) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            code: code.map(|c| c.to_string()),
+            message,
+        })
     }
 }
 
@@ -882,7 +885,7 @@ enum BatchFailure {
     /// the body carries one, and the message.
     Status {
         status: u16,
-        code: Option<String>,
+        code: Option<ApiErrorCode>,
         message: String,
     },
     /// A 2xx answer whose body is not JSON.
@@ -1029,7 +1032,7 @@ pub(crate) fn graphs_post_streamed(
                 }
                 (failure, _) => {
                     let code = match failure {
-                        BatchFailure::Status { code, .. } => code.clone(),
+                        BatchFailure::Status { code, .. } => *code,
                         _ => None,
                     };
                     Err(Refusal::error(
@@ -1210,19 +1213,21 @@ impl AppendError {
     /// not have: it does not support incremental sharing.
     fn from_failure(base_url: &str, route: &str, failure: BatchFailure) -> Self {
         let code = match &failure {
-            BatchFailure::Status { code, .. } => code.as_deref(),
+            BatchFailure::Status { code, .. } => *code,
             _ => None,
         };
         match (&failure, code) {
-            (BatchFailure::Status { status: 409, .. }, Some("write_to_frozen")) => Self::Frozen,
-            (BatchFailure::Status { status: 404, .. }, Some("not_found")) => Self::Gone,
+            (BatchFailure::Status { status: 409, .. }, Some(ApiErrorCode::WriteToFrozen)) => {
+                Self::Frozen
+            }
+            (BatchFailure::Status { status: 404, .. }, Some(ApiErrorCode::NotFound)) => Self::Gone,
             (
                 BatchFailure::Status {
                     status: 400,
                     message,
                     ..
                 },
-                Some("invalid_document"),
+                Some(ApiErrorCode::InvalidDocument),
             ) => Self::InvalidDocument(message.clone()),
             (
                 BatchFailure::Status {
@@ -1230,7 +1235,7 @@ impl AppendError {
                     message,
                     ..
                 },
-                Some("inherited_step_redefined"),
+                Some(ApiErrorCode::InheritedStepRedefined),
             ) => Self::InheritedStepRedefined(message.clone()),
             (BatchFailure::Status { status: 401, .. }, _) => Self::Other(relogin_message(base_url)),
             (
@@ -1366,17 +1371,22 @@ pub(crate) fn graph_url(
         .map_err(|f| AppendError::from_failure(base_url, "the graph meta route (GET …/meta)", f))
 }
 
-/// The `code` of an `ApiErrorResponse` body.
-fn error_code(body: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(String::from))
+/// An error answer's body: the API's `ApiErrorResponse`, or the part of
+/// it a proxy or an older server sends (an `error` with no `code`).
+#[derive(Deserialize)]
+struct ErrorBody {
+    #[serde(default)]
+    code: Option<ApiErrorCode>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn error_body(body: &str) -> Option<ErrorBody> {
+    serde_json::from_str(body).ok()
 }
 
 fn error_message(body: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+    error_body(body)?.error
 }
 
 /// Walk an error's `source()` chain and join each link's `Display`
@@ -2894,7 +2904,7 @@ pub(crate) mod tests {
     fn append_errors_are_classified_by_status_and_code() {
         let status = |status: u16, code: Option<&str>| BatchFailure::Status {
             status,
-            code: code.map(String::from),
+            code: code.map(|c| c.parse().unwrap()),
             message: "m".into(),
         };
         let b = "https://h";
