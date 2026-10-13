@@ -13,10 +13,15 @@
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) use engine::*;
 #[cfg(not(target_os = "emscripten"))]
+pub(crate) use remotes::*;
+#[cfg(not(target_os = "emscripten"))]
 pub(crate) use sources::Stamp;
 
 #[cfg(not(target_os = "emscripten"))]
 mod engine;
+
+#[cfg(not(target_os = "emscripten"))]
+mod remotes;
 
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) mod sources;
