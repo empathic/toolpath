@@ -27,8 +27,9 @@ const REMOTES_VERSION: u32 = 1;
 /// URL on that remote — on Pathbase its API URL,
 /// `<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`
 /// (`cmd_pathbase::remote_path_url`) — so the containing graph is the
-/// key without its last two segments and is not stored. Nothing reads
-/// these yet; incremental append and `share --all` will.
+/// key without its last two segments and is not stored. `path share`
+/// reads them to append to the remote path instead of creating another
+/// (`share_append`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RemoteRecord {
     /// How many steps of the derive the remote holds.
@@ -95,6 +96,25 @@ impl Default for Remotes {
             version: REMOTES_VERSION,
             sessions: BTreeMap::new(),
         }
+    }
+}
+
+impl Remotes {
+    /// The session's record on the destination (server, owner, repo) of
+    /// `probe`, any path API URL there, with the key it sits under.
+    pub(crate) fn at(
+        &self,
+        artifact_type: ArtifactType,
+        id: &str,
+        probe: &str,
+    ) -> Option<(&str, &RemoteRecord)> {
+        let dest = destination(probe)?;
+        self.sessions
+            .get(artifact_type.name())?
+            .get(id)?
+            .iter()
+            .find(|(key, _)| destination(key).as_ref() == Some(&dest))
+            .map(|(key, record)| (key.as_str(), record))
     }
 }
 
@@ -361,6 +381,37 @@ mod tests {
         assert!(
             session(cfg, "s2").is_empty(),
             "other sessions are untouched"
+        );
+    }
+
+    #[test]
+    fn at_finds_the_record_on_the_probed_destination_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path();
+        let x = &path_url("a", "x", 1);
+        let y = &path_url("a", "y", 2);
+        record_remote(cfg, ArtifactType::Claude, "s1", x, remote_record(1)).unwrap();
+        record_remote(cfg, ArtifactType::Claude, "s1", y, remote_record(2)).unwrap();
+        let remotes = load_remotes(cfg).unwrap();
+
+        let probe_x = path_url("a", "x", 9);
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", &probe_x),
+            Some((x.as_str(), &remote_record(1)))
+        );
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", &path_url("a", "y", 9)),
+            Some((y.as_str(), &remote_record(2)))
+        );
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", &path_url("b", "x", 9)),
+            None
+        );
+        assert_eq!(remotes.at(ArtifactType::Claude, "s2", &probe_x), None);
+        assert_eq!(remotes.at(ArtifactType::Codex, "s1", &probe_x), None);
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", "s3://bucket/key"),
+            None
         );
     }
 

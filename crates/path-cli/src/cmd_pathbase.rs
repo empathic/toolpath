@@ -461,10 +461,39 @@ impl BatchClient {
                 BatchFailure::Other(format!("unexpected response body: {}", short_body(&text)))
             })
         } else {
-            Err(BatchFailure::Status(
-                status.as_u16(),
-                error_message(&text).unwrap_or_else(|| short_body(&text)),
-            ))
+            Err(BatchFailure::Status {
+                status: status.as_u16(),
+                code: error_code(&text),
+                message: error_message(&text).unwrap_or_else(|| short_body(&text)),
+            })
+        }
+    }
+}
+
+impl BatchClient {
+    /// `GET url` and decode a 2xx response as `T`.
+    async fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> std::result::Result<T, BatchFailure> {
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(BatchFailure::Transport)?;
+        let status = response.status();
+        let text = response.text().await.map_err(BatchFailure::Transport)?;
+        if status.is_success() {
+            serde_json::from_str(&text).map_err(|_| {
+                BatchFailure::Other(format!("unexpected response body: {}", short_body(&text)))
+            })
+        } else {
+            Err(BatchFailure::Status {
+                status: status.as_u16(),
+                code: error_code(&text),
+                message: error_message(&text).unwrap_or_else(|| short_body(&text)),
+            })
         }
     }
 }
@@ -780,7 +809,13 @@ fn parents_first_order(steps: &[toolpath::v1::Step]) -> Option<Vec<usize>> {
 
 enum BatchFailure {
     Transport(reqwest::Error),
-    Status(u16, String),
+    /// A non-2xx answer: the status, the `ApiErrorResponse` code when
+    /// the body carries one, and the message.
+    Status {
+        status: u16,
+        code: Option<String>,
+        message: String,
+    },
     Other(String),
 }
 
@@ -788,7 +823,7 @@ impl BatchFailure {
     fn retryable(&self) -> bool {
         match self {
             BatchFailure::Transport(_) => true,
-            BatchFailure::Status(code, _) => *code >= 500,
+            BatchFailure::Status { status, .. } => *status >= 500,
             BatchFailure::Other(_) => false,
         }
     }
@@ -803,8 +838,12 @@ impl BatchFailure {
                 BATCH_READ_TIMEOUT.as_secs()
             ),
             BatchFailure::Transport(e) => reqwest_hint(e),
-            BatchFailure::Status(code, msg) if msg.is_empty() => format!("HTTP {code}"),
-            BatchFailure::Status(code, msg) => format!("HTTP {code}: {msg}"),
+            BatchFailure::Status {
+                status, message, ..
+            } if message.is_empty() => format!("HTTP {status}"),
+            BatchFailure::Status {
+                status, message, ..
+            } => format!("HTTP {status}: {message}"),
             BatchFailure::Other(msg) => msg.clone(),
         }
     }
@@ -818,9 +857,17 @@ fn post_batch<T: serde::de::DeserializeOwned>(
     url: &str,
     body: &str,
 ) -> std::result::Result<T, BatchFailure> {
+    with_retries(|| block_on(client.send(url, body)))
+}
+
+/// Run `request`, retrying transport errors and 5xx responses with
+/// backoff, up to [`BATCH_RETRIES`] times.
+fn with_retries<T>(
+    request: impl Fn() -> std::result::Result<T, BatchFailure>,
+) -> std::result::Result<T, BatchFailure> {
     let mut retries = 0;
     loop {
-        match block_on(client.send(url, body)) {
+        match request() {
             Err(f) if f.retryable() && retries < BATCH_RETRIES => {
                 retries += 1;
                 eprintln!(
@@ -876,7 +923,12 @@ pub(crate) fn graphs_post_streamed(
                 let _ = block_on(typed.delete_graph(owner, repo, &graph_id));
             }
             match (&e.failure, e.largest_step) {
-                (BatchFailure::Status(404 | 405, _), _) if e.opening_path => {
+                (
+                    BatchFailure::Status {
+                        status: 404 | 405, ..
+                    },
+                    _,
+                ) if e.opening_path => {
                     eprintln!(
                         "note: {base_url} does not serve streamed upload; \
                          sending the document in one request"
@@ -884,8 +936,8 @@ pub(crate) fn graphs_post_streamed(
                     let json = serde_json::to_string(doc).context("serialize graph")?;
                     graphs_post(base_url, token, owner, repo, name, &json, public)
                 }
-                (BatchFailure::Status(401, _), _) => bail!(relogin_message(base_url)),
-                (BatchFailure::Status(413, _), Some((id, len))) => {
+                (BatchFailure::Status { status: 401, .. }, _) => bail!(relogin_message(base_url)),
+                (BatchFailure::Status { status: 413, .. }, Some((id, len))) => {
                     let step_alone = if len * 2 > e.body_len {
                         format!("; step {id} itself is too large for one request")
                     } else {
@@ -925,7 +977,7 @@ fn stream_paths(
     graph_id: &uuid::Uuid,
     doc: &toolpath::v1::Graph,
     budget: usize,
-) -> std::result::Result<Vec<pathbase_client::types::CreatedPath>, StreamError> {
+) -> std::result::Result<Vec<pathbase_client::types::CreatedPath>, Box<StreamError>> {
     use toolpath::v1::PathOrRef;
 
     let paths: Vec<&toolpath::v1::Path> = doc
@@ -964,13 +1016,15 @@ fn stream_paths(
                 batches.len(),
                 batch.body.len()
             );
-            let stream_error = |failure| StreamError {
-                failure,
-                path_id: path.path.id.clone(),
-                batch_no: bi + 1,
-                body_len: batch.body.len(),
-                largest_step: batch.largest_step.clone(),
-                opening_path: bi == 0,
+            let stream_error = |failure| {
+                Box::new(StreamError {
+                    failure,
+                    path_id: path.path.id.clone(),
+                    batch_no: bi + 1,
+                    body_len: batch.body.len(),
+                    largest_step: batch.largest_step.clone(),
+                    opening_path: bi == 0,
+                })
             };
             if bi == 0 {
                 let url = client.open_route(owner, repo, graph_id);
@@ -989,6 +1043,220 @@ fn stream_paths(
         });
     }
     Ok(opened)
+}
+
+/// Create a graph from `doc` (whose JSON is `body`) in `owner/repo`: one
+/// request when it fits [`BATCH_BUDGET`] or cannot be streamed, else
+/// [`graphs_post_streamed`]. The streamed routes take inline paths with
+/// at least one step; any other document goes up in one request
+/// whatever its size.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_graph(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    name: Option<&str>,
+    doc: &toolpath::v1::Graph,
+    body: &str,
+    public: bool,
+) -> Result<CreatedGraph> {
+    let streamable = doc.paths.iter().all(|p| match p {
+        toolpath::v1::PathOrRef::Path(p) => !p.steps.is_empty(),
+        toolpath::v1::PathOrRef::Ref(_) => false,
+    });
+    if body.len() <= BATCH_BUDGET || !streamable {
+        graphs_post(base_url, token, owner, repo, name, body, public)
+    } else {
+        graphs_post_streamed(
+            base_url,
+            token,
+            owner,
+            repo,
+            name,
+            doc,
+            public,
+            BATCH_BUDGET,
+        )
+    }
+}
+
+// ── Append to a stored path ─────────────────────────────────────────────
+
+/// Why an append to a stored path, or a read of its step ids, failed.
+/// The sync client answers the first three with a continuation, a fresh
+/// graph, and an ids diff or fresh graph respectively.
+#[derive(Debug)]
+pub(crate) enum AppendError {
+    /// `409 write_to_frozen`: the path can no longer change.
+    Frozen,
+    /// `404 not_found`: the graph or the path is gone.
+    Gone,
+    /// `400 invalid_document`: a step conflicts with what is stored.
+    InvalidDocument(String),
+    /// Anything else, described for the user.
+    Other(String),
+}
+
+impl std::fmt::Display for AppendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppendError::Frozen => f.write_str("the path is frozen"),
+            AppendError::Gone => f.write_str("the path is gone"),
+            AppendError::InvalidDocument(msg) => write!(f, "the server refused a step: {msg}"),
+            AppendError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl AppendError {
+    fn from_failure(base_url: &str, failure: BatchFailure) -> Self {
+        let code = match &failure {
+            BatchFailure::Status { code, .. } => code.as_deref(),
+            _ => None,
+        };
+        match (&failure, code) {
+            (BatchFailure::Status { status: 409, .. }, Some("write_to_frozen")) => Self::Frozen,
+            (BatchFailure::Status { status: 404, .. }, Some("not_found")) => Self::Gone,
+            (
+                BatchFailure::Status {
+                    status: 400,
+                    message,
+                    ..
+                },
+                Some("invalid_document"),
+            ) => Self::InvalidDocument(message.clone()),
+            (BatchFailure::Status { status: 401, .. }, _) => Self::Other(relogin_message(base_url)),
+            (
+                BatchFailure::Status {
+                    status: status @ (404 | 405),
+                    ..
+                },
+                _,
+            ) => Self::Other(format!(
+                "{base_url} does not serve appends to a stored path (HTTP {status}); \
+                 upgrade the server"
+            )),
+            _ => Self::Other(failure.describe()),
+        }
+    }
+}
+
+/// Append `steps` (indices into `path.steps`, in the order to send) to
+/// the stored path at `path_url` (its API URL, as
+/// [`remote_path_url`] spells it), then a `Head` line naming `head`.
+/// The body is the RFC JSONL writer's output for those steps without
+/// its `PathOpen` and `PathClose`: the path's `ActorDef` lines, each
+/// step with its `Signature` lines, and the `Head`, split into requests
+/// of at most `budget` bytes as the streamed upload splits a path.
+pub(crate) fn append_steps(
+    base_url: &str,
+    token: &str,
+    path_url: &str,
+    path: &toolpath::v1::Path,
+    steps: &[usize],
+    head: &str,
+    budget: usize,
+) -> std::result::Result<(), AppendError> {
+    let mut selected: Vec<toolpath::v1::Step> =
+        steps.iter().map(|&i| path.steps[i].clone()).collect();
+    if let Some(order) = parents_first_order(&selected) {
+        selected = order.iter().map(|&i| selected[i].clone()).collect();
+    }
+    let actors = path.meta.as_ref().and_then(|m| m.actors.clone());
+    let tail = toolpath::v1::Path {
+        path: toolpath::v1::PathIdentity {
+            head: head.to_string(),
+            ..path.path.clone()
+        },
+        steps: selected,
+        meta: Some(toolpath::v1::PathMeta {
+            actors,
+            ..Default::default()
+        }),
+    };
+    let jsonl = tail.to_jsonl_string().expect("write jsonl to memory");
+    let after_open = jsonl.split_once('\n').map_or("", |(_, rest)| rest);
+    let close = after_open
+        .trim_end_matches('\n')
+        .rfind('\n')
+        .map_or(0, |i| i + 1);
+    let body = &after_open[..close];
+    let step_ids: Vec<&str> = tail.steps.iter().map(|s| s.step.id.as_str()).collect();
+    let batches = pack_batches(body, &step_ids, budget);
+
+    let client =
+        BatchClient::new(base_url, token).map_err(|e| AppendError::Other(e.to_string()))?;
+    let url = format!("{path_url}/steps");
+    for (bi, batch) in batches.iter().enumerate() {
+        if batches.len() > 1 {
+            eprintln!(
+                "  appending batch {}/{} ({} bytes)",
+                bi + 1,
+                batches.len(),
+                batch.body.len()
+            );
+        }
+        let _: pathbase_client::types::AppendStepsResponse = post_batch(&client, &url, &batch.body)
+            .map_err(|f| AppendError::from_failure(base_url, f))?;
+    }
+    Ok(())
+}
+
+/// The ids of the steps stored in the path at `path_url`, in document
+/// order, followed with `through_parents` by the ids stored along its
+/// parent chain, nearest first.
+pub(crate) fn path_step_ids(
+    base_url: &str,
+    token: &str,
+    path_url: &str,
+    through_parents: bool,
+) -> std::result::Result<Vec<String>, AppendError> {
+    #[derive(Deserialize)]
+    struct StepIds {
+        step_ids: Vec<String>,
+    }
+    let client =
+        BatchClient::new(base_url, token).map_err(|e| AppendError::Other(e.to_string()))?;
+    let url = if through_parents {
+        format!("{path_url}/step-ids?through_parents=true")
+    } else {
+        format!("{path_url}/step-ids")
+    };
+    with_retries(|| block_on(client.get::<StepIds>(&url)))
+        .map(|ids| ids.step_ids)
+        .map_err(|f| AppendError::from_failure(base_url, f))
+}
+
+/// The graph document URL Pathbase resolves a `path.parent` against,
+/// `<server>/u/<owner>/<repo>/graphs/<graph>`, for the path at the API
+/// URL `path_url`. Assumes the server's public URL is the API's base,
+/// as on pathbase.dev. `None` when `path_url` is not a path API URL.
+pub(crate) fn graph_document_url(path_url: &str) -> Option<String> {
+    let segs: Vec<&str> = path_url.rsplitn(11, '/').collect();
+    match segs.as_slice() {
+        [
+            _,
+            "paths",
+            graph,
+            "graphs",
+            repo,
+            "repos",
+            owner,
+            "u",
+            "v1",
+            "api",
+            server,
+        ] => Some(format!("{server}/u/{owner}/{repo}/graphs/{graph}")),
+        _ => None,
+    }
+}
+
+/// The `code` of an `ApiErrorResponse` body.
+fn error_code(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(String::from))
 }
 
 fn error_message(body: &str) -> Option<String> {
@@ -2432,6 +2700,132 @@ pub(crate) mod tests {
         assert_eq!(
             request_line(&server.requests()[1]),
             format!("POST /api/v1/u/al%20ex/repos/path%2Fstash/graphs/{TEST_UUID}/paths HTTP/1.1")
+        );
+    }
+
+    // ── Append ───────────────────────────────────────────────────────
+
+    /// An append over budget goes as several requests to `…/steps`:
+    /// actor definitions first, each step with its signatures, the
+    /// `Head` last, no `PathOpen`, `PathClose` or path signature.
+    #[test]
+    fn append_steps_batches_the_tail_and_ends_with_head() {
+        use crate::fake_pathbase::FakePathbase;
+        let fake = FakePathbase::start();
+        let mut path = stream_path(8, 200);
+        let mut actors = std::collections::HashMap::new();
+        actors.insert("human:alex".to_string(), Default::default());
+        path.meta.as_mut().unwrap().actors = Some(actors);
+        let mut first = path.clone();
+        first.steps.truncate(1);
+        first.path.head = "s0".into();
+        let doc = toolpath::v1::Graph::from_path(first);
+        let created = create_graph(
+            &fake.base(),
+            "tok",
+            "alex",
+            "x",
+            None,
+            &doc,
+            &doc.to_json().unwrap(),
+            false,
+        )
+        .unwrap();
+        let url = remote_path_url(
+            &fake.base(),
+            "alex",
+            "x",
+            &created.id,
+            &created.paths[0].server_id,
+        );
+        fake.clear_log();
+
+        let tail: Vec<usize> = (1..8).collect();
+        append_steps(&fake.base(), "tok", &url, &path, &tail, "s7", 1000).unwrap();
+        let writes = fake.writes();
+        assert!(writes.len() >= 3, "{} requests", writes.len());
+        assert!(
+            writes
+                .iter()
+                .all(|w| w.target == format!("{}/steps", &url[url.find("/api").unwrap()..]))
+        );
+        let sent: Vec<String> = writes.iter().flat_map(|w| w.step_ids()).collect();
+        assert_eq!(sent, (1..8).map(|i| format!("s{i}")).collect::<Vec<_>>());
+        assert!(
+            writes[0].body.starts_with(r#"{"ActorDef":"#),
+            "{}",
+            writes[0].body
+        );
+        for (i, w) in writes.iter().enumerate() {
+            assert!(!w.body.contains("PathOpen") && !w.body.contains("PathClose"));
+            assert!(!w.body.contains(r#""target":"path""#));
+            let heads = if i + 1 == writes.len() {
+                vec!["s7".to_string()]
+            } else {
+                vec![]
+            };
+            assert_eq!(w.heads(), heads);
+        }
+        assert!(
+            writes
+                .iter()
+                .any(|w| w.body.contains(r#""target":"step:s1""#))
+        );
+        let stored = fake.path_at(&url).unwrap();
+        assert_eq!(stored.step_ids().len(), 8);
+        assert_eq!(stored.head.as_deref(), Some("s7"));
+    }
+
+    #[test]
+    fn append_errors_are_classified_by_status_and_code() {
+        let status = |status: u16, code: Option<&str>| BatchFailure::Status {
+            status,
+            code: code.map(String::from),
+            message: "m".into(),
+        };
+        let b = "https://h";
+        assert!(matches!(
+            AppendError::from_failure(b, status(409, Some("write_to_frozen"))),
+            AppendError::Frozen
+        ));
+        assert!(matches!(
+            AppendError::from_failure(b, status(404, Some("not_found"))),
+            AppendError::Gone
+        ));
+        assert!(matches!(
+            AppendError::from_failure(b, status(400, Some("invalid_document"))),
+            AppendError::InvalidDocument(m) if m == "m"
+        ));
+        assert!(matches!(
+            AppendError::from_failure(b, status(400, Some("bad_request"))),
+            AppendError::Other(_)
+        ));
+        assert!(matches!(
+            AppendError::from_failure(b, status(409, Some("conflict"))),
+            AppendError::Other(_)
+        ));
+        let AppendError::Other(msg) = AppendError::from_failure(b, status(404, None)) else {
+            panic!("a 404 without a code is not a deleted graph");
+        };
+        assert!(msg.contains("does not serve appends"), "{msg}");
+    }
+
+    #[test]
+    fn graph_document_url_is_the_page_of_the_graph_holding_the_path() {
+        assert_eq!(
+            graph_document_url(&format!(
+                "https://pathbase.dev/api/v1/u/alex/repos/x/graphs/{TEST_UUID}/paths/{PATH_ID}"
+            ))
+            .as_deref(),
+            Some(format!("https://pathbase.dev/u/alex/x/graphs/{TEST_UUID}").as_str())
+        );
+        assert_eq!(
+            graph_document_url("http://h:8080/base/api/v1/u/a/repos/b/graphs/g/paths/p").as_deref(),
+            Some("http://h:8080/base/u/a/b/graphs/g")
+        );
+        assert_eq!(
+            graph_document_url("https://pathbase.dev/u/a/b/graphs/g"),
+            None
         );
     }
 }

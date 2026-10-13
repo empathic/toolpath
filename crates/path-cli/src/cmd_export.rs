@@ -982,8 +982,7 @@ pub(crate) fn run_pathbase_inner(
     summary_source: &str,
 ) -> Result<Option<Vec<UploadedPath>>> {
     use crate::cmd_pathbase::{
-        AuthMode, BATCH_BUDGET, anon_graphs_post, graphs_post, graphs_post_streamed,
-        remote_path_url, repos_post,
+        AuthMode, anon_graphs_post, create_graph, remote_path_url, repos_post,
     };
     use pathbase_client::types::Visibility;
 
@@ -1041,34 +1040,16 @@ pub(crate) fn run_pathbase_inner(
     };
 
     let name = args.name.or_else(|| Some(derive_name(&doc)));
-    // The streamed routes take inline paths with at least one step; any
-    // other document goes up in one request whatever its size.
-    let streamable = doc.paths.iter().all(|p| match p {
-        toolpath::v1::PathOrRef::Path(p) => !p.steps.is_empty(),
-        toolpath::v1::PathOrRef::Ref(_) => false,
-    });
-    let created = if body.len() <= BATCH_BUDGET || !streamable {
-        graphs_post(
-            &base_url,
-            &token,
-            &owner,
-            &repo,
-            name.as_deref(),
-            body,
-            args.public,
-        )?
-    } else {
-        graphs_post_streamed(
-            &base_url,
-            &token,
-            &owner,
-            &repo,
-            name.as_deref(),
-            &doc,
-            args.public,
-            BATCH_BUDGET,
-        )?
-    };
+    let created = create_graph(
+        &base_url,
+        &token,
+        &owner,
+        &repo,
+        name.as_deref(),
+        &doc,
+        body,
+        args.public,
+    )?;
 
     // The visibility we surface is what the server actually applied,
     // not what we requested. If server-side policy ever clamps the
@@ -1113,7 +1094,7 @@ pub(crate) fn run_pathbase_inner(
 /// hash the canonical JSON and use a short hex prefix so re-uploads
 /// of the same content produce the same display label.
 #[cfg(not(target_os = "emscripten"))]
-fn derive_name(doc: &toolpath::v1::Graph) -> String {
+pub(crate) fn derive_name(doc: &toolpath::v1::Graph) -> String {
     let raw = match doc.single_path() {
         Some(p) => p.path.id.as_str(),
         None => doc.graph.id.as_str(),
