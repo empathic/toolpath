@@ -5,8 +5,9 @@
 //! Where a provider reads provider-specific data and produces a [`ConversationView`],
 //! a projector consumes a [`ConversationView`] and produces some output type.
 
-use crate::{ConversationView, ConvoError, Result};
+use crate::{ConversationView, ConvoError, Item, Result};
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 
 // ── Trait ─────────────────────────────────────────────────────────────
 
@@ -126,6 +127,78 @@ impl AnyProjector {
                 std::any::type_name::<T>()
             ))
         })
+    }
+}
+
+// ── Parent resolution past dropped items ─────────────────────────────
+
+/// Parent resolution for a projector whose target writes only some of a
+/// view's items.
+///
+/// Items chain through events: a turn's `parent_id` may name an event. A
+/// target that drops that event must not write its id as the turn's parent,
+/// or the written parent names nothing. Built from the view and the
+/// target's rule for which items it writes as entries a parent can name,
+/// [`resolve`](KeptAncestors::resolve) maps a parent id to the nearest
+/// ancestor the target keeps.
+///
+/// ```
+/// use toolpath_convo::{ConversationEvent, ConversationView, Item, KeptAncestors};
+///
+/// let event = ConversationEvent {
+///     id: "e1".into(),
+///     timestamp: String::new(),
+///     parent_id: Some("t1".into()),
+///     event_type: "token_count".into(),
+///     data: Default::default(),
+/// };
+/// let view = ConversationView {
+///     items: vec![Item::Event(event)],
+///     ..Default::default()
+/// };
+/// let kept = KeptAncestors::new(&view, |item| matches!(item, Item::Turn(_)));
+/// assert_eq!(kept.resolve(Some("e1")), Some("t1"));
+/// ```
+pub struct KeptAncestors<'a> {
+    /// The parent of each dropped item, by id.
+    dropped: HashMap<&'a str, Option<&'a str>>,
+}
+
+impl<'a> KeptAncestors<'a> {
+    /// Index `view` for a target that keeps the items `keep` accepts. An id
+    /// held by a kept item is never resolved past, even if a dropped item
+    /// shares it.
+    pub fn new(view: &'a ConversationView, keep: impl Fn(&Item) -> bool) -> Self {
+        let kept: HashSet<&str> = view
+            .items
+            .iter()
+            .filter(|item| keep(item))
+            .map(Item::id)
+            .collect();
+        let dropped = view
+            .items
+            .iter()
+            .filter(|item| !keep(item) && !kept.contains(item.id()))
+            .map(|item| (item.id(), item.parent_id()))
+            .collect();
+        Self { dropped }
+    }
+
+    /// `parent_id` resolved past dropped items: the nearest ancestor the
+    /// target keeps, or `None` when the chain of dropped items ends (or
+    /// loops) first. A parent naming no item of the view is returned as is.
+    pub fn resolve<'b>(&self, parent_id: Option<&'b str>) -> Option<&'b str>
+    where
+        'a: 'b,
+    {
+        let mut pid = parent_id?;
+        for _ in 0..=self.dropped.len() {
+            match self.dropped.get(pid) {
+                None => return Some(pid),
+                Some(next) => pid = (*next)?,
+            }
+        }
+        None
     }
 }
 
@@ -463,5 +536,86 @@ mod tests {
         let any = AnyProjector::new(TotalInputTokens);
         let total: u32 = any.project_as(&view).unwrap();
         assert_eq!(total, 300);
+    }
+
+    // ── KeptAncestors ────────────────────────────────────────────────
+
+    fn chained_turn(id: &str, parent: Option<&str>) -> Item {
+        let mut turn = make_turn(id, Role::User, id);
+        turn.parent_id = parent.map(str::to_string);
+        Item::Turn(turn)
+    }
+
+    fn chained_event(id: &str, parent: Option<&str>) -> Item {
+        Item::Event(crate::ConversationEvent {
+            id: id.into(),
+            timestamp: String::new(),
+            parent_id: parent.map(str::to_string),
+            event_type: "token_count".into(),
+            data: HashMap::new(),
+        })
+    }
+
+    fn view_of(items: Vec<Item>) -> ConversationView {
+        ConversationView {
+            items,
+            ..Default::default()
+        }
+    }
+
+    fn turns_only(item: &Item) -> bool {
+        matches!(item, Item::Turn(_))
+    }
+
+    #[test]
+    fn kept_ancestors_resolves_past_a_run_of_dropped_events() {
+        let view = view_of(vec![
+            chained_turn("t1", None),
+            chained_event("e1", Some("t1")),
+            chained_event("e2", Some("e1")),
+            chained_turn("t2", Some("e2")),
+        ]);
+        let kept = KeptAncestors::new(&view, turns_only);
+        assert_eq!(kept.resolve(Some("e2")), Some("t1"));
+        assert_eq!(kept.resolve(Some("t1")), Some("t1"));
+        assert_eq!(kept.resolve(None), None);
+    }
+
+    #[test]
+    fn kept_ancestors_ends_at_a_dropped_root() {
+        let view = view_of(vec![
+            chained_event("e1", None),
+            chained_turn("t1", Some("e1")),
+        ]);
+        let kept = KeptAncestors::new(&view, turns_only);
+        assert_eq!(kept.resolve(Some("e1")), None);
+    }
+
+    #[test]
+    fn kept_ancestors_leaves_an_unknown_parent_alone() {
+        let view = view_of(vec![chained_turn("t1", Some("elsewhere"))]);
+        let kept = KeptAncestors::new(&view, turns_only);
+        assert_eq!(kept.resolve(Some("elsewhere")), Some("elsewhere"));
+    }
+
+    #[test]
+    fn kept_ancestors_stops_on_a_cycle_of_dropped_items() {
+        let view = view_of(vec![
+            chained_event("e1", Some("e2")),
+            chained_event("e2", Some("e1")),
+        ]);
+        let kept = KeptAncestors::new(&view, turns_only);
+        assert_eq!(kept.resolve(Some("e1")), None);
+    }
+
+    #[test]
+    fn kept_ancestors_never_resolves_past_an_id_a_kept_item_holds() {
+        let view = view_of(vec![
+            chained_turn("t0", None),
+            chained_turn("x", Some("t0")),
+            chained_event("x", Some("t0")),
+        ]);
+        let kept = KeptAncestors::new(&view, turns_only);
+        assert_eq!(kept.resolve(Some("x")), Some("x"));
     }
 }

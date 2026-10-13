@@ -18,11 +18,13 @@
 //! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
 //! Pi's format and would pollute the JSONL.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Item, KeptAncestors, Result, Role,
+    ToolInvocation, Turn,
 };
 
 use crate::reader::PiSession;
@@ -161,10 +163,22 @@ fn project_view(
         .collect();
 
     // Only turns project to entries; events are dropped. A Pi compaction,
-    // read as a System turn, projects like any other System turn.
+    // read as a System turn, projects like any other System turn. A turn
+    // may chain onto an event, so its parent resolves past dropped events
+    // to the nearest turn.
+    let kept = KeptAncestors::new(view, |item| matches!(item, Item::Turn(_)));
     for turn in view.turns() {
-        let pi = pi_extras(turn).cloned().unwrap_or_default();
-        emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+        let parent = kept.resolve(turn.parent_id.as_deref());
+        let turn = if parent == turn.parent_id.as_deref() {
+            Cow::Borrowed(turn)
+        } else {
+            Cow::Owned(Turn {
+                parent_id: parent.map(str::to_string),
+                ..turn.clone()
+            })
+        };
+        let pi = pi_extras(&turn).cloned().unwrap_or_default();
+        emit_turn_entries(cfg, &turn, &pi, &covered, &mut entries);
     }
 
     Ok(PiSession {
@@ -884,5 +898,34 @@ mod tests {
                 s
             );
         }
+    }
+
+    #[test]
+    fn test_turn_parent_resolves_past_dropped_events() {
+        // Claude and Codex readers chain turns through events; Pi drops
+        // events, so a turn chained onto one must name the turn before it.
+        let event = |id: &str, parent: &str| {
+            toolpath_convo::Item::Event(toolpath_convo::ConversationEvent {
+                id: id.into(),
+                timestamp: "2026-04-16T10:00:00Z".into(),
+                parent_id: Some(parent.into()),
+                event_type: "token_count".into(),
+                data: HashMap::new(),
+            })
+        };
+        let mut a1 = assistant_turn("a1", "hello");
+        a1.parent_id = Some("e2".into());
+        let mut view = view_with(vec![]);
+        view.items = vec![
+            toolpath_convo::Item::Turn(user_turn("u1", "hi")),
+            event("e1", "u1"),
+            event("e2", "e1"),
+            toolpath_convo::Item::Turn(a1),
+        ];
+
+        let session = PiProjector::default().project(&view).unwrap();
+        let ids: Vec<&str> = session.entries.iter().map(|e| e.entry_id()).collect();
+        assert_eq!(ids, ["session-uuid", "u1", "a1"]);
+        assert_eq!(session.entries[2].parent_entry_id(), Some("u1"));
     }
 }

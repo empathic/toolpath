@@ -226,6 +226,22 @@ impl Item {
             _ => None,
         }
     }
+
+    /// The item's id.
+    pub fn id(&self) -> &str {
+        match self {
+            Item::Turn(t) => &t.id,
+            Item::Event(e) => &e.id,
+        }
+    }
+
+    /// The id of the item this one chains onto.
+    pub fn parent_id(&self) -> Option<&str> {
+        match self {
+            Item::Turn(t) => t.parent_id.as_deref(),
+            Item::Event(e) => e.parent_id.as_deref(),
+        }
+    }
 }
 
 /// Toolpath's classification of what a tool invocation does.
@@ -587,7 +603,7 @@ pub trait ConversationWatcher {
 }
 
 pub use extract::extract_conversation;
-pub use project::{AnyProjector, ConversationProjector};
+pub use project::{AnyProjector, ConversationProjector, KeptAncestors};
 
 // ── Tests ────────────────────────────────────────────────────────────
 

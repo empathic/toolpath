@@ -37,7 +37,11 @@ their position in that stream.
   ride in the document (`source_parent` and `event_source_id` are
   gone). Readers whose harness records no linkage chain over the
   ordered item stream, so events sit on the head's ancestry
-  naturally. New proptest suite pins unique step ids and
+  naturally. Because a turn may chain onto an event, a projector whose
+  target drops events resolves parents with `KeptAncestors`: built from
+  the view and the target's rule for which items it keeps, it maps a
+  parent id to the nearest kept ancestor (`Item::id` and
+  `Item::parent_id` read either kind). New proptest suite pins unique step ids and
   derive → extract → derive stability over randomized interleavings
   with id collisions, and that every turn of a chained stream is an
   ancestor of the head however its events are linked.
@@ -89,7 +93,9 @@ their position in that stream.
   the non-turn events, and the synthesized chain runs over that
   stream.
 - **`toolpath-pi`** (0.7.0): builds `items` from its turns; compaction
-  stays a System turn.
+  stays a System turn. The projector drops events and resolves each
+  turn's parent past them, so a Claude or Codex session exported to Pi
+  never names a parent it did not write.
 - **`path-cli`** (0.30.0), **`toolpath-cli`** (0.30.0): dependency
   bumps for all of the above.
 
