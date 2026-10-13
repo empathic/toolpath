@@ -47,6 +47,8 @@ mod query;
 mod remote;
 mod schema;
 #[cfg(not(target_os = "emscripten"))]
+mod share_all;
+#[cfg(not(target_os = "emscripten"))]
 mod share_append;
 #[cfg(not(target_os = "emscripten"))]
 mod share_config;

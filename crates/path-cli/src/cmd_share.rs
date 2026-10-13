@@ -57,6 +57,24 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Share every session in scope instead of picking one: new ones are
+    /// created, shared ones get the steps they gained since, unchanged
+    /// ones are left alone. Requires login.
+    #[arg(long, conflicts_with_all = ["session", "anon", "project", "name"])]
+    pub all: bool,
+
+    /// With --all: only sessions whose project directory is under this path
+    #[arg(long, requires = "all", value_name = "DIR")]
+    pub project_under: Option<PathBuf>,
+
+    /// With --all: print what would be shared and stop
+    #[arg(long, requires = "all")]
+    pub dry_run: bool,
+
+    /// With --all: skip the confirmation prompt
+    #[arg(long, short = 'y', requires = "all")]
+    pub yes: bool,
 }
 
 /// One artifact surfaced by a provider — today always an agent session.
@@ -508,6 +526,23 @@ pub fn run(args: ShareArgs) -> Result<()> {
         return share_explicit(h, session.as_str(), &args, auth, base_url);
     }
 
+    if args.all {
+        let auth = crate::cmd_pathbase::preflight_auth(&base_url, false, false)?;
+        return crate::share_all::run(
+            crate::share_all::AllArgs {
+                harness,
+                project_under: args.project_under.clone(),
+                url: args.url.clone(),
+                repo: args.repo.clone(),
+                public: args.public,
+                dry_run: args.dry_run,
+                yes: args.yes,
+            },
+            base_url,
+            auth,
+        );
+    }
+
     let cwd = std::env::current_dir()?;
     let bundle = HarnessBundle::from_environment();
     let project_filter = args.project.as_deref();
@@ -579,6 +614,10 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        all: false,
+        project_under: None,
+        dry_run: false,
+        yes: false,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
@@ -928,7 +967,7 @@ fn cache_derived(harness: ArtifactType, derived: &crate::derive::DerivedDoc) -> 
 /// record the session's cwd there). This is how session-keyed harnesses
 /// (codex/opencode/copilot/cursor), which carry no `--project`, feed the
 /// configured-repo lookup.
-fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
+pub(crate) fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
     let base = doc.single_path()?.path.base.as_ref()?;
     let dir = base.uri.strip_prefix("file://")?;
     if dir.is_empty() {
@@ -1474,6 +1513,10 @@ mod tests {
             session: None,
             project: None,
             no_cache: false,
+            all: false,
+            project_under: None,
+            dry_run: false,
+            yes: false,
         }
     }
 
