@@ -15,8 +15,9 @@ use crate::config::Config;
 use crate::query::Scope;
 
 /// Each array element is a Toolpath step (`step`/`change`/`meta` verbatim)
-/// wrapped with three keys: `cache_id`, `path` (the parent path's `id`/`base`/
-/// `meta`), and `dead_end` (whether the step sits off the head's ancestry).
+/// wrapped with three keys: `cache_id`, `path` (the containing path's `id`/
+/// `base`/`parent`/`meta`), and `dead_end` (whether the step sits off the
+/// head's ancestry).
 /// Reach a step's fields with the usual jq paths, e.g.
 /// `.change[].structural.token_usage`. Run `path kind` for the field reference.
 #[derive(Parser, Debug)]
@@ -76,7 +77,7 @@ Each array element wraps a Toolpath step:
 
   {
     \"cache_id\": \"claude-abc123\",
-    \"path\": { \"id\": …, \"base\": …, \"meta\": { \"kind\": …, \"source\": … } },
+    \"path\": { \"id\": …, \"base\": …, \"parent\": …, \"meta\": { \"kind\": …, \"source\": … } },
     \"step\":   { \"id\": …, \"parents\": [...], \"actor\": …, \"timestamp\": … },
     \"change\": { \"<artifact>\": { \"raw\": …, \"structural\": … } },
     \"meta\":   { … },

@@ -202,6 +202,34 @@ fn whole_cache_loads_both_docs() {
         .stdout(predicate::str::starts_with("6"));
 }
 
+#[test]
+fn filter_on_path_parent_finds_continuations() {
+    let cfg = sandbox();
+    seed(
+        cfg.path(),
+        "claude-sess2",
+        r#"{
+  "graph": {"id": "g3"},
+  "paths": [{
+    "path": {"id": "sess-2", "base": {"uri": "file:///work/repo"}, "head": "t1",
+             "parent": {"uri": "file:///cache/claude-sess1.json", "path": "sess-1", "step": "s3"}},
+    "steps": [
+      {"step": {"id": "t1", "actor": "human:alex", "timestamp": "2026-06-22T10:00:00Z"},
+       "change": {"src/lib.rs": {"raw": "@@ resumed @@"}}}
+    ]
+  }]
+}"#,
+    );
+    query(
+        cfg.path(),
+        [r#"[.[] | select(.path.parent.path == "sess-1") | .cache_id] | unique"#],
+    )
+    .success()
+    .stdout(predicate::str::contains("claude-sess2"))
+    .stdout(predicate::str::contains("claude-sess1").not())
+    .stdout(predicate::str::contains("git-pr42").not());
+}
+
 // ── Content scoping ──────────────────────────────────────────────────
 
 #[test]
