@@ -22,10 +22,12 @@ use crate::{
 ///
 /// An item's id is its step's id with the `#<n>` suffix `derive_path`
 /// appends on a collision stripped ([`base_id`]), so the view carries the
-/// id the source recorded. An item's `parent_id` is the id of the step it
-/// chained onto, suffix included: the source id alone would not say which
-/// of two same-id steps that was, and `derive_path` resolves a renamed step
-/// id directly, so deriving the extracted view reproduces the path.
+/// id the source recorded. An item's `parent_id` is stripped the same way,
+/// so ids and parents stay in one namespace and a parent always names an
+/// item of the view. After a collision the stripped parent is ambiguous
+/// between same-id items; `derive_path` resolves an id to the latest step
+/// emitted under it, as it did when the path was derived, so deriving the
+/// extracted view reproduces the path.
 ///
 /// Steps are walked in order (they are already topologically sorted in the
 /// path). Structural changes with types `conversation.init`,
@@ -184,7 +186,7 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     view.items.push(Item::Event(ConversationEvent {
                         id: base_id(&step.step.id).to_string(),
                         timestamp: step.step.timestamp.clone(),
-                        parent_id: step.step.parents.first().cloned(),
+                        parent_id: step.step.parents.first().map(|p| base_id(p).to_string()),
                         event_type,
                         data,
                     }));
@@ -306,7 +308,7 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
 
     let delegations = build_delegations(extra);
 
-    let parent_id = step.step.parents.first().cloned();
+    let parent_id = step.step.parents.first().map(|p| base_id(p).to_string());
 
     let group_id = extra
         .get("group_id")
@@ -1489,9 +1491,8 @@ mod tests {
         // Two turns and two events share an id with different bodies, so
         // derive renames the later of each to `<id>#2` and the turn that
         // chains onto the duplicate turn resolves to the renamed step.
-        // Extract hands every item back under the id the source recorded;
-        // a parent keeps naming the step it chained onto, and a second
-        // derivation reproduces the first.
+        // Extract hands every item and every parent back under the id the
+        // source recorded, and a second derivation reproduces the first.
         let mut a1_other = bare_turn("a1", Some("u1"), Role::Assistant, "2026-01-01T00:00:03Z");
         a1_other.text = "a different answer".into();
         let mut e1_other = bare_event("e1", "attachment", "2026-01-01T00:00:02Z");
@@ -1534,7 +1535,7 @@ mod tests {
         let event_ids: Vec<&str> = view.events().map(|e| e.id.as_str()).collect();
         assert_eq!(event_ids, vec!["e1", "e1"]);
         let u2 = view.turns().find(|t| t.id == "u2").unwrap();
-        assert_eq!(u2.parent_id.as_deref(), Some("a1#2"));
+        assert_eq!(u2.parent_id.as_deref(), Some("a1"));
 
         let again = crate::derive::derive_path(&view, &DeriveConfig::default());
         assert_eq!(

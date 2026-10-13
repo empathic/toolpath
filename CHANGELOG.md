@@ -16,14 +16,15 @@ their position in that stream.
   callers). `derive_path` emits `conversation.event` steps at their
   item position instead of after all turns, and resolves duplicate step
   ids by renaming to `<id>#<n>`.
-  `extract_conversation` strips that suffix from item ids, so a rebuilt
-  view carries the ids the source recorded (a projector never writes
-  `<uuid>#2` as an entry's own id); a `parent_id` keeps naming the step
-  it chained onto, which `derive_path` resolves directly, so the view
-  derives to the same step sequence again. For that to hold, a step
-  byte-identical to a renamed holder of its id is dropped like one
-  identical to the first holder, and a dropped duplicate no longer
-  rebinds its id: the id keeps naming the latest step pushed under it.
+  `extract_conversation` strips that suffix from item ids and parent
+  ids alike, so a rebuilt view carries the ids the source recorded (a
+  projector never writes `<uuid>#2` as an entry's own id) and a parent
+  always names an item of the view; `derive_path` resolves an id to the
+  latest step emitted under it, so the view derives to the same step
+  sequence again. For that to hold, a step byte-identical to a renamed
+  holder of its id is dropped like one identical to the first holder,
+  and a dropped duplicate no longer rebinds its id: the id keeps naming
+  the latest step pushed under it.
   The stripper is public as `toolpath_convo::base_id`, which the gemini
   reader now uses in place of its private copy.
   Readers own linkage: a step's `parents` is the item's `parent_id`
