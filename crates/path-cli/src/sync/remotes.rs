@@ -38,6 +38,18 @@ pub(crate) struct RemoteRecord {
     pub(crate) last_step: String,
     /// The head the remote was last told.
     pub(crate) head: String,
+    /// Index into the derive at which the remote path's own steps begin:
+    /// 0 for a path created fresh, the continuation boundary for a
+    /// continuation. Everything before it is inherited through the
+    /// path's parent, and the server stores a path's edges only among
+    /// its own steps (its root steps descend from `parent.step`
+    /// implicitly), so every batch appended to a continuation has the
+    /// parents that point before it stripped. Knowing it locally also
+    /// tells the ids diff and the parent choice which ids are the path's
+    /// own without a server round trip. Absent in records written
+    /// before it existed, which are never continuations' records: 0.
+    #[serde(default)]
+    pub(crate) owned_from: usize,
     /// The local source's stamp when those steps were sent; absent
     /// when the source provides neither part, so freshness cannot be
     /// told by stamp.
@@ -63,21 +75,6 @@ impl SourceStamp {
     }
 }
 
-impl RemoteRecord {
-    /// The record for a remote holding every step of `path`, taken
-    /// while the local source was at `stamp`. `None` for a path with
-    /// no steps: there is nothing to hold.
-    pub(crate) fn of(path: &toolpath::v1::Path, stamp: sources::Stamp) -> Option<Self> {
-        let last = path.steps.last()?;
-        Some(Self {
-            steps: path.steps.len(),
-            last_step: last.step.id.clone(),
-            head: path.path.head.clone(),
-            source_stamp: SourceStamp::known(stamp),
-        })
-    }
-}
-
 /// One session's records: path URL → record.
 pub(crate) type SessionRemotes = BTreeMap<String, RemoteRecord>;
 
@@ -100,6 +97,19 @@ impl Default for Remotes {
 }
 
 impl Remotes {
+    /// The session's records, on every destination.
+    pub(crate) fn of(
+        &self,
+        artifact_type: ArtifactType,
+        id: &str,
+    ) -> impl Iterator<Item = &RemoteRecord> {
+        self.sessions
+            .get(artifact_type.name())
+            .and_then(|sessions| sessions.get(id))
+            .into_iter()
+            .flat_map(|records| records.values())
+    }
+
     /// The session's record on the destination (server, owner, repo) of
     /// `probe`, any path API URL there, with the key it sits under.
     pub(crate) fn at(
@@ -231,6 +241,7 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
                     steps: old.steps,
                     last_step: old.last_step,
                     head: old.head,
+                    owned_from: 0,
                     source_stamp: parse_stamp_string(&old.source_stamp),
                 };
                 lifted.push((name.clone(), id.clone(), api_url(&url), remote));
@@ -302,6 +313,7 @@ mod tests {
             steps,
             last_step: format!("s{}", steps - 1),
             head: format!("s{}", steps - 1),
+            owned_from: 0,
             source_stamp: Some(SourceStamp {
                 modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
                 size: Some(10),
@@ -542,16 +554,33 @@ mod tests {
 
     #[test]
     fn remote_record_serializes_as_the_spec_shape() {
-        let json = serde_json::to_value(remote_record(412)).unwrap();
+        let record = RemoteRecord {
+            owned_from: 400,
+            ..remote_record(412)
+        };
+        let json = serde_json::to_value(&record).unwrap();
         assert_eq!(
             json,
             serde_json::json!({
                 "steps": 412,
                 "last_step": "s411",
                 "head": "s411",
+                "owned_from": 400,
                 "source_stamp": {"modified": "2026-01-01T00:00:00Z", "size": 10},
             })
         );
+        assert_eq!(
+            serde_json::from_value::<RemoteRecord>(json).unwrap(),
+            record
+        );
+    }
+
+    /// A record written before `owned_from` existed is a fresh path's.
+    #[test]
+    fn a_record_without_owned_from_owns_every_step() {
+        let old = serde_json::json!({"steps": 3, "last_step": "s2", "head": "s2"});
+        let record: RemoteRecord = serde_json::from_value(old).unwrap();
+        assert_eq!(record.owned_from, 0);
     }
 
     /// A stamp with neither part is left out of the record and reads
@@ -590,38 +619,5 @@ mod tests {
         );
         assert_eq!(parse_stamp_string("/"), None);
         assert_eq!(parse_stamp_string("garbage"), None);
-    }
-
-    #[test]
-    fn remote_record_of_takes_the_path_tail_and_head() {
-        let mut path = toolpath::v1::Path {
-            path: toolpath::v1::PathIdentity {
-                id: "p".into(),
-                base: None,
-                head: "s2".into(),
-                graph_ref: None,
-                parent: None,
-            },
-            steps: Vec::new(),
-            meta: None,
-        };
-        assert_eq!(RemoteRecord::of(&path, (None, None)), None);
-        for id in ["s0", "s1", "s2"] {
-            path.steps.push(toolpath::v1::Step {
-                step: toolpath::v1::StepIdentity {
-                    id: id.into(),
-                    parents: Vec::new(),
-                    actor: "a".into(),
-                    timestamp: "2024-01-01T00:00:00Z".into(),
-                },
-                change: Default::default(),
-                meta: None,
-            });
-        }
-        let rec = RemoteRecord::of(&path, (None, Some(9))).unwrap();
-        assert_eq!(rec.steps, 3);
-        assert_eq!(rec.last_step, "s2");
-        assert_eq!(rec.head, "s2");
-        assert_eq!(rec.source_stamp, SourceStamp::known((None, Some(9))));
     }
 }

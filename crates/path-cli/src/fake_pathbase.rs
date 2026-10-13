@@ -4,13 +4,21 @@
 //! or delete a graph between them, and read back what was stored and
 //! every request that stored it.
 //!
-//! It models the contract the client relies on, not the real server:
-//! a step is stored once (an identical resend is skipped, a different
-//! payload under a stored id is `400 invalid_document`), every parent
-//! must be stored or earlier in the request (`400 invalid_document`), a
-//! frozen graph refuses writes (`409 write_to_frozen`), a missing graph
-//! is `404 not_found`, and a continuation may not own a step stored
-//! along its parent chain (`400 invalid_document`).
+//! It answers as Pathbase does wherever the client's tests depend on the
+//! answer: a step is stored once (an identical resend, or an identical
+//! repeat within one streamed body, is skipped; a different payload
+//! under a stored id, signatures aside, is `400 invalid_document`), a
+//! `POST /graphs` document that repeats a step id is `400
+//! invalid_document`, every parent must be stored in the path or earlier
+//! in the request (`400 invalid_document`), a frozen graph refuses writes
+//! (`409 write_to_frozen`), a missing graph or path is `404 not_found`, a
+//! step stored along the parent chain is `400 inherited_step_redefined`,
+//! a parent on this host must name a readable frozen graph, a member path
+//! and a step it owns (`400 invalid_parent`, `409 parent_not_frozen`)
+//! while one on another host is stored unresolved, the step-ids walk
+//! stops at a parent the caller cannot read and names it in
+//! `truncated_at`, and a route it does not have is answered `200` with an
+//! HTML page, as a release build's web app answers it.
 
 #![cfg(test)]
 
@@ -94,6 +102,8 @@ pub(crate) struct FakeGraph {
     pub(crate) owner: String,
     pub(crate) repo: String,
     pub(crate) frozen: bool,
+    /// The caller may not read it: a parent chain stops here.
+    pub(crate) unreadable: bool,
     pub(crate) paths: Vec<FakePath>,
 }
 
@@ -111,6 +121,9 @@ struct State {
     graphs: Vec<FakeGraph>,
     log: Vec<Request>,
     forced: Vec<Forced>,
+    /// Answer `POST /graphs` without `paths`, as a server that predates
+    /// the field does.
+    unlisted_paths: bool,
 }
 
 pub(crate) struct FakePathbase {
@@ -129,11 +142,18 @@ fn api_error(status: u16, code: &str, error: &str) -> Response {
     )
 }
 
+/// The page a release Pathbase serves for a route it does not have.
+const WEB_APP_PAGE: &str = "<!doctype html><html><body>Pathbase</body></html>";
+
 /// What the fake compares to tell "the same step" from "a different
-/// step under that id": everything but signatures, which ride their own
-/// lines in JSONL.
+/// step under that id": the whole step less its signatures, which ride
+/// their own lines in JSONL.
 fn payload(step: &Step) -> serde_json::Value {
-    serde_json::json!({"step": step.step, "change": step.change})
+    let mut value = serde_json::to_value(step).expect("a step serializes");
+    if let Some(meta) = value.get_mut("meta").and_then(|m| m.as_object_mut()) {
+        meta.remove("signatures");
+    }
+    value
 }
 
 impl FakePathbase {
@@ -215,6 +235,23 @@ impl FakePathbase {
         self.state.lock().unwrap().graphs.retain(|g| g.id != graph);
     }
 
+    /// Make `graph` unreadable to the caller.
+    pub(crate) fn hide(&self, graph: Uuid) {
+        let mut state = self.state.lock().unwrap();
+        state
+            .graphs
+            .iter_mut()
+            .find(|g| g.id == graph)
+            .unwrap()
+            .unreadable = true;
+    }
+
+    /// Answer `POST /graphs` without listing the stored paths from now
+    /// on.
+    pub(crate) fn unlist_created_paths(&self) {
+        self.state.lock().unwrap().unlisted_paths = true;
+    }
+
     /// Answer every `method` request whose target contains `target`
     /// with `status` and `body` from now on.
     pub(crate) fn force(&self, method: &str, target: &str, status: u16, body: &str) {
@@ -285,8 +322,13 @@ fn serve(stream: TcpStream, port: u16, state: &Mutex<State>) {
             None => route(&mut state, port, &request),
         }
     };
+    let content_type = if body.starts_with('<') {
+        "text/html"
+    } else {
+        "application/json"
+    };
     let response = format!(
-        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let mut stream = stream;
@@ -316,6 +358,17 @@ fn route(state: &mut State, port: u16, req: &Request) -> Response {
             };
             state.graphs.retain(|graph| graph.id != g);
             (204, String::new())
+        }
+        ("GET", ["api", "v1", "u", owner, "repos", repo, "graphs", g, "meta"]) => {
+            with_graph(state, g, |state, gi| {
+                let graph = &state.graphs[gi];
+                let body = serde_json::json!({
+                    "id": graph.id,
+                    "url": page_url(port, owner, repo, graph.id),
+                    "mutability": if graph.frozen { "frozen" } else { "mutable" },
+                });
+                (200, body.to_string())
+            })
         }
         ("POST", ["api", "v1", "u", _, "repos", _, "graphs", g, "paths"]) => {
             with_graph(state, g, |state, gi| open_path(state, port, gi, &req.body))
@@ -360,17 +413,20 @@ fn route(state: &mut State, port: u16, req: &Request) -> Response {
             let Some(pi) = path_index(state, gi, p) else {
                 return api_error(404, "not_found", "no such path");
             };
-            let mut ids = state.graphs[gi].paths[pi].step_ids();
+            let path = &state.graphs[gi].paths[pi];
+            let mut ids = path.step_ids();
+            let mut body = serde_json::json!({});
             if query.contains("through_parents=true") {
-                ids.extend(chain_ids(
-                    state,
-                    port,
-                    state.graphs[gi].paths[pi].parent.as_ref(),
-                ));
+                let chain = walk(state, port, path.parent.as_ref(), true);
+                ids.extend(chain.ids);
+                if let Some(at) = chain.truncated_at {
+                    body["truncated_at"] = serde_json::json!(at);
+                }
             }
-            (200, serde_json::json!({"step_ids": ids}).to_string())
+            body["step_ids"] = serde_json::json!(ids);
+            (200, body.to_string())
         }),
-        _ => api_error(404, "not_found", "no such route"),
+        _ => (200, WEB_APP_PAGE.to_string()),
     }
 }
 
@@ -397,39 +453,107 @@ fn path_index(state: &State, gi: usize, p: &str) -> Option<usize> {
         .position(|path| path.server_id == p)
 }
 
-/// The ids stored along `parent`'s chain on this host, nearest first.
-fn chain_ids<'a>(state: &'a State, port: u16, mut parent: Option<&'a Parent>) -> Vec<String> {
-    let mut ids = Vec::new();
+/// What a walk up a parent chain found: the ids stored along it on this
+/// host, nearest first, and the parent it stopped at for being
+/// unreadable.
+struct Chain {
+    ids: Vec<String>,
+    truncated_at: Option<Parent>,
+}
+
+/// Walk the chain from `parent`. With `readable_only`, as a read does,
+/// stop at a parent the caller cannot read; otherwise, as the owned-step
+/// check does, every parent on this host counts.
+fn walk<'a>(
+    state: &'a State,
+    port: u16,
+    mut parent: Option<&'a Parent>,
+    readable_only: bool,
+) -> Chain {
+    let mut chain = Chain {
+        ids: Vec::new(),
+        truncated_at: None,
+    };
     let mut seen = HashSet::new();
     while let Some(p) = parent {
-        let Some(path) = resolve(state, port, p) else {
+        let Some((graph, path)) = resolve(state, port, p) else {
             break;
         };
+        if readable_only && graph.unreadable {
+            chain.truncated_at = Some(p.clone());
+            break;
+        }
         if !seen.insert(path.server_id) {
             break;
         }
-        ids.extend(path.step_ids());
+        chain.ids.extend(path.step_ids());
         parent = path.parent.as_ref();
     }
-    ids
+    chain
 }
 
-/// The path a parent names, when its document is a graph on this host.
-fn resolve<'a>(state: &'a State, port: u16, parent: &Parent) -> Option<&'a FakePath> {
-    let prefix = format!("http://127.0.0.1:{port}/u/");
-    let rest = parent.uri.strip_prefix(&prefix)?;
-    let segs: Vec<&str> = rest.split('/').collect();
-    let [_, _, "graphs", g] = segs.as_slice() else {
-        return None;
+/// The graph page URL, which a child path's `parent.uri` names.
+fn page_url(port: u16, owner: &str, repo: &str, graph: Uuid) -> String {
+    format!("http://127.0.0.1:{port}/u/{owner}/{repo}/graphs/{graph}")
+}
+
+/// Where a parent `uri` on this host points: `Some(owner, repo, graph)`,
+/// or `None` for a malformed one. `Err` for another host's.
+fn parse_parent_uri(port: u16, uri: &str) -> Result<Option<(String, String, Uuid)>, ()> {
+    let Some(rest) = uri.strip_prefix(&format!("http://127.0.0.1:{port}/")) else {
+        return Err(());
     };
-    let g: Uuid = g.parse().ok()?;
-    state
+    let segs: Vec<&str> = rest.split('/').collect();
+    Ok(match segs.as_slice() {
+        ["u", owner, repo, "graphs", g] => g
+            .parse()
+            .ok()
+            .map(|g| (owner.to_string(), repo.to_string(), g)),
+        _ => None,
+    })
+}
+
+/// The graph and path a parent names, when it resolves on this host.
+fn resolve<'a>(
+    state: &'a State,
+    port: u16,
+    parent: &Parent,
+) -> Option<(&'a FakeGraph, &'a FakePath)> {
+    let (owner, repo, g) = parse_parent_uri(port, &parent.uri).ok()??;
+    let graph = state
         .graphs
         .iter()
-        .find(|graph| graph.id == g)?
-        .paths
-        .iter()
-        .find(|path| path.id == parent.path)
+        .find(|graph| graph.id == g && graph.owner == owner && graph.repo == repo)?;
+    let path = graph.paths.iter().find(|path| path.id == parent.path)?;
+    Some((graph, path))
+}
+
+/// Refuse a parent on this host that does not name a readable frozen
+/// graph, a member path and a step it owns. Another host's is fine.
+fn check_parent(state: &State, port: u16, parent: &Parent) -> Result<(), Response> {
+    let invalid = |why: &str| api_error(400, "invalid_parent", why);
+    match parse_parent_uri(port, &parent.uri) {
+        Err(()) => return Ok(()),
+        Ok(None) => return Err(invalid("does not name a graph on this host")),
+        Ok(Some(_)) => {}
+    }
+    let Some((graph, path)) = resolve(state, port, parent) else {
+        return Err(invalid("no readable graph holds that path"));
+    };
+    if graph.unreadable {
+        return Err(invalid("no readable graph holds that path"));
+    }
+    if !graph.frozen {
+        return Err(api_error(
+            409,
+            "parent_not_frozen",
+            "the parent is not frozen",
+        ));
+    }
+    if !path.holds(&parent.step) {
+        return Err(invalid("the parent path does not own that step"));
+    }
+    Ok(())
 }
 
 fn create_graph(state: &mut State, port: u16, owner: &str, repo: &str, body: &str) -> Response {
@@ -441,12 +565,26 @@ fn create_graph(state: &mut State, port: u16, owner: &str, repo: &str, body: &st
         Ok(doc) => doc,
         Err(e) => return api_error(400, "invalid_document", &e.to_string()),
     };
+    for p in &doc.paths {
+        let toolpath::v1::PathOrRef::Path(path) = p else {
+            continue;
+        };
+        let mut ids = HashSet::new();
+        if let Some(dup) = path.steps.iter().find(|s| !ids.insert(&s.step.id)) {
+            return api_error(
+                400,
+                "invalid_document",
+                &format!("step id {} appears twice", dup.step.id),
+            );
+        }
+    }
     let id = Uuid::new_v4();
     state.graphs.push(FakeGraph {
         id,
         owner: owner.to_string(),
         repo: repo.to_string(),
         frozen: false,
+        unreadable: false,
         paths: Vec::new(),
     });
     let gi = state.graphs.len() - 1;
@@ -467,12 +605,12 @@ fn create_graph(state: &mut State, port: u16, owner: &str, repo: &str, body: &st
     let mut response: serde_json::Value =
         serde_json::from_str(&crate::cmd_pathbase::tests::graph_document_json()).unwrap();
     response["id"] = serde_json::json!(id);
-    response["url"] = serde_json::json!(format!(
-        "http://127.0.0.1:{port}/u/{owner}/{repo}/graphs/{id}"
-    ));
+    response["url"] = serde_json::json!(page_url(port, owner, repo, id));
     response["document"] = serde_json::json!({});
     response["path_count"] = serde_json::json!(created.len());
-    response["paths"] = serde_json::Value::Array(created);
+    if !state.unlisted_paths {
+        response["paths"] = serde_json::Value::Array(created);
+    }
     (201, response.to_string())
 }
 
@@ -494,8 +632,16 @@ fn open_path(state: &mut State, port: u16, gi: usize, body: &str) -> Response {
         .get("parent")
         .and_then(|p| serde_json::from_value(p.clone()).ok());
     let pi = match state.graphs[gi].paths.iter().position(|p| p.id == id) {
+        Some(pi) if state.graphs[gi].paths[pi].parent != parent => {
+            return api_error(409, "conflict", "the path is open with another parent");
+        }
         Some(pi) => pi,
         None => {
+            if let Some(p) = &parent
+                && let Err(refusal) = check_parent(state, port, p)
+            {
+                return refusal;
+            }
             state.graphs[gi].paths.push(FakePath {
                 server_id: Uuid::new_v4(),
                 id,
@@ -528,7 +674,13 @@ fn apply(
     body: &str,
     opening: bool,
 ) -> Response {
-    let upstream = chain_ids(state, port, state.graphs[gi].paths[pi].parent.as_ref());
+    let upstream = walk(
+        state,
+        port,
+        state.graphs[gi].paths[pi].parent.as_ref(),
+        false,
+    )
+    .ids;
     if state.graphs[gi].frozen {
         return api_error(409, "write_to_frozen", "the graph is frozen");
     }
@@ -561,7 +713,15 @@ fn apply(
         };
         let id = step.step.id.clone();
         let known = |s: &str| path.holds(s) || new_steps.iter().any(|(n, _)| n == s);
-        if let Some((_, stored)) = path.steps.iter().find(|(s, _)| *s == id) {
+        if upstream.contains(&id) {
+            return api_error(
+                400,
+                "inherited_step_redefined",
+                &format!("step {id} is stored along the parent chain"),
+            );
+        }
+        let earlier = path.steps.iter().chain(&new_steps).find(|(s, _)| *s == id);
+        if let Some((_, stored)) = earlier {
             if *stored != payload(&step) {
                 return api_error(
                     400,
@@ -570,13 +730,6 @@ fn apply(
                 );
             }
             continue;
-        }
-        if upstream.contains(&id) {
-            return api_error(
-                400,
-                "invalid_document",
-                &format!("step {id} is stored along the parent chain"),
-            );
         }
         if let Some(p) = step.step.parents.iter().find(|p| !known(p)) {
             return api_error(
@@ -597,4 +750,178 @@ fn apply(
         200,
         serde_json::json!({"inserted": inserted, "head": path.head}).to_string(),
     )
+}
+
+/// The fake's answers, checked through the client calls the sync client
+/// makes, so a test that passes against it passes for a reason Pathbase
+/// shares.
+mod tests {
+    use super::*;
+    use crate::cmd_pathbase::{
+        AppendError, append_steps, create_graph, graph_url, path_step_ids, refusal_code,
+        remote_path_url,
+    };
+    use toolpath::v1::{Graph, Path, PathIdentity, StepIdentity, StepMeta};
+
+    fn step(id: &str, parent: Option<&str>) -> Step {
+        Step {
+            step: StepIdentity {
+                id: id.into(),
+                parents: parent.map(|p| vec![p.to_string()]).unwrap_or_default(),
+                actor: "agent:claude".into(),
+                timestamp: "2026-01-01T00:00:00Z".into(),
+            },
+            change: Default::default(),
+            meta: None,
+        }
+    }
+
+    fn path(steps: Vec<Step>, parent: Option<Parent>) -> Path {
+        Path {
+            path: PathIdentity {
+                id: "p".into(),
+                base: None,
+                head: steps.last().unwrap().step.id.clone(),
+                graph_ref: None,
+                parent,
+            },
+            steps,
+            meta: None,
+        }
+    }
+
+    /// Create a graph of `path`; its stored path's API URL.
+    fn create(fake: &FakePathbase, path: Path) -> anyhow::Result<String> {
+        let doc = Graph::from_path(path);
+        let created = create_graph(
+            &fake.base(),
+            "tok",
+            "alex",
+            "x",
+            None,
+            &doc,
+            &doc.to_json().unwrap(),
+            false,
+        )?;
+        Ok(remote_path_url(
+            &fake.base(),
+            "alex",
+            "x",
+            &created.id,
+            &created.paths[0].server_id,
+        ))
+    }
+
+    fn append(fake: &FakePathbase, url: &str, steps: Vec<Step>) -> Result<(), AppendError> {
+        let at = path(steps.clone(), None);
+        append_steps(&fake.base(), "tok", url, &at, steps, "h", 1 << 20)
+    }
+
+    #[test]
+    fn a_step_is_stored_once_and_never_changed() {
+        let fake = FakePathbase::start();
+        let err = create(&fake, path(vec![step("a", None), step("a", None)], None)).unwrap_err();
+        assert_eq!(refusal_code(&err), Some("invalid_document"), "{err:#}");
+
+        let url = create(&fake, path(vec![step("a", None)], None)).unwrap();
+        let mut changed = step("a", None);
+        changed.meta = Some(StepMeta {
+            intent: Some("other".into()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            append(&fake, &url, vec![changed]),
+            Err(AppendError::InvalidDocument(_))
+        ));
+        append(
+            &fake,
+            &url,
+            vec![step("a", None), step("b", Some("a")), step("b", Some("a"))],
+        )
+        .unwrap();
+        assert_eq!(fake.path_at(&url).unwrap().step_ids(), ["a", "b"]);
+        assert!(matches!(
+            append(
+                &fake,
+                &url,
+                vec![step("c", Some("b")), step("c", Some("a"))]
+            ),
+            Err(AppendError::InvalidDocument(_))
+        ));
+        assert!(matches!(
+            append(&fake, &url, vec![step("d", Some("elsewhere"))]),
+            Err(AppendError::InvalidDocument(_))
+        ));
+    }
+
+    #[test]
+    fn a_parent_on_this_host_must_resolve_and_one_elsewhere_is_kept() {
+        let fake = FakePathbase::start();
+        let url = create(
+            &fake,
+            path(vec![step("a", None), step("b", Some("a"))], None),
+        )
+        .unwrap();
+        let (graph, _) = ids_of(&url).unwrap();
+        let page = graph_url(&fake.base(), "tok", &url).unwrap();
+        let parent = |uri: &str, step: &str| Parent {
+            uri: uri.into(),
+            path: "p".into(),
+            step: step.into(),
+        };
+        let child = |p: Parent| path(vec![step("c", None)], Some(p));
+
+        let err = create(&fake, child(parent(&page, "b"))).unwrap_err();
+        assert_eq!(refusal_code(&err), Some("parent_not_frozen"), "{err:#}");
+        fake.freeze(graph);
+        for wrong in [
+            parent(&page, "zz"),
+            parent(&format!("{}/u/alex/x/nowhere", fake.base()), "b"),
+            parent(
+                &format!("{}/u/alex/x/graphs/{}", fake.base(), Uuid::new_v4()),
+                "b",
+            ),
+        ] {
+            let err = create(&fake, child(wrong)).unwrap_err();
+            assert_eq!(refusal_code(&err), Some("invalid_parent"), "{err:#}");
+        }
+        let err = create(&fake, path(vec![step("a", None)], Some(parent(&page, "b")))).unwrap_err();
+        assert_eq!(
+            refusal_code(&err),
+            Some("inherited_step_redefined"),
+            "{err:#}"
+        );
+
+        let foreign = create(
+            &fake,
+            child(parent("https://elsewhere.dev/u/a/b/graphs/g", "b")),
+        );
+        assert!(foreign.is_ok());
+
+        let continued = create(&fake, child(parent(&page, "b"))).unwrap();
+        let read = path_step_ids(&fake.base(), "tok", &continued, true).unwrap();
+        assert_eq!(read.step_ids, ["c", "a", "b"]);
+        assert_eq!(read.truncated_at, None);
+        fake.hide(graph);
+        let read = path_step_ids(&fake.base(), "tok", &continued, true).unwrap();
+        assert_eq!(read.step_ids, ["c"]);
+        assert_eq!(read.truncated_at, Some(parent(&page, "b")));
+    }
+
+    /// A route the server lacks answers with a page, which the client
+    /// reads as an unsupported server, never as a deleted graph.
+    #[test]
+    fn an_unknown_route_answers_with_a_page() {
+        let fake = FakePathbase::start();
+        let url = create(&fake, path(vec![step("a", None)], None)).unwrap();
+        let Err(AppendError::Other(msg)) =
+            path_step_ids(&fake.base(), "tok", &format!("{url}/elsewhere"), false)
+        else {
+            panic!("an unknown route is not a stored path");
+        };
+        assert!(
+            msg.contains("does not support incremental sharing"),
+            "{msg}"
+        );
+    }
 }

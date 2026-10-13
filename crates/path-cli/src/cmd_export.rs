@@ -212,6 +212,11 @@ pub enum ExportTarget {
     /// Use `--repo`/`--name`/`--public` to override the pathstash default
     /// when authenticated. Use `--anon` to force the anonymous endpoint
     /// even when credentials are present.
+    ///
+    /// The upload is a one-off dump of the whole document, unsettled
+    /// steps included, and writes no remote record: `path share` never
+    /// appends to the graph it makes. To share a session incrementally,
+    /// use `path share`.
     Pathbase {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
         #[arg(short, long)]
@@ -869,12 +874,6 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
         use crate::cmd_pathbase::preflight_auth;
 
         let file = cache_ref(&args.input)?;
-        // A cache id names a session the manifest may know; a file does
-        // not, and its upload is recorded nowhere. The session's stamp
-        // is taken before the body is read, so a sync that rewrites
-        // the entry during the upload leaves a record older than the
-        // source, never newer than the body that was sent.
-        let session = crate::sync::session_of_cache_id(&args.input);
         let body = std::fs::read_to_string(&file)
             .with_context(|| format!("Failed to read {}", file.display()))?;
         let upload = PathbaseUploadArgs {
@@ -885,70 +884,11 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
             public: args.public,
         };
         let base_url = resolve_upload_base_url(&upload);
-        let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
+        let needs_auth = (upload.repo.is_some() || upload.public || upload.name.is_some())
+            .then_some(crate::cmd_share::AUTH_FLAGS);
         let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
-        let uploaded = run_pathbase_inner(auth, base_url, upload, &body, &summary_source)?;
-        if let Some(uploaded) = uploaded
-            && let Some((artifact_type, id, stamp)) = session
-            && let Ok(doc) = toolpath::v1::Graph::from_json(&body)
-        {
-            record_remotes(artifact_type, &id, &doc, &uploaded, stamp);
-        }
-        Ok(())
-    }
-}
-
-/// One path of a finished upload: the `path.id` the document gave it
-/// and the URL the server addresses it by.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) struct UploadedPath {
-    pub(crate) id: String,
-    pub(crate) url: String,
-}
-
-/// Record where each uploaded path of `doc` now lives, under the
-/// session (`artifact_type`, `id`) it was derived from, in the remotes
-/// file. `stamp` is the session source's stamp when `doc` was derived.
-/// A write failure warns, as does a server that listed no paths for a
-/// document that had some; the upload itself is done.
-#[cfg(not(target_os = "emscripten"))]
-pub(crate) fn record_remotes(
-    artifact_type: crate::artifact::ArtifactType,
-    id: &str,
-    doc: &toolpath::v1::Graph,
-    uploaded: &[UploadedPath],
-    stamp: crate::sync::Stamp,
-) {
-    let inline = doc.paths.iter().filter_map(|p| match p {
-        toolpath::v1::PathOrRef::Path(p) => Some(p.as_ref()),
-        toolpath::v1::PathOrRef::Ref(_) => None,
-    });
-    if uploaded.is_empty() && inline.clone().any(|p| !p.steps.is_empty()) {
-        eprintln!("warning: remote record not written: the server did not list the stored paths");
-        return;
-    }
-    let config_dir = match crate::config::config_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("warning: remote record not written: {e}");
-            return;
-        }
-    };
-    for path in inline {
-        let Some(url) = uploaded
-            .iter()
-            .find(|u| u.id == path.path.id)
-            .map(|u| u.url.as_str())
-        else {
-            continue;
-        };
-        let Some(record) = crate::sync::RemoteRecord::of(path, stamp) else {
-            continue;
-        };
-        if let Err(e) = crate::sync::record_remote(&config_dir, artifact_type, id, url, record) {
-            eprintln!("warning: remote record not written: {e}");
-        }
+        run_pathbase_inner(auth, base_url, upload, &body, &summary_source)
     }
 }
 
@@ -970,9 +910,10 @@ pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
     resolve_url(None)
 }
 
-/// Upload `body` and say where each of its paths landed: `None` for an
-/// anonymous upload, which is recorded nowhere since nobody owns the
-/// graph it made.
+/// Upload `body` as a new graph: anonymously, or to the repo `args`
+/// names (the user's `pathstash` by default). Nothing records where it
+/// went: it is a one-off dump of the whole document, so nothing appends
+/// to it later.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn run_pathbase_inner(
     auth: crate::cmd_pathbase::AuthMode,
@@ -980,24 +921,9 @@ pub(crate) fn run_pathbase_inner(
     args: PathbaseUploadArgs,
     body: &str,
     summary_source: &str,
-) -> Result<Option<Vec<UploadedPath>>> {
-    use crate::cmd_pathbase::{
-        AuthMode, anon_graphs_post, create_graph, remote_path_url, repos_post,
-    };
+) -> Result<()> {
+    use crate::cmd_pathbase::{AuthMode, anon_graphs_post, create_graph, repos_post};
     use pathbase_client::types::Visibility;
-
-    let uploaded_paths = |owner: &str,
-                          repo: &str,
-                          graph_id: &uuid::Uuid,
-                          paths: &[pathbase_client::types::CreatedPath]| {
-        paths
-            .iter()
-            .map(|p| UploadedPath {
-                id: p.id.clone(),
-                url: remote_path_url(&base_url, owner, repo, graph_id, &p.server_id),
-            })
-            .collect()
-    };
 
     // Validate locally so we give a clean error rather than relying on
     // the server to reject malformed payloads.
@@ -1024,7 +950,7 @@ pub(crate) fn run_pathbase_inner(
                 body.len()
             );
             println!("{printable}");
-            return Ok(None);
+            return Ok(());
         }
         AuthMode::Authed { token, username } => (token, username),
     };
@@ -1077,12 +1003,7 @@ pub(crate) fn run_pathbase_inner(
         body.len()
     );
     println!("{}", created.url);
-    Ok(Some(uploaded_paths(
-        &owner,
-        &repo,
-        &created.id,
-        &created.paths,
-    )))
+    Ok(())
 }
 
 /// Default display label for a graph uploaded via `export pathbase`.
@@ -2108,13 +2029,6 @@ mod tests {
     }
 
     fn authed_upload(base_url: String, doc: &toolpath::v1::Graph) -> Result<()> {
-        authed_upload_paths(base_url, doc).map(|_| ())
-    }
-
-    fn authed_upload_paths(
-        base_url: String,
-        doc: &toolpath::v1::Graph,
-    ) -> Result<Vec<UploadedPath>> {
         run_pathbase_inner(
             crate::cmd_pathbase::AuthMode::Authed {
                 token: "tok".to_string(),
@@ -2134,7 +2048,6 @@ mod tests {
             &serde_json::to_string(doc).unwrap(),
             "test",
         )
-        .map(|uploaded| uploaded.expect("an authed upload says where its paths landed"))
     }
 
     /// Run `f` with the config directory pinned to a fresh tempdir,
@@ -2201,91 +2114,15 @@ mod tests {
         })
     }
 
-    /// `p export pathbase <cache id>` records the upload on the session
-    /// the manifest says the entry was derived from, with that record's
-    /// stamp; a file input is recorded nowhere.
+    /// `p export pathbase` is a full dump, unsettled steps included:
+    /// it records nothing, so no later share appends to it, and a
+    /// session's share record is left as it was.
     #[test]
-    fn pathbase_export_of_a_cache_entry_records_against_its_session() {
+    fn pathbase_export_writes_no_remote_record() {
         use crate::cmd_pathbase::tests::{MockServer, graph_created_json, me_response_body};
         with_config_dir(|config_dir| {
-            let doc = make_path_doc();
-            crate::cache::write_cached("claude-sess", &doc, true).unwrap();
+            crate::cache::write_cached("claude-sess", &make_path_doc(), true).unwrap();
             record_sess(99);
-
-            let server = MockServer::start_sequence(vec![
-                ("HTTP/1.1 200 OK", me_response_body("alex")),
-                (
-                    "HTTP/1.1 201 Created",
-                    graph_created_json(&[("test-path", "22222222-2222-2222-2222-222222222222")]),
-                ),
-            ]);
-            let base = server.base();
-            export_to(config_dir, "claude-sess", &base).unwrap();
-
-            let remotes = remotes_of_sess(config_dir);
-            assert_eq!(remotes.len(), 1);
-            let (url, remote) = remotes.iter().next().unwrap();
-            assert_eq!(
-                *url,
-                format!(
-                    "{base}/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
-                )
-            );
-            assert_eq!(remote.steps, 2);
-            assert_eq!(remote.last_step, "step-002");
-            assert_eq!(remote.head, "step-002");
-            assert_eq!(
-                remote.source_stamp,
-                crate::sync::SourceStamp::known((
-                    Some("2026-03-01T00:00:00Z".parse().unwrap()),
-                    Some(99)
-                ))
-            );
-
-            // The same document from a file: no session to record on.
-            let file = config_dir.join("doc.json");
-            std::fs::write(&file, serde_json::to_string(&doc).unwrap()).unwrap();
-            let server = MockServer::start_sequence(vec![
-                ("HTTP/1.1 200 OK", me_response_body("alex")),
-                (
-                    "HTTP/1.1 201 Created",
-                    graph_created_json(&[("test-path", "33333333-3333-3333-3333-333333333333")]),
-                ),
-            ]);
-            export_to(config_dir, file.to_str().unwrap(), &server.base()).unwrap();
-            assert_eq!(remotes_of_sess(config_dir).len(), 1);
-        });
-    }
-
-    /// The stamp the record carries is the one the manifest held before
-    /// the body was read, not after the upload: a sync that re-stamps
-    /// the entry in between must not make the record claim the newer
-    /// source. The cache entry is a FIFO: opening it to write blocks
-    /// until the export opens it to read, and only then does the writer
-    /// re-stamp the entry and supply the body.
-    #[cfg(unix)]
-    #[test]
-    fn pathbase_export_stamps_the_record_before_reading_the_body() {
-        use crate::cmd_pathbase::tests::{MockServer, graph_created_json, me_response_body};
-        with_config_dir(|config_dir| {
-            let fifo = crate::cache::cache_path("claude-sess").unwrap();
-            std::fs::create_dir_all(fifo.parent().unwrap()).unwrap();
-            assert!(
-                std::process::Command::new("mkfifo")
-                    .arg(&fifo)
-                    .status()
-                    .unwrap()
-                    .success()
-            );
-            record_sess(99);
-            let body = serde_json::to_string(&make_path_doc()).unwrap();
-            let writer = std::thread::spawn(move || {
-                use std::io::Write;
-                let mut pipe = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
-                record_sess(100);
-                pipe.write_all(body.as_bytes()).unwrap();
-            });
-
             let server = MockServer::start_sequence(vec![
                 ("HTTP/1.1 200 OK", me_response_body("alex")),
                 (
@@ -2294,99 +2131,9 @@ mod tests {
                 ),
             ]);
             export_to(config_dir, "claude-sess", &server.base()).unwrap();
-            writer.join().unwrap();
-
-            let manifest = crate::sync::load_manifest(config_dir).unwrap();
-            assert_eq!(manifest["claude"]["sess"].size, Some(100));
-            let remotes = remotes_of_sess(config_dir);
-            let remote = remotes.values().next().unwrap();
-            assert_eq!(
-                remote.source_stamp,
-                crate::sync::SourceStamp::known((
-                    Some("2026-03-01T00:00:00Z".parse().unwrap()),
-                    Some(99)
-                ))
-            );
+            assert!(remotes_of_sess(config_dir).is_empty());
+            assert!(!config_dir.join(crate::config::REMOTES_FILE_NAME).exists());
         });
-    }
-
-    /// Where the single-request upload says the path landed: the server
-    /// id from the create response under the graph it reported.
-    #[test]
-    fn pathbase_single_request_upload_names_the_stored_path() {
-        use crate::cmd_pathbase::tests::{MockServer, graph_created_json};
-        let server = MockServer::start(
-            "HTTP/1.1 201 Created",
-            Box::leak(
-                graph_created_json(&[("test-path", "22222222-2222-2222-2222-222222222222")])
-                    .into_boxed_str(),
-            ),
-        );
-        let base = server.base();
-        let uploaded = authed_upload_paths(base.clone(), &make_path_doc()).unwrap();
-        assert_eq!(uploaded.len(), 1);
-        assert_eq!(uploaded[0].id, "test-path");
-        assert_eq!(
-            uploaded[0].url,
-            format!(
-                "{base}/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/22222222-2222-2222-2222-222222222222"
-            )
-        );
-    }
-
-    /// The streamed upload names the path by the id the open route
-    /// answered with.
-    #[test]
-    fn pathbase_streamed_upload_names_the_opened_path() {
-        use crate::cmd_pathbase::tests::{
-            MockServer, graph_document_json, path_opened, steps_appended,
-        };
-        let mut doc = make_path_doc();
-        pad_first_step(&mut doc, crate::cmd_pathbase::BATCH_BUDGET);
-        let server = MockServer::start_sequence(vec![
-            ("HTTP/1.1 201 Created", graph_document_json()),
-            ("HTTP/1.1 201 Created", path_opened(1, None)),
-            ("HTTP/1.1 200 OK", steps_appended(1, Some("step-002"))),
-        ]);
-        let base = server.base();
-        let uploaded = authed_upload_paths(base.clone(), &doc).unwrap();
-        assert_eq!(uploaded.len(), 1);
-        assert_eq!(uploaded[0].id, "test-path");
-        assert_eq!(
-            uploaded[0].url,
-            format!(
-                "{base}/api/v1/u/alex/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/11111111-1111-1111-1111-111111111111"
-            )
-        );
-    }
-
-    /// An anonymous upload says nowhere its paths landed: nobody owns
-    /// the graph, so there is nothing to record.
-    #[test]
-    fn pathbase_anon_upload_names_no_path() {
-        use crate::cmd_pathbase::tests::{MockServer, graph_created_json};
-        let server = MockServer::start(
-            "HTTP/1.1 201 Created",
-            Box::leak(
-                graph_created_json(&[("test-path", "22222222-2222-2222-2222-222222222222")])
-                    .into_boxed_str(),
-            ),
-        );
-        let uploaded = run_pathbase_inner(
-            crate::cmd_pathbase::AuthMode::Anon,
-            server.base(),
-            PathbaseUploadArgs {
-                url: None,
-                anon: true,
-                repo: None,
-                name: None,
-                public: false,
-            },
-            &serde_json::to_string(&make_path_doc()).unwrap(),
-            "test",
-        )
-        .unwrap();
-        assert!(uploaded.is_none());
     }
 
     fn pad_first_step(doc: &mut toolpath::v1::Graph, bytes: usize) {

@@ -2261,3 +2261,36 @@ fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
         .stderr(predicate::str::contains("path p cache ls"))
         .stderr(predicate::str::contains("path cache ls").not());
 }
+
+// ── share --all ──────────────────────────────────────────────────────
+
+/// `share --all` uploads to the user's account: logged out, it says so
+/// and stops, without first announcing an anonymous upload.
+#[test]
+fn share_all_logged_out_is_refused_before_anything_else() {
+    let cfg = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let out = cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("HOME", home.path())
+        .env_remove("PATHBASE_URL")
+        .args(["share", "--all", "--yes", "--url", "http://127.0.0.1:9"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("Not logged in") && stderr.contains("`share --all`"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("anonymous"), "{stderr}");
+}
+
+#[test]
+fn share_all_rejects_no_cache() {
+    cmd()
+        .args(["share", "--all", "--no-cache"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--no-cache").and(predicate::str::contains("--all")));
+}

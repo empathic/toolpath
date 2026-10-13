@@ -61,7 +61,7 @@ pub struct ShareArgs {
     /// Share every session in scope instead of picking one: new ones are
     /// created, shared ones get the steps they gained since, unchanged
     /// ones are left alone. Requires login.
-    #[arg(long, conflicts_with_all = ["session", "anon", "project", "name"])]
+    #[arg(long, conflicts_with_all = ["session", "anon", "project", "name", "no_cache"])]
     pub all: bool,
 
     /// With --all: only sessions whose project directory is under this path
@@ -76,6 +76,10 @@ pub struct ShareArgs {
     #[arg(long, short = 'y', requires = "all")]
     pub yes: bool,
 }
+
+/// The flags that need an authenticated upload, for the preflight's
+/// messages.
+pub(crate) const AUTH_FLAGS: &str = "--repo / --public / --name";
 
 /// One artifact surfaced by a provider — today always an agent session.
 /// Rows feed both the unified `share` picker and `p cache sync`.
@@ -517,7 +521,9 @@ pub fn run(args: ShareArgs) -> Result<()> {
         public: args.public,
     };
     let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
-    let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
+    let needs_auth =
+        (upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some())
+            .then_some(AUTH_FLAGS);
 
     if let (Some(h), Some(session)) = (harness, &args.session) {
         // Explicit-args: validate creds before derive so a credential
@@ -527,7 +533,11 @@ pub fn run(args: ShareArgs) -> Result<()> {
     }
 
     if args.all {
-        let auth = crate::cmd_pathbase::preflight_auth(&base_url, false, false)?;
+        let crate::cmd_pathbase::AuthMode::Authed { token, username } =
+            crate::cmd_pathbase::preflight_auth(&base_url, false, Some("`share --all`"))?
+        else {
+            unreachable!("an authentication preflight that requires auth never goes anonymous");
+        };
         return crate::share_all::run(
             crate::share_all::AllArgs {
                 harness,
@@ -539,7 +549,8 @@ pub fn run(args: ShareArgs) -> Result<()> {
                 yes: args.yes,
             },
             base_url,
-            auth,
+            token,
+            username,
         );
     }
 
@@ -902,16 +913,40 @@ fn share_explicit(
             path,
             stamp,
         },
+        false,
     )?;
     eprintln!(
         "{summary} → {}: {}",
         destination.display(),
         outcome.describe()
     );
-    if let Some(url) = outcome.url() {
+    let url = match outcome.url() {
+        Some(url) => Some(url.to_string()),
+        None => recorded_graph_url(&config_dir, &destination, harness, &record_id),
+    };
+    if let Some(url) = url {
         println!("{url}");
     }
     Ok(())
+}
+
+/// The page of the graph the session's record on `dest` points into, as
+/// the server names it; `None` (with a note) when it cannot be read.
+fn recorded_graph_url(
+    config_dir: &std::path::Path,
+    dest: &crate::share_append::Destination,
+    harness: ArtifactType,
+    id: &str,
+) -> Option<String> {
+    let remotes = crate::sync::load_remotes(config_dir).ok()?;
+    let (key, _) = remotes.at(harness, id, &dest.probe())?;
+    match crate::cmd_pathbase::graph_url(&dest.base_url, &dest.token, key) {
+        Ok(url) => Some(url),
+        Err(e) => {
+            eprintln!("note: could not read the graph's URL: {e}");
+            None
+        }
+    }
 }
 
 /// The authed destination `dest` names: its repo, or the user's

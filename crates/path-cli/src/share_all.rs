@@ -7,15 +7,18 @@
 //!
 //! A pass enumerates through the sync engine's sources, so sessions are
 //! named as their records name them (a Claude chain by its head) and
-//! come with their stat stamps. A session with a record on its
-//! destination whose stamp matches the source's is skipped without being
-//! read. Every other session is derived and pushed. Sessions run one at a
-//! time; one failing is reported and the pass goes on.
+//! come with their stat stamps. A session with a record whose stamp
+//! matches the source's is skipped without being read. Every other
+//! session is derived, and only then given its destination, from the
+//! working directory the derive recorded: a listing's directory can be
+//! a lossy decoding (a Claude project slug). Sessions run one at a time;
+//! one failing is reported and the pass goes on.
 
 #![cfg(not(target_os = "emscripten"))]
 
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::artifact::{ArtifactRef, ArtifactType};
@@ -27,48 +30,47 @@ use crate::sync::{Manifest, Remotes, SourceStamp};
 /// What a pass will do with one session, decided before deriving.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Plan {
-    /// No record on its destination: create.
+    /// No record anywhere: derive, create.
     Create,
     /// A record whose stamp matches the source's: nothing to read.
     Unchanged,
-    /// A record, and the stamp is unknown or differs: derive, append.
+    /// Records, none with a known stamp equal to the source's: derive,
+    /// append.
     Update,
 }
 
-/// The spec's table: no record → create; a record and a known stamp
-/// equal to the record's → skip; otherwise derive and append.
-pub(crate) fn plan(record_stamp: Option<Option<SourceStamp>>, stamp: sources::Stamp) -> Plan {
-    match record_stamp {
-        None => Plan::Create,
-        Some(recorded) => match SourceStamp::known(stamp) {
-            Some(now) if recorded == Some(now) => Plan::Unchanged,
-            _ => Plan::Update,
-        },
+/// The spec's table, over the session's records on every destination
+/// (`record_stamps`): none → create; one with a known stamp equal to the
+/// source's → skip; otherwise derive and append.
+pub(crate) fn plan(record_stamps: &[Option<SourceStamp>], stamp: sources::Stamp) -> Plan {
+    if record_stamps.is_empty() {
+        return Plan::Create;
+    }
+    match SourceStamp::known(stamp) {
+        Some(now) if record_stamps.contains(&Some(now)) => Plan::Unchanged,
+        _ => Plan::Update,
     }
 }
 
 /// One session in scope.
 pub(crate) struct Item<'a> {
     pub(crate) artifact: ArtifactRef,
-    /// The directory the session belongs to, when known: where its
-    /// configured remote is looked up before it is derived.
+    /// The directory the listing gives the session, when known: what
+    /// `--project-under` scopes by, and where its configured remote is
+    /// looked up when the derive records no working directory.
     pub(crate) dir: Option<String>,
     pub(crate) source: &'a dyn ArtifactSource,
-    pub(crate) dest: Destination,
     pub(crate) plan: Plan,
 }
 
-/// Every session of `types` in `bundle` under `project_under`, with its
-/// destination (`destination` maps a session directory to one) and its
-/// plan against the records in `remotes`. Sorted by destination, then
-/// harness, then id, so a pass writes to one destination at a time.
+/// Every session of `sources` under `project_under`, with its plan
+/// against the records in `remotes`, sorted by harness, then id.
 pub(crate) fn gather<'a>(
     sources: &'a [Box<dyn ArtifactSource + 'a>],
     project_under: Option<&Path>,
     manifest: &Manifest,
     remotes: &Remotes,
-    destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
-) -> Result<Vec<Item<'a>>> {
+) -> Vec<Item<'a>> {
     let mut items = Vec::new();
     for source in sources {
         for artifact in source.enumerate(project_under) {
@@ -87,37 +89,24 @@ pub(crate) fn gather<'a>(
             {
                 continue;
             }
-            let dest = destination(dir.as_deref().map(Path::new))?;
-            let record = remotes
-                .at(artifact.artifact_type, &artifact.id, &dest.probe())
-                .map(|(_, r)| r.source_stamp);
-            let plan = plan(record, (artifact.modified, artifact.size));
+            let stamps: Vec<Option<SourceStamp>> = remotes
+                .of(artifact.artifact_type, &artifact.id)
+                .map(|r| r.source_stamp)
+                .collect();
+            let plan = plan(&stamps, (artifact.modified, artifact.size));
             items.push(Item {
                 artifact,
                 dir,
                 source: source.as_ref(),
-                dest,
                 plan,
             });
         }
     }
     items.sort_by(|a, b| {
-        (
-            dest_key(&a.dest),
-            a.artifact.artifact_type.name(),
-            &a.artifact.id,
-        )
-            .cmp(&(
-                dest_key(&b.dest),
-                b.artifact.artifact_type.name(),
-                &b.artifact.id,
-            ))
+        (a.artifact.artifact_type.name(), &a.artifact.id)
+            .cmp(&(b.artifact.artifact_type.name(), &b.artifact.id))
     });
-    Ok(items)
-}
-
-fn dest_key(d: &Destination) -> (String, String, String) {
-    (d.base_url.clone(), d.owner.clone(), d.repo.clone())
+    items
 }
 
 /// The sources for `types` in `bundle`.
@@ -139,8 +128,8 @@ pub(crate) enum SessionResult {
     Failed(String),
 }
 
-/// A finished pass: each session, the destination it went to, and what
-/// happened.
+/// A finished pass: each session, the destination it went to (empty
+/// when it never got one), and what happened.
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     pub(crate) sessions: Vec<(ArtifactType, String, String, SessionResult)>,
@@ -172,7 +161,7 @@ impl Report {
                     match o {
                         Outcome::Created { steps, .. } => bump("created", *steps),
                         Outcome::Appended { steps, .. } => bump("appended", *steps),
-                        Outcome::UpToDate { .. } => bump("up to date", 0),
+                        Outcome::UpToDate => bump("up to date", 0),
                         Outcome::NothingSettled => bump("nothing settled", 0),
                         Outcome::Continued { steps, .. } => bump("continued", *steps),
                         Outcome::Recreated { steps, .. } => bump("recreated", *steps),
@@ -239,9 +228,10 @@ impl Report {
 
 /// Run one pass over `items`: derive and push each that needs it,
 /// sequentially, reporting each as it finishes on stderr. A session
-/// whose derive or push fails is reported and the pass goes on.
-/// `cached` returns a session's cached document when the cache is
-/// current for it, sparing the derive.
+/// whose derive, destination or push fails is reported and the pass
+/// goes on. `cached` returns a session's cached document when the cache
+/// is current for it, sparing the derive; `destination` maps a session
+/// directory to where it goes.
 pub(crate) fn run_pass(
     config_dir: &Path,
     items: &[Item],
@@ -257,7 +247,7 @@ pub(crate) fn run_pass(
             report.sessions.push((
                 a.artifact_type,
                 a.id.clone(),
-                item.dest.display(),
+                String::new(),
                 SessionResult::Unchanged,
             ));
             continue;
@@ -265,12 +255,12 @@ pub(crate) fn run_pass(
         let (dest, result) = match push_item(config_dir, item, cached, destination) {
             Ok((dest, outcome)) => {
                 let url = outcome.url().map(|u| format!(" → {u}")).unwrap_or_default();
-                eprintln!("{label}: {}{url}", outcome.describe());
+                eprintln!("{label} → {dest}: {}{url}", outcome.describe());
                 (dest, SessionResult::Pushed(outcome))
             }
             Err(e) => {
                 eprintln!("{label}: failed: {e:#}");
-                (item.dest.display(), SessionResult::Failed(format!("{e:#}")))
+                (String::new(), SessionResult::Failed(format!("{e:#}")))
             }
         };
         report
@@ -280,10 +270,9 @@ pub(crate) fn run_pass(
     report
 }
 
-/// Derive (or read from the cache) and push one session. The derived
-/// document's recorded working directory, when it has one, picks the
-/// destination: it is exact where the listing's directory may be a
-/// lossy decoding.
+/// Derive (or read from the cache) and push one session to the
+/// destination of the working directory its document records, or of
+/// its listing's directory when it records none.
 fn push_item(
     config_dir: &Path,
     item: &Item,
@@ -298,10 +287,9 @@ fn push_item(
     let path = doc
         .single_path()
         .context("the session did not derive to a single path")?;
-    let dest = match crate::cmd_share::doc_session_dir(&doc) {
-        Some(dir) if item.dir.as_deref() != dir.to_str() => destination(Some(&dir))?,
-        _ => item.dest.clone(),
-    };
+    let dir =
+        crate::cmd_share::doc_session_dir(&doc).or_else(|| item.dir.as_ref().map(PathBuf::from));
+    let dest = destination(dir.as_deref()).context("resolve the destination")?;
     let outcome = share_append::push(
         config_dir,
         &dest,
@@ -311,6 +299,7 @@ fn push_item(
             path,
             stamp: (a.modified, a.size),
         },
+        true,
     )?;
     Ok((dest.display(), outcome))
 }
@@ -331,23 +320,16 @@ pub(crate) fn render_plan(items: &[Item], project_under: Option<&Path>) -> Strin
         count(Plan::Unchanged)
     );
     let mut per_harness: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut per_dest: BTreeMap<String, usize> = BTreeMap::new();
     for i in items {
         *per_harness
             .entry(i.artifact.artifact_type.name())
             .or_default() += 1;
-        if i.plan != Plan::Unchanged {
-            *per_dest.entry(i.dest.display()).or_default() += 1;
-        }
     }
     let harnesses: Vec<String> = per_harness
         .iter()
         .map(|(h, n)| format!("{h} {n}"))
         .collect();
     out.push_str(&format!("  {}\n", harnesses.join(", ")));
-    for (dest, n) in per_dest {
-        out.push_str(&format!("  → {dest}: {}\n", plural(n, "session")));
-    }
     out
 }
 
@@ -379,17 +361,8 @@ pub(crate) struct AllArgs {
     pub(crate) yes: bool,
 }
 
-/// `path share --all`.
-pub(crate) fn run(
-    args: AllArgs,
-    base_url: String,
-    auth: crate::cmd_pathbase::AuthMode,
-) -> Result<()> {
-    let crate::cmd_pathbase::AuthMode::Authed { token, username } = auth else {
-        anyhow::bail!(
-            "`share --all` uploads to your account and needs login: run `path auth login --url {base_url}`"
-        );
-    };
+/// `path share --all`, as `username` with `token`.
+pub(crate) fn run(args: AllArgs, base_url: String, token: String, username: String) -> Result<()> {
     let config_dir = crate::config::config_dir()?;
     let bundle = HarnessBundle::from_environment();
     let types: Vec<ArtifactType> = match args.harness {
@@ -400,16 +373,7 @@ pub(crate) fn run(
     let manifest = crate::sync::load_manifest(&config_dir).unwrap_or_default();
     let remotes = crate::sync::load_remotes(&config_dir)?;
 
-    let destination = |dir: Option<&Path>| -> Result<Destination> {
-        destination_for(&args, &base_url, &token, &username, dir)
-    };
-    let items = gather(
-        &sources,
-        args.project_under.as_deref(),
-        &manifest,
-        &remotes,
-        &destination,
-    )?;
+    let items = gather(&sources, args.project_under.as_deref(), &manifest, &remotes);
     eprint!("{}", render_plan(&items, args.project_under.as_deref()));
     let work = items.iter().filter(|i| i.plan != Plan::Unchanged).count();
     if work == 0 {
@@ -429,11 +393,9 @@ pub(crate) fn run(
             std::process::exit(130);
         }
     }
-    // The default destination is created on first use, once per pass.
-    let pathstash = |d: &Destination| d.owner == username && d.repo == "pathstash";
-    if args.repo.is_none() && items.iter().any(|i| pathstash(&i.dest)) {
-        crate::cmd_pathbase::repos_post(&base_url, &token, &username, "pathstash")?;
-    }
+    let destination = ensuring_pathstash(&username, |dir| {
+        destination_for(&args, &base_url, &token, &username, dir)
+    });
     let report = run_pass(
         &config_dir,
         &items,
@@ -446,6 +408,27 @@ pub(crate) fn run(
         anyhow::bail!("{} failed", plural(failed, "session"));
     }
     Ok(())
+}
+
+/// `resolve`, creating `username`'s `pathstash` repo on a server the
+/// first time a session resolves to it there. A failure to create it
+/// fails that session's resolution, and the next session to need it
+/// tries again.
+fn ensuring_pathstash<'a>(
+    username: &'a str,
+    resolve: impl Fn(Option<&Path>) -> Result<Destination> + 'a,
+) -> impl Fn(Option<&Path>) -> Result<Destination> + 'a {
+    let ensured: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    move |dir| {
+        let dest = resolve(dir)?;
+        let pathstash = dest.owner == username && dest.repo == "pathstash";
+        if pathstash && !ensured.borrow().contains(&dest.base_url) {
+            crate::cmd_pathbase::repos_post(&dest.base_url, &dest.token, username, "pathstash")
+                .context("create your pathstash repo")?;
+            ensured.borrow_mut().insert(dest.base_url.clone());
+        }
+        Ok(dest)
+    }
 }
 
 /// The destination for a session in `dir`: `--repo` when given, else the
@@ -569,8 +552,7 @@ mod tests {
             let bundle = self.bundle();
             let sources = sources_for(&bundle, &[ArtifactType::Claude, ArtifactType::Codex]);
             let remotes = crate::sync::load_remotes(self.cfg()).unwrap();
-            let items =
-                gather(&sources, None, &Manifest::default(), &remotes, destination).unwrap();
+            let items = gather(&sources, None, &Manifest::default(), &remotes);
             between(&items);
             let plans = items.iter().map(|i| i.plan).collect();
             (plans, run_pass(self.cfg(), &items, &|_| None, destination))
@@ -633,14 +615,18 @@ mod tests {
     fn plan_follows_the_table() {
         let stamp = (None, Some(10));
         let known = SourceStamp::known(stamp);
-        assert_eq!(plan(None, stamp), Plan::Create);
-        assert_eq!(plan(None, (None, None)), Plan::Create);
-        assert_eq!(plan(Some(known), stamp), Plan::Unchanged);
-        assert_eq!(plan(Some(known), (None, Some(11))), Plan::Update);
+        let other = SourceStamp::known((None, Some(9)));
+        assert_eq!(plan(&[], stamp), Plan::Create);
+        assert_eq!(plan(&[], (None, None)), Plan::Create);
+        assert_eq!(plan(&[known], stamp), Plan::Unchanged);
+        assert_eq!(plan(&[known], (None, Some(11))), Plan::Update);
+        // A record on any destination at the current stamp will do.
+        assert_eq!(plan(&[other, known], stamp), Plan::Unchanged);
+        assert_eq!(plan(&[other], stamp), Plan::Update);
         // Unknown on either side: derive every pass.
-        assert_eq!(plan(Some(None), (None, None)), Plan::Update);
-        assert_eq!(plan(Some(known), (None, None)), Plan::Update);
-        assert_eq!(plan(Some(None), stamp), Plan::Update);
+        assert_eq!(plan(&[None], (None, None)), Plan::Update);
+        assert_eq!(plan(&[known], (None, None)), Plan::Update);
+        assert_eq!(plan(&[None], stamp), Plan::Update);
     }
 
     /// Sessions with no settled step: only the first prompt, and only
@@ -710,17 +696,28 @@ mod tests {
         assert_eq!(fake.graphs().len(), 1);
     }
 
+    /// A session whose destination changed keeps a record on each, and
+    /// each appends from its own: a record at the current stamp on
+    /// either spares the derive.
     #[test]
-    fn a_session_shared_to_two_destinations_keeps_both_up_to_date() {
+    fn a_session_shared_to_two_destinations_appends_to_each_from_its_record() {
         let h = Harnesses::new();
         let fake = FakePathbase::start();
         let (x, y) = (dest(&fake, "x"), dest(&fake, "y"));
         h.claude(CLAUDE_ID, 30);
         h.pass(&x);
+        h.claude(CLAUDE_ID, 45);
         h.pass(&y);
         let (x_key, _) = h.record(ArtifactType::Claude, CLAUDE_ID, &x).unwrap();
         let (y_key, _) = h.record(ArtifactType::Claude, CLAUDE_ID, &y).unwrap();
         assert_ne!(x_key, y_key);
+
+        let (plans, _) = h.pass(&x);
+        assert_eq!(
+            plans,
+            [Plan::Unchanged],
+            "y's record holds the current stamp"
+        );
 
         h.claude(CLAUDE_ID, 60);
         let (plans, _) = h.pass(&x);
@@ -728,10 +725,13 @@ mod tests {
         let grown = h.claude_settled(CLAUDE_ID);
         assert_eq!(fake.path_at(&x_key).unwrap().step_ids(), grown);
         assert_ne!(fake.path_at(&y_key).unwrap().step_ids(), grown);
-        // y's record still holds the old stamp, so y is brought up too.
+        h.claude(CLAUDE_ID, 70);
         let (plans, _) = h.pass(&y);
         assert_eq!(plans, [Plan::Update]);
-        assert_eq!(fake.path_at(&y_key).unwrap().step_ids(), grown);
+        assert_eq!(
+            fake.path_at(&y_key).unwrap().step_ids(),
+            h.claude_settled(CLAUDE_ID)
+        );
         assert_eq!(fake.graphs().len(), 2);
     }
 
@@ -832,10 +832,7 @@ mod tests {
         fake.clear_log();
         let (_, report) = h.pass(&d);
         assert!(
-            matches!(
-                only(&report),
-                SessionResult::Pushed(Outcome::UpToDate { .. })
-            ),
+            matches!(only(&report), SessionResult::Pushed(Outcome::UpToDate)),
             "{report:?}"
         );
         assert!(fake.writes().is_empty());
@@ -967,25 +964,6 @@ mod tests {
     }
 
     #[test]
-    fn share_all_refuses_an_anonymous_run_before_any_request() {
-        let err = run(
-            AllArgs {
-                harness: None,
-                project_under: None,
-                url: None,
-                repo: None,
-                public: false,
-                dry_run: false,
-                yes: true,
-            },
-            "http://127.0.0.1:9".into(),
-            crate::cmd_pathbase::AuthMode::Anon,
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("path auth login"), "{err}");
-    }
-
-    #[test]
     fn the_summary_counts_each_outcome_and_lists_failures() {
         let report = Report {
             sessions: vec![
@@ -1002,19 +980,13 @@ mod tests {
                     ArtifactType::Claude,
                     "b".into(),
                     "me/x".into(),
-                    SessionResult::Pushed(Outcome::Appended {
-                        url: "u".into(),
-                        steps: 2,
-                    }),
+                    SessionResult::Pushed(Outcome::Appended { steps: 2 }),
                 ),
                 (
                     ArtifactType::Codex,
                     "c".into(),
                     "me/y".into(),
-                    SessionResult::Pushed(Outcome::Appended {
-                        url: "u".into(),
-                        steps: 3,
-                    }),
+                    SessionResult::Pushed(Outcome::Appended { steps: 3 }),
                 ),
                 (
                     ArtifactType::Codex,
@@ -1040,5 +1012,138 @@ mod tests {
              Written to:\n  me/x  2 sessions\n  me/y  1 session\n\
              Failed:\n  pi e: derive: boom\n"
         );
+    }
+
+    /// A Claude session listed under a lossy project slug goes where its
+    /// recorded working directory's remote says, and once recorded there
+    /// it is skipped without a derive.
+    #[test]
+    fn a_claude_session_goes_to_the_remote_of_its_recorded_directory() {
+        let h = Harnesses::new();
+        let fake = FakePathbase::start();
+        let (x, y) = (dest(&fake, "x"), dest(&fake, "y"));
+        h.claude(CLAUDE_ID, 30);
+        // The fixture's cwd is `…/toolpath-elicit.nu6ZWB/claude`; the
+        // listing decodes the `-test-project` slug instead.
+        let destination = |dir: Option<&Path>| -> Result<Destination> {
+            Ok(match dir {
+                Some(d) if d.ends_with("toolpath-elicit.nu6ZWB/claude") => y.clone(),
+                _ => x.clone(),
+            })
+        };
+        let (plans, report) = h.pass_with(&destination, &|_| {});
+        assert_eq!(plans, [Plan::Create]);
+        assert_eq!(report.sessions[0].2, "alex/y", "{report:?}");
+        assert!(h.record(ArtifactType::Claude, CLAUDE_ID, &y).is_some());
+        assert!(h.record(ArtifactType::Claude, CLAUDE_ID, &x).is_none());
+
+        fake.clear_log();
+        let (plans, _) = h.pass_with(&destination, &|_| {});
+        assert_eq!(plans, [Plan::Unchanged]);
+        assert!(fake.requests().is_empty(), "{:?}", fake.requests());
+    }
+
+    /// A destination that cannot be resolved (a configured remote that
+    /// does not parse) fails that session; the pass shares the rest.
+    #[test]
+    fn a_bad_destination_fails_only_its_session() {
+        let h = Harnesses::new();
+        let fake = FakePathbase::start();
+        let x = dest(&fake, "x");
+        h.claude(CLAUDE_ID, 30);
+        h.codex(30);
+        let destination = |dir: Option<&Path>| -> Result<Destination> {
+            match dir {
+                Some(d) if d.ends_with("claude") => anyhow::bail!("remote `::` does not parse"),
+                _ => Ok(x.clone()),
+            }
+        };
+        let (_, report) = h.pass_with(&destination, &|_| {});
+        assert_eq!(report.failed(), 1, "{report:?}");
+        let SessionResult::Failed(why) = outcomes(&report)[0] else {
+            panic!("{report:?}");
+        };
+        assert!(why.contains("does not parse"), "{why}");
+        assert!(matches!(
+            outcomes(&report)[1],
+            SessionResult::Pushed(Outcome::Created { .. })
+        ));
+    }
+
+    /// The pathstash repo is made the first time a session resolves to
+    /// it, once per server, and never when none does. Failing to make it
+    /// fails the sessions that need it, not the pass.
+    #[test]
+    fn the_pathstash_repo_is_made_when_a_session_first_needs_it() {
+        let repo_posts = |fake: &FakePathbase| {
+            fake.requests()
+                .iter()
+                .filter(|r| r.method == "POST" && r.target.ends_with("/repos"))
+                .count()
+        };
+        let h = Harnesses::new();
+        let fake = FakePathbase::start();
+        h.claude(CLAUDE_ID, 30);
+        h.codex(30);
+        let pathstash = dest(&fake, "pathstash");
+        let both = ensuring_pathstash("alex", |_| Ok(pathstash.clone()));
+        let (_, report) = h.pass_with(&both, &|_| {});
+        assert_eq!(report.failed(), 0, "{report:?}");
+        assert_eq!(repo_posts(&fake), 1);
+
+        let h = Harnesses::new();
+        let fake = FakePathbase::start();
+        h.claude(CLAUDE_ID, 30);
+        h.codex(30);
+        let elsewhere = ensuring_pathstash("alex", |_| Ok(dest(&fake, "x")));
+        h.pass_with(&elsewhere, &|_| {});
+        assert_eq!(repo_posts(&fake), 0);
+
+        // Every write to this server fails; the other server is fine.
+        let h = Harnesses::new();
+        let fake = FakePathbase::start();
+        let other = FakePathbase::start();
+        h.claude(CLAUDE_ID, 30);
+        h.codex(30);
+        fake.force(
+            "POST",
+            "/repos",
+            500,
+            r#"{"code":"internal_error","error":"down"}"#,
+        );
+        let pathstash = dest(&fake, "pathstash");
+        let x = dest(&other, "x");
+        let claude_to_pathstash = ensuring_pathstash("alex", |dir: Option<&Path>| {
+            Ok(match dir {
+                Some(d) if d.ends_with("claude") => pathstash.clone(),
+                _ => x.clone(),
+            })
+        });
+        let (_, report) = h.pass_with(&claude_to_pathstash, &|_| {});
+        assert_eq!(report.failed(), 1, "{report:?}");
+        assert!(matches!(outcomes(&report)[0], SessionResult::Failed(_)));
+        assert!(matches!(
+            outcomes(&report)[1],
+            SessionResult::Pushed(Outcome::Created { .. })
+        ));
+    }
+
+    /// Against a server whose create response lists no stored paths, a
+    /// pass would create a new graph every time: it fails the session
+    /// instead, and leaves no graph.
+    #[test]
+    fn a_server_that_lists_no_stored_paths_fails_the_session() {
+        let h = Harnesses::new();
+        let fake = FakePathbase::start();
+        fake.unlist_created_paths();
+        let d = dest(&fake, "x");
+        h.claude(CLAUDE_ID, 30);
+        let (_, report) = h.pass(&d);
+        let SessionResult::Failed(why) = only(&report) else {
+            panic!("{report:?}");
+        };
+        assert!(why.contains("incremental upload unsupported"), "{why}");
+        assert!(fake.graphs().is_empty());
+        assert_eq!(h.record(ArtifactType::Claude, CLAUDE_ID, &d), None);
     }
 }
