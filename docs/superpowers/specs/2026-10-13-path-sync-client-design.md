@@ -16,11 +16,20 @@ copy is the one the implementing PRs cite.
   one destination (toolpath #356). Keyed by harness, then session id, then
   the path's API URL
   `<server>/api/v1/u/<owner>/repos/<repo>/graphs/<g>/paths/<p>`. Value:
-  `{ steps, last_step, head, source_stamp? }`, where `steps` is how far
-  into the local derive the remote chain covers (a continuation's parents
-  included) and `last_step` is the id at that position. One record per
+  `{ steps, last_step, head, owned_from, source_stamp? }`, where `steps`
+  is how far into the local derive the remote chain covers (a
+  continuation's parents included), `last_step` is the id at that
+  position, and `owned_from` is the index into the derive at which the
+  remote path's own steps begin: 0 for a path created fresh, the
+  continuation boundary for a continuation. A continuation needs
+  `owned_from` because the server stores a path's edges only among its
+  own steps (root steps descend implicitly from `parent.step`), so every
+  batch appended to it must have parents pointing into inherited history
+  stripped, and because the ids diff and the parent choice need its own
+  ids without a server round trip on every append. Written on every
+  record write; absent (an older record) reads as 0. One record per
   session per destination (server + owner + repo); a new write replaces
-  the old. Anonymous uploads write none.
+  the old. Anonymous uploads and `path export pathbase` write none.
 - **Destination**: where a session goes, resolved from config as `share`
   resolves it today (server, owner, repo).
 - **Settled step**: a derived step that a later turn follows. The current
@@ -41,8 +50,8 @@ copy is the one the implementing PRs cite.
    starts with what the record says was sent, the client continues in the
    same remote path, pushing the steps the server lacks, and leaves the
    server's extra steps where they are.
-4. **A missing remote is recreated.** `404` on append means the graph is
-   gone: create a fresh graph, re-key the record, report it.
+4. **A missing remote is recreated.** `404 not_found` on append means the
+   graph is gone: create a fresh graph, re-key the record, report it.
 5. **Freezing is the server's.** `409 write_to_frozen` on append means
    create a continuation and re-key the record.
 6. **The periodic job's behaviour is configurable**: scope, interval,
@@ -61,38 +70,65 @@ Input: a session (harness + id), its destination, the record if any.
 3. **No record → create.** Stream `S[0..k)` as a new graph (open with
    the first batch, append the rest, trailing `Head` = the head among the
    pushed steps). Write the record from the create response:
-   `steps = k`, `last_step = S[k-1].id`, `head`, `source_stamp`.
+   `steps = k`, `last_step = S[k-1].id`, `head`, `owned_from = 0`,
+   `source_stamp`.
 4. **Record, fast check (every pass, O(1)).** If `k >= record.steps` and
    `S[record.steps - 1].id == record.last_step`, the prefix holds. If
    `k == record.steps`, nothing to send; refresh `source_stamp` only.
    Otherwise append `S[record.steps..k)` to the recorded path URL plus
    `/steps`, with a trailing `Head`, in batches as the streaming client
-   already does. On `2xx`, advance the record.
+   already does. On `2xx`, advance the record. On `400 invalid_document`
+   (a new step does not fit what is stored), go to 5.
 5. **Record, mismatch (only when 4 fails, O(n) ids).** `GET` the path's
-   step ids from the server (see Pathbase additions). Let `R` be that
+   step ids through parents (see Pathbase additions). Let `R` be that
    set. Append, in document order, every `S[i]` with `i < k` and
-   `S[i].id ∉ R`, with a trailing `Head`. On `2xx`, write the record from
-   the derive: `steps = k`, `last_step = S[k-1].id`. On
-   `400 invalid_document` (a new step's parent is neither stored nor
-   earlier in the batch; the derivation changed shape), go to 7.
-6. **`409 write_to_frozen`** on any append: the path is frozen. Build a
-   continuation: a new document whose single pushed path carries
-   `path.parent = { uri: <graph document URL>, path: <toolpath path id>,
-   step: record.head }` on its `PathOpen`, and whose steps are
-   `S[record.steps..k)` (owned steps only). Root steps of that document are
-   implicitly children of `parent.step`; the server restores the edge on
-   the composed read. Create it as a new graph in the same destination and
-   re-key the record to the new path URL with `steps = k` and
-   `last_step = S[k-1].id`, the same write as every other success.
-   `steps` always means how far into the local derive the remote chain
-   covers, parents included, so the fast check in 4 needs no offset.
-   Report "continued".
-7. **`404`** on append, or `400 invalid_document` from step 5: create a
-   fresh graph from `S[0..k)` exactly as in 3, replace the record, report
-   "recreated".
+   `S[i].id ∉ R`, with a trailing `Head`. When the response carries
+   `truncated_at`, `R` is partial: the steps before `owned_from` are
+   inherited from above it and only `S[owned_from..k)` is diffed. On
+   `2xx`, write the record from the derive: `steps = k`,
+   `last_step = S[k-1].id`. On `400 invalid_document` (a new step's
+   parent is neither stored nor earlier in the batch; the derivation
+   changed shape), go to 7.
+6. **`409 write_to_frozen`** on any append, from 4 or 5 alike: the path
+   is frozen. `GET` its step ids through parents and take the settled
+   steps the server does not have, as in 5; this is the continuation's
+   step set, so steps an unrecorded earlier append stored are never
+   claimed twice (none missing: refresh the record, create nothing).
+   Build a new document whose single path carries
+   `path.parent = { uri, path: <toolpath path id>, step }` on its
+   `PathOpen`, where `uri` is the frozen graph's `url` as
+   `GET …/graphs/{id}/meta` reports it (only the server knows its public
+   URL), and `step` is the first new step's `parents[0]` when the frozen
+   path owns that id (a stored id at or past `record.owned_from`; the
+   server takes only a step the parent path owns), else `record.head`.
+   Strip from its steps every parent not among them. Create it as a new
+   graph in the same destination and re-key the record to the new path
+   URL with `steps = k`, `last_step = S[k-1].id` and `owned_from` the
+   index of the first new step. Report "continued".
+7. **`404 not_found`** on append, `400 invalid_document` from step 5, or
+   `400 inherited_step_redefined` on any append or on the continuation's
+   create (an id stored above a parent the list could not show): create
+   a fresh graph from `S[0..k)` exactly as in 3, replace the record with
+   `owned_from = 0`, report "recreated".
+
+Every batch appended to a continuation (`owned_from > 0`) has the
+parents not in `S[owned_from..k)` stripped. A merge edge into inherited
+history is lost that way; the step still descends from `parent.step`.
+
+**Unsupported server.** A `2xx` whose body is not JSON (a release
+Pathbase answers a route it lacks with its web app's page), or a `404`
+without `code: not_found`, on any sync request (append, step ids, graph
+meta) means the server does not support incremental sharing: the session
+fails with a message naming the route, and nothing is recreated. A
+create response that lists no stored paths leaves nothing to record: a
+single `path share` succeeds with a warning and writes no record;
+`path share --all` deletes the graph it just made and fails that session
+("server does not report stored paths; incremental upload unsupported")
+rather than creating a duplicate every pass.
 
 What the client never does: freeze, PUT, replay with idempotency keys,
-compare step content, or keep a list of pushed ids.
+compare step content, keep a list of pushed ids, or build a server URL
+the server can report.
 
 ### Why the fast check is enough
 
@@ -105,30 +141,43 @@ and `last_step` answer.
 ### Prefix stability
 
 Steps 4 and 5 assume the deriver is prefix-stable: a later derive of the
-same source starts with the same steps in the same order. toolpath #144
-makes the Claude deriver prefix-stable (events at stream position) and its
-second qualifier pass found the Codex deriver is not yet (an empty assistant
-turn that is dropped and later reappears). Until a deriver is prefix-stable,
-every pass for that harness takes the mismatch path, which is slower but
-still correct.
+same source starts with the same steps in the same order. The Claude and
+Codex derivers are (events at stream position; toolpath #144 and the
+items IR). A deriver that is not takes the mismatch path on every pass,
+which is slower but still correct.
 
 ## Bulk upload: `path share --all`
 
 Enumerate sessions in scope exactly as #355 did (projects, harnesses,
-include/exclude, the summary table). For each session and its destination:
+include/exclude, the summary table). `--all` requires login: it fails
+before any output when the user is logged out or the login does not
+check out, and it refuses `--no-cache`. For each session, before
+deriving:
 
-| Record | Source stamp | Action |
+| Records (any destination) | Source stamp | Action |
 | --- | --- | --- |
-| none | any | create (append step 3) |
-| present | known and equal to the record's | skip, no derive |
-| present | unknown, or different | derive, then append steps 4–7 |
+| none | any | derive, then create (append step 3) |
+| any | known and equal to one record's | skip, no derive |
+| any | unknown, or equal to none | derive, then append steps 4–7 |
 
-Sessions run sequentially per destination; the server serialises writes
-per path anyway. A failure on one session is reported and does not stop
-the pass. Exit non-zero if any eligible session failed.
+The destination is resolved after the derive, from the derived path's
+recorded working directory (what `path share` uses), falling back to the
+listing's directory when the derive records none: a listing's directory
+can be a lossy decoding (a Claude project slug). A destination rule that
+fails to parse fails that session only. The user's `pathstash` repo is
+created lazily, the first time a session resolves to it on a server; a
+failure there fails that session only.
+
+Sessions run sequentially; the server serialises writes per path anyway.
+A failure on one session is reported and does not stop the pass. Exit
+non-zero if any eligible session failed.
 
 `path share` of a single session takes the same code path, so a repeat
 share of a recorded session appends instead of creating a second graph.
+
+`path export pathbase` is not part of this: it uploads a whole document,
+unsettled steps included, and writes no record, so a later append never
+trusts it as a cursor.
 
 ## Periodic job: `path sync`
 
@@ -152,17 +201,25 @@ One PR, stacked on #469:
 - `GET /api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths/{path_id}/step-ids`:
   the path's step ids in document order. With `?through_parents=true`,
   the ids along the parent chain too, nearest first, so a continuation
-  client can learn what is already stored upstream in one call.
+  client can learn what is already stored upstream in one call. The walk
+  stops at a parent the caller cannot read and names it in
+  `truncated_at: {uri, path, step}`.
 
 Already on the branches and relied on here: streamed open and append with
-`Head` lines and `409 write_to_frozen` (#486), `parent` on `PathOpen`
-resolved on this host and stored as written otherwise (#469),
-`400 invalid_document` for a step citing an unstored parent (#469).
+`Head` lines and `409 write_to_frozen` (#486); `parent` on `PathOpen`
+resolved on this host (a readable frozen graph, a member path, a step it
+owns; else `400 invalid_parent` or `409 parent_not_frozen`) and stored
+unresolved when on another host (#469); `400 invalid_document` for a
+step citing a parent neither stored in the path nor earlier in the batch;
+`400 inherited_step_redefined` for an owned id stored along the parent
+chain; `GET …/graphs/{id}/meta` reporting the graph's `url`.
 
 ## Acceptance test
 
 The definition of done for the whole chain. Lives in `path-cli`'s
-integration tests, gated on a local pathbase (`TEST_PATHBASE_URL`).
+integration tests, ignored by default; `just acceptance` runs them against
+a running Pathbase named by `TEST_PATHBASE_URL` and `TEST_PATHBASE_TOKEN`,
+and fails saying what to set when they are missing.
 
 1. Copy a real Claude Code session file into a temp harness directory,
    truncated to its first N lines. Run one pass. Assert the server path's
@@ -174,11 +231,14 @@ integration tests, gated on a local pathbase (`TEST_PATHBASE_URL`).
    full settled derive (the test appends a closing user line so the last
    group settles).
 4. Freeze the graph with `POST .../freeze`. Grow the file. Run a pass.
-   Assert a new graph exists with `parent = { uri, path, step = old head }`,
-   its steps are the new ones only, and the record is re-keyed to it.
-5. Delete the first graph. Run a pass with new lines. Assert "recreated".
-6. Same loop for a Codex rollout. Until the Codex deriver is prefix-stable
-   this is the test that fails.
+   Assert a new graph exists whose `parent.uri` is the frozen graph's
+   `url` as the server reports it and whose `parent.step` follows step 6,
+   that its steps are the new ones only and its step ids through parents
+   reach the frozen path's, and that the record is re-keyed to it with
+   `owned_from` at the boundary.
+5. Delete the graph the record points at. Run a pass with new lines.
+   Assert "recreated".
+6. Same loop for a Codex rollout.
 
 ## Out of scope, recorded elsewhere
 

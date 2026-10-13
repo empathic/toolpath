@@ -122,13 +122,14 @@ their position in that stream.
   API URL
   (`<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`)
   and holds how many steps of the derive the remote has, the id of the
-  last of them, the head the remote was last told, and the local
-  source's stamp at the time (`modified` and `size`, typed as in the
-  manifest, absent when the source provides neither). `path share` and
-  `p export pathbase` write one after a successful upload (for a cache
-  id, against the session the entry was derived from; anonymous uploads
-  write none; a server that lists no paths in its create response
-  leaves no record and warns). A session keeps one record per
+  last of them, the head the remote was last told, where the remote
+  path's own steps begin (`owned_from`: 0, or a continuation's
+  boundary), and the local source's stamp at the time (`modified` and
+  `size`, typed as in the manifest, absent when the source provides
+  neither). An authed `path share` writes one after a successful push
+  (anonymous uploads write none; `p export pathbase`, a full dump with
+  unsettled steps, writes none; a server that lists no paths in its
+  create response leaves no record and warns). A session keeps one record per
   destination (server, owner, repo): a repeat share replaces the
   earlier entry. `path resume` writes none: a pulled path becomes a new
   local session.
@@ -138,15 +139,23 @@ their position in that stream.
   already has a record on the destination, appends the steps it gained
   to that path instead of uploading another graph: by position when the
   record still matches the derive, by step id when it does not. A frozen
-  remote path is continued in a new graph whose path names it as
-  `parent`; a remote path the server no longer has is recreated.
+  remote path is continued in a new graph holding the settled steps the
+  server lacks, whose path names the frozen graph as `parent` by the URL
+  the server reports for it; a remote path the server no longer has, or
+  one that refuses a step stored along its parents, is recreated. A
+  server without the sync routes (a page or a bare 404 where the API
+  should answer) fails the session, naming the route.
   `path share --all` shares every session in scope through the same
   code: new sessions are created, recorded ones whose source stamp is
-  unchanged are skipped without deriving, the rest are brought up to
-  date. `--project-under <dir>` and `--harness` narrow the scope; a plan
+  unchanged are skipped without deriving, the rest are derived and then
+  sent where their recorded working directory's remote says (the user's
+  `pathstash` is created when a session first needs it).
+  `--project-under <dir>` and `--harness` narrow the scope; a plan
   heading precedes the confirmation (`--yes` skips it, `--dry-run` stops
   there); a summary of outcomes and failures ends the pass, which exits
-  non-zero if any session failed. Requires login.
+  non-zero if any session failed. Requires login, checked before
+  anything else; refuses `--no-cache`. `just acceptance` runs the sync
+  acceptance tests against a running Pathbase.
 - **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
   whose `POST /graphs` answers `GraphCreatedResponse`: an empty
   `document` and `paths[]` naming each stored path's `path.id` and
