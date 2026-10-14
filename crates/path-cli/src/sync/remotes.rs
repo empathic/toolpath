@@ -38,18 +38,18 @@ pub(crate) struct RemoteRecord {
     pub(crate) last_step: String,
     /// The head the remote was last told.
     pub(crate) head: String,
-    /// Index into the derive at which the remote path's own steps begin:
-    /// 0 for a path created fresh, the continuation boundary for a
-    /// continuation. Everything before it is inherited through the
-    /// path's parent, and the server stores a path's edges only among
-    /// its own steps (its root steps descend from `parent.step`
-    /// implicitly), so every batch appended to a continuation has the
-    /// parents that point before it stripped. Knowing it locally also
-    /// tells the ids diff and the parent choice which ids are the path's
-    /// own without a server round trip. Absent in records written
-    /// before it existed, which are never continuations' records: 0.
+    /// Whether the remote path carries a `path.parent`: it was created
+    /// as a continuation of a frozen path, so some of the derive's steps
+    /// are inherited from the chain above it rather than its own. The
+    /// server stores a path's edges only among its own steps, so every
+    /// batch appended to such a path keeps only parents among them.
+    /// Which ids are owned and which inherited is asked of the server,
+    /// never inferred from positions in the local derive: once a session
+    /// has been truncated and regrown, a continuation's own steps need
+    /// not be a contiguous suffix of it. Absent in records written
+    /// before it existed, which are never continuations' records: false.
     #[serde(default)]
-    pub(crate) owned_from: usize,
+    pub(crate) has_parent: bool,
     /// The local source's stamp when those steps were sent; absent
     /// when the source provides neither part, so freshness cannot be
     /// told by stamp.
@@ -241,7 +241,7 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
                     steps: old.steps,
                     last_step: old.last_step,
                     head: old.head,
-                    owned_from: 0,
+                    has_parent: false,
                     source_stamp: parse_stamp_string(&old.source_stamp),
                 };
                 lifted.push((name.clone(), id.clone(), api_url(&url), remote));
@@ -313,7 +313,7 @@ mod tests {
             steps,
             last_step: format!("s{}", steps - 1),
             head: format!("s{}", steps - 1),
-            owned_from: 0,
+            has_parent: false,
             source_stamp: Some(SourceStamp {
                 modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
                 size: Some(10),
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn remote_record_serializes_as_the_spec_shape() {
         let record = RemoteRecord {
-            owned_from: 400,
+            has_parent: true,
             ..remote_record(412)
         };
         let json = serde_json::to_value(&record).unwrap();
@@ -565,7 +565,7 @@ mod tests {
                 "steps": 412,
                 "last_step": "s411",
                 "head": "s411",
-                "owned_from": 400,
+                "has_parent": true,
                 "source_stamp": {"modified": "2026-01-01T00:00:00Z", "size": 10},
             })
         );
@@ -575,12 +575,12 @@ mod tests {
         );
     }
 
-    /// A record written before `owned_from` existed is a fresh path's.
+    /// A record written before `has_parent` existed is a fresh path's.
     #[test]
-    fn a_record_without_owned_from_owns_every_step() {
+    fn a_record_without_has_parent_has_no_parent() {
         let old = serde_json::json!({"steps": 3, "last_step": "s2", "head": "s2"});
         let record: RemoteRecord = serde_json::from_value(old).unwrap();
-        assert_eq!(record.owned_from, 0);
+        assert!(!record.has_parent);
     }
 
     /// A stamp with neither part is left out of the record and reads

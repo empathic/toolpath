@@ -165,6 +165,17 @@ impl Server {
     }
 }
 
+fn step_id(step: &Value) -> String {
+    step["step"]["id"].as_str().unwrap().to_string()
+}
+
+fn parents_of(step: &Value) -> Vec<String> {
+    step["step"]["parents"]
+        .as_array()
+        .map(|ps| ps.iter().map(|p| p.as_str().unwrap().to_string()).collect())
+        .unwrap_or_default()
+}
+
 /// `…/graphs/<g>` of a path API URL `…/graphs/<g>/paths/<p>`.
 fn graph_url(path_url: &str) -> &str {
     let cut = path_url.rfind("/paths/").expect("a path API URL");
@@ -181,21 +192,25 @@ struct Logged {
 }
 
 impl Logged {
-    fn step_ids(&self) -> Vec<String> {
+    /// The steps of a JSONL body, or of a `POST /graphs` document.
+    fn steps(&self) -> Vec<Value> {
         if let Ok(upload) = serde_json::from_str::<Value>(&self.body)
             && let Some(paths) = upload["document"]["paths"].as_array()
         {
             return paths
                 .iter()
                 .flat_map(|p| p["steps"].as_array().cloned().unwrap_or_default())
-                .filter_map(|s| s["step"]["id"].as_str().map(String::from))
                 .collect();
         }
         self.body
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .filter_map(|v| v["Step"]["step"]["id"].as_str().map(String::from))
+            .filter_map(|v| v.get("Step").cloned())
             .collect()
+    }
+
+    fn step_ids(&self) -> Vec<String> {
+        self.steps().iter().map(step_id).collect()
     }
 
     fn is_write(&self) -> bool {
@@ -597,6 +612,10 @@ fn run_loop(
     assert_eq!(server.step_ids(&key), want, "step 1:\n{stderr}");
     assert_eq!(record["steps"], want.len());
     assert_eq!(record["last_step"], want[want.len() - 1].as_str());
+    eprintln!(
+        "{harness}: {first} lines, created with {} steps",
+        want.len()
+    );
     cli.proxy.take();
 
     // 2 and 3. Grow, pass, until the file is complete; then a closing
@@ -676,7 +695,11 @@ fn run_loop(
         "the continuation is linked to the frozen path"
     );
     assert_eq!(record["steps"], want.len());
-    assert_eq!(record["owned_from"], before.len());
+    assert_eq!(record["has_parent"], true);
+    eprintln!(
+        "{harness}: frozen, continued with {} steps",
+        want.len() - before.len()
+    );
     let doc = server.document(&new_key);
     let path_id = cli.derive_doc_path_id(&derive_args);
     let parent = &doc["paths"][0]["path"]["parent"];
@@ -703,6 +726,107 @@ fn run_loop(
     assert_eq!(cli.record(harness, id).0, key);
     let stored: HashSet<String> = server.step_ids(&key).into_iter().collect();
     assert!(want[before.len()..].iter().all(|s| stored.contains(s)));
+    eprintln!(
+        "{harness}: appended {} steps to the continuation",
+        want.len() - before.len()
+    );
+
+    // 4b. Truncate the file below the continuation boundary and regrow
+    // it along new lines: the steps the chain lacks land on the
+    // continuation, their edges among themselves intact and those into
+    // inherited history dropped.
+    let own_before = server.step_ids(&key);
+    let held_before: HashSet<String> = server.step_ids_through_parents(&key).into_iter().collect();
+    lines = all[..first].to_vec();
+    lines.extend(session.exchange(&lines, 200, true));
+    lines.extend(session.exchange(&lines, 201, true));
+    lines.extend(session.exchange(&lines, 202, false));
+    write_lines(&session.file(), &lines);
+    cli.proxy.take();
+    let stderr = cli.pass(harness);
+    let steps = cli.derive(&derive_args);
+    want = settled(&steps);
+    let new: Vec<String> = want
+        .iter()
+        .filter(|id| !held_before.contains(*id))
+        .cloned()
+        .collect();
+    let sent: Vec<Value> = cli
+        .proxy
+        .take()
+        .iter()
+        .filter(|r| r.is_write())
+        .flat_map(|r| r.steps())
+        .collect();
+    let sent_ids: Vec<String> = sent.iter().map(step_id).collect();
+    assert_eq!(
+        sent_ids, new,
+        "the steps the chain lacks are sent:\n{stderr}"
+    );
+    assert!(!new.is_empty(), "the regrowth settles new steps:\n{stderr}");
+    let (k, record) = cli.record(harness, id);
+    assert_eq!(k, key, "they land on the continuation:\n{stderr}");
+    assert_eq!(server.step_ids(&key), [&own_before[..], &new[..]].concat());
+    assert_eq!(record["steps"], want.len());
+    assert_eq!(record["last_step"], want[want.len() - 1].as_str());
+    assert_eq!(record["has_parent"], true);
+    let mut owned: HashSet<String> = own_before.into_iter().collect();
+    let mut kept_edges = 0;
+    for step in &sent {
+        let local = steps.iter().find(|s| step_id(s) == step_id(step)).unwrap();
+        let expected: Vec<String> = parents_of(local)
+            .into_iter()
+            .filter(|p| owned.contains(p))
+            .collect();
+        assert_eq!(parents_of(step), expected, "parents of {}", step_id(step));
+        kept_edges += expected.len();
+        owned.insert(step_id(step));
+    }
+    assert!(
+        new.len() < 2 || kept_edges > 0,
+        "edges among the new steps are kept"
+    );
+    eprintln!(
+        "{harness}: truncated to {first} lines and regrown: {} settled, {} sent to the continuation",
+        want.len(),
+        sent_ids.len()
+    );
+
+    // 4c. Freeze the continuation, grow, pass: a second continuation,
+    // descending from a step the first one owns.
+    server.freeze(&key);
+    let owned_by_first = server.step_ids(&key);
+    let held_before: HashSet<String> = server.step_ids_through_parents(&key).into_iter().collect();
+    lines.extend(session.exchange(&lines, 203, true));
+    lines.extend(session.exchange(&lines, 204, false));
+    write_lines(&session.file(), &lines);
+    let stderr = cli.pass(harness);
+    assert!(stderr.contains("continued"), "{stderr}");
+    want = settled(&cli.derive(&derive_args));
+    let new: Vec<String> = want
+        .iter()
+        .filter(|id| !held_before.contains(*id))
+        .cloned()
+        .collect();
+    let (second, record) = cli.record(harness, id);
+    assert_ne!(
+        second, key,
+        "the record is re-keyed to the second continuation"
+    );
+    assert_eq!(server.step_ids(&second), new);
+    assert_eq!(record["steps"], want.len());
+    assert_eq!(record["has_parent"], true);
+    let doc = server.document(&second);
+    let parent = &doc["paths"][0]["path"]["parent"];
+    assert_eq!(parent["uri"], server.graph_page_url(&key).as_str(), "{doc}");
+    assert!(
+        owned_by_first
+            .iter()
+            .any(|id| parent["step"] == id.as_str()),
+        "{parent}"
+    );
+    eprintln!("{harness}: second continuation with {} steps", new.len());
+    key = second;
 
     // 5. Delete the graph the record points at, grow, pass: recreated.
     server.delete(&key);
@@ -715,6 +839,7 @@ fn run_loop(
     let (recreated, record) = cli.record(harness, id);
     assert_ne!(recreated, key);
     assert_eq!(server.step_ids(&recreated), want);
+    eprintln!("{harness}: deleted, recreated with {} steps", want.len());
     assert_eq!(record["steps"], want.len());
 
     // A repeat pass with nothing new sends nothing.

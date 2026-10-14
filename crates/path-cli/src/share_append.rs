@@ -163,12 +163,20 @@ struct Push<'a> {
     record_required: bool,
 }
 
-/// What a step-ids read through parents says the server holds.
+/// What the server holds along the chain of a recorded path, split by
+/// whose step each id is.
 struct Stored {
-    ids: HashSet<String>,
-    /// The walk stopped at a parent the caller cannot read, so ids
-    /// stored above it are not in `ids`.
-    partial: bool,
+    /// The path's own step ids.
+    owned: HashSet<String>,
+    /// The ids stored along its parent chain, as far as the caller can
+    /// read it.
+    inherited: HashSet<String>,
+}
+
+impl Stored {
+    fn holds(&self, id: &str) -> bool {
+        self.owned.contains(id) || self.inherited.contains(id)
+    }
 }
 
 /// A graph just created: its stored path's API URL (the record key),
@@ -179,6 +187,16 @@ struct Created {
     page: String,
 }
 
+/// How a pass found the steps it appends, which decides what a refused
+/// append falls back to.
+#[derive(Clone, Copy, PartialEq)]
+enum Found {
+    /// Past the record's position, its prefix holding.
+    PastRecord,
+    /// By diffing the settled steps against the server's ids.
+    ByIds,
+}
+
 impl Push<'_> {
     fn steps(&self) -> &[Step] {
         &self.session.path.steps
@@ -187,7 +205,7 @@ impl Push<'_> {
     /// Append step 3: no record, so a new graph of `S[0..k)`.
     fn create(&self) -> Result<Outcome> {
         let created = self.create_prefix()?;
-        self.record_created(&created, self.head.clone(), 0)?;
+        self.record_created(&created, self.head.clone(), false)?;
         Ok(Outcome::Created {
             url: created.page,
             steps: self.k,
@@ -205,52 +223,66 @@ impl Push<'_> {
         }
         if self.k == record.steps {
             if record.source_stamp != SourceStamp::known(self.session.stamp) {
-                self.record(url, record.head.clone(), record.owned_from)?;
+                self.record(url, record.head.clone(), record.has_parent)?;
             }
             return Ok(Outcome::UpToDate);
         }
-        let missing: Vec<usize> = (record.steps..self.k).collect();
-        match self.append(url, record, &missing) {
-            Ok(()) => {
-                self.record(url, self.head.clone(), record.owned_from)?;
-                Ok(Outcome::Appended {
-                    steps: missing.len(),
-                })
-            }
-            Err(AppendError::Frozen) => self.continuation(url, record),
-            Err(AppendError::Gone) => self.recreate("the remote path is gone"),
-            // The prefix's last id matched but a new step does not fit
-            // what is stored: let the ids decide.
-            Err(AppendError::InvalidDocument(_)) => self.update_by_ids(url, record),
-            Err(AppendError::InheritedStepRedefined(msg)) => self.recreate(&inherited(&msg)),
-            Err(AppendError::Other(msg)) => Err(anyhow!(msg)),
+        if !record.has_parent {
+            let new: Vec<usize> = (record.steps..self.k).collect();
+            return self.append_new(url, record, None, &new, Found::PastRecord);
         }
+        // A continuation keeps only edges among its own steps, and which
+        // those are only the server knows.
+        let stored = match self.stored(url, true) {
+            Ok(stored) => stored,
+            Err(AppendError::Gone) => return self.recreate("the remote path is gone"),
+            Err(e) => return Err(anyhow!("read the remote path's step ids: {e}")),
+        };
+        let new = self.new_steps(&stored, record.steps);
+        self.append_new(url, record, Some(&stored), &new, Found::PastRecord)
     }
 
     /// Step 5: the record does not describe the derive. Send every
     /// settled step the server lacks, by id, in document order.
     fn update_by_ids(&self, url: &str, record: &RemoteRecord) -> Result<Outcome> {
-        let stored = match self.stored(url) {
+        let stored = match self.stored(url, record.has_parent) {
             Ok(stored) => stored,
             Err(AppendError::Gone) => return self.recreate("the remote path is gone"),
             Err(e) => return Err(anyhow!("read the remote path's step ids: {e}")),
         };
-        let missing = self.missing(&stored, record.owned_from);
-        if missing.is_empty() {
-            // The server's extra steps stay where they are, and so does
-            // the head it was last told.
-            self.record(url, record.head.clone(), record.owned_from)?;
+        let new = self.new_steps(&stored, 0);
+        self.append_new(url, record, Some(&stored), &new, Found::ByIds)
+    }
+
+    /// Append `new` to the recorded path at `url` and advance the record,
+    /// or take the step the refusal calls for. `stored` is what the server
+    /// was read to hold, when it was read. Nothing new: the server's extra
+    /// steps stay where they are, and so does the head it was last told.
+    fn append_new(
+        &self,
+        url: &str,
+        record: &RemoteRecord,
+        stored: Option<&Stored>,
+        new: &[usize],
+        found: Found,
+    ) -> Result<Outcome> {
+        if new.is_empty() {
+            self.record(url, record.head.clone(), record.has_parent)?;
             return Ok(Outcome::UpToDate);
         }
-        match self.append(url, record, &missing) {
+        let owned = stored.filter(|_| record.has_parent).map(|s| &s.owned);
+        match self.append(url, owned, new) {
             Ok(()) => {
-                self.record(url, self.head.clone(), record.owned_from)?;
-                Ok(Outcome::Appended {
-                    steps: missing.len(),
-                })
+                self.record(url, self.head.clone(), record.has_parent)?;
+                Ok(Outcome::Appended { steps: new.len() })
             }
             Err(AppendError::Frozen) => self.continuation(url, record),
             Err(AppendError::Gone) => self.recreate("the remote path is gone"),
+            // Past the record, a new step does not fit what is stored:
+            // let the ids decide.
+            Err(AppendError::InvalidDocument(_)) if found == Found::PastRecord => {
+                self.update_by_ids(url, record)
+            }
             Err(AppendError::InvalidDocument(msg)) => self.recreate(&format!(
                 "the derive no longer fits the remote path ({msg})"
             )),
@@ -267,14 +299,14 @@ impl Push<'_> {
     /// server reports for it.
     fn continuation(&self, url: &str, record: &RemoteRecord) -> Result<Outcome> {
         let d = self.dest;
-        let stored = match self.stored(url) {
+        let stored = match self.stored(url, record.has_parent) {
             Ok(stored) => stored,
             Err(AppendError::Gone) => return self.recreate("the remote path is gone"),
             Err(e) => return Err(anyhow!("read the frozen path's step ids: {e}")),
         };
-        let missing = self.missing(&stored, record.owned_from);
-        let Some(&first) = missing.first() else {
-            self.record(url, record.head.clone(), record.owned_from)?;
+        let new = self.new_steps(&stored, 0);
+        let Some(&first) = new.first() else {
+            self.record(url, record.head.clone(), record.has_parent)?;
             return Ok(Outcome::UpToDate);
         };
         let uri = match cmd_pathbase::graph_url(&d.base_url, &d.token, url) {
@@ -282,14 +314,10 @@ impl Push<'_> {
             Err(AppendError::Gone) => return self.recreate("the remote path is gone"),
             Err(e) => return Err(anyhow!("read the frozen graph's URL: {e}")),
         };
-        let owned: HashSet<&str> = missing
-            .iter()
-            .map(|&i| self.steps()[i].step.id.as_str())
-            .collect();
-        let head = if owned.contains(self.head.as_str()) {
+        let head = if new.iter().any(|&i| self.steps()[i].step.id == self.head) {
             self.head.clone()
         } else {
-            self.steps()[*missing.last().expect("missing is not empty")]
+            self.steps()[*new.last().expect("new is not empty")]
                 .step
                 .id
                 .clone()
@@ -305,10 +333,8 @@ impl Push<'_> {
                 }),
                 ..path.path.clone()
             },
-            steps: missing
-                .iter()
-                .map(|&i| with_parents_in(&self.steps()[i], &owned))
-                .collect(),
+            // The new path owns nothing yet: only edges among its steps.
+            steps: self.batch(Some(&HashSet::new()), &new),
             meta: path.meta.clone(),
         };
         let created = match self.create_graph(continuation) {
@@ -320,10 +346,10 @@ impl Push<'_> {
             }
             Err(e) => return Err(e),
         };
-        self.record_created(&created, head, first)?;
+        self.record_created(&created, head, true)?;
         Ok(Outcome::Continued {
             url: created.page,
-            steps: missing.len(),
+            steps: new.len(),
         })
     }
 
@@ -331,20 +357,13 @@ impl Push<'_> {
     /// from: the first new step's own parent when the frozen path owns
     /// it (a session that regrew from an earlier step continues from
     /// there), else the head the frozen path was last told. The server
-    /// takes only a step the parent path owns, and the frozen path owns
-    /// the stored ids from `record.owned_from` on.
+    /// takes only a step the parent path owns.
     fn parent_step(&self, first: usize, stored: &Stored, record: &RemoteRecord) -> String {
         self.steps()[first]
             .step
             .parents
             .first()
-            .filter(|p| stored.ids.contains(p.as_str()))
-            .filter(|p| {
-                self.steps()
-                    .iter()
-                    .position(|s| s.step.id == **p)
-                    .is_some_and(|i| i >= record.owned_from)
-            })
+            .filter(|p| stored.owned.contains(p.as_str()))
             .cloned()
             .unwrap_or_else(|| record.head.clone())
     }
@@ -352,7 +371,7 @@ impl Push<'_> {
     /// Step 7: a new graph of `S[0..k)` replaces the recorded one.
     fn recreate(&self, reason: &str) -> Result<Outcome> {
         let created = self.create_prefix()?;
-        self.record_created(&created, self.head.clone(), 0)?;
+        self.record_created(&created, self.head.clone(), false)?;
         Ok(Outcome::Recreated {
             url: created.page,
             steps: self.k,
@@ -360,66 +379,81 @@ impl Push<'_> {
         })
     }
 
-    /// Append `missing` to the path at `url`. A continuation's path
-    /// stores edges only among its own steps, so a parent before
-    /// `record.owned_from` is stripped: the step descends from
-    /// `parent.step` implicitly.
+    /// Append `new` to the path at `url`, its parents kept only among
+    /// `owned` and the batch's earlier steps when `owned` is given.
     fn append(
         &self,
         url: &str,
-        record: &RemoteRecord,
-        missing: &[usize],
+        owned: Option<&HashSet<String>>,
+        new: &[usize],
     ) -> std::result::Result<(), AppendError> {
-        let own: Option<HashSet<&str>> = (record.owned_from > 0).then(|| {
-            self.steps()[record.owned_from.min(self.k)..self.k]
-                .iter()
-                .map(|s| s.step.id.as_str())
-                .collect()
-        });
-        let steps = missing
-            .iter()
-            .map(|&i| match &own {
-                Some(own) => with_parents_in(&self.steps()[i], own),
-                None => self.steps()[i].clone(),
-            })
-            .collect();
         let d = self.dest;
         cmd_pathbase::append_steps(
             &d.base_url,
             &d.token,
             url,
             self.session.path,
-            steps,
+            self.batch(owned, new),
             &self.head,
             BATCH_BUDGET,
         )
     }
 
-    /// What the server holds along the chain of the path at `url`.
-    fn stored(&self, url: &str) -> std::result::Result<Stored, AppendError> {
+    /// The steps `new`, in order. With `owned`, a path that stores edges
+    /// only among its own steps: each keeps the parents in `owned` or
+    /// earlier in the batch, and a step left with none descends from the
+    /// path's `parent.step` implicitly.
+    fn batch(&self, owned: Option<&HashSet<String>>, new: &[usize]) -> Vec<Step> {
+        let Some(owned) = owned else {
+            return new.iter().map(|&i| self.steps()[i].clone()).collect();
+        };
+        let mut earlier: HashSet<&str> = HashSet::new();
+        let mut steps = Vec::with_capacity(new.len());
+        for &i in new {
+            let mut step = self.steps()[i].clone();
+            step.step
+                .parents
+                .retain(|p| owned.contains(p) || earlier.contains(p.as_str()));
+            earlier.insert(self.steps()[i].step.id.as_str());
+            steps.push(step);
+        }
+        steps
+    }
+
+    /// What the server holds along the chain of the path at `url`. A path
+    /// with a parent lists its own ids first, then the chain's; the
+    /// boundary between them is read from its own ids alone.
+    fn stored(&self, url: &str, has_parent: bool) -> std::result::Result<Stored, AppendError> {
         let d = self.dest;
         let read = cmd_pathbase::path_step_ids(&d.base_url, &d.token, url, true)?;
         if let Some(at) = &read.truncated_at {
             eprintln!(
                 "note: the remote path's history is readable only down to path {} of {}; \
-                 the steps it inherits from there are taken as stored",
+                 a step stored above it may make the server refuse the append",
                 at.path, at.uri
             );
         }
-        Ok(Stored {
-            ids: read.step_ids.into_iter().collect(),
-            partial: read.truncated_at.is_some(),
-        })
+        let all: HashSet<String> = read.step_ids.into_iter().collect();
+        if !has_parent {
+            return Ok(Stored {
+                owned: all,
+                inherited: HashSet::new(),
+            });
+        }
+        let owned: HashSet<String> =
+            cmd_pathbase::path_step_ids(&d.base_url, &d.token, url, false)?
+                .step_ids
+                .into_iter()
+                .collect();
+        let inherited = all.difference(&owned).cloned().collect();
+        Ok(Stored { owned, inherited })
     }
 
-    /// The settled steps the server does not hold, in document order.
-    /// When the list is partial, the steps before `owned_from` are
-    /// inherited from above what it shows, so only the path's own are
-    /// diffed.
-    fn missing(&self, stored: &Stored, owned_from: usize) -> Vec<usize> {
-        let from = if stored.partial { owned_from } else { 0 };
+    /// The settled steps from `from` on that the server does not hold,
+    /// in document order.
+    fn new_steps(&self, stored: &Stored, from: usize) -> Vec<usize> {
         (from..self.k)
-            .filter(|&i| !stored.ids.contains(&self.steps()[i].step.id))
+            .filter(|&i| !stored.holds(&self.steps()[i].step.id))
             .collect()
     }
 
@@ -494,22 +528,22 @@ impl Push<'_> {
 
     /// [`Self::record`] for a graph just created, when it can be
     /// recorded.
-    fn record_created(&self, created: &Created, head: String, owned_from: usize) -> Result<()> {
+    fn record_created(&self, created: &Created, head: String, has_parent: bool) -> Result<()> {
         match &created.key {
-            Some(url) => self.record(url, head, owned_from),
+            Some(url) => self.record(url, head, has_parent),
             None => Ok(()),
         }
     }
 
     /// Record that the remote at `url` holds the derive through `S[k-1]`,
-    /// its own steps from `owned_from` on, last told `head`. Replaces the
+    /// was last told `head`, and has a parent or not. Replaces the
     /// session's record on this destination.
-    fn record(&self, url: &str, head: String, owned_from: usize) -> Result<()> {
+    fn record(&self, url: &str, head: String, has_parent: bool) -> Result<()> {
         let record = RemoteRecord {
             steps: self.k,
             last_step: self.steps()[self.k - 1].step.id.clone(),
             head,
-            owned_from,
+            has_parent,
             source_stamp: SourceStamp::known(self.session.stamp),
         };
         crate::sync::record_remote(
@@ -526,13 +560,6 @@ impl Push<'_> {
 /// The reason a refusal of an inherited id gives for recreating.
 fn inherited(msg: &str) -> String {
     format!("a step is stored along the remote path's parents ({msg})")
-}
-
-/// `step` with only the parents in `keep`.
-fn with_parents_in(step: &Step, keep: &HashSet<&str>) -> Step {
-    let mut step = step.clone();
-    step.step.parents.retain(|p| keep.contains(p.as_str()));
-    step
 }
 
 /// How many leading steps are settled: followed by a later turn, so
@@ -888,7 +915,7 @@ mod tests {
                 steps: 3,
                 last_step: "t2".into(),
                 head: "t2".into(),
-                owned_from: 0,
+                has_parent: false,
                 source_stamp: SourceStamp::known(STAMP),
             }
         );
@@ -1095,9 +1122,9 @@ mod tests {
                 record.steps,
                 record.last_step.as_str(),
                 record.head.as_str(),
-                record.owned_from
+                record.has_parent
             ),
-            (4, "t3", "t3", 2)
+            (4, "t3", "t3", true)
         );
         let continuation = fake.path_at(&new).unwrap();
         assert_eq!(continuation.step_ids(), strs(&["t2", "t3"]));
@@ -1191,7 +1218,7 @@ mod tests {
                     steps: record_steps,
                     last_step: last.into(),
                     head: last.into(),
-                    owned_from: 0,
+                    has_parent: false,
                     source_stamp: None,
                 },
             )
@@ -1336,8 +1363,8 @@ mod tests {
         let (new, record) = record_on(cfg.path(), &d).unwrap();
         assert_ne!(new, old);
         assert_eq!(
-            (record.steps, record.last_step.as_str(), record.owned_from),
-            (3, "n2", 2)
+            (record.steps, record.last_step.as_str(), record.has_parent),
+            (3, "n2", true)
         );
         let continuation = fake.path_at(&new).unwrap();
         assert_eq!(continuation.step_ids(), strs(&["n2"]));
@@ -1377,14 +1404,14 @@ mod tests {
         let continuation = fake.path_at(&new).unwrap();
         assert_eq!(continuation.step_ids(), strs(&["t5"]));
         assert_eq!(continuation.parent.unwrap().step, "t4");
-        assert_eq!((record.steps, record.owned_from), (6, 5));
+        assert_eq!((record.steps, record.has_parent), (6, true));
     }
 
-    /// A continuation's own steps begin at `owned_from`: a later
-    /// batch's parents before it are stripped, whether the batch comes
-    /// from the fast path (a merge citing the inherited `t0`) or from
-    /// the ids diff (a regrowth from the inherited `t1`, read through
-    /// the parent chain).
+    /// A continuation stores edges only among its own steps, which the
+    /// server lists: a later batch's parents into inherited history are
+    /// stripped, whether the batch comes from the fast path (a merge
+    /// citing the inherited `t0`) or from the ids diff (a regrowth from
+    /// the inherited `t1`).
     #[test]
     fn a_continuation_strips_inherited_parents_from_every_later_batch() {
         let fake = FakePathbase::start();
@@ -1395,7 +1422,7 @@ mod tests {
         fake.freeze(ids_of(&old).unwrap().0);
         push_to(cfg.path(), &d, &session_of(5), STAMP).unwrap();
         let (cont, record) = record_on(cfg.path(), &d).unwrap();
-        assert_eq!(record.owned_from, 2);
+        assert!(record.has_parent);
 
         let mut merged = session_of(6);
         merged.steps[4].step.parents = strs(&["t3", "t0"]);
@@ -1420,11 +1447,10 @@ mod tests {
         assert_eq!(record_on(cfg.path(), &d).unwrap().0, cont);
     }
 
-    /// The step-ids walk stopped at an unreadable parent: the steps
-    /// before `owned_from` are taken as stored above it, and only the
-    /// continuation's own are diffed.
+    /// The step-ids walk stopped at an unreadable parent: a pass past
+    /// the record still appends only what follows it.
     #[test]
-    fn a_partial_step_id_list_diffs_only_the_paths_own_steps() {
+    fn a_partial_step_id_list_still_appends_past_the_record() {
         let fake = FakePathbase::start();
         let cfg = tempfile::tempdir().unwrap();
         let d = dest(&fake, "x");
@@ -1433,6 +1459,32 @@ mod tests {
         let old_graph = ids_of(&old).unwrap().0;
         fake.freeze(old_graph);
         push_to(cfg.path(), &d, &session_of(5), STAMP).unwrap();
+        let (cont, _) = record_on(cfg.path(), &d).unwrap();
+        fake.hide(old_graph);
+
+        let out = push_to(cfg.path(), &d, &session_of(7), STAMP).unwrap();
+        assert!(matches!(out, Outcome::Appended { steps: 2 }), "{out:?}");
+        assert_eq!(
+            fake.path_at(&cont).unwrap().step_ids(),
+            strs(&["t2", "t3", "t4", "t5"])
+        );
+    }
+
+    /// The ids diff of a continuation whose parent the caller can no
+    /// longer read cannot tell the hidden parent's steps from missing
+    /// ones: it sends them, the server refuses an id stored along the
+    /// parents, and the session starts a fresh graph.
+    #[test]
+    fn an_id_stored_above_an_unreadable_parent_recreates() {
+        let fake = FakePathbase::start();
+        let cfg = tempfile::tempdir().unwrap();
+        let d = dest(&fake, "x");
+        push_to(cfg.path(), &d, &session_of(3), STAMP).unwrap();
+        let (old, _) = record_on(cfg.path(), &d).unwrap();
+        let old_graph = ids_of(&old).unwrap().0;
+        fake.freeze(old_graph);
+        push_to(cfg.path(), &d, &session_of(5), STAMP).unwrap();
+        let (cont, _) = record_on(cfg.path(), &d).unwrap();
         fake.hide(old_graph);
 
         // A step reappears between `t2` and `t3`: the prefix check fails.
@@ -1440,32 +1492,221 @@ mod tests {
         path.steps.insert(3, event_step("late", Some("t2")));
         fake.clear_log();
         let out = push_to(cfg.path(), &d, &path, STAMP).unwrap();
-        assert!(matches!(out, Outcome::Appended { steps: 3, .. }), "{out:?}");
-        assert_eq!(fake.writes()[0].step_ids(), strs(&["late", "t4", "t5"]));
+        let Outcome::Recreated { steps, reason, .. } = &out else {
+            panic!("{out:?}");
+        };
+        assert_eq!(*steps, 7);
+        assert!(reason.contains("parents"), "{reason}");
+        let refused = fake
+            .requests()
+            .into_iter()
+            .find(|r| {
+                r.target
+                    .starts_with(&format!("{}/steps", &cont[fake.base().len()..]))
+            })
+            .unwrap();
+        assert_eq!(refused.step_ids()[0], "t0");
+        let (new, record) = record_on(cfg.path(), &d).unwrap();
+        assert_ne!(new, cont);
+        assert!(!record.has_parent);
+        assert_eq!(fake.path_at(&new).unwrap().parent, None);
     }
 
+    /// A frozen continuation is continued again: the new path descends
+    /// from a step the continuation owns, and its ids through parents
+    /// reach both frozen paths.
     #[test]
-    fn an_id_stored_along_the_parents_recreates() {
+    fn a_frozen_continuation_is_continued_again() {
         let fake = FakePathbase::start();
         let cfg = tempfile::tempdir().unwrap();
         let d = dest(&fake, "x");
         push_to(cfg.path(), &d, &session_of(3), STAMP).unwrap();
-        let (old, _) = record_on(cfg.path(), &d).unwrap();
-        fake.force(
-            "POST",
-            "/steps",
-            400,
-            r#"{"code":"inherited_step_redefined","error":"step t2 is inherited"}"#,
+        let (first, _) = record_on(cfg.path(), &d).unwrap();
+        fake.freeze(ids_of(&first).unwrap().0);
+        push_to(cfg.path(), &d, &session_of(5), STAMP).unwrap();
+        let (second, _) = record_on(cfg.path(), &d).unwrap();
+        let second_graph = ids_of(&second).unwrap().0;
+        fake.freeze(second_graph);
+
+        let out = push_to(cfg.path(), &d, &session_of(7), STAMP).unwrap();
+        assert!(
+            matches!(out, Outcome::Continued { steps: 2, .. }),
+            "{out:?}"
         );
+        let (third, record) = record_on(cfg.path(), &d).unwrap();
+        assert_eq!(
+            (
+                record.steps,
+                record.last_step.as_str(),
+                record.head.as_str(),
+                record.has_parent
+            ),
+            (6, "t5", "t5", true)
+        );
+        let continuation = fake.path_at(&third).unwrap();
+        assert_eq!(continuation.step_ids(), strs(&["t4", "t5"]));
+        let parent = continuation.parent.unwrap();
+        assert_eq!(
+            (parent.uri, parent.step.as_str()),
+            (
+                format!("{}/u/alex/x/graphs/{second_graph}", fake.base()),
+                "t3"
+            )
+        );
+        let read = cmd_pathbase::path_step_ids(&d.base_url, &d.token, &third, true).unwrap();
+        assert_eq!(read.step_ids, strs(&["t4", "t5", "t2", "t3", "t0", "t1"]));
+        assert_eq!(fake.graphs().len(), 3);
+    }
+
+    /// An earlier pass stored every settled step and died before
+    /// recording it, then the path was frozen: the refused append finds
+    /// nothing missing, so the record catches up and no graph is made.
+    #[test]
+    fn a_frozen_path_holding_every_settled_step_only_refreshes_the_record() {
+        let fake = FakePathbase::start();
+        let cfg = tempfile::tempdir().unwrap();
+        let d = dest(&fake, "x");
+        push_to(cfg.path(), &d, &session_of(3), STAMP).unwrap();
+        let (key, before) = record_on(cfg.path(), &d).unwrap();
+        let unrecorded = session_of(5);
+        cmd_pathbase::append_steps(
+            &d.base_url,
+            &d.token,
+            &key,
+            &unrecorded,
+            unrecorded.steps[2..4].to_vec(),
+            "t3",
+            BATCH_BUDGET,
+        )
+        .unwrap();
+        fake.freeze(ids_of(&key).unwrap().0);
+
         let out = push_to(cfg.path(), &d, &session_of(5), STAMP).unwrap();
+        assert_eq!(out, Outcome::UpToDate);
+        assert_eq!(fake.graphs().len(), 1);
+        let (same, record) = record_on(cfg.path(), &d).unwrap();
+        assert_eq!(same, key);
+        assert_eq!(
+            (
+                record.steps,
+                record.last_step.as_str(),
+                record.head.as_str(),
+                record.has_parent
+            ),
+            (4, "t3", before.head.as_str(), false)
+        );
+    }
+
+    /// The continuation's create is refused for an id stored above a
+    /// parent the caller cannot read: the session starts a fresh graph.
+    #[test]
+    fn a_continuation_refused_for_an_inherited_id_recreates() {
+        let fake = FakePathbase::start();
+        let cfg = tempfile::tempdir().unwrap();
+        let d = dest(&fake, "x");
+        push_to(cfg.path(), &d, &session_of(3), STAMP).unwrap();
+        let (first, _) = record_on(cfg.path(), &d).unwrap();
+        let first_graph = ids_of(&first).unwrap().0;
+        fake.freeze(first_graph);
+        push_to(cfg.path(), &d, &session_of(5), STAMP).unwrap();
+        let (second, _) = record_on(cfg.path(), &d).unwrap();
+        fake.hide(first_graph);
+        fake.freeze(ids_of(&second).unwrap().0);
+
+        let out = push_to(cfg.path(), &d, &session_of(7), STAMP).unwrap();
         let Outcome::Recreated { steps, reason, .. } = &out else {
             panic!("{out:?}");
         };
-        assert_eq!(*steps, 4);
+        assert_eq!(*steps, 6);
         assert!(reason.contains("parents"), "{reason}");
         let (new, record) = record_on(cfg.path(), &d).unwrap();
-        assert_ne!(new, old);
-        assert_eq!(record.owned_from, 0);
+        assert!(!record.has_parent);
+        assert_eq!(
+            fake.path_at(&new).unwrap().step_ids(),
+            ids(&session_of(7).steps[..6])
+        );
+    }
+
+    /// The blocker's scenario: a continuation owns `t4, t5`, then the
+    /// session is truncated below the boundary and regrows along
+    /// `n2..n4`. The new steps land on the continuation with the edges
+    /// among them intact, and once it is frozen the next continuation
+    /// descends from the regrown line.
+    #[test]
+    fn a_continuation_truncated_below_its_boundary_and_regrown_keeps_its_edges() {
+        let fake = FakePathbase::start();
+        let cfg = tempfile::tempdir().unwrap();
+        let d = dest(&fake, "x");
+        push_to(cfg.path(), &d, &session_of(5), STAMP).unwrap();
+        let (first, _) = record_on(cfg.path(), &d).unwrap();
+        fake.freeze(ids_of(&first).unwrap().0);
+        push_to(cfg.path(), &d, &session_of(7), STAMP).unwrap();
+        let (cont, _) = record_on(cfg.path(), &d).unwrap();
+        assert_eq!(fake.path_at(&cont).unwrap().step_ids(), strs(&["t4", "t5"]));
+
+        let regrown = |n: usize| {
+            let mut path = session_of(2);
+            for i in 2..n {
+                let parent = if i == 2 {
+                    "t1".into()
+                } else {
+                    format!("n{}", i - 1)
+                };
+                path.steps.push(turn_step(
+                    &format!("n{i}"),
+                    Some(&parent),
+                    Some(&format!("h{i}")),
+                    &[],
+                ));
+            }
+            path.path.head = format!("n{}", n - 1);
+            path
+        };
+        fake.clear_log();
+        let out = push_to(cfg.path(), &d, &regrown(6), STAMP).unwrap();
+        assert!(matches!(out, Outcome::Appended { steps: 3 }), "{out:?}");
+        assert_eq!(fake.writes()[0].step_ids(), strs(&["n2", "n3", "n4"]));
+        assert!(sent_parents(&fake, "n2").is_empty());
+        assert_eq!(sent_parents(&fake, "n3"), strs(&["n2"]));
+        assert_eq!(sent_parents(&fake, "n4"), strs(&["n3"]));
+        let (same, record) = record_on(cfg.path(), &d).unwrap();
+        assert_eq!(same, cont);
+        assert_eq!(
+            (
+                record.steps,
+                record.last_step.as_str(),
+                record.head.as_str(),
+                record.has_parent
+            ),
+            (5, "n4", "n4", true)
+        );
+        assert_eq!(
+            fake.path_at(&cont).unwrap().step_ids(),
+            strs(&["t4", "t5", "n2", "n3", "n4"])
+        );
+
+        let cont_graph = ids_of(&cont).unwrap().0;
+        fake.freeze(cont_graph);
+        let out = push_to(cfg.path(), &d, &regrown(7), STAMP).unwrap();
+        assert!(
+            matches!(out, Outcome::Continued { steps: 1, .. }),
+            "{out:?}"
+        );
+        let (next, record) = record_on(cfg.path(), &d).unwrap();
+        assert_eq!(
+            (record.steps, record.last_step.as_str(), record.has_parent),
+            (6, "n5", true)
+        );
+        let continuation = fake.path_at(&next).unwrap();
+        assert_eq!(continuation.step_ids(), strs(&["n5"]));
+        let parent = continuation.parent.unwrap();
+        assert_eq!(
+            (parent.uri, parent.step.as_str()),
+            (
+                format!("{}/u/alex/x/graphs/{cont_graph}", fake.base()),
+                "n4"
+            )
+        );
     }
 
     /// A release Pathbase answers a route it lacks with its web app's
