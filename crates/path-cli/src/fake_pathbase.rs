@@ -11,7 +11,8 @@
 //! `POST /graphs` document that repeats a step id is `400
 //! invalid_document`, every parent must be stored in the path or earlier
 //! in the request (`400 invalid_document`), a frozen graph refuses writes
-//! (`409 write_to_frozen`), a missing graph or path is `404 not_found`, a
+//! (`409 write_to_frozen`), a missing graph or path, or a graph named
+//! under an owner or repo it is not in, is `404 not_found`, a
 //! step stored along the parent chain is `400 inherited_step_redefined`,
 //! a parent on this host must name a readable frozen graph, a member path
 //! and a step it owns (`400 invalid_parent`, `409 parent_not_frozen`)
@@ -352,26 +353,27 @@ fn route(state: &mut State, port: u16, req: &Request) -> Response {
         ("POST", ["api", "v1", "u", owner, "repos", repo, "graphs"]) => {
             create_graph(state, port, owner, repo, &req.body)
         }
-        ("DELETE", ["api", "v1", "u", _, "repos", _, "graphs", g]) => {
-            let Ok(g) = g.parse::<Uuid>() else {
-                return api_error(400, "bad_request", "bad id");
-            };
-            state.graphs.retain(|graph| graph.id != g);
-            (204, String::new())
+        ("DELETE", ["api", "v1", "u", owner, "repos", repo, "graphs", g]) => {
+            with_graph(state, owner, repo, g, |state, gi| {
+                state.graphs.remove(gi);
+                (204, String::new())
+            })
         }
         ("GET", ["api", "v1", "u", owner, "repos", repo, "graphs", g, "meta"]) => {
-            with_graph(state, g, |state, gi| {
+            with_graph(state, owner, repo, g, |state, gi| {
                 let graph = &state.graphs[gi];
                 let body = serde_json::json!({
                     "id": graph.id,
-                    "url": page_url(port, owner, repo, graph.id),
+                    "url": page_url(port, &graph.owner, &graph.repo, graph.id),
                     "mutability": if graph.frozen { "frozen" } else { "mutable" },
                 });
                 (200, body.to_string())
             })
         }
-        ("POST", ["api", "v1", "u", _, "repos", _, "graphs", g, "paths"]) => {
-            with_graph(state, g, |state, gi| open_path(state, port, gi, &req.body))
+        ("POST", ["api", "v1", "u", owner, "repos", repo, "graphs", g, "paths"]) => {
+            with_graph(state, owner, repo, g, |state, gi| {
+                open_path(state, port, gi, &req.body)
+            })
         }
         (
             "POST",
@@ -379,16 +381,16 @@ fn route(state: &mut State, port: u16, req: &Request) -> Response {
                 "api",
                 "v1",
                 "u",
-                _,
+                owner,
                 "repos",
-                _,
+                repo,
                 "graphs",
                 g,
                 "paths",
                 p,
                 "steps",
             ],
-        ) => with_graph(state, g, |state, gi| {
+        ) => with_graph(state, owner, repo, g, |state, gi| {
             let Some(pi) = path_index(state, gi, p) else {
                 return api_error(404, "not_found", "no such path");
             };
@@ -400,16 +402,16 @@ fn route(state: &mut State, port: u16, req: &Request) -> Response {
                 "api",
                 "v1",
                 "u",
-                _,
+                owner,
                 "repos",
-                _,
+                repo,
                 "graphs",
                 g,
                 "paths",
                 p,
                 "step-ids",
             ],
-        ) => with_graph(state, g, |state, gi| {
+        ) => with_graph(state, owner, repo, g, |state, gi| {
             let Some(pi) = path_index(state, gi, p) else {
                 return api_error(404, "not_found", "no such path");
             };
@@ -430,15 +432,22 @@ fn route(state: &mut State, port: u16, req: &Request) -> Response {
     }
 }
 
+/// Run `f` on the graph `g` in `owner`'s repo `repo`: Pathbase looks a
+/// graph up inside the repo the URL names, so one in another repo is
+/// not found.
 fn with_graph(
     state: &mut State,
+    owner: &str,
+    repo: &str,
     g: &str,
     f: impl FnOnce(&mut State, usize) -> Response,
 ) -> Response {
-    let gi = g
-        .parse::<Uuid>()
-        .ok()
-        .and_then(|g| state.graphs.iter().position(|graph| graph.id == g));
+    let gi = g.parse::<Uuid>().ok().and_then(|g| {
+        state
+            .graphs
+            .iter()
+            .position(|graph| graph.id == g && graph.owner == owner && graph.repo == repo)
+    });
     match gi {
         Some(gi) => f(state, gi),
         None => api_error(404, "not_found", "no such graph"),
@@ -906,6 +915,39 @@ mod tests {
         let read = path_step_ids(&fake.base(), "tok", &continued, true).unwrap();
         assert_eq!(read.step_ids, ["c"]);
         assert_eq!(read.truncated_at, Some(parent(&page, "b")));
+    }
+
+    /// A graph is found only under the owner and repo it is in, and its
+    /// meta reports the URL it has there.
+    #[test]
+    fn a_graph_is_addressed_through_its_own_owner_and_repo() {
+        let fake = FakePathbase::start();
+        let url = create(&fake, path(vec![step("a", None)], None)).unwrap();
+        let (graph, p) = ids_of(&url).unwrap();
+        for (owner, repo) in [("sam", "x"), ("alex", "y")] {
+            let elsewhere = remote_path_url(&fake.base(), owner, repo, &graph, &p);
+            assert!(matches!(
+                path_step_ids(&fake.base(), "tok", &elsewhere, false),
+                Err(AppendError::Gone)
+            ));
+            assert!(matches!(
+                append(&fake, &elsewhere, vec![step("b", Some("a"))]),
+                Err(AppendError::Gone)
+            ));
+            assert!(matches!(
+                graph_url(&fake.base(), "tok", &elsewhere),
+                Err(AppendError::Gone)
+            ));
+            assert!(
+                crate::cmd_pathbase::graphs_delete(&fake.base(), "tok", owner, repo, &graph)
+                    .is_err()
+            );
+        }
+        assert_eq!(
+            graph_url(&fake.base(), "tok", &url).unwrap(),
+            format!("{}/u/alex/x/graphs/{graph}", fake.base())
+        );
+        assert_eq!(fake.path_at(&url).unwrap().step_ids(), ["a"]);
     }
 
     /// A route the server lacks answers with a page, which the client
