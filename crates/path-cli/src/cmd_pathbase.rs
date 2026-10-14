@@ -496,7 +496,7 @@ fn decode_response<T: serde::de::DeserializeOwned>(
 ) -> std::result::Result<T, BatchFailure> {
     if !status.is_success() {
         let body = error_body(text);
-        let code = body.as_ref().and_then(|b| b.code);
+        let code = body.as_ref().and_then(|b| b.code.clone());
         let message = body
             .and_then(|b| b.error)
             .unwrap_or_else(|| short_body(text));
@@ -669,7 +669,7 @@ pub(crate) fn graphs_post(
                     body.error
                 )
             };
-            Err(Refusal::error(Some(body.code), message))
+            Err(Refusal::error(Some(body.code.to_string()), message))
         }
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
             let status = resp.status();
@@ -706,11 +706,8 @@ pub(crate) struct Refusal {
 }
 
 impl Refusal {
-    fn error(code: Option<ApiErrorCode>, message: String) -> anyhow::Error {
-        anyhow::Error::new(Self {
-            code: code.map(|c| c.to_string()),
-            message,
-        })
+    fn error(code: Option<String>, message: String) -> anyhow::Error {
+        anyhow::Error::new(Self { code, message })
     }
 }
 
@@ -882,10 +879,11 @@ fn parents_first_order(steps: &[toolpath::v1::Step]) -> Option<Vec<usize>> {
 enum BatchFailure {
     Transport(reqwest::Error),
     /// A non-2xx answer: the status, the `ApiErrorResponse` code when
-    /// the body carries one, and the message.
+    /// the body carries one (known to this build or not), and the
+    /// message.
     Status {
         status: u16,
-        code: Option<ApiErrorCode>,
+        code: Option<String>,
         message: String,
     },
     /// A 2xx answer whose body is not JSON.
@@ -1032,7 +1030,7 @@ pub(crate) fn graphs_post_streamed(
                 }
                 (failure, _) => {
                     let code = match failure {
-                        BatchFailure::Status { code, .. } => *code,
+                        BatchFailure::Status { code, .. } => code.clone(),
                         _ => None,
                     };
                     Err(Refusal::error(
@@ -1209,13 +1207,15 @@ impl std::fmt::Display for AppendError {
 impl AppendError {
     /// Classify `failure` of a request to `route` (named for the user).
     /// A route answered by a page rather than the API, or by a `404` or
-    /// `405` without the API's `not_found` code, is one the server does
-    /// not have: it does not support incremental sharing.
+    /// `405` with no error code, is one the server does not have: it
+    /// does not support incremental sharing. A code this build does not
+    /// know is the API answering: the failure keeps the server's message.
     fn from_failure(base_url: &str, route: &str, failure: BatchFailure) -> Self {
-        let code = match &failure {
-            BatchFailure::Status { code, .. } => *code,
+        let raw = match &failure {
+            BatchFailure::Status { code, .. } => code.as_deref(),
             _ => None,
         };
+        let code = raw.and_then(|c| c.parse::<ApiErrorCode>().ok());
         match (&failure, code) {
             (BatchFailure::Status { status: 409, .. }, Some(ApiErrorCode::WriteToFrozen)) => {
                 Self::Frozen
@@ -1244,9 +1244,22 @@ impl AppendError {
                 },
                 _,
             )
-            | (BatchFailure::NotJson { .. }, _) => Self::Other(format!(
-                "{base_url} does not support incremental sharing: it does not serve {route}; \
-                 upgrade the server"
+            | (BatchFailure::NotJson { .. }, _)
+                if raw.is_none() =>
+            {
+                Self::Other(format!(
+                    "{base_url} does not support incremental sharing: it does not serve {route}; \
+                     upgrade the server"
+                ))
+            }
+            (
+                BatchFailure::Status {
+                    status, message, ..
+                },
+                None,
+            ) if raw.is_some() => Self::Other(format!(
+                "{route}: HTTP {status} ({}): {message}",
+                raw.unwrap_or_default()
             )),
             _ => Self::Other(format!("{route}: {}", failure.describe())),
         }
@@ -1372,11 +1385,13 @@ pub(crate) fn graph_url(
 }
 
 /// An error answer's body: the API's `ApiErrorResponse`, or the part of
-/// it a proxy or an older server sends (an `error` with no `code`).
+/// it a proxy or an older server sends (an `error` with no `code`). The
+/// code is read as a string, so one newer than this build still leaves
+/// the body, and its message, readable.
 #[derive(Deserialize)]
 struct ErrorBody {
     #[serde(default)]
-    code: Option<ApiErrorCode>,
+    code: Option<String>,
     #[serde(default)]
     error: Option<String>,
 }
@@ -2904,7 +2919,7 @@ pub(crate) mod tests {
     fn append_errors_are_classified_by_status_and_code() {
         let status = |status: u16, code: Option<&str>| BatchFailure::Status {
             status,
-            code: code.map(|c| c.parse().unwrap()),
+            code: code.map(String::from),
             message: "m".into(),
         };
         let b = "https://h";
@@ -2933,6 +2948,18 @@ pub(crate) mod tests {
             classify(status(409, Some("conflict"))),
             AppendError::Other(_)
         ));
+        // A code newer than this build: the server's message, never an
+        // unsupported server, and a 404 is not a deleted graph.
+        for status_code in [400, 404, 409] {
+            let AppendError::Other(msg) = classify(status(status_code, Some("path_deleted")))
+            else {
+                panic!("an unknown code is reported as it came");
+            };
+            assert_eq!(
+                msg,
+                format!("the step-ids route: HTTP {status_code} (path_deleted): m")
+            );
+        }
         for unsupported in [status(404, None), BatchFailure::NotJson { status: 200 }] {
             let AppendError::Other(msg) = classify(unsupported) else {
                 panic!("a route the server does not have is not a deleted graph");
@@ -2943,6 +2970,26 @@ pub(crate) mod tests {
                 "{msg}"
             );
         }
+    }
+
+    #[test]
+    fn an_error_body_with_an_unknown_code_keeps_its_code_and_message() {
+        let failure = decode_response::<serde_json::Value>(
+            reqwest::StatusCode::NOT_FOUND,
+            r#"{"code":"path_deleted","error":"the path was deleted"}"#,
+        );
+        let Err(BatchFailure::Status {
+            status,
+            code,
+            message,
+        }) = failure
+        else {
+            panic!("an error status");
+        };
+        assert_eq!(
+            (status, code.as_deref(), message.as_str()),
+            (404, Some("path_deleted"), "the path was deleted")
+        );
     }
 
     #[test]
