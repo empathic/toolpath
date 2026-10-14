@@ -110,6 +110,24 @@ impl Remotes {
             .flat_map(|records| records.values())
     }
 
+    /// The session's records on the server (scheme and host) of
+    /// `probe`, any path API URL there, whatever their owner and repo.
+    pub(crate) fn on_server<'a>(
+        &'a self,
+        artifact_type: ArtifactType,
+        id: &str,
+        probe: &str,
+    ) -> impl Iterator<Item = &'a RemoteRecord> {
+        let server = destination(probe).map(|(server, ..)| server);
+        self.sessions
+            .get(artifact_type.name())
+            .and_then(|sessions| sessions.get(id))
+            .into_iter()
+            .flat_map(|records| records.iter())
+            .filter(move |(key, _)| server.is_some() && destination(key).map(|(s, ..)| s) == server)
+            .map(|(_, record)| record)
+    }
+
     /// The session's record on the destination (server, owner, repo) of
     /// `probe`, any path API URL there, with the key it sits under.
     pub(crate) fn at(

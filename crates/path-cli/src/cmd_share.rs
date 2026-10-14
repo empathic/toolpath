@@ -915,6 +915,13 @@ fn share_explicit(
         },
         false,
     )?;
+    if outcome == crate::share_append::Outcome::NothingSettled {
+        eprintln!(
+            "{summary}: nothing to share yet: the session has no completed turn \
+             (the current turn is shared once the next one starts)"
+        );
+        return Ok(());
+    }
     eprintln!(
         "{summary} → {}: {}",
         destination.display(),

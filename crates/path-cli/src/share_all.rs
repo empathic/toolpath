@@ -39,9 +39,10 @@ pub(crate) enum Plan {
     Update,
 }
 
-/// The spec's table, over the session's records on every destination
-/// (`record_stamps`): none → create; one with a known stamp equal to the
-/// source's → skip; otherwise derive and append.
+/// The spec's table, over the session's records that can stand for the
+/// pass's destination (`record_stamps`, see [`RecordScope`]): none →
+/// create; one with a known stamp equal to the source's → skip;
+/// otherwise derive and append.
 pub(crate) fn plan(record_stamps: &[Option<SourceStamp>], stamp: sources::Stamp) -> Plan {
     if record_stamps.is_empty() {
         return Plan::Create;
@@ -49,6 +50,48 @@ pub(crate) fn plan(record_stamps: &[Option<SourceStamp>], stamp: sources::Stamp)
     match SourceStamp::known(stamp) {
         Some(now) if record_stamps.contains(&Some(now)) => Plan::Unchanged,
         _ => Plan::Update,
+    }
+}
+
+/// Which of a session's records can tell a pass it has nothing to send.
+/// A destination resolved from config is known only after the derive,
+/// so a record on any destination at the current stamp will do; one the
+/// user named before the pass is satisfied only by records there.
+#[derive(Debug, Clone)]
+pub(crate) enum RecordScope {
+    /// Destinations come from config: every record.
+    Any,
+    /// `--url` names the server: the records on the server of this
+    /// probe (a path API URL there).
+    Server(String),
+    /// `--repo` names the destination: the record at this probe's
+    /// server, owner and repo.
+    Destination(String),
+}
+
+impl RecordScope {
+    /// The stamps of the session's records within this scope.
+    fn stamps(
+        &self,
+        remotes: &Remotes,
+        artifact_type: ArtifactType,
+        id: &str,
+    ) -> Vec<Option<SourceStamp>> {
+        match self {
+            RecordScope::Any => remotes
+                .of(artifact_type, id)
+                .map(|r| r.source_stamp)
+                .collect(),
+            RecordScope::Server(probe) => remotes
+                .on_server(artifact_type, id, probe)
+                .map(|r| r.source_stamp)
+                .collect(),
+            RecordScope::Destination(probe) => remotes
+                .at(artifact_type, id, probe)
+                .map(|(_, r)| r.source_stamp)
+                .into_iter()
+                .collect(),
+        }
     }
 }
 
@@ -64,12 +107,14 @@ pub(crate) struct Item<'a> {
 }
 
 /// Every session of `sources` under `project_under`, with its plan
-/// against the records in `remotes`, sorted by harness, then id.
+/// against the records in `remotes` within `scope`, sorted by harness,
+/// then id.
 pub(crate) fn gather<'a>(
     sources: &'a [Box<dyn ArtifactSource + 'a>],
     project_under: Option<&Path>,
     manifest: &Manifest,
     remotes: &Remotes,
+    scope: &RecordScope,
 ) -> Vec<Item<'a>> {
     let mut items = Vec::new();
     for source in sources {
@@ -89,10 +134,7 @@ pub(crate) fn gather<'a>(
             {
                 continue;
             }
-            let stamps: Vec<Option<SourceStamp>> = remotes
-                .of(artifact.artifact_type, &artifact.id)
-                .map(|r| r.source_stamp)
-                .collect();
+            let stamps = scope.stamps(remotes, artifact.artifact_type, &artifact.id);
             let plan = plan(&stamps, (artifact.modified, artifact.size));
             items.push(Item {
                 artifact,
@@ -128,8 +170,8 @@ pub(crate) enum SessionResult {
     Failed(String),
 }
 
-/// A finished pass: each session, the destination it went to (empty
-/// when it never got one), and what happened.
+/// A finished pass: each session, its destination (empty when it was
+/// never resolved), and what happened.
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     pub(crate) sessions: Vec<(ArtifactType, String, String, SessionResult)>,
@@ -211,15 +253,15 @@ impl Report {
         let failures: Vec<_> = self
             .sessions
             .iter()
-            .filter_map(|(t, id, _, r)| match r {
-                SessionResult::Failed(why) => Some((t, id, why)),
+            .filter_map(|(t, id, dest, r)| match r {
+                SessionResult::Failed(why) => Some((t, id, dest, why)),
                 _ => None,
             })
             .collect();
         if !failures.is_empty() {
             out.push_str("Failed:\n");
-            for (t, id, why) in failures {
-                out.push_str(&format!("  {} {id}: {why}\n", t.name()));
+            for (t, id, dest, why) in failures {
+                out.push_str(&format!("  {} {id}{}: {why}\n", t.name(), arrow(dest)));
             }
         }
         out
@@ -252,15 +294,17 @@ pub(crate) fn run_pass(
             ));
             continue;
         }
-        let (dest, result) = match push_item(config_dir, item, cached, destination) {
-            Ok((dest, outcome)) => {
+        let (dest, pushed) = push_item(config_dir, item, cached, destination);
+        let dest = dest.unwrap_or_default();
+        let result = match pushed {
+            Ok(outcome) => {
                 let url = outcome.url().map(|u| format!(" → {u}")).unwrap_or_default();
-                eprintln!("{label} → {dest}: {}{url}", outcome.describe());
-                (dest, SessionResult::Pushed(outcome))
+                eprintln!("{label}{}: {}{url}", arrow(&dest), outcome.describe());
+                SessionResult::Pushed(outcome)
             }
             Err(e) => {
-                eprintln!("{label}: failed: {e:#}");
-                (String::new(), SessionResult::Failed(format!("{e:#}")))
+                eprintln!("{label}{}: failed: {e:#}", arrow(&dest));
+                SessionResult::Failed(format!("{e:#}"))
             }
         };
         report
@@ -270,26 +314,47 @@ pub(crate) fn run_pass(
     report
 }
 
+/// ` → owner/repo` for a resolved destination, nothing otherwise.
+fn arrow(dest: &str) -> String {
+    if dest.is_empty() {
+        String::new()
+    } else {
+        format!(" → {dest}")
+    }
+}
+
 /// Derive (or read from the cache) and push one session to the
 /// destination of the working directory its document records, or of
-/// its listing's directory when it records none.
+/// its listing's directory when it records none. The destination's
+/// display comes back whenever it was resolved, failure or not.
 fn push_item(
     config_dir: &Path,
     item: &Item,
     cached: &dyn Fn(&ArtifactRef) -> Option<toolpath::v1::Graph>,
     destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
-) -> Result<(String, Outcome)> {
+) -> (Option<String>, Result<Outcome>) {
     let a = &item.artifact;
     let doc = match cached(a) {
         Some(doc) => doc,
-        None => item.source.derive(a).context("derive")?.doc,
+        None => match item.source.derive(a).context("derive") {
+            Ok(derived) => derived.doc,
+            Err(e) => return (None, Err(e)),
+        },
     };
-    let path = doc
-        .single_path()
-        .context("the session did not derive to a single path")?;
+    let Some(path) = doc.single_path() else {
+        return (
+            None,
+            Err(anyhow::anyhow!(
+                "the session did not derive to a single path"
+            )),
+        );
+    };
     let dir =
         crate::cmd_share::doc_session_dir(&doc).or_else(|| item.dir.as_ref().map(PathBuf::from));
-    let dest = destination(dir.as_deref()).context("resolve the destination")?;
+    let dest = match destination(dir.as_deref()).context("resolve the destination") {
+        Ok(dest) => dest,
+        Err(e) => return (None, Err(e)),
+    };
     let outcome = share_append::push(
         config_dir,
         &dest,
@@ -300,8 +365,8 @@ fn push_item(
             stamp: (a.modified, a.size),
         },
         true,
-    )?;
-    Ok((dest.display(), outcome))
+    );
+    (Some(dest.display()), outcome)
 }
 
 /// The heading before a pass: how many sessions are in scope and what
@@ -373,7 +438,14 @@ pub(crate) fn run(args: AllArgs, base_url: String, token: String, username: Stri
     let manifest = crate::sync::load_manifest(&config_dir).unwrap_or_default();
     let remotes = crate::sync::load_remotes(&config_dir)?;
 
-    let items = gather(&sources, args.project_under.as_deref(), &manifest, &remotes);
+    let scope = record_scope(&args, &base_url, &username);
+    let items = gather(
+        &sources,
+        args.project_under.as_deref(),
+        &manifest,
+        &remotes,
+        &scope,
+    );
     eprint!("{}", render_plan(&items, args.project_under.as_deref()));
     let work = items.iter().filter(|i| i.plan != Plan::Unchanged).count();
     if work == 0 {
@@ -408,6 +480,20 @@ pub(crate) fn run(args: AllArgs, base_url: String, token: String, username: Stri
         anyhow::bail!("{} failed", plural(failed, "session"));
     }
     Ok(())
+}
+
+/// The records that can spare a session in this pass: those at the
+/// repo `--repo` names, those on the server `--url` names, or any.
+fn record_scope(args: &AllArgs, base_url: &str, username: &str) -> RecordScope {
+    let probe = |owner: &str, repo: &str| {
+        let nil = uuid::Uuid::nil();
+        crate::cmd_pathbase::remote_path_url(base_url, owner, repo, &nil, &nil)
+    };
+    match (&args.repo, &args.url) {
+        (Some(spec), _) => RecordScope::Destination(probe(&spec.owner, &spec.name)),
+        (None, Some(_)) => RecordScope::Server(probe(username, "pathstash")),
+        (None, None) => RecordScope::Any,
+    }
 }
 
 /// `resolve`, creating `username`'s `pathstash` repo on a server the
@@ -549,10 +635,20 @@ mod tests {
             destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
             between: &dyn Fn(&[Item]),
         ) -> (Vec<Plan>, Report) {
+            self.pass_scoped(&RecordScope::Any, destination, between)
+        }
+
+        /// [`Self::pass_with`], planning against the records in `scope`.
+        fn pass_scoped(
+            &self,
+            scope: &RecordScope,
+            destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
+            between: &dyn Fn(&[Item]),
+        ) -> (Vec<Plan>, Report) {
             let bundle = self.bundle();
             let sources = sources_for(&bundle, &[ArtifactType::Claude, ArtifactType::Codex]);
             let remotes = crate::sync::load_remotes(self.cfg()).unwrap();
-            let items = gather(&sources, None, &Manifest::default(), &remotes);
+            let items = gather(&sources, None, &Manifest::default(), &remotes, scope);
             between(&items);
             let plans = items.iter().map(|i| i.plan).collect();
             (plans, run_pass(self.cfg(), &items, &|_| None, destination))
@@ -935,6 +1031,55 @@ mod tests {
         assert_eq!(report.failed(), 1, "{report:?}");
         assert!(matches!(outcomes(&report)[0], SessionResult::Failed(_)));
         assert!(matches!(outcomes(&report)[1], SessionResult::Pushed(_)));
+        assert_eq!(report.sessions[0].2, "alex/x", "the refusing repo is named");
+        assert!(
+            report
+                .render()
+                .contains(&format!("claude {CLAUDE_ID} → alex/x: ")),
+            "{}",
+            report.render()
+        );
+    }
+
+    /// A destination the user names is satisfied only by its own
+    /// record: `--repo` by the record at that repo, `--url` by a record
+    /// on that server. Config resolution takes a record anywhere.
+    #[test]
+    fn a_named_destination_is_not_satisfied_by_another_destinations_record() {
+        let h = Harnesses::new();
+        let fake = FakePathbase::start();
+        let other = FakePathbase::start();
+        let (x, y) = (dest(&fake, "x"), dest(&fake, "y"));
+        h.claude(CLAUDE_ID, 30);
+        h.pass(&x);
+        let to = |d: &Destination| {
+            let d = d.clone();
+            move |_: Option<&Path>| -> Result<Destination> { Ok(d.clone()) }
+        };
+
+        let (plans, _) = h.pass_scoped(&RecordScope::Any, &to(&y), &|_| {});
+        assert_eq!(plans, [Plan::Unchanged]);
+        let (plans, _) = h.pass_scoped(&RecordScope::Server(x.probe()), &to(&y), &|_| {});
+        assert_eq!(plans, [Plan::Unchanged], "a record on the named server");
+        let (plans, _) = h.pass_scoped(
+            &RecordScope::Server(dest(&other, "x").probe()),
+            &|_| Ok(dest(&other, "x")),
+            &|_| {},
+        );
+        assert_eq!(plans, [Plan::Create], "no record on the named server");
+
+        let (plans, report) = h.pass_scoped(&RecordScope::Destination(y.probe()), &to(&y), &|_| {});
+        assert_eq!(plans, [Plan::Create]);
+        assert!(
+            matches!(
+                only(&report),
+                SessionResult::Pushed(Outcome::Created { .. })
+            ),
+            "{report:?}"
+        );
+        assert!(h.record(ArtifactType::Claude, CLAUDE_ID, &y).is_some());
+        let (plans, _) = h.pass_scoped(&RecordScope::Destination(y.probe()), &to(&y), &|_| {});
+        assert_eq!(plans, [Plan::Unchanged], "now recorded there");
     }
 
     /// Each session goes to the destination its directory resolves to.
@@ -997,20 +1142,26 @@ mod tests {
                 (
                     ArtifactType::Pi,
                     "e".into(),
-                    "me/y".into(),
+                    String::new(),
                     SessionResult::Failed("derive: boom".into()),
+                ),
+                (
+                    ArtifactType::Pi,
+                    "f".into(),
+                    "me/z".into(),
+                    SessionResult::Failed("forbidden".into()),
                 ),
             ],
         };
         assert_eq!(
             report.render(),
-            "5 sessions in scope\n  \
+            "6 sessions in scope\n  \
              created             1  (4 steps)\n  \
              appended            2  (5 steps)\n  \
              unchanged           1\n  \
-             failed              1\n\
+             failed              2\n\
              Written to:\n  me/x  2 sessions\n  me/y  1 session\n\
-             Failed:\n  pi e: derive: boom\n"
+             Failed:\n  pi e: derive: boom\n  pi f → me/z: forbidden\n"
         );
     }
 
@@ -1145,5 +1296,17 @@ mod tests {
         assert!(why.contains("incremental upload unsupported"), "{why}");
         assert!(fake.graphs().is_empty());
         assert_eq!(h.record(ArtifactType::Claude, CLAUDE_ID, &d), None);
+
+        // The cleanup delete fails: the summary names the graph left.
+        fake.force(
+            "DELETE",
+            "/graphs/",
+            403,
+            r#"{"code":"forbidden","error":"no"}"#,
+        );
+        let (_, report) = h.pass(&d);
+        let graph = fake.graphs()[0].id;
+        let left = format!("{}/u/alex/x/graphs/{graph}", fake.base());
+        assert!(report.render().contains(&left), "{}", report.render());
     }
 }

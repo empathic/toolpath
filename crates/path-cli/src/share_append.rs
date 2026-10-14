@@ -472,8 +472,9 @@ impl Push<'_> {
 
     /// Create a graph holding `path`. A server that does not list the
     /// stored path leaves nothing to record: when a record is required,
-    /// the graph is deleted and the session fails; otherwise a warning
-    /// says the next share will create another graph.
+    /// the graph is deleted and the session fails, naming the graph when
+    /// it could not be deleted; otherwise a warning says the next share
+    /// will create another graph.
     fn create_graph(&self, path: Path) -> Result<Created> {
         let d = self.dest;
         let doc = Graph::from_path(path);
@@ -494,6 +495,8 @@ impl Push<'_> {
         )?;
         let Some(stored) = created.paths.first() else {
             if self.record_required {
+                let unsupported =
+                    "server does not report stored paths; incremental upload unsupported";
                 let deleted = cmd_pathbase::graphs_delete(
                     &d.base_url,
                     &d.token,
@@ -502,9 +505,17 @@ impl Push<'_> {
                     &created.id,
                 );
                 if let Err(e) = deleted {
-                    eprintln!("warning: {e:#}");
+                    eprintln!(
+                        "warning: the graph just created could not be deleted; \
+                         delete {} by hand: {e:#}",
+                        created.url
+                    );
+                    bail!(
+                        "{unsupported}; the graph it created could not be deleted: {}",
+                        created.url
+                    );
                 }
-                bail!("server does not report stored paths; incremental upload unsupported");
+                bail!("{unsupported}");
             }
             eprintln!(
                 "warning: remote record not written: the server did not list the stored paths"
@@ -1756,5 +1767,33 @@ mod tests {
         );
         assert_eq!(record_count(cfg.path()), 0);
         assert_eq!(fake.graphs().len(), 1, "the bulk pass's graph is deleted");
+    }
+
+    /// The bulk pass's graph cannot be deleted again: the session's
+    /// error names it, so the user can delete it.
+    #[test]
+    fn a_failed_cleanup_delete_names_the_graph_left_behind() {
+        let fake = FakePathbase::start();
+        fake.unlist_created_paths();
+        fake.force(
+            "DELETE",
+            "/graphs/",
+            403,
+            r#"{"code":"forbidden","error":"no"}"#,
+        );
+        let cfg = tempfile::tempdir().unwrap();
+        let d = dest(&fake, "x");
+        let session = Session {
+            artifact_type: ArtifactType::Claude,
+            id: "s",
+            path: &session_of(3),
+            stamp: STAMP,
+        };
+        let err = push(cfg.path(), &d, &session, true).unwrap_err();
+        let left = fake.graphs();
+        assert_eq!(left.len(), 1);
+        let url = format!("{}/u/alex/x/graphs/{}", fake.base(), left[0].id);
+        assert!(err.to_string().contains(&url), "{err}");
+        assert!(err.to_string().contains("could not be deleted"), "{err}");
     }
 }
