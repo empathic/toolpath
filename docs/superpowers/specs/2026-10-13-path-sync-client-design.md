@@ -16,18 +16,20 @@ copy is the one the implementing PRs cite.
   one destination (toolpath #356). Keyed by harness, then session id, then
   the path's API URL
   `<server>/api/v1/u/<owner>/repos/<repo>/graphs/<g>/paths/<p>`. Value:
-  `{ steps, last_step, head, owned_from, source_stamp? }`, where `steps`
-  is how far into the local derive the remote chain covers (a
+  `{ steps, last_step, head, has_parent, source_stamp? }`, where `steps`
+  is how far into the local settled derive the remote chain covers (a
   continuation's parents included), `last_step` is the id at that
-  position, and `owned_from` is the index into the derive at which the
-  remote path's own steps begin: 0 for a path created fresh, the
-  continuation boundary for a continuation. A continuation needs
-  `owned_from` because the server stores a path's edges only among its
-  own steps (root steps descend implicitly from `parent.step`), so every
-  batch appended to it must have parents pointing into inherited history
-  stripped, and because the ids diff and the parent choice need its own
-  ids without a server round trip on every append. Written on every
-  record write; absent (an older record) reads as 0. One record per
+  position, and `has_parent` is true when the remote path carries a
+  `path.parent`, i.e. it was created as a continuation. The server
+  stores a path's edges only among its own steps (root steps descend
+  implicitly from `parent.step`), so a batch appended to a continuation
+  keeps only parents among them. Which ids a continuation owns and
+  which it inherits is asked of the server, never inferred from
+  positions in the local derive: once a session has been truncated and
+  regrown, a continuation's own steps need not be a contiguous suffix
+  of the derive, so the server is the only sound source. `has_parent`
+  tells the client when to ask. Written on every record write; absent
+  (an older record) reads as false. One record per
   session per destination (server + owner + repo); a new write replaces
   the old. Anonymous uploads and `path export pathbase` write none.
 - **Destination**: where a session goes, resolved from config as `share`
@@ -70,61 +72,84 @@ Input: a session (harness + id), its destination, the record if any.
 3. **No record → create.** Stream `S[0..k)` as a new graph (open with
    the first batch, append the rest, trailing `Head` = the head among the
    pushed steps). Write the record from the create response:
-   `steps = k`, `last_step = S[k-1].id`, `head`, `owned_from = 0`,
+   `steps = k`, `last_step = S[k-1].id`, `head`, `has_parent = false`,
    `source_stamp`.
 4. **Record, fast check (every pass, O(1)).** If `k >= record.steps` and
    `S[record.steps - 1].id == record.last_step`, the prefix holds. If
-   `k == record.steps`, nothing to send; refresh `source_stamp` only.
-   Otherwise append `S[record.steps..k)` to the recorded path URL plus
-   `/steps`, with a trailing `Head`, in batches as the streaming client
-   already does. On `2xx`, advance the record. On `400 invalid_document`
-   (a new step does not fit what is stored), go to 5.
-5. **Record, mismatch (only when 4 fails, O(n) ids).** `GET` the path's
-   step ids through parents (see Pathbase additions). Let `R` be that
-   set. Append, in document order, every `S[i]` with `i < k` and
-   `S[i].id ∉ R`, with a trailing `Head`. When the response carries
-   `truncated_at`, `R` is partial: the steps before `owned_from` are
-   inherited from above it and only `S[owned_from..k)` is diffed. On
-   `2xx`, write the record from the derive: `steps = k`,
-   `last_step = S[k-1].id`. On `400 invalid_document` (a new step's
-   parent is neither stored nor earlier in the batch; the derivation
-   changed shape), go to 7.
+   `k == record.steps`, nothing to send; refresh `source_stamp` only, so
+   an unchanged session costs no request. Otherwise:
+   - `has_parent == false` (a fresh graph, nothing inherited): append
+     `S[record.steps..k)` to the recorded path URL plus `/steps`, with
+     a trailing `Head`, in batches as the streaming client already
+     does. Nothing is stripped, because nothing is inherited.
+   - `has_parent == true`: read the path's ownership (below), and
+     append the steps of `S[record.steps..k)` not in `O ∪ I`, each
+     with its parents filtered as below. One read per pass for a
+     continuation that grew is the accepted cost.
+
+   On `2xx`, advance the record. On `400 invalid_document` (a new step
+   does not fit what is stored, e.g. a parent the server lacks), go
+   to 5.
+5. **Record, mismatch (only when 4 fails, O(n) ids).** Read what the
+   chain stores: for `has_parent == false`, the path's step ids
+   (`O`, with `I` empty); for `has_parent == true`, its ownership. New
+   steps are the settled steps `S[i]`, `i < k`, whose id is not in
+   `O ∪ I`, in document order; append them, parents filtered as below,
+   with a trailing `Head`. On `2xx`, write the record from the derive:
+   `steps = k`, `last_step = S[k-1].id`. On `400 invalid_document` (a
+   new step's parent is neither stored nor earlier in the batch; the
+   derivation changed shape), go to 7. When the response carries
+   `truncated_at`, `I` is partial: proceed, and a refusal with
+   `inherited_step_redefined` recreates (7).
 6. **`409 write_to_frozen`** on any append, from 4 or 5 alike: the path
-   is frozen. `GET` its step ids through parents and take the settled
-   steps the server does not have, as in 5; this is the continuation's
-   step set, so steps an unrecorded earlier append stored are never
-   claimed twice (none missing: refresh the record, create nothing).
-   Build a new document whose single path carries
+   is frozen. Read what its chain stores as in 5 and take the settled
+   steps not in `O ∪ I`; this is the continuation's step set, so steps
+   an unrecorded earlier append stored are never claimed twice (none
+   missing: refresh the record, create nothing). Build a new document
+   whose single path carries
    `path.parent = { uri, path: <toolpath path id>, step }` on its
    `PathOpen`, where `uri` is the frozen graph's `url` as
    `GET …/graphs/{id}/meta` reports it (only the server knows its public
-   URL), and `step` is the first new step's `parents[0]` when the frozen
-   path owns that id (a stored id at or past `record.owned_from`; the
-   server takes only a step the parent path owns), else `record.head`.
-   Strip from its steps every parent not among them. Create it as a new
-   graph in the same destination and re-key the record to the new path
-   URL with `steps = k`, `last_step = S[k-1].id` and `owned_from` the
-   index of the first new step. Report "continued".
+   URL), and `step` is the first new step's `parents[0]` when that id
+   is in the frozen path's `O` (the server takes only a step the parent
+   path owns), else `record.head`. Each step keeps only the parents
+   earlier among the new steps. Create it as a new graph in the same
+   destination and re-key the record to the new path URL with
+   `steps = k`, `last_step = S[k-1].id` and `has_parent = true`. Report
+   "continued". A continuation of a continuation is the same step.
 7. **`404 not_found`** on append, `400 invalid_document` from step 5, or
    `400 inherited_step_redefined` on any append or on the continuation's
    create (an id stored above a parent the list could not show): create
    a fresh graph from `S[0..k)` exactly as in 3, replace the record with
-   `owned_from = 0`, report "recreated".
+   `has_parent = false`, report "recreated".
 
-Every batch appended to a continuation (`owned_from > 0`) has the
-parents not in `S[owned_from..k)` stripped. A merge edge into inherited
-history is lost that way; the step still descends from `parent.step`.
+**Ownership of a continuation.** `GET` the path's step ids with
+`through_parents=true`; the server lists the path's own ids first, then
+its parents', nearest first, but does not mark where its own end, so
+`GET` them without `through_parents` too. The second response is `O`,
+the path's own ids; the rest of the first is `I`, the ids it inherits.
+Every step appended to a continuation keeps only the parents in `O` or
+earlier in the same batch. A merge edge into inherited history is lost
+that way, and a step left with no parent descends from `parent.step`.
 
 **Unsupported server.** A `2xx` whose body is not JSON (a release
 Pathbase answers a route it lacks with its web app's page), or a `404`
-without `code: not_found`, on any sync request (append, step ids, graph
-meta) means the server does not support incremental sharing: the session
-fails with a message naming the route, and nothing is recreated. A
-create response that lists no stored paths leaves nothing to record: a
-single `path share` succeeds with a warning and writes no record;
+or `405` with no error code, on any sync request (append, step ids,
+graph meta) means the server does not support incremental sharing: the
+session fails with a message naming the route, and nothing is
+recreated. An error code this client does not know is the API
+answering: the session fails with the server's code and message, and a
+`404` with such a code is not a deleted graph to recreate. A create
+response that lists no stored paths leaves nothing to record: a single
+`path share` succeeds with a warning and writes no record;
 `path share --all` deletes the graph it just made and fails that session
 ("server does not report stored paths; incremental upload unsupported")
-rather than creating a duplicate every pass.
+rather than creating a duplicate every pass. When that delete fails, the
+warning, the session's failure line and the pass's "Failed:" summary
+name the graph's URL, so the user can delete it.
+
+A single `path share` of a session with nothing settled prints one line
+saying the session has no completed turn yet, and exits 0.
 
 What the client never does: freeze, PUT, replay with idempotency keys,
 compare step content, keep a list of pushed ids, or build a server URL
@@ -152,13 +177,19 @@ Enumerate sessions in scope exactly as #355 did (projects, harnesses,
 include/exclude, the summary table). `--all` requires login: it fails
 before any output when the user is logged out or the login does not
 check out, and it refuses `--no-cache`. For each session, before
-deriving:
+deriving, over the records that can stand for the pass's destination:
+every record when destinations come from config (the destination is
+known only after the derive), only the record at the named repo with
+`--repo`, and only records on the named server with `--url`:
 
-| Records (any destination) | Source stamp | Action |
+| Records (in scope) | Source stamp | Action |
 | --- | --- | --- |
 | none | any | derive, then create (append step 3) |
 | any | known and equal to one record's | skip, no derive |
 | any | unknown, or equal to none | derive, then append steps 4–7 |
+
+A failed session's line and its "Failed:" entry name its destination
+whenever it was resolved.
 
 The destination is resolved after the derive, from the derived path's
 recorded working directory (what `path share` uses), falling back to the
@@ -235,7 +266,14 @@ and fails saying what to set when they are missing.
    `url` as the server reports it and whose `parent.step` follows step 6,
    that its steps are the new ones only and its step ids through parents
    reach the frozen path's, and that the record is re-keyed to it with
-   `owned_from` at the boundary.
+   `has_parent` true.
+   Then truncate the file below the continuation boundary, regrow it
+   along new lines, and run a pass: assert the steps the chain lacks
+   landed on the continuation, each with its parents among the
+   continuation's steps intact and those into inherited history
+   dropped, and that the record matches the derive. Freeze the
+   continuation, grow, run a pass: assert a second continuation whose
+   `parent.step` is a step the first one owns.
 5. Delete the graph the record points at. Run a pass with new lines.
    Assert "recreated".
 6. Same loop for a Codex rollout.
