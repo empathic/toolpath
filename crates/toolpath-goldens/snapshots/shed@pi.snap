@@ -1,0 +1,123 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_pi
+  agent: pi
+  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
+input_file: goldens/pi/input.jsonl
+---
+{
+  "source": {
+    "lines": 25,
+    "bytes": 17912,
+    "string_chars": 10903,
+    "by_type": {
+      "message": 22,
+      "model_change": 1,
+      "session": 1,
+      "thinking_level_change": 1
+    }
+  },
+  "ir": {
+    "bytes": 16360,
+    "string_chars": 11243,
+    "steps": 12,
+    "text_chars": 5296,
+    "tool_uses": 10
+  },
+  "projections": {
+    "claude": {
+      "lines": 23,
+      "bytes": 21468,
+      "string_chars": 13677,
+      "by_type": {
+        "assistant": 11,
+        "permission-mode": 1,
+        "user": 11
+      }
+    },
+    "codex": {
+      "lines": 72,
+      "bytes": 26956,
+      "string_chars": 18855,
+      "by_type": {
+        "event_msg/agent_message": 6,
+        "event_msg/exec_command_end": 4,
+        "event_msg/token_count": 11,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 10,
+        "response_item/message": 12,
+        "response_item/reasoning": 6,
+        "session_meta": 1,
+        "turn_context": 11
+      }
+    },
+    "copilot": {
+      "lines": 55,
+      "bytes": 24700,
+      "string_chars": 16891,
+      "by_type": {
+        "assistant.message": 11,
+        "assistant.turn_end": 11,
+        "assistant.turn_start": 11,
+        "session.start": 1,
+        "tool.execution_complete": 10,
+        "tool.execution_start": 10,
+        "user.message": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 23,
+    "bytes": 17007,
+    "event_types_shed": {
+      "model_change": {
+        "source": 1,
+        "after": 0
+      },
+      "thinking_level_change": {
+        "source": 1,
+        "after": 0
+      }
+    },
+    "key_paths": {
+      "source": 42,
+      "after": 36,
+      "lost": 7,
+      "gained": 1
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "message.content[].thinkingSignature",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.details.diff",
+        "example": "-1 scratch — feature elicitation +1 fixt…"
+      },
+      {
+        "path": "message.details.firstChangedLine",
+        "example": "1"
+      },
+      {
+        "path": "message.responseId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "modelId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "provider",
+        "example": "ollama"
+      },
+      {
+        "path": "thinkingLevel",
+        "example": "medium"
+      }
+    ]
+  }
+}

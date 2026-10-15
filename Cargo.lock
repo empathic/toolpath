@@ -1696,6 +1696,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "globset"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "group"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2132,9 +2145,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
 dependencies = [
  "console",
+ "globset",
  "once_cell",
+ "pest",
+ "pest_derive",
+ "serde",
  "similar",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]
@@ -5445,6 +5463,25 @@ name = "toolpath-golden"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "toolpath-goldens"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "insta",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "toolpath",
+ "toolpath-claude",
+ "toolpath-codex",
+ "toolpath-convo",
+ "toolpath-copilot",
+ "toolpath-pi",
+ "uuid",
 ]
 
 [[package]]

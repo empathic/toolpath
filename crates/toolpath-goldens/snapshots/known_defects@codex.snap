@@ -1,0 +1,27 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.known_defects
+info:
+  adapter: toolpath_codex
+  agent: codex
+  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
+input_file: goldens/codex/input.jsonl
+---
+[
+  {
+    "name": "codex-to-claude-illegal-types",
+    "target": "claude",
+    "finding": {
+      "kind": "illegal_claude_types",
+      "counts": {
+        "agent_message": 13,
+        "session_meta": 2,
+        "task_complete": 1,
+        "task_started": 2,
+        "token_count": 13,
+        "turn_context": 1,
+        "user_message": 2
+      }
+    }
+  }
+]

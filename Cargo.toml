@@ -16,6 +16,7 @@ members = [
     "crates/pathbase-client",
     "crates/path-cli",
     "crates/toolpath-golden",
+    "crates/toolpath-goldens",
 ]
 exclude = ["crates/toolpath-cli"]
 resolver = "2"
