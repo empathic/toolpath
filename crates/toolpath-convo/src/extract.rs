@@ -227,6 +227,14 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
             total.output_tokens = add_opt(total.output_tokens, usage.output_tokens);
             total.cache_read_tokens = add_opt(total.cache_read_tokens, usage.cache_read_tokens);
             total.cache_write_tokens = add_opt(total.cache_write_tokens, usage.cache_write_tokens);
+            // Per-turn breakdowns sum to the session's, like the counters
+            // they decompose.
+            for (class, inner) in &usage.breakdowns {
+                let target = total.breakdowns.entry(class.clone()).or_default();
+                for (sub, n) in inner {
+                    *target.entry(sub.clone()).or_insert(0) += n;
+                }
+            }
         }
     }
     if has_any_usage {

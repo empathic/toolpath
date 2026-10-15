@@ -900,6 +900,33 @@ mod tests {
     }
 
     #[test]
+    fn test_total_usage_breakdowns_round_trip() {
+        use std::collections::BTreeMap;
+        // total_usage is recomputed from the turns on extract; their
+        // breakdowns must sum into it, not be dropped.
+        let usage = |out: u32, reasoning: u32| TokenUsage {
+            output_tokens: Some(out),
+            breakdowns: BTreeMap::from([(
+                "output".to_string(),
+                BTreeMap::from([("reasoning".to_string(), reasoning)]),
+            )]),
+            ..Default::default()
+        };
+        let mut t1 = base_turn("t1", Role::Assistant);
+        t1.token_usage = Some(usage(900, 450));
+        let mut t2 = base_turn("t2", Role::Assistant);
+        t2.token_usage = Some(usage(100, 25));
+        let view = view_with(vec![t1, t2]);
+
+        let path = derive_path(&view, &DeriveConfig::default());
+        let extracted = crate::extract::extract_conversation(&path);
+
+        let total = extracted.total_usage.expect("total_usage recomputed");
+        assert_eq!(total.output_tokens, Some(1000));
+        assert_eq!(total.breakdowns["output"]["reasoning"], 475);
+    }
+
+    #[test]
     fn test_token_usage_empty_breakdowns_omitted_in_json() {
         // skip_serializing_if guarantees no "breakdowns" key for the empty map,
         // keeping the wire format byte-compatible with pre-breakdowns producers.
