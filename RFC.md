@@ -300,11 +300,14 @@ Consumers that recognize the URI may rely on the structure that spec describes;
 unrecognized URIs should be treated as a generic path. Kind URIs are
 immutable, semver-versioned, and revisions ship at a new version URI.
 
-Defined kinds are listed at <https://toolpath.net/kinds/>. The only one defined
-so far is `https://toolpath.net/kinds/agent-coding-session/v1.0.0` — a path
-recording an AI coding conversation, where each conversational-turn step
-carries a `"conversation.append"` structural change with the turn's role,
-text, and so on. See the linked spec for the full contract.
+Defined kinds are listed at <https://toolpath.net/kinds/>. The only kind defined
+so far is `agent-coding-session` — a path recording an AI coding conversation,
+where each conversational-turn step carries a `"conversation.append"`
+structural change with the turn's role, text, and so on. Its current URI is
+`https://toolpath.net/kinds/agent-coding-session/v1.1.0`, the only version
+producers write. `…/v1.0.0` is read-only legacy: still valid, still accepted by
+readers, not supported for writing, and carrying an erratum on token
+accounting that its page records. See the linked specs for the full contract.
 
 #### Actor Definitions
 

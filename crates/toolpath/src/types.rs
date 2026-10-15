@@ -152,9 +152,15 @@ pub struct Base {
 pub const PATH_KIND_AGENT_CODING_SESSION: &str =
     "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
 
-/// The previous version URI. Documents produced before the v1.1.0
-/// accounting rule carry this kind; consumers summing their `token_usage`
-/// per step must deduplicate repeated message-level usage themselves.
+/// The previous version URI: read-only legacy, not supported for writing.
+///
+/// Documents produced before the v1.1.0 accounting rule (2026-06-17) carry
+/// this kind. Readers accept it (the URI is immutable and such documents
+/// stay valid) and `path p validate` warns on it; no producer may emit it,
+/// which `crates/path-cli/tests/cross_harness_matrix.rs` asserts. Consumers
+/// summing a v1.0.0 path's `token_usage` per step must deduplicate repeated
+/// message-level usage themselves, per the erratum at
+/// <https://toolpath.net/kinds/agent-coding-session/v1.0.0>.
 pub const PATH_KIND_AGENT_CODING_SESSION_V1_0_0: &str =
     "https://toolpath.net/kinds/agent-coding-session/v1.0.0";
 

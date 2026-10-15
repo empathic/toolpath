@@ -62,8 +62,10 @@ content — a `raw` unified-diff perspective.
 - **Both directions.** Forward (`path p import/list/show copilot`, `path share`)
   and reverse via `CopilotProjector` (`path p export copilot`, `path resume`).
   Resume writes `~/.copilot/session-state/<id>/` + a `session-store.db`
-  `sessions` row (only ever a fresh id). ✅ **Verified against copilotVersion
-  1.0.67**: a projected session loads and resumes in the real `copilot --resume`.
+  `sessions` row (only ever a fresh id). ✅ **Verified against copilot CLI
+  1.0.61 on 2026-10-15**: four projected sessions loaded in the real
+  `copilot --resume` and the model answered from their history (an earlier
+  run at 1.0.67 predates the fixes that made this hold).
   The loader's writer requirements (UUID ids, offset ISO timestamps, `turnId`,
   `messageId`, …) are documented in
   [writing-compatible.md](../../docs/agents/formats/copilot-cli/writing-compatible.md).
