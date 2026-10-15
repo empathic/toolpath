@@ -91,6 +91,11 @@
             pkgs.nodejs
             pkgs.pnpm
 
+            # The `secrets` gate: `gitleaks dir` over the tree with .gitleaks.toml. The gate
+            # skips when the binary is absent (CI on main has no flake), so the shell carries it
+            # to make the local run the wider one.
+            pkgs.gitleaks
+
             # plugins/claude-code/scripts/ensure-path.sh downloads and verifies
             # a release tarball. Its checksum step already falls back from
             # sha256sum to shasum, so coreutils is not needed here.

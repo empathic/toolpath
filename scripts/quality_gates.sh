@@ -8,7 +8,7 @@
 # Usage:
 #   scripts/quality_gates.sh [--verbose] [[-]gate ...]
 #
-# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site
+# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site, secrets
 # No args runs all gates. Prefix with - to exclude a gate.
 #
 # Options:
@@ -43,7 +43,7 @@ trap 'rm -rf "${_tmpdir}"' EXIT
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
 # run_gate; shellcheck can't see the call sites and flags them as unused.
 
-_all_gates=(format shellcheck clippy test doc examples plugin site)
+_all_gates=(format shellcheck clippy test doc examples plugin site secrets)
 
 # shellcheck disable=SC2329
 gate_format() {
@@ -107,6 +107,19 @@ gate_site() {
     # `sh: eleventy: command not found` and a stale "did you mean to install?"
     # warning that doesn't say which directory.
     (cd "${_root}/site" && pnpm install --frozen-lockfile 2>&1 && pnpm run build 2>&1)
+}
+
+# shellcheck disable=SC2329
+gate_secrets() {
+    # The whole tree, with gitleaks' default rules plus the custom rules and the allowlist in
+    # .gitleaks.toml. The same file drives crates/toolpath-webmock/tests/no_secrets.rs, which
+    # runs under the test gate everywhere (CI on main has no flake and no gitleaks); this gate
+    # is the wider sweep for a machine that has the binary (the wip flake's dev shell does).
+    if ! command -v gitleaks >/dev/null 2>&1; then
+        echo "gitleaks not on PATH; skipped (crates/toolpath-webmock/tests/no_secrets.rs covers the fixture surfaces under the test gate)"
+        return 0
+    fi
+    gitleaks dir "${_root}" --config "${_root}/.gitleaks.toml" --no-banner --redact 2>&1
 }
 
 # ── Runner ────────────────────────────────────────────────────────────────────
