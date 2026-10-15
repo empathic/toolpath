@@ -56,6 +56,12 @@ impl ConversationProjector for ClaudeProjector {
 /// points at — synthesizing a new one breaks the chain.
 const TOOL_RESULT_USER_EVENT: &str = "tool_result_user";
 
+/// Stand-in text for an errored tool result whose source recorded no
+/// output: the Messages API rejects an `is_error` tool_result with empty
+/// content, which would fail the first resumed turn (hard rule 4 in
+/// `docs/agents/formats/claude-code/writing-compatible-jsonl.md`).
+const EMPTY_ERROR_RESULT_TEXT: &str = "(tool call failed; the source session recorded no output)";
+
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
     let mut convo = Conversation::new(view.id.clone());
 
@@ -623,9 +629,19 @@ fn tool_result_entries(turn: &Turn, session_id: &str) -> Vec<ConversationEntry> 
         .iter()
         .filter_map(|tu| {
             let result = tu.result.as_ref()?;
+            // The Messages API rejects a replayed transcript holding an
+            // errored tool_result with empty content ("content cannot be
+            // empty if `is_error` is true"), so a resume of the projected
+            // session fails on its first turn. A source that recorded only
+            // the failure (no text) gets a stand-in, never empty text.
+            let content = if result.is_error && result.content.trim().is_empty() {
+                EMPTY_ERROR_RESULT_TEXT.to_string()
+            } else {
+                result.content.clone()
+            };
             let part = ContentPart::ToolResult {
                 tool_use_id: tu.id.clone(),
-                content: ToolResultContent::Text(result.content.clone()),
+                content: ToolResultContent::Text(content),
                 is_error: result.is_error,
             };
 
@@ -1438,6 +1454,44 @@ mod tests {
     }
 
     // ── Test 6: No tool result entry when tool uses have no results ───
+
+    #[test]
+    fn test_errored_tool_result_without_output_is_never_empty() {
+        // A source that recorded only the failure (a copilot reader that
+        // dropped `error.message`; a pi or codex result whose text is "")
+        // must not project an `is_error` tool_result with empty content:
+        // the API rejects the replayed transcript on the first resumed turn
+        // (measured: `400 … tool_result: content cannot be empty if
+        // is_error is true`).
+        let mut turn = assistant_turn("a1", "Reading a missing file.");
+        turn.tool_uses = vec![ToolInvocation {
+            id: "t1".to_string(),
+            name: "Read".to_string(),
+            input: serde_json::json!({"file_path": "nope.txt"}),
+            result: Some(ToolResult {
+                content: String::new(),
+                is_error: true,
+            }),
+            category: None,
+        }];
+        let view = make_view("sess-1", vec![user_turn("u1", "Go"), turn]);
+        let convo = ClaudeProjector.project(&view).unwrap();
+        let entries = content_entries(&convo);
+        let msg = entries[2].message.as_ref().unwrap();
+        match msg.content.as_ref().unwrap() {
+            MessageContent::Parts(parts) => match &parts[0] {
+                ContentPart::ToolResult {
+                    content, is_error, ..
+                } => {
+                    assert!(is_error);
+                    assert!(!content.text().trim().is_empty());
+                    assert_eq!(content.text(), EMPTY_ERROR_RESULT_TEXT);
+                }
+                other => panic!("Expected ToolResult, got {:?}", other),
+            },
+            other => panic!("Expected Parts, got {:?}", other),
+        }
+    }
 
     #[test]
     fn test_no_tool_result_entry_when_no_results() {
