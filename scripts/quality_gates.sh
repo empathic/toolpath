@@ -119,7 +119,12 @@ gate_secrets() {
         echo "gitleaks not on PATH; skipped (crates/toolpath-webmock/tests/no_secrets.rs covers the fixture surfaces under the test gate)"
         return 0
     fi
-    gitleaks dir "${_root}" --config "${_root}/.gitleaks.toml" --no-banner --redact 2>&1
+    # From the repo root, scanning `.`: gitleaks reports paths the way the target was spelled,
+    # and the path allowlist in .gitleaks.toml is anchored repo-relative (`^target/`). Handed
+    # the absolute root it reports absolute paths, nothing in the allowlist matches, and a
+    # checkout that has been built reports every build script's `-Users-…` output as a leak
+    # (1888 findings over 286 MB on a worktree with target/; 0 over 24 MB from `.`).
+    (cd "${_root}" && gitleaks dir . --config .gitleaks.toml --no-banner --redact 2>&1)
 }
 
 # ── Runner ────────────────────────────────────────────────────────────────────
