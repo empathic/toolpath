@@ -1,0 +1,60 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_cursor
+  agent: cursor
+  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
+input_file: test-fixtures/cursor/convo.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 71
+  },
+  "after": {
+    "steps": 56,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 95
+  },
+  "lost": [
+    "paths[].meta.files_changed[]",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation"
+  ],
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.aggregated_output",
+    "paths[].steps[].change.<artifact>.structural.call_id",
+    "paths[].steps[].change.<artifact>.structural.cli_version",
+    "paths[].steps[].change.<artifact>.structural.command[]",
+    "paths[].steps[].change.<artifact>.structural.cwd",
+    "paths[].steps[].change.<artifact>.structural.duration.nanos",
+    "paths[].steps[].change.<artifact>.structural.duration.secs",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.event_data_type",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.exit_code",
+    "paths[].steps[].change.<artifact>.structural.formatted_output",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.id",
+    "paths[].steps[].change.<artifact>.structural.memory_citation",
+    "paths[].steps[].change.<artifact>.structural.message",
+    "paths[].steps[].change.<artifact>.structural.model",
+    "paths[].steps[].change.<artifact>.structural.model_provider",
+    "paths[].steps[].change.<artifact>.structural.originator",
+    "paths[].steps[].change.<artifact>.structural.parsed_cmd[].cmd",
+    "paths[].steps[].change.<artifact>.structural.parsed_cmd[].type",
+    "paths[].steps[].change.<artifact>.structural.phase",
+    "paths[].steps[].change.<artifact>.structural.source",
+    "paths[].steps[].change.<artifact>.structural.status",
+    "paths[].steps[].change.<artifact>.structural.stderr",
+    "paths[].steps[].change.<artifact>.structural.stdout",
+    "paths[].steps[].change.<artifact>.structural.timestamp",
+    "paths[].steps[].change.<artifact>.structural.turn_id"
+  ]
+}

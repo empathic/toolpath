@@ -321,6 +321,10 @@ pub struct ToolExecution {
     pub success: Option<bool>,
     /// Result/output text, when carried inline on `..._complete`.
     pub output: Option<String>,
+    /// `error.message` (or a plain-string `error`) on a failed
+    /// `..._complete` `[observed, 1.0.68]`: a failed call carries no
+    /// `result`, only this. It is the only text the model saw for the call.
+    pub error: Option<String>,
     /// `result.detailedContent` — for `edit`/`create` this is the git-style
     /// diff of the actual file state `[observed, 1.0.67+]`, i.e. real
     /// file-change fidelity (not an arg reconstruction).
@@ -354,6 +358,14 @@ impl ToolExecution {
                 })
             }),
             output: tool_output(p),
+            error: match p.get("error") {
+                Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+                Some(e @ Value::Object(_)) => {
+                    str_field(e, &["message", "text", "code"]).filter(|s| !s.trim().is_empty())
+                }
+                _ => str_field(p, &["errorMessage", "error_message"])
+                    .filter(|s| !s.trim().is_empty()),
+            },
             detailed: p
                 .get("result")
                 .and_then(|r| r.get("detailedContent"))

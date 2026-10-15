@@ -19,7 +19,7 @@ Every such path comes from one place: the shared `ConversationView → Path` der
 
 Constraints apply by structural `type`, not by artifact key: a `change` entry is checked only when its `structural.type` is one named here, and extra properties never make a path invalid. [`schema.json`](./schema.json) encodes the rules; apply it alongside the base schema. The URI is immutable. Later revisions ship under a new version URI.
 
-**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `group_id`, and group-level token accounting is now specified — see [Group accounting](#group-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule.
+**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `group_id`, and group-level token accounting is now specified — see [Group accounting](#group-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule. v1.1.0 is the only version producers write; v1.0.0 is read-only legacy (readers accept it, `path p validate` warns, nothing emits it).
 
 ## The turn payload
 

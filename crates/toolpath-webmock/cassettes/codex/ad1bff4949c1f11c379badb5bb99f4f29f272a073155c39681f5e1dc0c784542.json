@@ -1,0 +1,69 @@
+{
+ "agent": "codex",
+ "recorded_at": "2026-10-15T19:21:09.866Z",
+ "key": "ad1bff4949c1f11c379badb5bb99f4f29f272a073155c39681f5e1dc0c784542",
+ "loose_key": "edaaea765e8b0a885043dddc01a84931c3b313f4f357b39df150a5f7e1391f60",
+ "model": "",
+ "request": {
+  "method": "POST",
+  "url": "/backend-api/ps/mcp",
+  "upstream": "https://chatgpt.com",
+  "headers": {
+   "accept": "text/event-stream, application/json",
+   "content-type": "application/json",
+   "originator": "codex-toolpath",
+   "user-agent": "codex-mcp-client/0.162.1",
+   "x-openai-product-sku": "codex"
+  },
+  "body": "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"elicitation\":{\"form\":{},\"url\":{}}},\"clientInfo\":{\"name\":\"codex-mcp-client\",\"title\":\"Codex\",\"version\":\"0.162.1\"}}}",
+  "body_encoding": "identity",
+  "normalized": {
+   "id": 0,
+   "jsonrpc": "2.0",
+   "method": "initialize",
+   "params": {
+    "capabilities": {
+     "elicitation": {
+      "form": {},
+      "url": {}
+     }
+    },
+    "clientInfo": {
+     "name": "codex-mcp-client",
+     "title": "Codex",
+     "version": "0.162.1"
+    },
+    "protocolVersion": "<DATE>"
+   }
+  }
+ },
+ "response": {
+  "status": 451,
+  "headers": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a4b12f6cea9e8c77-EWR",
+   "content-type": "application/json",
+   "cross-origin-opener-policy": "same-origin-allow-popups",
+   "date": "Thu, 15 Oct 2026 19:21:10 GMT",
+   "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+   "referrer-policy": "strict-origin-when-cross-origin",
+   "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=GZ6zoZnc7cyxOileUXkTeM2Q%2B0fvh40KpYH9o9LJFK7kOlMPG%2FQAEDzhsCtVpQR3F75umVWmQkCqj8piSFk1O2f6U11Jxz%2BOT9QuWqlWMNMljXAdz6prgVUbQEWy\"}]}",
+   "server": "cloudflare",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "x-content-type-options": "nosniff",
+   "x-oai-request-id": "084079e5-6bfc-4da6-b906-2fcb21e32dce",
+   "x-openai-proxy-wasm": "v0.1",
+   "set-cookie": "<redacted>"
+  },
+  "chunks": [
+   {
+    "t_ms": 141,
+    "b64": "eyJtZXNzYWdlIjoibm9fYmlzY3VpdF9ub19zZXJ2aWNlIn0="
+   }
+  ],
+  "bytes": 35,
+  "duration_ms": 141,
+  "sse": false,
+  "text_preview": "{\"message\":\"no_biscuit_no_service\"}"
+ }
+}

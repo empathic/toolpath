@@ -1,0 +1,71 @@
+{
+ "agent": "copilot",
+ "recorded_at": "2026-10-15T19:38:47.009Z",
+ "key": "2a0cd17c0f4891d5393ccda3e2f015edd0b42849fa236a565d17723a8a9c996f",
+ "loose_key": "36200bc591126d9c1ad53cfae211a5c9242269976d66d98020a775b132c4d974",
+ "model": "",
+ "request": {
+  "method": "POST",
+  "url": "/mcp/readonly",
+  "upstream": "https://api.githubcopilot.com",
+  "headers": {
+   "accept": "application/json, text/event-stream",
+   "authorization": "<redacted>",
+   "content-type": "application/json",
+   "user-agent": "copilot/1.0.61 (darwin v24.19.0) term/unknown",
+   "x-mcp-host": "copilot-cli",
+   "x-mcp-tools": "get_file_contents,search_code,get_copilot_space,list_copilot_spaces,web_search,search_users"
+  },
+  "body": "{\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"elicitation\":{\"form\":{},\"url\":{}}},\"clientInfo\":{\"name\":\"github-copilot-developer\",\"version\":\"1.0.61\"}},\"jsonrpc\":\"2.0\",\"id\":0}",
+  "body_encoding": "identity",
+  "normalized": {
+   "jsonrpc": "2.0",
+   "method": "initialize",
+   "params": {
+    "capabilities": {
+     "elicitation": {
+      "form": {},
+      "url": {}
+     }
+    },
+    "clientInfo": {
+     "name": "github-copilot-developer",
+     "version": "1.0.61"
+    },
+    "protocolVersion": "<DATE>"
+   }
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "access-control-allow-headers": "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Mcp-Method, Mcp-Name, Last-Event-ID, Authorization, X-MCP-Readonly, X-MCP-Toolsets, X-MCP-Tools, X-MCP-Exclude-Tools, X-MCP-Features, X-MCP-Lockdown, X-MCP-Insiders, Mcp-Param-owner, Mcp-Param-repo",
+   "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "Mcp-Session-Id, WWW-Authenticate",
+   "access-control-max-age": "86400",
+   "cache-control": "no-cache, no-transform",
+   "content-security-policy": "default-src 'none'; sandbox",
+   "content-type": "text/event-stream",
+   "date": "Thu, 15 Oct 2026 19:38:47 GMT",
+   "mcp-session-id": "c195c503-97aa-4761-9ad1-2d9a0e446a15",
+   "server": "github.com",
+   "strict-transport-security": "max-age=31536000",
+   "vary": "X-MCP-Features",
+   "x-copilot-service-request-id": "a5506920-43a2-4075-9dd2-1732472f1187",
+   "x-github-backend": "Kubernetes",
+   "x-github-edge-region": "iad",
+   "x-github-request-id": "D574:21A1CB:2D18E5F:2F51AD1:6AD12BC7"
+  },
+  "chunks": [
+   {
+    "t_ms": 434,
+    "b64": "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwiaWQiOjAsInJlc3VsdCI6eyJjYXBhYmlsaXRpZXMiOnsiY29tcGxldGlvbnMiOnt9LCJwcm9tcHRzIjp7fSwicmVzb3VyY2VzIjp7fSwidG9vbHMiOnt9fSwiaW5zdHJ1Y3Rpb25zIjoiVGhlIEdpdEh1YiBNQ1AgU2VydmVyIHByb3ZpZGVzIHRvb2xzIHRvIGludGVyYWN0IHdpdGggR2l0SHViIHBsYXRmb3JtLlxuXG5Ub29sIHNlbGVjdGlvbiBndWlkYW5jZTpcblx0MS4gVXNlICdsaXN0XyonIHRvb2xzIGZvciBicm9hZCwgc2ltcGxlIHJldHJpZXZhbCBhbmQgcGFnaW5hdGlvbiBvZiBhbGwgaXRlbXMgb2YgYSB0eXBlIChlLmcuLCBhbGwgaXNzdWVzLCBhbGwgUFJzLCBhbGwgYnJhbmNoZXMpIHdpdGggYmFzaWMgZmlsdGVyaW5nLlxuXHQyLiBVc2UgJ3NlYXJjaF8qJyB0b29scyBmb3IgdGFyZ2V0ZWQgcXVlcmllcyB3aXRoIHNwZWNpZmljIGNyaXRlcmlhLCBrZXl3b3Jkcywgb3IgY29tcGxleCBmaWx0ZXJzIChlLmcuLCBpc3N1ZXMgd2l0aCBjZXJ0YWluIHRleHQsIFBScyBieSBhdXRob3IsIGNvZGUgY29udGFpbmluZyBmdW5jdGlvbnMpLlxuXG5Db250ZXh0IG1hbmFnZW1lbnQ6XG5cdDEuIFVzZSBwYWdpbmF0aW9uIHdoZW5ldmVyIHBvc3NpYmxlIHdpdGggYmF0Y2hlcyBvZiA1LTEwIGl0ZW1zLlxuXHQyLiBVc2UgbWluaW1hbF9vdXRwdXQgcGFyYW1ldGVyIHNldCB0byB0cnVlIGlmIHRoZSBmdWxsIGluZm9ybWF0aW9uIGlzIG5vdCBuZWVkZWQgdG8gYWNjb21wbGlzaCBhIHRhc2suXG5cblRvb2wgdXNhZ2UgZ3VpZGFuY2U6XG5cdDEuIEZvciAnc2VhcmNoXyonIHRvb2xzOiBVc2Ugc2VwYXJhdGUgJ3NvcnQnIGFuZCAnb3JkZXInIHBhcmFtZXRlcnMgaWYgYXZhaWxhYmxlIGZvciBzb3J0aW5nIHJlc3VsdHMgLSBkbyBub3QgaW5jbHVkZSAnc29ydDonIHN5bnRheCBpbiBxdWVyeSBzdHJpbmdzLiBRdWVyeSBzdHJpbmdzIHNob3VsZCBjb250YWluIG9ubHkgc2VhcmNoIGNyaXRlcmlhIChlLmcuLCAnb3JnOmdvb2dsZSBsYW5ndWFnZTpweXRob24nKSwgbm90IHNvcnRpbmcgaW5zdHJ1Y3Rpb25zLiIsInByb3RvY29sVmVyc2lvbiI6IjIwMjUtMTEtMjUiLCJzZXJ2ZXJJbmZvIjp7Im5hbWUiOiJnaXRodWItbWNwLXNlcnZlciIsInRpdGxlIjoiR2l0SHViIE1DUCBTZXJ2ZXIiLCJ2ZXJzaW9uIjoiZ2l0aHViLW1jcC1zZXJ2ZXIvcmVtb3RlLWFkMTdjMjhjZmVmNTJhYWY2MzI4YjQwNGU4OWNiMzg1YjAzMGY0ZmQiLCJpY29ucyI6W3sic3JjIjoiZGF0YTppbWFnZS9wbmc7YmFzZTY0LGlWQk9SdzBLR2dvQUFBQU5TVWhFVWdBQUFCZ0FBQUFZQ0FZQUFBRGdkejM0QUFBQUJtSkxSMFFBL3dEL0FQK2d2YWVUQUFBREswbEVRVlJJaWJXVlFXaGNWUlNHdjNQZnkwekdkQklNUldrN2l6aU1UcE9ScHRwcWlOU05HMWROaXphRkZseElvWXVDQzdOd0pkaVZsaFlwcnR3cGlnaENGOUd0dWhDUnR1Q29hV2RxR0Y3SGtFNGFXbTFDcGtsbUpwbDNqNHZNUzk5TTJrNEc5Tis4ZDg2NTkvOHU5NTUzSC96UGtzY1ZNNWxNZjAzZG82aU9LYkpYSUFHZ1VCSjBHcEh2b2xLZnpPZnpDeDBCRW9uUldEUmVtUkQwUGFDM3pTS1hFRDFmTGZkY0xKVXVWOW9DMHVrWGRsdXhreXE4MU1hNFZYOVk0eDRwNXJPemp3U2tVdnNTZE1rVllFK0g1b0htak05SW9UQTFGeVJNOEpKSWpNYm9rbTgzelVXL1Z2aTVyYVh3QzhybmpXaVBkWFJ5WUdDZ095aTd3VXMwWHBrQVhteUVhL1hWOHFtWm1abnFjMFA3WHJYS1cyQnVLRG92Z29ycUxvV01GYjRwM3JqMkk0dzdxY0hDTVNBT2N0RHQ3bjBYK0dpRFQ2TmJyUHNYRHc1MHhmdHpLZzdvZHZjbXRYZjREc0pUalhCcHpiWFB6RjYvdm1nQWF1b2VwYmxibkdUeVFMdnUyVlFtazRrZ3hFS3B2dWk2Y3dTQ00xQWRhNXFoZXE1WXpDNXRGNURQNTlkUXpqWWxaY096Y2NneUdLNjVtQysyYXg3SVdQZkxjR3hoS0FSZ1Y3aTR2Qnk3MHltZ1VNaitBOVNEV0dCM0dPQ0VCL2YwVkovc0ZKQktqZlFTNnNyQU93RDhIUjdzdS83QlRnRTJVbW45OHU5dUFnUitheXFwbk9rVUlLMXpaTVBUQUNqeVF6T0ExMU5EK3orRThhYXRlNFRNczRQRDd3dTgwZXpQOTQwbkpKTUgra3kwWGdLZUFIa0gxVGNSWGdOeXdGZW91ZUpOLy81VDJDQ1pHVDdrV0JsVjlDU3d2d1Y2bi9YdWhPZGRMUnVBWWpHN2hNakhnRUgxdEViMEJFZ1dlQjQ0SjhhZWJGMjI0M05jMGZNUE1VZmdndWRkTFVPb2UvcjdkbHdXSnpxR01DeHE2cTVXei9qU1ZRWitOYjc5NU42OXU0dGhrLzZkVDd1SW5OaXlZY29VOVpXM0Z4WVdmQWpkcHA3bjFYempIQWJtVUozd1RYUThndk9aYitvWFYxZDN6TGY2V0VjV1czTW9KWFg5dzU3bjFZS1VDZGVMK2V5c092NG95clFxbjY1VHYrMWFkejRXcnh6YXNrWFdOczBWNUpxNi9pczNjN2xiNGJ5aFJUZHp1VnZVVjBaUVBnRHVBNmpxbGorZnFodmtsbEU5cSt2TEw3ZWFiNEFmbzFScXBKZEk5UmhyM1plQ1F3dVVUcWZqdm9rZXQ3V3VTNTFjalArNS9nV0M4eTV1SWtydERRQUFBQUJKUlU1RXJrSmdnZz09IiwibWltZVR5cGUiOiJpbWFnZS9wbmciLCJ0aGVtZSI6ImxpZ2h0In0seyJzcmMiOiJkYXRhOmltYWdlL3BuZztiYXNlNjQsaVZCT1J3MEtHZ29BQUFBTlNVaEVVZ0FBQUJnQUFBQVlDQVlBQUFEZ2R6MzRBQUFBQm1KTFIwUUEvd0QvQVArZ3ZhZVRBQUFCOEVsRVFWUklpYldWdTA5VVFSU0h2OWsxSWdXN0FZMFJCV0tzVEd4OU5ENHFTNUYvd0VZTERiMHhBWTBVeGtkcloyTkhZV2ZzYVl5VlQ0aUp3WnBOakpvb0xCUUVZejZMdlpzZHhtSDNMdEZmTjNQTytYNXp6end1L0dlRmJrRjFCSmdDSm9IandGZ1JhZ0RMd0F2Z2VRamhSMSt1NnFBNnE2N1pXNnZxakRwWUZuNVlmVjBDbk9xRE90RUxQcVkyZGdGdnE2RWU2ZGFXZDFIeXZQcXlCUFNWK2pRYXYxSDN0YmtoTXBnRjdoWERMYUFlUXRoVXp3RlhnRS9BRjBCZ0ZEZ0JQQXNoTEtoVjRDY3dWTlRQaEJBZXhLc2ZjZnVHYnFoZFQxaW1BMStqK2xWMUdLQlN4S2VBV3BSZlRjYTk0SHVCK0JUVmdjdXh3V1JTOHpDRXNGYldJSVN3QmN3bDB4Mm0ram5adUtObDRSSGpRTUpZam9QTkpGanUwdnh0OGl0aU5LSFRvbXFTTzd3TGVBM1lFMDFWWW9QdlNmN0pmZzJBVThuNFcyendQZ2xPNzhJZ3Jla3cxZW5NRGIxZlhLQ3VVaXZxN1V6OTlUaXBycTZydnd1emhTTHBvM3BMdlpBQm4xVnYybnJrVWpXTFBkbFdNRmNFRjlXRDZ0dW80RW5HNEhFRzNOYWQzS2NPcUV0UmUvYmIraWM4VW85bDhpL3RBRjlVQjNicTU0U3RKM2RUdmFHT3FvZk0zSXVpUmFsVzFQSDhiblVLeDR0VnhMcVl5VHVmNUN6bDRKVjBJb1N3QXB3QjdnTHI3ZW5NV3Rwekc3VGVvZE5GYlhtcE5mV3E2WWxveFliVWEycTlMK2kvMWg4L0VBR2RVckY5WlFBQUFBQkpSVTVFcmtKZ2dnPT0iLCJtaW1lVHlwZSI6ImltYWdlL3BuZyIsInRoZW1lIjoiZGFyayJ9XX19fQoK"
+   }
+  ],
+  "bytes": 3348,
+  "duration_ms": 435,
+  "sse": true,
+  "text_preview": "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"capabilities\":{\"completions\":{},\"prompts\":{},\"resources\":{},\"tools\":{}},\"instructions\":\"The GitHub MCP Server provides tools to interact with GitHub platform.\\n\\nTool selection guidance:\\n\\t1. Use 'list_*' tools for broad, simple retrieval and pagination of all items of a type (e.g., all issues, all PRs, all branches) with basic filtering.\\n\\"
+ }
+}

@@ -12,7 +12,9 @@
 //!   JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`,
 //!   loadable via `codex resume <session-uuid>`.
 //! - `export opencode` projects a Path document into rows in opencode's
-//!   `~/.local/share/opencode/opencode.db` so the session is visible to
+//!   database under `~/.local/share/opencode/` (`opencode-stable.db` for
+//!   current releases, `opencode.db` for older ones — see
+//!   `toolpath_opencode::PathResolver`) so the session is visible to
 //!   the `opencode` CLI; or to a JSON file / stdout.
 //! - `export pathbase` uploads the document to a Pathbase server.
 
@@ -151,8 +153,9 @@ pub enum ExportTarget {
         input: String,
 
         /// Target project directory. With this flag, inserts session,
-        /// message, and part rows into `~/.local/share/opencode/opencode.db`
-        /// so the `opencode` CLI sees the session in its picker.
+        /// message, and part rows into the opencode database under
+        /// `~/.local/share/opencode/` (`opencode-stable.db`, or `opencode.db`
+        /// for older releases) so the `opencode` CLI sees the session.
         /// Defaults to cwd when neither --project nor --output is given.
         #[arg(short, long)]
         project: Option<PathBuf>,
@@ -413,6 +416,15 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
         let mut conversation = build_claude_conversation(&path)?;
         if let Some(id) = exported_session_id(&args, &document_json)? {
             conversation.rename_session(&id);
+        }
+        // A document that names no Claude session (one not derived from a
+        // Claude log, like examples/path-02-local-session) projects to an
+        // empty session id, which was written as `<project>/.jsonl` — a file
+        // Claude Code cannot resume.
+        if conversation.session_id.trim().is_empty() {
+            anyhow::bail!(
+                "the document names no Claude session id; pass --session-id <id> or --new-session-id"
+            );
         }
         #[cfg(feature = "resume-remote")]
         if let Some(dir) = &args.remote.cwd {
@@ -886,22 +898,13 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
     }
 }
 
-/// Resolve the upload target URL from the CLI flag, the stored session,
-/// or the default. Mirrors the order used inside `run_pathbase_inner` so
-/// `cmd_share`'s pre-flight resolution agrees with the eventual upload.
+/// Resolve the upload target URL: the CLI flag, `$PATHBASE_URL`, the
+/// most recent login, then the default. Mirrors the order used inside
+/// `run_pathbase_inner` so `cmd_share`'s pre-flight resolution agrees
+/// with the eventual upload.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
-    use crate::cmd_pathbase::{credentials_path, load_session, resolve_url};
-
-    if let Some(u) = &args.url {
-        return resolve_url(Some(u.clone()));
-    }
-    if let Ok(path) = credentials_path()
-        && let Ok(Some(s)) = load_session(&path)
-    {
-        return s.url;
-    }
-    resolve_url(None)
+    crate::cmd_pathbase::resolve_session_url(args.url.clone())
 }
 
 #[cfg(not(target_os = "emscripten"))]
@@ -2206,6 +2209,29 @@ mod tests {
 
         let err = run_opencode(input_path.to_string_lossy().to_string(), None, None).unwrap_err();
         assert!(err.to_string().contains("single-path"));
+    }
+
+    #[test]
+    fn export_claude_refuses_a_document_with_no_session_id() {
+        // examples/path-02-local-session is not derived from a Claude log, so
+        // it names no Claude session. Exporting it used to write
+        // `<project>/.jsonl` holding a lone permission-mode line with
+        // `"sessionId":""`.
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/path-02-local-session.path.json");
+        let temp = tempfile::tempdir().unwrap();
+        let out = temp.path().join("out.jsonl");
+        let err = run_claude(ClaudeExportArgs {
+            input: example.to_string_lossy().to_string(),
+            output: Some(out.clone()),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("names no Claude session id"),
+            "unexpected error: {err}"
+        );
+        assert!(!out.exists(), "nothing is written for a refused document");
     }
 
     #[test]

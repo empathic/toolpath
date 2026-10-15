@@ -79,6 +79,29 @@ scripts/quality_gates.sh          # or: just ci; --verbose streams each gate's o
 
 Requires Rust 1.85+ (edition 2024). Pinned to 1.94.0 via `rust-toolchain.toml`.
 
+If `cargo` is not on your PATH, `flake.nix` carries a devShell with everything the
+justfile and `scripts/quality_gates.sh` assume — the Rust toolchain plus shellcheck,
+node/pnpm, jq, curl and fzf, with openssl wired up for `openssl-sys`:
+
+```bash
+nix develop                                   # or: nix develop --command <cmd>
+nix develop --command ./scripts/quality_gates.sh
+```
+
+The shell's Rust comes from nixpkgs and is **ahead of** the 1.94.0 pin — `rust-toolchain.toml`
+is read by rustup, which the shell does not provide. Clippy gains lints between releases, so
+green in the shell is evidence, not proof; the pinned toolchain is the real gate.
+
+The same flake builds the binary and exports a home-manager module, so a nix consumer can
+take this repo as a flake input and follow a ref of it instead of pinning a rev by hand:
+
+```bash
+nix build .#toolpath          # → result/bin/path; version read from crates/path-cli/Cargo.toml
+# programs.toolpath.{enable,package,devBin} via homeManagerModules.toolpath (modules/toolpath.nix)
+```
+
+The package skips the workspace tests (`doCheck = false`); CI is the gate.
+
 ## CLI usage
 
 The binary is called `path` (package: `path-cli`; the older `toolpath-cli` package is a deprecated shim that still installs the same binary for users running `cargo install toolpath-cli`).
@@ -136,7 +159,7 @@ cargo run -p path-cli -- config edit  # $VISUAL/$EDITOR on ~/.toolpath/config.to
 
 The **cache** at `~/.toolpath/documents/<cache-id>.json` is the single landing zone for every `import` (and for `import pathbase` downloads). Cache id is `<source>-<inner-id>` — e.g. `claude-abc123`, `git-main` (Pathbase paths key on `<owner>-<repo>-<slug>`, anon paths on `anon-pathstash-<uuid>`). Files are `0600`, parent directory `0700`. `$TOOLPATH_CONFIG_DIR` overrides the root. Imports error on cache hit (`--force` overwrites); `--no-cache` sends the JSON to stdout for shell composition. `p cache sync` fills the cache incrementally from the installed agent harnesses (see "Things to know") and always overwrites what it re-derives.
 
-`path auth login` prints `<base>/auth/cli`; the user logs in there and pastes the 8-character code back, which the CLI redeems (`POST /api/v1/auth/cli/redeem`) for a bearer token stored at `~/.toolpath/credentials.json` (`0600`; `$TOOLPATH_CONFIG_DIR` overrides). Server URL comes from `--url`, then `$PATHBASE_URL`, then `https://pathbase.dev`. The redeem endpoint (`operationId: cli_redeem`) is in `crates/pathbase-client/openapi.json`, so the progenitor-derived `pathbase-client` generates it and `cmd_pathbase.rs` calls `client.cli_redeem(&body)` like any other operation — nothing about the auth flow is hand-rolled.
+`path auth login` prints `<base>/auth/cli`; the user logs in there and pastes the 8-character code back, which the CLI redeems (`POST /api/v1/auth/cli/redeem`) for a bearer token stored at `~/.toolpath/credentials.json` (`0600`, enforced on every write; `$TOOLPATH_CONFIG_DIR` overrides). The file holds one login per server, keyed by lowercased `scheme://host[:port]` under `sessions`; its top-level `url`/`token`/`user` stay the most recent login, which is what binaries before 0.30.0 read. Login uses `--url`, then `$PATHBASE_URL`, then `https://pathbase.dev`; every other command resolves `--url`, then `$PATHBASE_URL`, then the most recent login, then `https://pathbase.dev` (`cmd_pathbase::resolve_session_url`), and sends only the token stored for that server (`load_session_for`) — never another server's. The redeem endpoint (`operationId: cli_redeem`) is in `crates/pathbase-client/openapi.json`, so the progenitor-derived `pathbase-client` generates it and `cmd_pathbase.rs` calls `client.cli_redeem(&body)` like any other operation — nothing about the auth flow is hand-rolled.
 
 ## Key conventions
 
@@ -248,3 +271,5 @@ Format references for the agent on-disk formats live at `docs/agents/formats/` �
 - `/path:resume` projects a shared session into the current project via `p import pathbase` + `p export claude` and hands the user `/resume <id>` — the running TUI cannot be switched programmatically, and the command guards against re-exporting a session that already exists locally (export overwrites the file). With `--remote <user@host>` it sends the current session with `resume --remote --no-attach --session <id> --project <cwd>` and hands the user the printed `ssh -t` attach line; it needs a `path` built with the `resume-remote` feature and checks `resume --help` for `--session` first. `/path:link-pr` runs the share flow and appends the link to a PR description via `gh pr view/edit`.
 - Two hard constraints in the command docs: slash-command `!` context commands and model-issued Bash must not contain `$PWD`/variables (Claude Code's permission checker rejects commands it can't statically analyze — hence the `sessions`/`current-session` helper modes), and `--project` must always be absolute (relative values silently match nothing).
 - Tests: `scripts/test-plugin.sh` (the `plugin` quality gate); plugin scripts are shellchecked. Dev loop: `claude --plugin-dir ./plugins/claude-code`. Keep `plugins/claude-code/.claude-plugin/plugin.json` and the marketplace entry version in lockstep; `MIN_VERSION` in ensure-path.sh names the oldest CLI the command docs support.
+
+If qualifier might be relevant, run `qualifier agents` first.

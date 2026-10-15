@@ -1,0 +1,30 @@
+{
+  "adapter": "pi",
+  "gained": [
+    "paths[].steps[].change.src/auth.rs.structural.after",
+    "paths[].steps[].change.src/auth.rs.structural.before"
+  ],
+  "ir1": {
+    "key_paths": 42,
+    "steps": 7,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "ir2": {
+    "key_paths": 36,
+    "steps": 6,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "lost": [
+    "paths[].path.base.branch",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.src/auth.rs.structural.operation"
+  ],
+  "set": "claude-compacted"
+}

@@ -1,0 +1,48 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_copilot
+  agent: copilot
+  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
+input_file: goldens/copilot/input.jsonl
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 14,
+    "text_chars": 4594,
+    "tool_uses": 11,
+    "key_paths": 59
+  },
+  "after": {
+    "steps": 15,
+    "text_chars": 4594,
+    "tool_uses": 11,
+    "key_paths": 49
+  },
+  "lost": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].path.base.uri",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+    "paths[].steps[].change.<artifact>.structural.content",
+    "paths[].steps[].change.<artifact>.structural.contextTier",
+    "paths[].steps[].change.<artifact>.structural.newModel",
+    "paths[].steps[].change.<artifact>.structural.reasoningEffort",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
+  ],
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+    "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+    "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+    "paths[].steps[].change.<artifact>.structural.raw.type",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path"
+  ]
+}

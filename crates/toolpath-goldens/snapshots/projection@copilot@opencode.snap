@@ -1,0 +1,1413 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_copilot
+  agent: copilot
+  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
+input_file: test-fixtures/copilot/convo.jsonl
+---
+{
+  "id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+  "project_id": "42099b4af021e53fd8fd4e056c2568d7c2e3ffa8",
+  "slug": "you-re-going-to-walk-through-a-small-set-of-tasks-designed-t",
+  "directory": "/",
+  "title": "You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the curre",
+  "version": "0.0.0-projected",
+  "time_created": 1783006098426,
+  "time_updated": 1783006133358,
+  "messages": [
+    {
+      "id": "msg_f2371f3fa001Nn8cUn134dIfbF",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006098426,
+      "time_updated": 1783006098426,
+      "data": {
+        "role": "user",
+        "time": {
+          "created": 1783006098426
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "anthropic",
+          "modelID": "unknown"
+        },
+        "summary": {
+          "diffs": []
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f2371f3fa002ustfwE6yKDtOj6",
+          "message_id": "msg_f2371f3fa001Nn8cUn134dIfbF",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006098426,
+          "time_updated": 1783006098426,
+          "data": {
+            "type": "text",
+            "text": "You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work."
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f2371f40b003Eqr1IN4YY1YsJW",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006098443,
+      "time_updated": 1783006098443,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f2371f3fa001Nn8cUn134dIfbF",
+        "time": {
+          "created": 1783006098443,
+          "completed": 1783006098443
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 324,
+          "input": 0,
+          "output": 324,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f2371f40b004cpo9xScCC6c4W3",
+          "message_id": "msg_f2371f40b003Eqr1IN4YY1YsJW",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006098443,
+          "time_updated": 1783006098443,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f2371f40b005giAEOwSfOz9Q7S",
+          "message_id": "msg_f2371f40b003Eqr1IN4YY1YsJW",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006098443,
+          "time_updated": 1783006098443,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories\n2. Write notes.md - I should use `create` tool\n3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did\n\nLet me start by listing files and thinking through my approach.",
+            "time": {
+              "start": 1783006098443,
+              "end": 1783006098443
+            }
+          }
+        },
+        {
+          "id": "prt_f2371f40b006KlAF5MieWv4QfP",
+          "message_id": "msg_f2371f40b003Eqr1IN4YY1YsJW",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006098443,
+          "time_updated": 1783006098443,
+          "data": {
+            "type": "text",
+            "text": "I'll work through these steps systematically, using the appropriate tools at each stage.\n\n**Step 1: List files in current directory**\nI'll use the `view` tool to list files in the directory.",
+            "time": {
+              "start": 1783006098443,
+              "end": 1783006098443
+            }
+          }
+        },
+        {
+          "id": "prt_f2371f40b0076E3KLaUiZeyAP0",
+          "message_id": "msg_f2371f40b003Eqr1IN4YY1YsJW",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006098443,
+          "time_updated": 1783006098443,
+          "data": {
+            "type": "tool",
+            "tool": "view",
+            "callID": "toolu_bdrk_01HfUZ7xMaPh8ESUWWUaRA6X",
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "/tmp/elicit-scratch"
+              },
+              "output": "\ndiff --git a/tmp/elicit-scratch b/tmp/elicit-scratch\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/tmp/elicit-scratch\n@@ -1,0 +1,0 @@\n\n",
+              "title": "",
+              "metadata": {},
+              "time": {
+                "start": 1783006098443,
+                "end": 1783006098443
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f2371f40b008x9bGH20PsDersE",
+          "message_id": "msg_f2371f40b003Eqr1IN4YY1YsJW",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006098443,
+          "time_updated": 1783006098443,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 324,
+              "input": 0,
+              "output": 324,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f237203fa009OV1oHvd02CEEoU",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006102522,
+      "time_updated": 1783006102522,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f2371f40b003Eqr1IN4YY1YsJW",
+        "time": {
+          "created": 1783006102522,
+          "completed": 1783006102522
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 264,
+          "input": 0,
+          "output": 264,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f237203fa00akAsfheV5IcWv6D",
+          "message_id": "msg_f237203fa009OV1oHvd02CEEoU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006102522,
+          "time_updated": 1783006102522,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f237203fa00bvQ62pIlBILPaas",
+          "message_id": "msg_f237203fa009OV1oHvd02CEEoU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006102522,
+          "time_updated": 1783006102522,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories\n2. Write notes.md - I should use `create` tool\n3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did\n\nLet me start by listing files and thinking through my approach.",
+            "time": {
+              "start": 1783006102522,
+              "end": 1783006102522
+            }
+          }
+        },
+        {
+          "id": "prt_f237203fa00ckeY8ciJ9c01a6h",
+          "message_id": "msg_f237203fa009OV1oHvd02CEEoU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006102522,
+          "time_updated": 1783006102522,
+          "data": {
+            "type": "text",
+            "text": "The directory appears to be empty. Now I'll proceed with the remaining steps.\n\n**Step 2: Write notes.md**\nI'll use the `create` tool to write the file with exactly the two lines specified.\n\n**Step 3: Read it back**\nI'll use `view` to confirm both lines are present.\n\n**Step 4: Edit it** \nI'll use `edit` to replace \"scratch\" with \"fixture\".\n\n**Step 5: Find files starting with \"note\"**\nI'll use `glob` to find matching files.\n\n**Step 6: Search for \"fixture\"**\nI'll use `grep` to search file contents.\n\nLet me start with creating the file:",
+            "time": {
+              "start": 1783006102522,
+              "end": 1783006102522
+            }
+          }
+        },
+        {
+          "id": "prt_f237203fa00dLKkgg4ozkKDAnm",
+          "message_id": "msg_f237203fa009OV1oHvd02CEEoU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006102522,
+          "time_updated": 1783006102522,
+          "data": {
+            "type": "tool",
+            "tool": "write",
+            "callID": "toolu_bdrk_01WiqjjhjievQeWtxytJRURR",
+            "state": {
+              "status": "completed",
+              "input": {
+                "file_text": "scratch — feature elicitation\nthis file will be edited and searched.",
+                "path": "/tmp/elicit-scratch/notes.md"
+              },
+              "output": "Created file /tmp/elicit-scratch/notes.md with 68 characters",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1783006102522,
+                "end": 1783006102522
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f237203fa00ecCRu7JnLFoSTBE",
+          "message_id": "msg_f237203fa009OV1oHvd02CEEoU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006102522,
+          "time_updated": 1783006102522,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 264,
+              "input": 0,
+              "output": 264,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f237210d500fjT0YRKkA0GUn2Y",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006105813,
+      "time_updated": 1783006105813,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f237203fa009OV1oHvd02CEEoU",
+        "time": {
+          "created": 1783006105813,
+          "completed": 1783006105813
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 87,
+          "input": 0,
+          "output": 87,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f237210d50107kZORiqBbOfoU7",
+          "message_id": "msg_f237210d500fjT0YRKkA0GUn2Y",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006105813,
+          "time_updated": 1783006105813,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f237210d5011sXY0SAn6bTE9p2",
+          "message_id": "msg_f237210d500fjT0YRKkA0GUn2Y",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006105813,
+          "time_updated": 1783006105813,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories\n2. Write notes.md - I should use `create` tool\n3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did\n\nLet me start by listing files and thinking through my approach.",
+            "time": {
+              "start": 1783006105813,
+              "end": 1783006105813
+            }
+          }
+        },
+        {
+          "id": "prt_f237210d50126lDSv5s4DM2wAN",
+          "message_id": "msg_f237210d500fjT0YRKkA0GUn2Y",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006105813,
+          "time_updated": 1783006105813,
+          "data": {
+            "type": "text",
+            "text": "**Step 3: Read notes.md back**",
+            "time": {
+              "start": 1783006105813,
+              "end": 1783006105813
+            }
+          }
+        },
+        {
+          "id": "prt_f237210d5013tx9byvE7SbfwNV",
+          "message_id": "msg_f237210d500fjT0YRKkA0GUn2Y",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006105813,
+          "time_updated": 1783006105813,
+          "data": {
+            "type": "tool",
+            "tool": "view",
+            "callID": "toolu_bdrk_01Rb4y14Zm4CUDCsJWrCF2sQ",
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "/tmp/elicit-scratch/notes.md"
+              },
+              "output": "1. scratch — feature elicitation\n2. this file will be edited and searched.",
+              "title": "",
+              "metadata": {},
+              "time": {
+                "start": 1783006105813,
+                "end": 1783006105813
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f237210d5014o01TRx4Ao3Ci0V",
+          "message_id": "msg_f237210d500fjT0YRKkA0GUn2Y",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006105813,
+          "time_updated": 1783006105813,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 87,
+              "input": 0,
+              "output": 87,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f23721886015fVVMrLtx44CxTE",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006107782,
+      "time_updated": 1783006107782,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f237210d500fjT0YRKkA0GUn2Y",
+        "time": {
+          "created": 1783006107782,
+          "completed": 1783006107782
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 362,
+          "input": 0,
+          "output": 362,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f23721886016tqAhrmsHDV8fNq",
+          "message_id": "msg_f23721886015fVVMrLtx44CxTE",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006107782,
+          "time_updated": 1783006107782,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f237218860173PMqG1jiqGZeEn",
+          "message_id": "msg_f23721886015fVVMrLtx44CxTE",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006107782,
+          "time_updated": 1783006107782,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I didLet me start by listing files and thinking through my approach.",
+            "time": {
+              "start": 1783006107782,
+              "end": 1783006107782
+            }
+          }
+        },
+        {
+          "id": "prt_f237218860182iYZTtMDx8ObCM",
+          "message_id": "msg_f23721886015fVVMrLtx44CxTE",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006107782,
+          "time_updated": 1783006107782,
+          "data": {
+            "type": "text",
+            "text": "Confirmed—both lines are present.\n\n**Step 4: Edit notes.md to replace \"scratch\" with \"fixture\"**",
+            "time": {
+              "start": 1783006107782,
+              "end": 1783006107782
+            }
+          }
+        },
+        {
+          "id": "prt_f23721886019AGQs60lpK4DFzR",
+          "message_id": "msg_f23721886015fVVMrLtx44CxTE",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006107782,
+          "time_updated": 1783006107782,
+          "data": {
+            "type": "tool",
+            "tool": "edit",
+            "callID": "toolu_bdrk_01PjTe5kaxxPqT23PaJBTpzt",
+            "state": {
+              "status": "completed",
+              "input": {
+                "new_str": "fixture — feature elicitation",
+                "old_str": "scratch — feature elicitation",
+                "path": "/tmp/elicit-scratch/notes.md"
+              },
+              "output": "File /tmp/elicit-scratch/notes.md updated with changes.",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1783006107782,
+                "end": 1783006107782
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f2372188601aIKlk3DKPCee1Bk",
+          "message_id": "msg_f23721886015fVVMrLtx44CxTE",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006107782,
+          "time_updated": 1783006107782,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 362,
+              "input": 0,
+              "output": 362,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f2372256d01bEiTvNTDsDTCSoo",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006111085,
+      "time_updated": 1783006111085,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f23721886015fVVMrLtx44CxTE",
+        "time": {
+          "created": 1783006111085,
+          "completed": 1783006111085
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 66,
+          "input": 0,
+          "output": 66,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f2372256d01ctHW4YJh5O0DlFr",
+          "message_id": "msg_f2372256d01bEiTvNTDsDTCSoo",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006111085,
+          "time_updated": 1783006111085,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f2372256d01do8DHUJTuGiYfYp",
+          "message_id": "msg_f2372256d01bEiTvNTDsDTCSoo",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006111085,
+          "time_updated": 1783006111085,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I didLet me start by listing files and thinking through my approach.",
+            "time": {
+              "start": 1783006111085,
+              "end": 1783006111085
+            }
+          }
+        },
+        {
+          "id": "prt_f2372256d01ewuFRzR5VsjysaW",
+          "message_id": "msg_f2372256d01bEiTvNTDsDTCSoo",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006111085,
+          "time_updated": 1783006111085,
+          "data": {
+            "type": "text",
+            "text": "**Step 5: Find files starting with \"note\"**",
+            "time": {
+              "start": 1783006111085,
+              "end": 1783006111085
+            }
+          }
+        },
+        {
+          "id": "prt_f2372256d01fiUQysZG51W0yfy",
+          "message_id": "msg_f2372256d01bEiTvNTDsDTCSoo",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006111085,
+          "time_updated": 1783006111085,
+          "data": {
+            "type": "tool",
+            "tool": "glob",
+            "callID": "toolu_bdrk_0198Ydw7qtboSwcdnoXQvyj9",
+            "state": {
+              "status": "completed",
+              "input": {
+                "pattern": "note*"
+              },
+              "output": "./notes.md",
+              "title": "note*",
+              "metadata": {},
+              "time": {
+                "start": 1783006111085,
+                "end": 1783006111085
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f2372256d020H63xGLTOzmmJKm",
+          "message_id": "msg_f2372256d01bEiTvNTDsDTCSoo",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006111085,
+          "time_updated": 1783006111085,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 66,
+              "input": 0,
+              "output": 66,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f23722e800219q9xYyQmpHp8hU",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006113408,
+      "time_updated": 1783006113408,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f2372256d01bEiTvNTDsDTCSoo",
+        "time": {
+          "created": 1783006113408,
+          "completed": 1783006113408
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 264,
+          "input": 0,
+          "output": 264,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f23722e80022zEVl8If6ZSYG7v",
+          "message_id": "msg_f23722e800219q9xYyQmpHp8hU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006113408,
+          "time_updated": 1783006113408,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f23722e80023Bj771PAx8YFmkR",
+          "message_id": "msg_f23722e800219q9xYyQmpHp8hU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006113408,
+          "time_updated": 1783006113408,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did",
+            "time": {
+              "start": 1783006113408,
+              "end": 1783006113408
+            }
+          }
+        },
+        {
+          "id": "prt_f23722e800244bCZqaJxQBTSSB",
+          "message_id": "msg_f23722e800219q9xYyQmpHp8hU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006113408,
+          "time_updated": 1783006113408,
+          "data": {
+            "type": "text",
+            "text": "Good.\n\n**Step 6: Search for \"fixture\" in files**",
+            "time": {
+              "start": 1783006113408,
+              "end": 1783006113408
+            }
+          }
+        },
+        {
+          "id": "prt_f23722e80025xRLz0A8utVwzIQ",
+          "message_id": "msg_f23722e800219q9xYyQmpHp8hU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006113408,
+          "time_updated": 1783006113408,
+          "data": {
+            "type": "tool",
+            "tool": "grep",
+            "callID": "toolu_bdrk_01FTqdbfhPpkk8Ft7hwVP36W",
+            "state": {
+              "status": "completed",
+              "input": {
+                "pattern": "fixture"
+              },
+              "output": "./notes.md",
+              "title": "fixture",
+              "metadata": {},
+              "time": {
+                "start": 1783006113408,
+                "end": 1783006113408
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f23722e80026p6l13msLxfIPi9",
+          "message_id": "msg_f23722e800219q9xYyQmpHp8hU",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006113408,
+          "time_updated": 1783006113408,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 264,
+              "input": 0,
+              "output": 264,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f237238bc0276OFuH8qxnK5LHB",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006116028,
+      "time_updated": 1783006116028,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f23722e800219q9xYyQmpHp8hU",
+        "time": {
+          "created": 1783006116028,
+          "completed": 1783006116028
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 303,
+          "input": 0,
+          "output": 303,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f237238bc028Z7WHERTk4Gylpn",
+          "message_id": "msg_f237238bc0276OFuH8qxnK5LHB",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006116028,
+          "time_updated": 1783006116028,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f237238bc029u2gkwsqphTMQxc",
+          "message_id": "msg_f237238bc0276OFuH8qxnK5LHB",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006116028,
+          "time_updated": 1783006116028,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did",
+            "time": {
+              "start": 1783006116028,
+              "end": 1783006116028
+            }
+          }
+        },
+        {
+          "id": "prt_f237238bc02aadqdHaB8ZaYPBb",
+          "message_id": "msg_f237238bc0276OFuH8qxnK5LHB",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006116028,
+          "time_updated": 1783006116028,
+          "data": {
+            "type": "text",
+            "text": "Perfect—\"fixture\" is in notes.md as expected.\n\n**Step 7: Read a non-existent file**",
+            "time": {
+              "start": 1783006116028,
+              "end": 1783006116028
+            }
+          }
+        },
+        {
+          "id": "prt_f237238bc02bMNiLenkALA6Bjp",
+          "message_id": "msg_f237238bc0276OFuH8qxnK5LHB",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006116028,
+          "time_updated": 1783006116028,
+          "data": {
+            "type": "tool",
+            "tool": "view",
+            "callID": "toolu_bdrk_01B8i9gQsjpnZTg8jg2qM45W",
+            "state": {
+              "status": "error",
+              "input": {
+                "path": "/tmp/elicit-scratch/does-not-exist.txt"
+              },
+              "error": "Path does not exist",
+              "time": {
+                "start": 1783006116028,
+                "end": 1783006116028
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f237238bc02cmmJCjyuAx4Uszq",
+          "message_id": "msg_f237238bc0276OFuH8qxnK5LHB",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006116028,
+          "time_updated": 1783006116028,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 303,
+              "input": 0,
+              "output": 303,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f2372456602dCMBXLVwUQrQ6NL",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006119270,
+      "time_updated": 1783006119270,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f237238bc0276OFuH8qxnK5LHB",
+        "time": {
+          "created": 1783006119270,
+          "completed": 1783006119270
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 345,
+          "input": 0,
+          "output": 345,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f2372456602eQKtDueEQ9QLlNZ",
+          "message_id": "msg_f2372456602dCMBXLVwUQrQ6NL",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006119270,
+          "time_updated": 1783006119270,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f2372456602fYEkg4ZTk8jxb1n",
+          "message_id": "msg_f2372456602dCMBXLVwUQrQ6NL",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006119270,
+          "time_updated": 1783006119270,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did",
+            "time": {
+              "start": 1783006119270,
+              "end": 1783006119270
+            }
+          }
+        },
+        {
+          "id": "prt_f237245660309L4PoepMAtEPS9",
+          "message_id": "msg_f2372456602dCMBXLVwUQrQ6NL",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006119270,
+          "time_updated": 1783006119270,
+          "data": {
+            "type": "text",
+            "text": "Acknowledged—the file does not exist, and the read correctly reported the failure.\n\n**Step 8: Write and run count.sh**",
+            "time": {
+              "start": 1783006119270,
+              "end": 1783006119270
+            }
+          }
+        },
+        {
+          "id": "prt_f23724566031ZFR5WEV1qXoeko",
+          "message_id": "msg_f2372456602dCMBXLVwUQrQ6NL",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006119270,
+          "time_updated": 1783006119270,
+          "data": {
+            "type": "tool",
+            "tool": "write",
+            "callID": "toolu_bdrk_013frCT7o3w25S2RvaDpZYco",
+            "state": {
+              "status": "completed",
+              "input": {
+                "file_text": "#!/bin/bash\necho 1\necho 2\necho 3\necho 4\necho 5\n",
+                "path": "/tmp/elicit-scratch/count.sh"
+              },
+              "output": "Created file /tmp/elicit-scratch/count.sh with 47 characters",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1783006119270,
+                "end": 1783006119270
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f23724566032r2EhX2lmyWNqrw",
+          "message_id": "msg_f2372456602dCMBXLVwUQrQ6NL",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006119270,
+          "time_updated": 1783006119270,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 345,
+              "input": 0,
+              "output": 345,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f237250f3033t1KVJVyvooGl9n",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006122227,
+      "time_updated": 1783006122227,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f2372456602dCMBXLVwUQrQ6NL",
+        "time": {
+          "created": 1783006122227,
+          "completed": 1783006122227
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 299,
+          "input": 0,
+          "output": 299,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f237250f30343t72m9iY2FE9rP",
+          "message_id": "msg_f237250f3033t1KVJVyvooGl9n",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006122227,
+          "time_updated": 1783006122227,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f237250f3035mI646nodVe2C2F",
+          "message_id": "msg_f237250f3033t1KVJVyvooGl9n",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006122227,
+          "time_updated": 1783006122227,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did",
+            "time": {
+              "start": 1783006122227,
+              "end": 1783006122227
+            }
+          }
+        },
+        {
+          "id": "prt_f237250f3036R6wLH5Q5OHVfTX",
+          "message_id": "msg_f237250f3033t1KVJVyvooGl9n",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006122227,
+          "time_updated": 1783006122227,
+          "data": {
+            "type": "text",
+            "text": "Now run it:",
+            "time": {
+              "start": 1783006122227,
+              "end": 1783006122227
+            }
+          }
+        },
+        {
+          "id": "prt_f237250f3037SBS97Y0dqYQbNx",
+          "message_id": "msg_f237250f3033t1KVJVyvooGl9n",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006122227,
+          "time_updated": 1783006122227,
+          "data": {
+            "type": "tool",
+            "tool": "bash",
+            "callID": "toolu_bdrk_01VMn94cyGrjdcavKzKSmPac",
+            "state": {
+              "status": "completed",
+              "input": {
+                "command": "bash /tmp/elicit-scratch/count.sh",
+                "description": "Run the count.sh script"
+              },
+              "output": "1\n2\n3\n4\n5\n<shellId: 0 completed with exit code 0>",
+              "title": "Run the count.sh script",
+              "metadata": {
+                "exit": 0,
+                "output": "1\n2\n3\n4\n5\n<shellId: 0 completed with exit code 0>",
+                "truncated": false
+              },
+              "time": {
+                "start": 1783006122227,
+                "end": 1783006122227
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f237250f3038ny8gwQthxmAHnF",
+          "message_id": "msg_f237250f3033t1KVJVyvooGl9n",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006122227,
+          "time_updated": 1783006122227,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 299,
+              "input": 0,
+              "output": 299,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f23725b62039mlgBv1I1A1GLGy",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006124898,
+      "time_updated": 1783006124898,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f237250f3033t1KVJVyvooGl9n",
+        "time": {
+          "created": 1783006124898,
+          "completed": 1783006124898
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 654,
+          "input": 0,
+          "output": 654,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f23725b6203atwp4vzJcYihZYu",
+          "message_id": "msg_f23725b62039mlgBv1I1A1GLGy",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006124898,
+          "time_updated": 1783006124898,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f23725b6203baYoQdQmhxwZO8v",
+          "message_id": "msg_f23725b62039mlgBv1I1A1GLGy",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006124898,
+          "time_updated": 1783006124898,
+          "data": {
+            "type": "reasoning",
+            "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did\n\nThe user wants me to count the words in a specific file. I should use the `view` tool to read the file, and then count the words.\n\nLet me first view the file to see its contents.\n\nThe user wants me to count the words in a specific file. I should use the `view` tool to read the file, and then count the words.\n\nLet me first view the file to see its contents.",
+            "time": {
+              "start": 1783006124898,
+              "end": 1783006124898
+            }
+          }
+        },
+        {
+          "id": "prt_f23725b6203cH0hxhEjxIls4gy",
+          "message_id": "msg_f23725b62039mlgBv1I1A1GLGy",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006124898,
+          "time_updated": 1783006124898,
+          "data": {
+            "type": "text",
+            "text": "Perfect—exactly five lines of output.\n\n**Step 9: Dispatch a sub-agent to count words in notes.md**\n\nThe file `/tmp/elicit-scratch/notes.md` contains **16 words**.\n\nHere's the breakdown:\n- Line 1: \"fixture\", \"feature\", \"elicitation\" (3 words)\n- Line 2: \"this\", \"file\", \"will\", \"be\", \"edited\", \"and\", \"searched\" (7 words)\n- Plus the numbers \"1\" and \"2\" at the start of each line, and the dash \"—\" (6 words total including these)\n\n**Total: 16 words**",
+            "time": {
+              "start": 1783006124898,
+              "end": 1783006124898
+            }
+          }
+        },
+        {
+          "id": "prt_f23725b6203doXaUdYS1HTdLMj",
+          "message_id": "msg_f23725b62039mlgBv1I1A1GLGy",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006124898,
+          "time_updated": 1783006124898,
+          "data": {
+            "type": "tool",
+            "tool": "task",
+            "callID": "toolu_bdrk_01Dn4kzTM8mDFaT3WUyB4jJq",
+            "state": {
+              "status": "completed",
+              "input": {
+                "agent_type": "task",
+                "description": "Count words in notes.md",
+                "mode": "sync",
+                "name": "word-counter",
+                "prompt": "Count the words in `/tmp/elicit-scratch/notes.md` and report the number."
+              },
+              "output": "The file `/tmp/elicit-scratch/notes.md` contains **16 words**.\n\nHere's the breakdown:\n- Line 1: \"fixture\", \"feature\", \"elicitation\" (3 words)\n- Line 2: \"this\", \"file\", \"will\", \"be\", \"edited\", \"and\", \"searched\" (7 words)\n- Plus the numbers \"1\" and \"2\" at the start of each line, and the dash \"—\" (6 words total including these)\n\n**Total: 16 words**",
+              "title": "",
+              "metadata": {},
+              "time": {
+                "start": 1783006124898,
+                "end": 1783006124898
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f23725b6203eSYf1OsGmnac7x5",
+          "message_id": "msg_f23725b62039mlgBv1I1A1GLGy",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006124898,
+          "time_updated": 1783006124898,
+          "data": {
+            "type": "tool",
+            "tool": "view",
+            "callID": "toolu_bdrk_016SBMkDqx3pJYZHpofcM8cf",
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "/tmp/elicit-scratch/notes.md"
+              },
+              "output": "1. fixture — feature elicitation\n2. this file will be edited and searched.",
+              "title": "",
+              "metadata": {},
+              "time": {
+                "start": 1783006124898,
+                "end": 1783006124898
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_f23725b6203ftEetT4QyoPKIPr",
+          "message_id": "msg_f23725b62039mlgBv1I1A1GLGy",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006124898,
+          "time_updated": 1783006124898,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 654,
+              "input": 0,
+              "output": 654,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_f23727c6e04095xA7DiUFnabUO",
+      "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+      "time_created": 1783006133358,
+      "time_updated": 1783006133358,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_f23725b62039mlgBv1I1A1GLGy",
+        "time": {
+          "created": 1783006133358,
+          "completed": 1783006133358
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4.5",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/",
+          "root": "/"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 173,
+          "input": 0,
+          "output": 173,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_f23727c6e041ifzFWPIpwJQkdn",
+          "message_id": "msg_f23727c6e04095xA7DiUFnabUO",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006133358,
+          "time_updated": 1783006133358,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_f23727c6e042aT8mIi0RxDoBCL",
+          "message_id": "msg_f23727c6e04095xA7DiUFnabUO",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006133358,
+          "time_updated": 1783006133358,
+          "data": {
+            "type": "reasoning",
+            "text": "The sub-agent counted 16 words total in the file. Let me quote that result in one sentence for step 10.",
+            "time": {
+              "start": 1783006133358,
+              "end": 1783006133358
+            }
+          }
+        },
+        {
+          "id": "prt_f23727c6e043u3xUF2rdsluCcE",
+          "message_id": "msg_f23727c6e04095xA7DiUFnabUO",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006133358,
+          "time_updated": 1783006133358,
+          "data": {
+            "type": "text",
+            "text": "The sub-agent reported that `notes.md` contains **16 words** total.\n\n**Step 10: Summary**\n\nI completed all nine steps: listed the empty directory, created and read `notes.md`, edited it to replace \"scratch\" with \"fixture\", found the file via glob matching, confirmed the search found \"fixture\", attempted to read a non-existent file (which correctly failed), created and executed a shell script that output five lines, and dispatched a sub-agent which counted 16 words in the file. All tools worked as expected and stayed within the current working directory throughout.",
+            "time": {
+              "start": 1783006133358,
+              "end": 1783006133358
+            }
+          }
+        },
+        {
+          "id": "prt_f23727c6e044FsjC588imD9yx3",
+          "message_id": "msg_f23727c6e04095xA7DiUFnabUO",
+          "session_id": "ses_0dc8e0c05ffeREuPTuMtGgsZv4",
+          "time_created": 1783006133358,
+          "time_updated": 1783006133358,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 173,
+              "input": 0,
+              "output": 173,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

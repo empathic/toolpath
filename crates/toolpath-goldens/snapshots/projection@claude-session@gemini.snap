@@ -1,0 +1,130 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
+input_file: goldens/claude-session/input.jsonl
+---
+{
+  "sessionId": "08f8ca74-56bc-441d-8922-cb3637991ef5",
+  "projectHash": "8a5edab282632443219e051e4ade2d1d5bbc671c781051bf1437897cbdfea0f1",
+  "startTime": "2026-10-08T19:52:24.852Z",
+  "lastUpdated": "2026-10-08T19:52:29.830Z",
+  "directories": [
+    "/"
+  ],
+  "kind": "main",
+  "messages": [
+    {
+      "id": "946c3320-e62e-498b-a012-caa57b4b515d",
+      "timestamp": "2026-10-08T19:52:24.852Z",
+      "type": "user",
+      "content": [
+        {
+          "text": "Run the shell command `ls` exactly, with no arguments or flags, to list the file names in the current directory. Then read the file notes.txt and tell me its first line."
+        }
+      ]
+    },
+    {
+      "id": "d6a21dba-fa09-4970-89db-85ff8a7ea6d9",
+      "timestamp": "2026-10-08T19:52:26.969Z",
+      "type": "gemini",
+      "content": "",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    {
+      "id": "06090cc1-61b2-4e7a-8a88-eb870ff05877",
+      "timestamp": "2026-10-08T19:52:27.034Z",
+      "type": "gemini",
+      "content": "",
+      "model": "claude-haiku-4-5-20251001",
+      "toolCalls": [
+        {
+          "id": "toolu_016Jcqs5U6qdvMJZjjrcRFvq",
+          "name": "run_shell_command",
+          "args": {
+            "command": "ls",
+            "description": "List files in current directory"
+          },
+          "status": "success",
+          "timestamp": "2026-10-08T19:52:27.034Z",
+          "result": [
+            {
+              "functionResponse": {
+                "id": "toolu_016Jcqs5U6qdvMJZjjrcRFvq",
+                "name": "run_shell_command",
+                "response": {
+                  "output": "notes.txt\nother.txt"
+                }
+              }
+            }
+          ],
+          "resultDisplay": "notes.txt\nother.txt",
+          "description": "List files in current directory",
+          "displayName": "Shell",
+          "renderOutputAsMarkdown": true
+        }
+      ]
+    },
+    {
+      "id": "9b188e5d-72e1-45c3-a3fa-e23ef1b02421",
+      "timestamp": "2026-10-08T19:52:28.097Z",
+      "type": "gemini",
+      "content": "",
+      "tokens": {
+        "input": 10,
+        "output": 245,
+        "cached": 15045
+      },
+      "model": "claude-haiku-4-5-20251001",
+      "toolCalls": [
+        {
+          "id": "toolu_01GjqjxW9tnUh9qzsRWnoEWW",
+          "name": "read_file",
+          "args": {
+            "file_path": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt",
+            "limit": 1
+          },
+          "status": "success",
+          "timestamp": "2026-10-08T19:52:28.097Z",
+          "result": [
+            {
+              "functionResponse": {
+                "id": "toolu_01GjqjxW9tnUh9qzsRWnoEWW",
+                "name": "read_file",
+                "response": {
+                  "output": "1\tfirst line of the notes"
+                }
+              }
+            }
+          ],
+          "resultDisplay": "1\tfirst line of the notes",
+          "description": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt",
+          "displayName": "ReadFile",
+          "renderOutputAsMarkdown": true
+        }
+      ]
+    },
+    {
+      "id": "a85d604b-5a11-4203-84c0-e8d4be7eef91",
+      "timestamp": "2026-10-08T19:52:29.585Z",
+      "type": "gemini",
+      "content": "",
+      "model": "claude-haiku-4-5-20251001"
+    },
+    {
+      "id": "0ab64e1b-9c25-4aef-8b54-f004e25bda06",
+      "timestamp": "2026-10-08T19:52:29.830Z",
+      "type": "gemini",
+      "content": "The directory contains two files: `notes.txt` and `other.txt`.\n\nThe first line of notes.txt is: **first line of the notes**",
+      "tokens": {
+        "input": 8,
+        "output": 87,
+        "cached": 22202
+      },
+      "model": "claude-haiku-4-5-20251001"
+    }
+  ]
+}

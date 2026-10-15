@@ -1,0 +1,35 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.known_defects
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
+input_file: goldens/claude/input.jsonl
+---
+[
+  {
+    "name": "claude-to-codex-caller-cwd",
+    "target": "codex",
+    "finding": {
+      "kind": "caller_cwd",
+      "source_cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude",
+      "written_cwd": [
+        "/"
+      ]
+    }
+  },
+  {
+    "name": "claude-roundtrip-renames",
+    "target": "self",
+    "finding": {
+      "kind": "renames",
+      "renames": [
+        {
+          "from": "message.stop_reason",
+          "to": "message.stopReason"
+        }
+      ]
+    }
+  }
+]

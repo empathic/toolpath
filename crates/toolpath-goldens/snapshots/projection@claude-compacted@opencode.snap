@@ -1,0 +1,426 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+  "project_id": "342f2f6ad141ea111def76a9174ce1e63bdf98d8",
+  "slug": "help-me-refactor-the-auth-module",
+  "directory": "/work",
+  "title": "Help me refactor the auth module.",
+  "version": "0.0.0-projected",
+  "time_created": 1717236000000,
+  "time_updated": 1717237863000,
+  "messages": [
+    {
+      "id": "msg_fd33de500001znOoJ7q3ruuHsP",
+      "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+      "time_created": 1717236000000,
+      "time_updated": 1717236000000,
+      "data": {
+        "role": "user",
+        "time": {
+          "created": 1717236000000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "anthropic",
+          "modelID": "unknown"
+        },
+        "summary": {
+          "diffs": []
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_fd33de500002zesHKYQmH1mhyQ",
+          "message_id": "msg_fd33de500001znOoJ7q3ruuHsP",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717236000000,
+          "time_updated": 1717236000000,
+          "data": {
+            "type": "text",
+            "text": "Help me refactor the auth module."
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_fd33de8e8003k7KM31rx92Ol9k",
+      "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+      "time_created": 1717236001000,
+      "time_updated": 1717236001000,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_fd33de500001znOoJ7q3ruuHsP",
+        "time": {
+          "created": 1717236001000,
+          "completed": 1717236001000
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-opus-4-6",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/work",
+          "root": "/work"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 340,
+          "input": 300,
+          "output": 40,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "tool_use"
+      },
+      "parts": [
+        {
+          "id": "prt_fd33de8e800494oYyBwKS0H2GW",
+          "message_id": "msg_fd33de8e8003k7KM31rx92Ol9k",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717236001000,
+          "time_updated": 1717236001000,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_fd33de8e8005TibU3PiNu011g0",
+          "message_id": "msg_fd33de8e8003k7KM31rx92Ol9k",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717236001000,
+          "time_updated": 1717236001000,
+          "data": {
+            "type": "text",
+            "text": "I'll start by reading the current auth code.",
+            "time": {
+              "start": 1717236001000,
+              "end": 1717236001000
+            }
+          }
+        },
+        {
+          "id": "prt_fd33de8e8006DS4fR8C90sx7pD",
+          "message_id": "msg_fd33de8e8003k7KM31rx92Ol9k",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717236001000,
+          "time_updated": 1717236001000,
+          "data": {
+            "type": "tool",
+            "tool": "read",
+            "callID": "t-pre-1",
+            "state": {
+              "status": "completed",
+              "input": {
+                "filePath": "src/auth.rs"
+              },
+              "output": "pub fn login() { ... }",
+              "title": "src/auth.rs",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1717236001000,
+                "end": 1717236001000
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_fd33de8e8007h1bsZtPWAOR4Sq",
+          "message_id": "msg_fd33de8e8003k7KM31rx92Ol9k",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717236001000,
+          "time_updated": 1717236001000,
+          "data": {
+            "type": "step-finish",
+            "reason": "tool_use",
+            "cost": 0.0,
+            "tokens": {
+              "total": 340,
+              "input": 300,
+              "output": 40,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_fd35960280083IBB1ekIRwkDOb",
+      "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+      "time_created": 1717237801000,
+      "time_updated": 1717237801000,
+      "data": {
+        "role": "user",
+        "time": {
+          "created": 1717237801000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "anthropic",
+          "modelID": "unknown"
+        },
+        "summary": {
+          "diffs": []
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_fd35960280091wn23y8GUenlOn",
+          "message_id": "msg_fd35960280083IBB1ekIRwkDOb",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237801000,
+          "time_updated": 1717237801000,
+          "data": {
+            "type": "text",
+            "text": "[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation."
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_fd35a46a000aa10QJXzbfUhJ41",
+      "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+      "time_created": 1717237860000,
+      "time_updated": 1717237860000,
+      "data": {
+        "role": "user",
+        "time": {
+          "created": 1717237860000
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "anthropic",
+          "modelID": "unknown"
+        },
+        "summary": {
+          "diffs": []
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_fd35a46a000bxv6XheEoxga8cG",
+          "message_id": "msg_fd35a46a000aa10QJXzbfUhJ41",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237860000,
+          "time_updated": 1717237860000,
+          "data": {
+            "type": "text",
+            "text": "Now add the session validation."
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_fd35a4a8800cHehYk2fhPxTG0y",
+      "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+      "time_created": 1717237861000,
+      "time_updated": 1717237861000,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_fd35a46a000aa10QJXzbfUhJ41",
+        "time": {
+          "created": 1717237861000,
+          "completed": 1717237861000
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-opus-4-6",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/work",
+          "root": "/work"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 680,
+          "input": 600,
+          "output": 80,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "tool_use"
+      },
+      "parts": [
+        {
+          "id": "prt_fd35a4a8800dB1lJpa64CLM7SE",
+          "message_id": "msg_fd35a4a8800cHehYk2fhPxTG0y",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237861000,
+          "time_updated": 1717237861000,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_fd35a4a8800eC59VvYfyeo5FZu",
+          "message_id": "msg_fd35a4a8800cHehYk2fhPxTG0y",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237861000,
+          "time_updated": 1717237861000,
+          "data": {
+            "type": "text",
+            "text": "Adding session validation to login().",
+            "time": {
+              "start": 1717237861000,
+              "end": 1717237861000
+            }
+          }
+        },
+        {
+          "id": "prt_fd35a4a8800fyCAOGQhwO7Bga9",
+          "message_id": "msg_fd35a4a8800cHehYk2fhPxTG0y",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237861000,
+          "time_updated": 1717237861000,
+          "data": {
+            "type": "tool",
+            "tool": "edit",
+            "callID": "t-post-1",
+            "state": {
+              "status": "completed",
+              "input": {
+                "filePath": "src/auth.rs",
+                "newString": "pub fn login() { validate_session();",
+                "oldString": "pub fn login() {"
+              },
+              "output": "File written successfully",
+              "title": "src/auth.rs",
+              "metadata": {
+                "diagnostics": {},
+                "diff": "Index: src/auth.rs\n===================================================================\n--- src/auth.rs\n+++ src/auth.rs\n@@ -1,1 +1,1 @@\n-pub fn login() {\n+pub fn login() { validate_session();\n"
+              },
+              "time": {
+                "start": 1717237861000,
+                "end": 1717237861000
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_fd35a4a88010HTCy2bvlO9k3W7",
+          "message_id": "msg_fd35a4a8800cHehYk2fhPxTG0y",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237861000,
+          "time_updated": 1717237861000,
+          "data": {
+            "type": "step-finish",
+            "reason": "tool_use",
+            "cost": 0.0,
+            "tokens": {
+              "total": 680,
+              "input": 600,
+              "output": 80,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_fd35a5258011bcudZV6Jw41tUf",
+      "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+      "time_created": 1717237863000,
+      "time_updated": 1717237863000,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_fd35a4a8800cHehYk2fhPxTG0y",
+        "time": {
+          "created": 1717237863000,
+          "completed": 1717237863000
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-opus-4-6",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/work",
+          "root": "/work"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 720,
+          "input": 700,
+          "output": 20,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "end_turn"
+      },
+      "parts": [
+        {
+          "id": "prt_fd35a5258012dlk6dXBHAcatlR",
+          "message_id": "msg_fd35a5258011bcudZV6Jw41tUf",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237863000,
+          "time_updated": 1717237863000,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_fd35a5258013pUmwR1OHe5g0Kw",
+          "message_id": "msg_fd35a5258011bcudZV6Jw41tUf",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237863000,
+          "time_updated": 1717237863000,
+          "data": {
+            "type": "text",
+            "text": "Done. The auth module now validates sessions on login.",
+            "time": {
+              "start": 1717237863000,
+              "end": 1717237863000
+            }
+          }
+        },
+        {
+          "id": "prt_fd35a5258014yUTumPYLLeo3q5",
+          "message_id": "msg_fd35a5258011bcudZV6Jw41tUf",
+          "session_id": "ses_02cc21affffeO7tOCwu6c7Vq6k",
+          "time_created": 1717237863000,
+          "time_updated": 1717237863000,
+          "data": {
+            "type": "step-finish",
+            "reason": "end_turn",
+            "cost": 0.0,
+            "tokens": {
+              "total": 720,
+              "input": 700,
+              "output": 20,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -227,10 +227,17 @@ pub fn to_view(session: &Session) -> ConversationView {
                 {
                     upgrade_mutation_diff(&mut current, &mut turns, id, det);
                 }
-                let result = ToolResult {
-                    content: te.output.clone().unwrap_or_default(),
-                    is_error: te.success == Some(false),
+                // A failed call carries no `result`, only `error.message`;
+                // that message is what the model saw, so it is the result.
+                // (An errored result with empty content is also rejected by
+                // the Anthropic Messages API when a projection replays it.)
+                let is_error = te.success == Some(false);
+                let content = match (te.output.clone(), is_error) {
+                    (Some(out), _) if !out.is_empty() => out,
+                    (_, true) => te.error.clone().unwrap_or_default(),
+                    (out, false) => out.unwrap_or_default(),
                 };
+                let result = ToolResult { content, is_error };
                 if !attach_tool_result(
                     &mut current,
                     &mut turns,
@@ -743,6 +750,26 @@ mod tests {
             r#"{"type":"session.shutdown","timestamp":"2026-06-30T10:00:10.000Z","data":{"modelMetrics":{"model":"claude-haiku-4.5"},"usage":{"inputTokens":1200,"outputTokens":340}}}"#,
         ]
         .join("\n")
+    }
+
+    #[test]
+    fn failed_tool_call_keeps_its_error_message_as_the_result() {
+        // Shaped after copilot 1.0.68: a failed `view` has no `result`, only
+        // `error.message`. That text is the result the model saw; an errored
+        // result with empty content is also rejected by the Anthropic API
+        // when a projection replays it.
+        let body = [
+            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"copilotVersion":"1.0.68","producer":"copilot-agent","context":{"cwd":"/tmp/proj"}}}"#,
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"read a missing file"}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"Reading.","model":"claude-haiku-4.5"}}"#,
+            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"toolCallId":"c1","toolName":"view","arguments":{"path":"/tmp/proj/does-not-exist.txt"}}}"#,
+            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"toolCallId":"c1","success":false,"error":{"message":"Path does not exist","code":"failure"}}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        assert!(result.is_error);
+        assert_eq!(result.content, "Path does not exist");
     }
 
     #[test]

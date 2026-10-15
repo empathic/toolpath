@@ -368,13 +368,14 @@ pub(crate) fn derive_pi_session_with(
 /// document. Used by `path import pathbase` and `path resume <url>`.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Result<DerivedDoc> {
-    use crate::cmd_pathbase::{credentials_path, graphs_download, load_session, resolve_url};
+    use crate::cmd_pathbase::{
+        credentials_path, graphs_download, load_session_for, resolve_session_url,
+    };
 
     let (base, ref_) = parse_pathbase_ref(target, url_flag)?;
-    let stored = load_session(&credentials_path()?)?;
-    let base_url = base
-        .or_else(|| stored.as_ref().map(|s| s.url.clone()))
-        .unwrap_or_else(|| resolve_url(None));
+    let base_url = base.unwrap_or_else(|| resolve_session_url(None));
+    // Only this server's login: another server's token is never sent.
+    let stored = load_session_for(&credentials_path()?, &base_url)?;
 
     let token = stored.as_ref().map(|s| s.token.as_str());
 

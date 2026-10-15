@@ -1,0 +1,123 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "source": {
+    "lines": 9,
+    "bytes": 2751,
+    "string_chars": 1189,
+    "by_type": {
+      "assistant": 3,
+      "compact_boundary": 1,
+      "user": 5
+    }
+  },
+  "ir": {
+    "bytes": 3609,
+    "string_chars": 1563,
+    "steps": 7,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "projections": {
+    "codex": {
+      "lines": 23,
+      "bytes": 4461,
+      "string_chars": 2145,
+      "by_type": {
+        "event_msg/agent_message": 3,
+        "event_msg/token_count": 3,
+        "event_msg/user_message": 3,
+        "response_item/function_call": 2,
+        "response_item/function_call_output": 2,
+        "response_item/message": 6,
+        "session_meta": 1,
+        "turn_context": 3
+      }
+    },
+    "copilot": {
+      "lines": 17,
+      "bytes": 5392,
+      "string_chars": 3085,
+      "by_type": {
+        "assistant.message": 3,
+        "assistant.turn_end": 3,
+        "assistant.turn_start": 3,
+        "session.start": 1,
+        "tool.execution_complete": 2,
+        "tool.execution_start": 2,
+        "user.message": 3
+      }
+    },
+    "cursor": {
+      "lines": 840,
+      "bytes": 26408,
+      "string_chars": 3203,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 129,
+      "bytes": 3341,
+      "string_chars": 1019,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 417,
+      "bytes": 12194,
+      "string_chars": 2934,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 9,
+      "bytes": 3058,
+      "string_chars": 1143,
+      "by_type": {
+        "message": 8,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 10,
+    "bytes": 3918,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 28,
+      "after": 50,
+      "lost": 3,
+      "gained": 25
+    },
+    "renamed": [
+      {
+        "from": "message.stop_reason",
+        "to": "message.stopReason"
+      }
+    ],
+    "dropped": [
+      {
+        "path": "isCompactSummary",
+        "example": "true"
+      },
+      {
+        "path": "isVisibleInTranscriptOnly",
+        "example": "true"
+      },
+      {
+        "path": "message.stop_reason",
+        "example": "tool_use"
+      }
+    ]
+  }
+}

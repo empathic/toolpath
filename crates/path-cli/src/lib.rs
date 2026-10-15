@@ -35,6 +35,8 @@ mod derive;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
 #[cfg(not(target_os = "emscripten"))]
+pub mod goldens;
+#[cfg(not(target_os = "emscripten"))]
 pub mod harness;
 mod io;
 pub mod kinds;
@@ -135,6 +137,12 @@ enum Commands {
         #[command(subcommand)]
         command: cmd_p::PCommand,
     },
+    /// Capture, check and diff hermetic goldens for cross-harness transformations
+    #[cfg(not(target_os = "emscripten"))]
+    Goldens {
+        #[command(flatten)]
+        args: goldens::GoldensArgs,
+    },
     /// Print a random Toolpath haiku
     Haiku,
 }
@@ -170,6 +178,8 @@ pub fn run() -> Result<()> {
         Commands::Auth { op } => cmd_auth::run(op),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Config { op } => cmd_config::run(op),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Goldens { args } => goldens::run(args),
         Commands::P { command } => cmd_p::run(command, cli.pretty, &config),
     }
 }

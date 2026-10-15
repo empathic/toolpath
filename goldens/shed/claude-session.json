@@ -1,0 +1,236 @@
+{
+  "harness": "claude",
+  "ir": {
+    "bytes": 175866,
+    "steps": 27,
+    "string_chars": 158008,
+    "text_chars": 292,
+    "tool_uses": 2
+  },
+  "projections": [
+    {
+      "by_type": {
+        "event_msg/agent_message": 1,
+        "event_msg/exec_command_end": 1,
+        "event_msg/token_count": 2,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 2,
+        "response_item/function_call_output": 2,
+        "response_item/message": 4,
+        "session_meta": 1,
+        "turn_context": 2
+      },
+      "bytes": 3973,
+      "lines": 16,
+      "string_chars": 2128,
+      "target": "codex"
+    },
+    {
+      "by_type": {
+        "message": 8,
+        "session": 1
+      },
+      "bytes": 4091,
+      "lines": 9,
+      "string_chars": 1808,
+      "target": "pi"
+    },
+    {
+      "by_type": {
+        "assistant.message": 5,
+        "assistant.turn_end": 5,
+        "assistant.turn_start": 5,
+        "session.start": 1,
+        "tool.execution_complete": 2,
+        "tool.execution_start": 2,
+        "user.message": 1
+      },
+      "bytes": 6241,
+      "lines": 21,
+      "string_chars": 3721,
+      "target": "copilot"
+    }
+  ],
+  "same_format": {
+    "bytes": 172426,
+    "dropped": [
+      {
+        "example": "0",
+        "path": "apiBlockIndex"
+      },
+      {
+        "example": "null",
+        "path": "message.container"
+      },
+      {
+        "example": "direct",
+        "path": "message.content[].caller.type"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.content[].signature"
+      },
+      {
+        "example": "null",
+        "path": "message.context_management"
+      },
+      {
+        "example": "null",
+        "path": "message.diagnostics"
+      },
+      {
+        "example": "null",
+        "path": "message.stop_details"
+      },
+      {
+        "example": "tool_use",
+        "path": "message.stop_reason"
+      },
+      {
+        "example": "null",
+        "path": "message.stop_sequence"
+      },
+      {
+        "example": "message",
+        "path": "message.type"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.cache_creation.ephemeral_1h_input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.cache_creation.ephemeral_5m_input_tokens"
+      },
+      {
+        "example": "null",
+        "path": "message.usage.fallback_credit"
+      },
+      {
+        "example": "not_available",
+        "path": "message.usage.inference_geo"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.iterations[].cache_creation.ephemeral_1h_input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.iterations[].cache_creation.ephemeral_5m_input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.iterations[].cache_creation_input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.iterations[].cache_read_input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.iterations[].input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.iterations[].output_tokens"
+      },
+      {
+        "example": "message",
+        "path": "message.usage.iterations[].type"
+      },
+      {
+        "example": "<withheld>",
+        "path": "message.usage.output_tokens_details.thinking_tokens"
+      },
+      {
+        "example": "0",
+        "path": "message.usage.server_tool_use.web_fetch_requests"
+      },
+      {
+        "example": "0",
+        "path": "message.usage.server_tool_use.web_search_requests"
+      },
+      {
+        "example": "standard",
+        "path": "message.usage.speed"
+      },
+      {
+        "example": "null",
+        "path": "perTurnEffort"
+      },
+      {
+        "example": "default",
+        "path": "permissionMode"
+      },
+      {
+        "example": "<withheld>",
+        "path": "promptId"
+      },
+      {
+        "example": "sdk",
+        "path": "promptSource"
+      },
+      {
+        "example": "<withheld>",
+        "path": "requestId"
+      },
+      {
+        "example": "sdk",
+        "path": "turnOrigin"
+      },
+      {
+        "example": "0",
+        "path": "turnPosition.promptIndex"
+      },
+      {
+        "example": "1",
+        "path": "turnPosition.turnIndex"
+      },
+      {
+        "example": "ls",
+        "path": "wireToolInputs.toolu_016Jcqs5U6qdvMJZjjrcRFvq.command"
+      },
+      {
+        "example": "List files in current directory",
+        "path": "wireToolInputs.toolu_016Jcqs5U6qdvMJZjjrcRFvq.description"
+      },
+      {
+        "example": "<withheld>",
+        "path": "wireToolInputs.toolu_01GjqjxW9tnUh9qzsRWnoEWW.file_path"
+      },
+      {
+        "example": "1",
+        "path": "wireToolInputs.toolu_01GjqjxW9tnUh9qzsRWnoEWW.limit"
+      }
+    ],
+    "event_types_shed": {},
+    "key_paths": {
+      "after": 246,
+      "gained": 2,
+      "lost": 37,
+      "source": 281
+    },
+    "lines": 29,
+    "renamed": [
+      {
+        "from": "message.stop_reason",
+        "to": "message.stopReason"
+      }
+    ]
+  },
+  "set": "claude-session",
+  "source": {
+    "by_type": {
+      "assistant": 5,
+      "atis-latch": 3,
+      "attachment": 12,
+      "cost-state": 1,
+      "last-prompt": 3,
+      "queue-operation": 2,
+      "user": 3
+    },
+    "bytes": 178273,
+    "lines": 29,
+    "string_chars": 159249
+  }
+}

@@ -1,0 +1,418 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_codex
+  agent: codex
+  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
+input_file: test-fixtures/codex/convo.jsonl
+---
+{
+  "source": {
+    "lines": 45,
+    "bytes": 80769,
+    "string_chars": 67268,
+    "by_type": {
+      "event_msg/agent_message": 13,
+      "event_msg/task_complete": 1,
+      "event_msg/task_started": 2,
+      "event_msg/token_count": 13,
+      "event_msg/user_message": 2,
+      "response_item/function_call": 1,
+      "response_item/function_call_output": 1,
+      "response_item/message": 8,
+      "response_item/reasoning": 1,
+      "session_meta": 2,
+      "turn_context": 1
+    }
+  },
+  "ir": {
+    "bytes": 89938,
+    "string_chars": 69898,
+    "steps": 42,
+    "text_chars": 13445,
+    "tool_uses": 1
+  },
+  "projections": {
+    "claude": {
+      "lines": 44,
+      "bytes": 25976,
+      "string_chars": 20970,
+      "by_type": {
+        "agent_message": 13,
+        "assistant": 2,
+        "permission-mode": 1,
+        "session_meta": 2,
+        "task_complete": 1,
+        "task_started": 2,
+        "token_count": 13,
+        "turn_context": 1,
+        "user": 7,
+        "user_message": 2
+      }
+    },
+    "copilot": {
+      "lines": 15,
+      "bytes": 17541,
+      "string_chars": 15720,
+      "by_type": {
+        "assistant.message": 2,
+        "assistant.turn_end": 2,
+        "assistant.turn_start": 2,
+        "session.start": 1,
+        "system.message": 2,
+        "tool.execution_complete": 1,
+        "tool.execution_start": 1,
+        "user.message": 4
+      }
+    },
+    "cursor": {
+      "lines": 858,
+      "bytes": 32860,
+      "string_chars": 8933,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 112,
+      "bytes": 16410,
+      "string_chars": 14419,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 338,
+      "bytes": 13194,
+      "string_chars": 5758,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 10,
+      "bytes": 16352,
+      "string_chars": 14480,
+      "by_type": {
+        "message": 9,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 19,
+    "bytes": 20136,
+    "event_types_shed": {
+      "event_msg/agent_message": {
+        "source": 13,
+        "after": 2
+      },
+      "event_msg/task_complete": {
+        "source": 1,
+        "after": 0
+      },
+      "event_msg/task_started": {
+        "source": 2,
+        "after": 0
+      },
+      "event_msg/token_count": {
+        "source": 13,
+        "after": 2
+      },
+      "response_item/reasoning": {
+        "source": 1,
+        "after": 0
+      },
+      "session_meta": {
+        "source": 2,
+        "after": 1
+      }
+    },
+    "key_paths": {
+      "source": 94,
+      "after": 37,
+      "lost": 69,
+      "gained": 12
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "payload.agent_nickname",
+        "example": "Confucius"
+      },
+      {
+        "path": "payload.approval_policy",
+        "example": "never"
+      },
+      {
+        "path": "payload.base_instructions.text",
+        "example": "You are Codex, a coding agent based on G…"
+      },
+      {
+        "path": "payload.collaboration_mode.mode",
+        "example": "default"
+      },
+      {
+        "path": "payload.collaboration_mode.settings.developer_instructions",
+        "example": "null"
+      },
+      {
+        "path": "payload.collaboration_mode.settings.model",
+        "example": "gpt-5.5"
+      },
+      {
+        "path": "payload.collaboration_mode.settings.reasoning_effort",
+        "example": "xhigh"
+      },
+      {
+        "path": "payload.collaboration_mode_kind",
+        "example": "default"
+      },
+      {
+        "path": "payload.completed_at",
+        "example": "1778178475"
+      },
+      {
+        "path": "payload.content",
+        "example": "null"
+      },
+      {
+        "path": "payload.current_date",
+        "example": "2026-05-07"
+      },
+      {
+        "path": "payload.duration_ms",
+        "example": "13024"
+      },
+      {
+        "path": "payload.effort",
+        "example": "xhigh"
+      },
+      {
+        "path": "payload.encrypted_content",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.file_system_sandbox_policy.entries[].access",
+        "example": "read"
+      },
+      {
+        "path": "payload.file_system_sandbox_policy.entries[].path.path",
+        "example": "/Users/ben/.codex/memories"
+      },
+      {
+        "path": "payload.file_system_sandbox_policy.entries[].path.type",
+        "example": "special"
+      },
+      {
+        "path": "payload.file_system_sandbox_policy.entries[].path.value.kind",
+        "example": "root"
+      },
+      {
+        "path": "payload.file_system_sandbox_policy.entries[].path.value.subpath",
+        "example": ".git"
+      },
+      {
+        "path": "payload.file_system_sandbox_policy.kind",
+        "example": "restricted"
+      },
+      {
+        "path": "payload.forked_from_id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info",
+        "example": "null"
+      },
+      {
+        "path": "payload.info.last_token_usage.cached_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.reasoning_output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.total_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.model_context_window",
+        "example": "258400"
+      },
+      {
+        "path": "payload.info.total_token_usage.reasoning_output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.total_token_usage.total_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.last_agent_message",
+        "example": "`notes.md` contains 11 words."
+      },
+      {
+        "path": "payload.model_context_window",
+        "example": "258400"
+      },
+      {
+        "path": "payload.permission_profile.file_system.entries[].access",
+        "example": "read"
+      },
+      {
+        "path": "payload.permission_profile.file_system.entries[].path.path",
+        "example": "/Users/ben/.codex/memories"
+      },
+      {
+        "path": "payload.permission_profile.file_system.entries[].path.type",
+        "example": "special"
+      },
+      {
+        "path": "payload.permission_profile.file_system.entries[].path.value.kind",
+        "example": "root"
+      },
+      {
+        "path": "payload.permission_profile.file_system.entries[].path.value.subpath",
+        "example": ".git"
+      },
+      {
+        "path": "payload.permission_profile.file_system.type",
+        "example": "restricted"
+      },
+      {
+        "path": "payload.permission_profile.network",
+        "example": "restricted"
+      },
+      {
+        "path": "payload.permission_profile.type",
+        "example": "managed"
+      },
+      {
+        "path": "payload.personality",
+        "example": "pragmatic"
+      },
+      {
+        "path": "payload.rate_limits.credits",
+        "example": "null"
+      },
+      {
+        "path": "payload.rate_limits.limit_id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.rate_limits.limit_name",
+        "example": "null"
+      },
+      {
+        "path": "payload.rate_limits.plan_type",
+        "example": "team"
+      },
+      {
+        "path": "payload.rate_limits.primary.resets_at",
+        "example": "1778196423"
+      },
+      {
+        "path": "payload.rate_limits.primary.used_percent",
+        "example": "1.0"
+      },
+      {
+        "path": "payload.rate_limits.primary.window_minutes",
+        "example": "300"
+      },
+      {
+        "path": "payload.rate_limits.rate_limit_reached_type",
+        "example": "null"
+      },
+      {
+        "path": "payload.rate_limits.secondary.resets_at",
+        "example": "1778613473"
+      },
+      {
+        "path": "payload.rate_limits.secondary.used_percent",
+        "example": "2.0"
+      },
+      {
+        "path": "payload.rate_limits.secondary.window_minutes",
+        "example": "10080"
+      },
+      {
+        "path": "payload.realtime_active",
+        "example": "false"
+      },
+      {
+        "path": "payload.sandbox_policy.exclude_slash_tmp",
+        "example": "false"
+      },
+      {
+        "path": "payload.sandbox_policy.exclude_tmpdir_env_var",
+        "example": "false"
+      },
+      {
+        "path": "payload.sandbox_policy.network_access",
+        "example": "false"
+      },
+      {
+        "path": "payload.sandbox_policy.type",
+        "example": "workspace-write"
+      },
+      {
+        "path": "payload.sandbox_policy.writable_roots[]",
+        "example": "/Users/ben/.codex/memories"
+      },
+      {
+        "path": "payload.source.subagent.thread_spawn.agent_nickname",
+        "example": "Confucius"
+      },
+      {
+        "path": "payload.source.subagent.thread_spawn.agent_path",
+        "example": "null"
+      },
+      {
+        "path": "payload.source.subagent.thread_spawn.agent_role",
+        "example": "null"
+      },
+      {
+        "path": "payload.source.subagent.thread_spawn.depth",
+        "example": "1"
+      },
+      {
+        "path": "payload.source.subagent.thread_spawn.parent_thread_id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.started_at",
+        "example": "1778178417"
+      },
+      {
+        "path": "payload.summary",
+        "example": "none"
+      },
+      {
+        "path": "payload.time_to_first_token_ms",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.timezone",
+        "example": "America/New_York"
+      },
+      {
+        "path": "payload.truncation_policy.limit",
+        "example": "10000"
+      },
+      {
+        "path": "payload.truncation_policy.mode",
+        "example": "tokens"
+      }
+    ]
+  }
+}

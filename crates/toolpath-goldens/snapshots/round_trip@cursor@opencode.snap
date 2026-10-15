@@ -1,0 +1,46 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_cursor
+  agent: cursor
+  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
+input_file: test-fixtures/cursor/convo.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 71
+  },
+  "after": {
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 71
+  },
+  "lost": [
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string"
+  ],
+  "gained": [
+    "paths[].path.base.ref",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.operation",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.tool",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.tool_id",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.type",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString"
+  ]
+}

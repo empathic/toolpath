@@ -99,9 +99,18 @@ fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()>
     Ok(())
 }
 
+/// The instant, in the shape Copilot CLI writes and validates in
+/// `workspace.yaml` (`2026-10-15T13:50:59.997Z`). The chrono default
+/// (`…59.997483+00:00`) fails its datetime check: copilot 1.0.61 logs
+/// `Failed to load workspace … created_at: Invalid datetime` and resumes
+/// without the workspace state.
+fn copilot_now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 fn copilot_workspace_yaml(session: &toolpath_copilot::Session) -> String {
     let ws = session.workspace.clone().unwrap_or_default();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = copilot_now();
     let mut out = String::new();
     out.push_str(&format!("id: {}\n", session.id));
     if let Some(cwd) = &ws.git_root {
@@ -135,7 +144,7 @@ fn register_copilot_session(
     let ws = session.workspace.clone().unwrap_or_default();
     let cwd = ws.git_root.unwrap_or_default();
     let summary = copilot_first_user_message(session);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = copilot_now();
     conn.execute(
         "INSERT OR REPLACE INTO sessions
             (id, cwd, repository, host_type, branch, summary, created_at, updated_at)
@@ -156,4 +165,21 @@ fn register_copilot_session(
 
 fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
     session.first_user_text().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_timestamps_are_millisecond_utc_z() {
+        // `2026-10-15T13:50:59.997Z`: 24 chars, `Z`, three fractional digits —
+        // the only shape copilot's workspace.yaml validator accepts.
+        let now = copilot_now();
+        assert_eq!(now.len(), 24, "{now}");
+        assert!(now.ends_with('Z'), "{now}");
+        assert_eq!(&now[19..20], ".", "{now}");
+        assert!(now[20..23].chars().all(|c| c.is_ascii_digit()), "{now}");
+        assert!(!now.contains("+00:00"), "{now}");
+    }
 }

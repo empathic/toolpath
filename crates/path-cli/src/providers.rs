@@ -202,9 +202,11 @@ mod tests {
             ..Config::default()
         };
         let manager = opencode_convo(&config);
+        // Nothing exists under /xdg/data, so the resolver names the file a
+        // current (stable-channel) opencode would create.
         assert_eq!(
             manager.resolver().db_path().unwrap(),
-            PathBuf::from("/xdg/data/opencode/opencode.db")
+            PathBuf::from("/xdg/data/opencode/opencode-stable.db")
         );
     }
 

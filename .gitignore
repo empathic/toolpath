@@ -14,3 +14,5 @@ site/wasm/
 # macOS
 .DS_Store
 
+# nix build output symlink
+result
