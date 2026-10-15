@@ -1,0 +1,32 @@
+{
+ "cassettes": "claude",
+ "recorded_at": "2026-10-15T19:16:23.122Z",
+ "recorded_with": "the Bun prototype of this crate (webmock.ts, the spec it was ported from) driven by the scratch run-cell.sh: `run claude record`; secret headers never stored, the recording machine's scratch root replaced by <scratch>",
+ "golden": {
+  "set": "codex",
+  "input": "goldens/codex/input.jsonl",
+  "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "same_bytes_as": "test-fixtures/codex/convo.jsonl"
+ },
+ "projection": {
+  "toolpath_rev": "6aeff36",
+  "path_version": "0.30.0",
+  "basis": "tp worktree at 6aeff36 (wip/bdelanghe), path 0.30.0 built 10:39 EDT 2026-10-15; review/resume-matrix-v2.md",
+  "derive": "path p derive codex --all",
+  "resume": "path resume --harness claude",
+  "cell": "resume-matrix/v2-cell-codex-to-claude",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "session_id_origin": "kept from the golden"
+ },
+ "probe": {
+  "command": "claude -p <prompt> -r 019e03b2-11a2-7320-9098-5d831813e66c --model claude-haiku-4-5-20251001 --output-format json --allowedTools 'Bash(ls)'",
+  "prompt": "Reply with exactly the first five words of the very first user message in this conversation (not this one), then the word END. No other text.",
+  "turns": "the golden conversation plus this one headless turn; nothing else was sent"
+ },
+ "files": [
+  "4933f27fc07f980728f123fe75711e9f9bb088841323cfe3ff1fbc1791741d35.json",
+  "9d135681ef63faa4b1e550dc5e17be258c2b25ab3da95f8fa8ae109846adbb42.json",
+  "index.jsonl"
+ ]
+}

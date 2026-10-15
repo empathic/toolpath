@@ -1,0 +1,32 @@
+{
+ "cassettes": "pathbase",
+ "recorded_at": "2026-10-15T19:31:24.294Z",
+ "recorded_with": "the Bun prototype of this crate (webmock.ts, the spec it was ported from) driven by the scratch run-cell.sh: `run pathbase record`; secret headers never stored, the recording machine's scratch root replaced by <scratch>",
+ "golden": {
+  "set": "codex",
+  "input": "goldens/codex/input.jsonl",
+  "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "same_bytes_as": "test-fixtures/codex/convo.jsonl"
+ },
+ "projection": {
+  "toolpath_rev": "0655ae9",
+  "path_version": "0.30.0",
+  "basis": "path 0.30.0 built 14:31 EDT at 0655ae9 (review/resume-matrix-v4.md); the derive ran 15:20 EDT while the tp worktree was at 5117415, whose changes since 0655ae9 (opencode id shape, pr/ notes) do not touch codex derive or share — rev by reflog and mtime, provisional",
+  "derive": "path p derive codex --all",
+  "resume": null,
+  "note": "not a projection: the derived document was shared to the local pathbase",
+  "cell": "resume-matrix/src-codex",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "session_id_origin": "kept from the golden"
+ },
+ "probe": {
+  "command": "path share --anon --harness codex --session 019e03b2-11a2-7320-9098-5d831813e66c --url <proxy> --no-cache",
+  "prompt": "Reply with exactly the first five words of the very first user message in this conversation (not this one), then the word END. No other text.",
+  "turns": "the golden conversation plus this one headless turn; nothing else was sent"
+ },
+ "files": [
+  "5a855f84624511cf220d9c1e03c84c77fef5237cc59d83aa053bbc15997e7daf.json",
+  "index.jsonl"
+ ]
+}
