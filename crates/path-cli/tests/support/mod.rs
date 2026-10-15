@@ -31,7 +31,7 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// `$XDG_DATA_HOME` to a tempdir, and clears `$CLAUDE_CONFIG_DIR`.
 ///
 /// `$XDG_DATA_HOME` matters because the opencode `PathResolver` prefers it
-/// over `$HOME` when locating `opencode.db`. Without pinning it, a machine
+/// over `$HOME` when locating the opencode database. Without pinning it, a machine
 /// that sets `$XDG_DATA_HOME` (common on Linux; also set on this dev box)
 /// would send the opencode projector to the *real* user database — the
 /// test would fail with "table … already exists" and, worse, mutate the
