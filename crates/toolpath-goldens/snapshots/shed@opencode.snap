@@ -1,0 +1,456 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
+input_file: test-fixtures/opencode/convo.json
+---
+{
+  "source": {
+    "lines": 1100,
+    "bytes": 39306,
+    "string_chars": 15962,
+    "by_type": {
+      "?": 1
+    }
+  },
+  "ir": {
+    "bytes": 17279,
+    "string_chars": 10311,
+    "steps": 12,
+    "text_chars": 2851,
+    "tool_uses": 10
+  },
+  "projections": {
+    "claude": {
+      "lines": 23,
+      "bytes": 22187,
+      "string_chars": 14337,
+      "by_type": {
+        "assistant": 11,
+        "permission-mode": 1,
+        "user": 11
+      }
+    },
+    "codex": {
+      "lines": 69,
+      "bytes": 22027,
+      "string_chars": 14579,
+      "by_type": {
+        "event_msg/agent_message": 1,
+        "event_msg/exec_command_end": 1,
+        "event_msg/token_count": 11,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 10,
+        "response_item/message": 12,
+        "response_item/reasoning": 11,
+        "session_meta": 1,
+        "turn_context": 11
+      }
+    },
+    "copilot": {
+      "lines": 55,
+      "bytes": 25673,
+      "string_chars": 17421,
+      "by_type": {
+        "assistant.message": 11,
+        "assistant.turn_end": 11,
+        "assistant.turn_start": 11,
+        "session.start": 1,
+        "tool.execution_complete": 10,
+        "tool.execution_start": 10,
+        "user.message": 1
+      }
+    },
+    "cursor": {
+      "lines": 1364,
+      "bytes": 48105,
+      "string_chars": 11848,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 515,
+      "bytes": 19846,
+      "string_chars": 9337,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 23,
+      "bytes": 16401,
+      "string_chars": 9755,
+      "by_type": {
+        "message": 22,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 1246,
+    "bytes": 44742,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 88,
+      "after": 72,
+      "lost": 87,
+      "gained": 71
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "info.directory",
+        "example": "<withheld>"
+      },
+      {
+        "path": "info.id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "info.path",
+        "example": "<withheld>"
+      },
+      {
+        "path": "info.permission[].action",
+        "example": "deny"
+      },
+      {
+        "path": "info.permission[].pattern",
+        "example": "*"
+      },
+      {
+        "path": "info.permission[].permission",
+        "example": "question"
+      },
+      {
+        "path": "info.projectID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "info.slug",
+        "example": "hidden-canyon"
+      },
+      {
+        "path": "info.summary.additions",
+        "example": "0"
+      },
+      {
+        "path": "info.summary.deletions",
+        "example": "0"
+      },
+      {
+        "path": "info.summary.files",
+        "example": "0"
+      },
+      {
+        "path": "info.time.created",
+        "example": "1778178631197"
+      },
+      {
+        "path": "info.time.updated",
+        "example": "1778178667810"
+      },
+      {
+        "path": "info.title",
+        "example": "Tool category exercise walkthrough"
+      },
+      {
+        "path": "info.version",
+        "example": "1.14.41"
+      },
+      {
+        "path": "messages[].info.agent",
+        "example": "build"
+      },
+      {
+        "path": "messages[].info.cost",
+        "example": "0"
+      },
+      {
+        "path": "messages[].info.finish",
+        "example": "tool-calls"
+      },
+      {
+        "path": "messages[].info.id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.mode",
+        "example": "build"
+      },
+      {
+        "path": "messages[].info.model.modelID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.model.providerID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.modelID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.parentID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.path.cwd",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.path.root",
+        "example": "/"
+      },
+      {
+        "path": "messages[].info.providerID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.role",
+        "example": "user"
+      },
+      {
+        "path": "messages[].info.sessionID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].info.time.completed",
+        "example": "1778178635293"
+      },
+      {
+        "path": "messages[].info.time.created",
+        "example": "1778178631267"
+      },
+      {
+        "path": "messages[].info.tokens.cache.read",
+        "example": "0"
+      },
+      {
+        "path": "messages[].info.tokens.cache.write",
+        "example": "0"
+      },
+      {
+        "path": "messages[].info.tokens.input",
+        "example": "11294"
+      },
+      {
+        "path": "messages[].info.tokens.output",
+        "example": "85"
+      },
+      {
+        "path": "messages[].info.tokens.reasoning",
+        "example": "100"
+      },
+      {
+        "path": "messages[].info.tokens.total",
+        "example": "11479"
+      },
+      {
+        "path": "messages[].parts[].callID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].cost",
+        "example": "0"
+      },
+      {
+        "path": "messages[].parts[].messageID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].reason",
+        "example": "tool-calls"
+      },
+      {
+        "path": "messages[].parts[].sessionID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.error",
+        "example": "File not found: /private/var/folders/jk/…"
+      },
+      {
+        "path": "messages[].parts[].state.input.command",
+        "example": "bash count.sh"
+      },
+      {
+        "path": "messages[].parts[].state.input.content",
+        "example": "scratch — feature elicitation this file …"
+      },
+      {
+        "path": "messages[].parts[].state.input.description",
+        "example": "Run count.sh script"
+      },
+      {
+        "path": "messages[].parts[].state.input.filePath",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.input.newString",
+        "example": "fixture"
+      },
+      {
+        "path": "messages[].parts[].state.input.oldString",
+        "example": "scratch"
+      },
+      {
+        "path": "messages[].parts[].state.input.path",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.input.pattern",
+        "example": "note*"
+      },
+      {
+        "path": "messages[].parts[].state.input.prompt",
+        "example": "Count the words in `/private/var/folders…"
+      },
+      {
+        "path": "messages[].parts[].state.input.subagent_type",
+        "example": "general"
+      },
+      {
+        "path": "messages[].parts[].state.input.workdir",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.count",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.description",
+        "example": "Run count.sh script"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.diff",
+        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.exists",
+        "example": "false"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.exit",
+        "example": "0"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.filediff.additions",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.filediff.deletions",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.filediff.file",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.filediff.patch",
+        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.filepath",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.matches",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.model.modelID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.model.providerID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.output",
+        "example": "1 2 3 4 5 "
+      },
+      {
+        "path": "messages[].parts[].state.metadata.preview",
+        "example": ".stderr.log"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.sessionId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].state.metadata.truncated",
+        "example": "false"
+      },
+      {
+        "path": "messages[].parts[].state.output",
+        "example": "<path>/private/var/folders/jk/4rycn96j1r…"
+      },
+      {
+        "path": "messages[].parts[].state.status",
+        "example": "completed"
+      },
+      {
+        "path": "messages[].parts[].state.time.end",
+        "example": "1778178635055"
+      },
+      {
+        "path": "messages[].parts[].state.time.start",
+        "example": "1778178635049"
+      },
+      {
+        "path": "messages[].parts[].state.title",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].text",
+        "example": "\"You're going to walk through a small se…"
+      },
+      {
+        "path": "messages[].parts[].time.end",
+        "example": "1778178634261"
+      },
+      {
+        "path": "messages[].parts[].time.start",
+        "example": "1778178632515"
+      },
+      {
+        "path": "messages[].parts[].tokens.cache.read",
+        "example": "0"
+      },
+      {
+        "path": "messages[].parts[].tokens.cache.write",
+        "example": "0"
+      },
+      {
+        "path": "messages[].parts[].tokens.input",
+        "example": "11294"
+      },
+      {
+        "path": "messages[].parts[].tokens.output",
+        "example": "85"
+      },
+      {
+        "path": "messages[].parts[].tokens.reasoning",
+        "example": "100"
+      },
+      {
+        "path": "messages[].parts[].tokens.total",
+        "example": "11479"
+      },
+      {
+        "path": "messages[].parts[].tool",
+        "example": "read"
+      },
+      {
+        "path": "messages[].parts[].type",
+        "example": "text"
+      }
+    ]
+  }
+}

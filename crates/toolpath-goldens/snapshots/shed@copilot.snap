@@ -5,7 +5,7 @@ info:
   adapter: toolpath_copilot
   agent: copilot
   input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
-input_file: goldens/copilot/input.jsonl
+input_file: test-fixtures/copilot/convo.jsonl
 ---
 {
   "source": {
@@ -62,6 +62,30 @@ input_file: goldens/copilot/input.jsonl
         "response_item/reasoning": 11,
         "session_meta": 1,
         "turn_context": 11
+      }
+    },
+    "cursor": {
+      "lines": 1382,
+      "bytes": 61147,
+      "string_chars": 23306,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 562,
+      "bytes": 28213,
+      "string_chars": 16529,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 1404,
+      "bytes": 54037,
+      "string_chars": 21194,
+      "by_type": {
+        "?": 1
       }
     },
     "pi": {

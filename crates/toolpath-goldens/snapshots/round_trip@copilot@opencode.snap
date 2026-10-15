@@ -1,0 +1,51 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_copilot
+  agent: copilot
+  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
+input_file: test-fixtures/copilot/convo.jsonl
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 14,
+    "text_chars": 4594,
+    "tool_uses": 11,
+    "key_paths": 59
+  },
+  "after": {
+    "steps": 12,
+    "text_chars": 4594,
+    "tool_uses": 11,
+    "key_paths": 58
+  },
+  "lost": [
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+    "paths[].steps[].change.<artifact>.structural.content",
+    "paths[].steps[].change.<artifact>.structural.contextTier",
+    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.newModel",
+    "paths[].steps[].change.<artifact>.structural.reasoningEffort"
+  ],
+  "gained": [
+    "paths[].path.base.ref",
+    "paths[].steps[].change./tmp/elicit-scratch.structural.operation",
+    "paths[].steps[].change./tmp/elicit-scratch.structural.tool",
+    "paths[].steps[].change./tmp/elicit-scratch.structural.tool_id",
+    "paths[].steps[].change./tmp/elicit-scratch.structural.type",
+    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.operation",
+    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.tool",
+    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.tool_id",
+    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.type",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.stop_reason"
+  ]
+}

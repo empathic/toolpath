@@ -5,7 +5,7 @@ info:
   adapter: toolpath_pi
   agent: pi
   input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
-input_file: goldens/pi/input.jsonl
+input_file: test-fixtures/pi/convo.jsonl
 ---
 {
   "source": {
@@ -66,6 +66,30 @@ input_file: goldens/pi/input.jsonl
         "tool.execution_complete": 10,
         "tool.execution_start": 10,
         "user.message": 1
+      }
+    },
+    "cursor": {
+      "lines": 1352,
+      "bytes": 54313,
+      "string_chars": 17560,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 488,
+      "bytes": 20305,
+      "string_chars": 10333,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 1255,
+      "bytes": 45800,
+      "string_chars": 16704,
+      "by_type": {
+        "?": 1
       }
     }
   },

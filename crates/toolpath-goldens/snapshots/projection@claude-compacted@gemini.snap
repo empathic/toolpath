@@ -1,0 +1,138 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "sessionId": "sess-compact",
+  "projectHash": "8a5edab282632443219e051e4ade2d1d5bbc671c781051bf1437897cbdfea0f1",
+  "startTime": "2024-06-01T10:00:00Z",
+  "lastUpdated": "2024-06-01T10:31:03Z",
+  "directories": [
+    "/"
+  ],
+  "kind": "main",
+  "messages": [
+    {
+      "id": "uuid-pre-1",
+      "timestamp": "2024-06-01T10:00:00Z",
+      "type": "user",
+      "content": [
+        {
+          "text": "Help me refactor the auth module."
+        }
+      ]
+    },
+    {
+      "id": "uuid-pre-2",
+      "timestamp": "2024-06-01T10:00:01Z",
+      "type": "gemini",
+      "content": "I'll start by reading the current auth code.",
+      "tokens": {
+        "input": 300,
+        "output": 40
+      },
+      "model": "claude-opus-4-6",
+      "toolCalls": [
+        {
+          "id": "t-pre-1",
+          "name": "read_file",
+          "args": {
+            "file_path": "src/auth.rs"
+          },
+          "status": "success",
+          "timestamp": "2024-06-01T10:00:01Z",
+          "result": [
+            {
+              "functionResponse": {
+                "id": "t-pre-1",
+                "name": "read_file",
+                "response": {
+                  "output": "pub fn login() { ... }"
+                }
+              }
+            }
+          ],
+          "resultDisplay": "pub fn login() { ... }",
+          "description": "src/auth.rs",
+          "displayName": "ReadFile",
+          "renderOutputAsMarkdown": true
+        }
+      ]
+    },
+    {
+      "id": "uuid-summary",
+      "timestamp": "2024-06-01T10:30:01Z",
+      "type": "user",
+      "content": [
+        {
+          "text": "[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation."
+        }
+      ]
+    },
+    {
+      "id": "uuid-post-1",
+      "timestamp": "2024-06-01T10:31:00Z",
+      "type": "user",
+      "content": [
+        {
+          "text": "Now add the session validation."
+        }
+      ]
+    },
+    {
+      "id": "uuid-post-2",
+      "timestamp": "2024-06-01T10:31:01Z",
+      "type": "gemini",
+      "content": "Adding session validation to login().",
+      "tokens": {
+        "input": 600,
+        "output": 80
+      },
+      "model": "claude-opus-4-6",
+      "toolCalls": [
+        {
+          "id": "t-post-1",
+          "name": "replace",
+          "args": {
+            "file_path": "src/auth.rs",
+            "new_string": "pub fn login() { validate_session();",
+            "old_string": "pub fn login() {"
+          },
+          "status": "success",
+          "timestamp": "2024-06-01T10:31:01Z",
+          "result": [
+            {
+              "functionResponse": {
+                "id": "t-post-1",
+                "name": "replace",
+                "response": {
+                  "output": "File written successfully"
+                }
+              }
+            }
+          ],
+          "resultDisplay": "File written successfully",
+          "description": "src/auth.rs",
+          "displayName": "Replace",
+          "renderOutputAsMarkdown": true
+        }
+      ]
+    },
+    {
+      "id": "uuid-post-4",
+      "timestamp": "2024-06-01T10:31:03Z",
+      "type": "gemini",
+      "content": "Done. The auth module now validates sessions on login.",
+      "tokens": {
+        "input": 700,
+        "output": 20
+      },
+      "model": "claude-opus-4-6"
+    }
+  ]
+}

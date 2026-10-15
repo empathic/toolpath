@@ -1,0 +1,522 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_cursor
+  agent: cursor
+  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
+input_file: test-fixtures/cursor/convo.json
+---
+{
+  "source": {
+    "lines": 2320,
+    "bytes": 84539,
+    "string_chars": 20740,
+    "by_type": {
+      "?": 1
+    }
+  },
+  "ir": {
+    "bytes": 19184,
+    "string_chars": 11873,
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10
+  },
+  "projections": {
+    "claude": {
+      "lines": 31,
+      "bytes": 21211,
+      "string_chars": 14410,
+      "by_type": {
+        "assistant": 20,
+        "permission-mode": 1,
+        "user": 10
+      }
+    },
+    "codex": {
+      "lines": 75,
+      "bytes": 25286,
+      "string_chars": 17848,
+      "by_type": {
+        "event_msg/agent_message": 10,
+        "event_msg/exec_command_end": 2,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 9,
+        "response_item/message": 21,
+        "session_meta": 1,
+        "turn_context": 21
+      }
+    },
+    "copilot": {
+      "lines": 84,
+      "bytes": 33120,
+      "string_chars": 21561,
+      "by_type": {
+        "assistant.message": 21,
+        "assistant.turn_end": 21,
+        "assistant.turn_start": 21,
+        "session.start": 1,
+        "tool.execution_complete": 9,
+        "tool.execution_start": 10,
+        "user.message": 1
+      }
+    },
+    "gemini": {
+      "lines": 493,
+      "bytes": 20371,
+      "string_chars": 9925,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 1904,
+      "bytes": 61804,
+      "string_chars": 18089,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 32,
+      "bytes": 21494,
+      "string_chars": 11241,
+      "by_type": {
+        "message": 31,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 2545,
+    "bytes": 89961,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 174,
+      "after": 70,
+      "lost": 104,
+      "gained": 0
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "bubbles[].checkpointId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].isPlanExecution",
+        "example": "false"
+      },
+      {
+        "path": "bubbles[].thinking.signature",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].thinking.text",
+        "example": "The user wants me to complete a series o…"
+      },
+      {
+        "path": "bubbles[].thinkingDurationMs",
+        "example": "4705"
+      },
+      {
+        "path": "bubbles[].thinkingStyle",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].tokenCount.inputTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].tokenCount.outputTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.isPruned",
+        "example": "true"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.outputMode",
+        "example": "content"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.path",
+        "example": "/Users/ben/projects/temp/cursortest2"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.pattern",
+        "example": "fixture"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.hasChanges",
+        "example": "true"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].content",
+        "example": ""
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].modifiedLineNumber",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].originalLineNumber",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].type",
+        "example": "removed"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.startedAtMs",
+        "example": "1780338811534"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.status",
+        "example": "success"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.subagentComposerId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.terminationReason",
+        "example": "completed"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.topFiles[].matchCount",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.topFiles[].uri",
+        "example": "./notes.md"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.totalFiles",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.totalMatches",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].turnDurationMs",
+        "example": "33803"
+      },
+      {
+        "path": "data.activeTabsShouldBeReactive",
+        "example": "true"
+      },
+      {
+        "path": "data.addedFiles",
+        "example": "0"
+      },
+      {
+        "path": "data.applied",
+        "example": "false"
+      },
+      {
+        "path": "data.applyAgentBackendTypeRestrictions",
+        "example": "false"
+      },
+      {
+        "path": "data.blobEncryptionKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.browserChipManuallyDisabled",
+        "example": "false"
+      },
+      {
+        "path": "data.browserChipManuallyEnabled",
+        "example": "false"
+      },
+      {
+        "path": "data.contextUsagePercent",
+        "example": "7.471"
+      },
+      {
+        "path": "data.conversationCheckpointLastUpdatedAt",
+        "example": "1780338838991"
+      },
+      {
+        "path": "data.conversationState",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.debugModeSuggestionUsed",
+        "example": "false"
+      },
+      {
+        "path": "data.filesChangedCount",
+        "example": "2"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].contentHeightHint",
+        "example": "754"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.hasThinking",
+        "example": "true"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.isKeptFinalAiVisibleOutsideWorkedForGroup",
+        "example": "true"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.isToolGroupable",
+        "example": "true"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.thinkingDurationMs",
+        "example": "4705"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.toolCallId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.toolFormerTool",
+        "example": "15"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.turnDurationMs",
+        "example": "33803"
+      },
+      {
+        "path": "data.gitHubPromptDismissed",
+        "example": "false"
+      },
+      {
+        "path": "data.hasChangedContext",
+        "example": "false"
+      },
+      {
+        "path": "data.hasLoaded",
+        "example": "true"
+      },
+      {
+        "path": "data.hasUnreadMessages",
+        "example": "false"
+      },
+      {
+        "path": "data.isApplyingWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.isBestOfNParent",
+        "example": "false"
+      },
+      {
+        "path": "data.isBestOfNSubcomposer",
+        "example": "false"
+      },
+      {
+        "path": "data.isContinuationInProgress",
+        "example": "false"
+      },
+      {
+        "path": "data.isCreatingWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.isDraft",
+        "example": "false"
+      },
+      {
+        "path": "data.isFileListExpanded",
+        "example": "false"
+      },
+      {
+        "path": "data.isNAL",
+        "example": "true"
+      },
+      {
+        "path": "data.isProject",
+        "example": "false"
+      },
+      {
+        "path": "data.isQueueExpanded",
+        "example": "true"
+      },
+      {
+        "path": "data.isReadingLongFile",
+        "example": "false"
+      },
+      {
+        "path": "data.isSpec",
+        "example": "false"
+      },
+      {
+        "path": "data.isSpecSubagentDone",
+        "example": "false"
+      },
+      {
+        "path": "data.isUndoingWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.latestChatGenerationUUID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.$mid",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.external",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.path",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.scheme",
+        "example": "file"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/count.sh.contentKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/count.sh.firstEditBubbleId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/count.sh.isNewlyCreated",
+        "example": "true"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/notes.md.contentKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/notes.md.firstEditBubbleId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/notes.md.isNewlyCreated",
+        "example": "true"
+      },
+      {
+        "path": "data.pendingCreateWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.planModeSuggestionUsed",
+        "example": "false"
+      },
+      {
+        "path": "data.promptTokenBreakdown.categories[].estimatedTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.promptTokenBreakdown.categories[].id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.promptTokenBreakdown.categories[].label",
+        "example": "System prompt"
+      },
+      {
+        "path": "data.promptTokenBreakdown.maxTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.promptTokenBreakdown.totalUsedTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.removedFiles",
+        "example": "0"
+      },
+      {
+        "path": "data.restrictAgentModeSwitching",
+        "example": "false"
+      },
+      {
+        "path": "data.richText",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.speculativeSummarizationEncryptionKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.stopHookLoopCount",
+        "example": "0"
+      },
+      {
+        "path": "data.subagentComposerIds[]",
+        "example": "64cc0e23-6dc6-46c4-a155-5b55fc9c30e9"
+      },
+      {
+        "path": "data.subtitle",
+        "example": "Edited count.sh, notes.md"
+      },
+      {
+        "path": "data.text",
+        "example": ""
+      },
+      {
+        "path": "data.totalLinesAdded",
+        "example": "10"
+      },
+      {
+        "path": "data.totalLinesRemoved",
+        "example": "0"
+      },
+      {
+        "path": "data.worktreeStartedReadOnly",
+        "example": "false"
+      },
+      {
+        "path": "head.contextUsagePercent",
+        "example": "7.471"
+      },
+      {
+        "path": "head.hasBlockingPendingActions",
+        "example": "false"
+      },
+      {
+        "path": "head.hasPendingPlan",
+        "example": "false"
+      },
+      {
+        "path": "head.isBestOfNSubcomposer",
+        "example": "false"
+      },
+      {
+        "path": "head.isProject",
+        "example": "false"
+      },
+      {
+        "path": "head.isSpec",
+        "example": "false"
+      },
+      {
+        "path": "head.isWorktree",
+        "example": "false"
+      },
+      {
+        "path": "head.subtitle",
+        "example": "Edited count.sh, notes.md"
+      },
+      {
+        "path": "head.totalLinesAdded",
+        "example": "10"
+      },
+      {
+        "path": "head.totalLinesRemoved",
+        "example": "0"
+      },
+      {
+        "path": "head.worktreeStartedReadOnly",
+        "example": "false"
+      }
+    ]
+  }
+}

@@ -9,10 +9,10 @@ use serde::Serialize;
 use serde_json::Value;
 use toolpath_convo::ConversationView;
 
-use crate::keypaths::KeyPath;
+use crate::keypaths::{KeyPath, json_values};
 
 /// A harness that writes transcripts, and that a transcript can be projected
-/// to.
+/// to: the seven `path resume --harness` accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Agent {
@@ -24,10 +24,27 @@ pub enum Agent {
     Pi,
     /// A Copilot CLI `events.jsonl`.
     Copilot,
+    /// A Gemini CLI chat file: one JSON document before 0.47, a JSONL stream
+    /// (header line, then messages) from 0.47.
+    Gemini,
+    /// An opencode session: the rows of `opencode-stable.db`, as
+    /// `opencode export` or `p export opencode -o` write them to JSON.
+    Opencode,
+    /// A Cursor composer: the `state.vscdb` rows of one session as one JSON
+    /// document (`CursorSession`), as `p export cursor -o` writes it.
+    Cursor,
 }
 
 impl Agent {
-    pub const ALL: [Agent; 4] = [Agent::Claude, Agent::Codex, Agent::Pi, Agent::Copilot];
+    pub const ALL: [Agent; 7] = [
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Pi,
+        Agent::Copilot,
+        Agent::Gemini,
+        Agent::Opencode,
+        Agent::Cursor,
+    ];
 
     /// The name `path` uses: `path p export <name>`.
     pub fn name(self) -> &'static str {
@@ -36,6 +53,9 @@ impl Agent {
             Agent::Codex => "codex",
             Agent::Pi => "pi",
             Agent::Copilot => "copilot",
+            Agent::Gemini => "gemini",
+            Agent::Opencode => "opencode",
+            Agent::Cursor => "cursor",
         }
     }
 
@@ -46,6 +66,9 @@ impl Agent {
             Agent::Codex => "toolpath_codex",
             Agent::Pi => "toolpath_pi",
             Agent::Copilot => "toolpath_copilot",
+            Agent::Gemini => "toolpath_gemini",
+            Agent::Opencode => "toolpath_opencode",
+            Agent::Cursor => "toolpath_cursor",
         }
     }
 
@@ -54,15 +77,27 @@ impl Agent {
         Agent::ALL.into_iter().filter(move |a| *a != self)
     }
 
-    /// From the first JSON line: a Codex rollout opens with `session_meta`,
-    /// a Copilot session with `session.start`, a pi session with a `session`
-    /// header, and every Claude Code line carries `sessionId`. `None` when
-    /// the first line is none of these.
+    /// From the first JSON value of the input. A whole-document session is
+    /// told by its shape: a Cursor composer has `data.composerId`, an
+    /// opencode session an `id` (or `info.id`) of the form `ses_…` and
+    /// `messages`, a Gemini chat file `sessionId` with `projectHash` (its
+    /// JSONL header line carries the same two). Then by the first line's
+    /// `type`: a Codex rollout opens with `session_meta`, a Copilot session
+    /// with `session.start`, a pi session with a `session` header; every
+    /// Claude Code line carries `sessionId`. `None` when the input is none of
+    /// these.
     pub fn detect(input: &[u8]) -> Option<Agent> {
-        let first = std::str::from_utf8(input)
-            .ok()?
-            .lines()
-            .find_map(|l| serde_json::from_str::<Value>(l).ok())?;
+        let first = json_values(std::str::from_utf8(input).ok()?).next()?;
+        if first["data"]["composerId"].is_string() {
+            return Some(Agent::Cursor);
+        }
+        let session_id = first["info"]["id"].as_str().or(first["id"].as_str());
+        if session_id.is_some_and(|id| id.starts_with("ses_")) && first["messages"].is_array() {
+            return Some(Agent::Opencode);
+        }
+        if first.get("projectHash").is_some() && first.get("sessionId").is_some() {
+            return Some(Agent::Gemini);
+        }
         match first["type"].as_str() {
             Some("session_meta") => Some(Agent::Codex),
             Some("session.start") => Some(Agent::Copilot),
@@ -99,15 +134,16 @@ pub struct Set {
 }
 
 impl Set {
-    /// A set from its bytes; the agent is detected from the first line.
+    /// A set from its bytes; the agent is detected from the first JSON value.
     pub fn new(name: impl Into<String>, input: Vec<u8>) -> Result<Set, String> {
         let name = name.into();
         let agent = Agent::detect(&input)
-            .ok_or_else(|| format!("{name}: the first line names no known agent"))?;
+            .ok_or_else(|| format!("{name}: the first JSON value names no known agent"))?;
         Ok(Set { name, agent, input })
     }
 
-    /// `goldens/<name>/input.jsonl`: the set is named after its directory.
+    /// `test-fixtures/<agent>/convo.*` or `goldens/<name>/input.*`: the set
+    /// is named after its directory.
     pub fn from_input_file(path: &Path) -> Result<Set, String> {
         let name = path
             .parent()
@@ -144,16 +180,20 @@ pub struct Stages {
     /// The toolpath graph `path p derive` prints: what every projection
     /// starts from.
     pub document: Value,
-    /// The transcript projected to every other agent, as the JSONL `path p
-    /// export <agent>` writes. Copilot's is in canonical form
-    /// ([`crate::canonical::canonicalize`]): its projection mints a session
-    /// id per run.
+    /// The transcript projected to every other agent, as `path p export
+    /// <agent> -o` writes it: JSONL for Claude, Codex, pi and Copilot, one
+    /// JSON document for Gemini, opencode and Cursor. Copilot's is in
+    /// canonical form ([`crate::canonical::canonicalize`]): its projection
+    /// mints a session id per run.
     #[serde(serialize_with = "by_agent_name")]
     pub projections: BTreeMap<Agent, String>,
     /// Each projection read back by its own adapter and derived again: what
     /// of the document survived.
     #[serde(serialize_with = "by_agent_name")]
     pub round_trips: BTreeMap<Agent, RoundTrip>,
+    /// The validation `path p validate` runs, over the document and over
+    /// every projection derived again.
+    pub validate: Validate,
     /// What is shed between the transcript, the document and the
     /// projections, including the same-format round trip.
     pub shed: Shed,
@@ -239,14 +279,64 @@ pub enum RoundTrip {
     Unreadable { error: String },
 }
 
-/// Lines, bytes and event types of a JSONL transcript.
+/// What `path p validate` says of a document: the base schema and, for a
+/// path naming a bundled kind, that kind's schema.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Validation {
+    Valid,
+    /// Every violation, as `path p validate` prints it.
+    Invalid {
+        errors: Vec<String>,
+    },
+    /// There was no document to validate: the projection was unreadable.
+    NotDerived,
+}
+
+/// The validation of the document and of every projection derived again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Validate {
+    pub document: Validation,
+    #[serde(serialize_with = "by_agent_name")]
+    pub round_trips: BTreeMap<Agent, Validation>,
+}
+
+/// One field of the session's token accounting on which the three witnesses
+/// disagree: the sum over `conversation.append` steps, the adapter's
+/// `total_usage`, and the `total_usage` extracted from the document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Mismatch {
+    /// `input_tokens`, `output_tokens`, `cache_read_tokens`,
+    /// `cache_write_tokens`, or `breakdowns.<class>.<sub>`.
+    pub field: String,
+    pub steps: Option<u32>,
+    pub ir: Option<u32>,
+    pub extracted: Option<u32>,
+}
+
+impl fmt::Display for Mismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let n = |v: Option<u32>| v.map_or("none".to_owned(), |v| v.to_string());
+        write!(
+            f,
+            "total_usage.{}: steps {}, ir {}, extracted {}",
+            self.field,
+            n(self.steps),
+            n(self.ir),
+            n(self.extracted)
+        )
+    }
+}
+
+/// Lines, bytes and event types of a transcript.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct TranscriptStats {
     pub lines: usize,
     pub bytes: usize,
     /// Characters in every string value, summed.
     pub string_chars: usize,
-    /// Count per event type (`type`, or `type/payload.type`).
+    /// Count per event type (`type`, or `type/payload.type`), per JSON value:
+    /// per line of a JSONL transcript, once for a whole-document session.
     pub by_type: BTreeMap<String, usize>,
 }
 
@@ -343,6 +433,9 @@ pub enum Finding {
     },
     /// Fields the same-format round trip writes under another spelling.
     Renames { renames: Vec<Rename> },
+    /// Fields of the session's token accounting on which the sum over
+    /// steps, the adapter's total and the extracted total disagree.
+    Accounting { mismatches: Vec<Mismatch> },
 }
 
 #[cfg(test)]
@@ -350,23 +443,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_is_detected_from_the_first_json_line() {
+    fn agent_is_detected_from_the_first_json_value() {
         let codex = b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"x\"}}\n";
         let copilot = b"{\"type\":\"session.start\",\"data\":{\"sessionId\":\"x\"}}\n";
         let pi = b"{\"type\":\"session\",\"id\":\"x\",\"cwd\":\"/w\"}\n";
         let claude = b"\n{\"type\":\"user\",\"sessionId\":\"x\"}\n";
+        let gemini_stream = b"{\"sessionId\":\"x\",\"projectHash\":\"h\",\"kind\":\"main\"}\n{\"type\":\"user\",\"content\":\"hi\"}\n";
+        let gemini_file =
+            b"{\n  \"sessionId\": \"x\",\n  \"projectHash\": \"h\",\n  \"messages\": []\n}";
+        let opencode_export = b"{\"info\":{\"id\":\"ses_1\"},\"messages\":[]}";
+        let opencode_rows = b"{\n  \"id\": \"ses_1\",\n  \"messages\": []\n}";
+        let cursor = b"{\"data\":{\"composerId\":\"c\"},\"bubbles\":[]}";
         assert_eq!(Agent::detect(codex), Some(Agent::Codex));
         assert_eq!(Agent::detect(copilot), Some(Agent::Copilot));
         assert_eq!(Agent::detect(pi), Some(Agent::Pi));
         assert_eq!(Agent::detect(claude), Some(Agent::Claude));
+        assert_eq!(Agent::detect(gemini_stream), Some(Agent::Gemini));
+        assert_eq!(Agent::detect(gemini_file), Some(Agent::Gemini));
+        assert_eq!(Agent::detect(opencode_export), Some(Agent::Opencode));
+        assert_eq!(Agent::detect(opencode_rows), Some(Agent::Opencode));
+        assert_eq!(Agent::detect(cursor), Some(Agent::Cursor));
         assert_eq!(Agent::detect(b"{\"type\":\"session\"}\n"), None);
+        assert_eq!(
+            Agent::detect(b"{\"id\":\"not-a-session\",\"messages\":[]}"),
+            None
+        );
         assert_eq!(Agent::detect(b""), None);
     }
 
     #[test]
     fn targets_are_every_other_agent() {
         let t: Vec<Agent> = Agent::Pi.targets().collect();
-        assert_eq!(t, vec![Agent::Claude, Agent::Codex, Agent::Copilot]);
+        assert_eq!(
+            t,
+            vec![
+                Agent::Claude,
+                Agent::Codex,
+                Agent::Copilot,
+                Agent::Gemini,
+                Agent::Opencode,
+                Agent::Cursor
+            ]
+        );
     }
 
     #[test]
@@ -385,5 +503,19 @@ mod tests {
     fn an_unrecognised_transcript_is_refused_by_name() {
         let err = Set::new("odd", b"{\"hello\":1}\n".to_vec()).unwrap_err();
         assert!(err.starts_with("odd:"), "{err}");
+    }
+
+    #[test]
+    fn a_mismatch_names_its_field_and_the_three_witnesses() {
+        let m = Mismatch {
+            field: "breakdowns.output.reasoning".into(),
+            steps: Some(1),
+            ir: None,
+            extracted: Some(1),
+        };
+        assert_eq!(
+            m.to_string(),
+            "total_usage.breakdowns.output.reasoning: steps 1, ir none, extracted 1"
+        );
     }
 }

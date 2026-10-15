@@ -1,0 +1,37 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_cursor
+  agent: cursor
+  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
+input_file: test-fixtures/cursor/convo.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 71
+  },
+  "after": {
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 70
+  },
+  "lost": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
+    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation"
+  ],
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+    "paths[].steps[].change.<artifact>.structural.stop_reason"
+  ]
+}

@@ -5,7 +5,7 @@ info:
   adapter: toolpath_codex
   agent: codex
   input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
-input_file: goldens/codex/input.jsonl
+input_file: test-fixtures/codex/convo.jsonl
 ---
 {
   "source": {
@@ -64,6 +64,30 @@ input_file: goldens/codex/input.jsonl
         "tool.execution_complete": 1,
         "tool.execution_start": 1,
         "user.message": 4
+      }
+    },
+    "cursor": {
+      "lines": 858,
+      "bytes": 32860,
+      "string_chars": 8933,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 112,
+      "bytes": 16410,
+      "string_chars": 14419,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 338,
+      "bytes": 13194,
+      "string_chars": 5758,
+      "by_type": {
+        "?": 1
       }
     },
     "pi": {

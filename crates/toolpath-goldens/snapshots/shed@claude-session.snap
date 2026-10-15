@@ -60,6 +60,30 @@ input_file: goldens/claude-session/input.jsonl
         "user.message": 1
       }
     },
+    "cursor": {
+      "lines": 826,
+      "bytes": 25208,
+      "string_chars": 2746,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 121,
+      "bytes": 3774,
+      "string_chars": 1533,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 452,
+      "bytes": 14079,
+      "string_chars": 4023,
+      "by_type": {
+        "?": 1
+      }
+    },
     "pi": {
       "lines": 9,
       "bytes": 4101,
