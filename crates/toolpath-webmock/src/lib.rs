@@ -755,7 +755,7 @@ async fn record(
 fn up_headers_for_client(stored: &HashMap<String, String>) -> Vec<(String, String)> {
     stored
         .iter()
-        .filter(|(k, _)| !HOP_HEADERS.contains(&k.as_str()) && !is_secret_header(&k))
+        .filter(|(k, _)| !HOP_HEADERS.contains(&k.as_str()) && !is_secret_header(k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }
