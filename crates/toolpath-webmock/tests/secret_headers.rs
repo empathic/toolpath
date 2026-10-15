@@ -14,6 +14,7 @@ fn provider_credential_headers_are_secret_by_name() {
         "cookie",
         "set-cookie",
         "chatgpt-account-id",
+        "x-gemini-api-privileged-user-id",
     ] {
         assert!(is_secret_header(h), "{h} must never reach a cassette");
     }

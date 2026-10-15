@@ -52,6 +52,9 @@ pub const SECRET_HEADERS: &[&str] = &[
     "chatgpt-account-id",
     "openai-organization",
     "x-github-token",
+    // The Gemini API answers with the account id behind the key. An identifier, not a credential,
+    // but it ties a public cassette to one Google account; the first gemini recordings kept it.
+    "x-gemini-api-privileged-user-id",
 ];
 
 /// A header is a secret when it is listed above or when its name ends in `-key`, `-token`
