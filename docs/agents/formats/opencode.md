@@ -638,6 +638,32 @@ as expected. Recover the wall-clock millis via
 `Identifier.timestamp(id)` on ascending IDs; for descending ones
 (`ses_*`) invert the bits first.
 
+### Projected IDs
+
+`toolpath-opencode`'s projector (`project.rs`, `mint_id`) mints ids in
+exactly this shape — 12-hex time field from the turn's timestamp plus
+the projector's running counter, 14 base62 chars — but draws the tail
+from the SHA-1 of a seed (`<view id>`, `<session>-msg-<n>`,
+`<session>-prt-<n>`) instead of `randomBytes`, so a projection is
+deterministic. A view id that already starts with `ses_` is kept
+verbatim.
+
+The shape is load-bearing, not cosmetic. On every call to the
+`opencode` provider (OpenCode Zen, `https://opencode.ai/zen/v1`)
+opencode sends `x-opencode-session: <session id>`,
+`x-opencode-request: <user message id>`, `x-opencode-project` and
+`x-opencode-client`. Zen's **free tier** rejects a request whose
+session id is not opencode-shaped with
+`403 {"type":"FreeTierError","message":"OpenCode's free tier can only
+be used from within OpenCode…"}` before any model work. Established
+2026-10-15 (opencode 1.18.18, `opencode/big-pickle`) by replaying
+captured requests: the projected body — foreign `<environment_context>`
+user turns, consecutive user turns, tool turns, `version`
+`0.0.0-projected`, user-message `model` `anthropic/unknown` — was
+accepted unchanged once the header carried a 26-char id; a 24-hex id
+(the previous minting) was refused. The time field is not checked for
+recency (a May-2026 time passed in October).
+
 ## Logs
 
 Plain-text files under `$data/log/`. Format:
