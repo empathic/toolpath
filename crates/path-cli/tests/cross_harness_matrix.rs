@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use toolpath::v1::Graph;
+use toolpath::v1::{Graph, PATH_KIND_AGENT_CODING_SESSION, PATH_KIND_AGENT_CODING_SESSION_V1_0_0};
 use toolpath_convo::{
     ConversationProjector, ConversationView, DeriveConfig, Role, Turn, derive_path,
     extract_conversation,
@@ -1103,6 +1103,93 @@ fn matrix_translation() {
         sources.push((h.name().to_string(), view));
     }
     run_matrix("matrix (real fixtures)", &sources);
+}
+
+/// Every producer writes the current kind URI. One derivation per captured
+/// fixture, through `derive_path` — the one place the kind is stamped; every
+/// provider crate's own `derive_path` wrapper calls it — so a producer that
+/// stopped reaching it, or a constant that drifted, fails here by name.
+#[test]
+fn every_producer_writes_the_current_kind() {
+    assert!(
+        PATH_KIND_AGENT_CODING_SESSION.ends_with("/v1.1.0"),
+        "the current kind constant is {PATH_KIND_AGENT_CODING_SESSION}; v1.1.0 is the only version producers write"
+    );
+    for h in all_harnesses() {
+        let view = h.load_fixture().unwrap_or_else(|| {
+            panic!(
+                "{} fixture missing — run scripts/capture-elicit-fixtures.sh {}",
+                h.name(),
+                h.name()
+            )
+        });
+        let path = derive_path(&view, &DeriveConfig::default());
+        let kind = path.meta.as_ref().and_then(|m| m.kind.as_deref());
+        assert_eq!(
+            kind,
+            Some(PATH_KIND_AGENT_CODING_SESSION),
+            "{} fixture derived with kind {kind:?}",
+            h.name()
+        );
+    }
+}
+
+/// The superseded v1.0.0 URI is read-only legacy: it may be spelled where the
+/// legacy constant is defined and nowhere else under any crate's `src/`, so no
+/// producer, projector or default can grow its own copy of it.
+#[test]
+fn no_source_spells_the_superseded_kind_outside_the_legacy_constant() {
+    let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("crates dir");
+    let mut sources = Vec::new();
+    for crate_dir in std::fs::read_dir(&crates_dir)
+        .expect("list crates")
+        .flatten()
+    {
+        let src = crate_dir.path().join("src");
+        if src.is_dir() {
+            collect_rust_sources(&src, &mut sources);
+        }
+    }
+    assert!(
+        !sources.is_empty(),
+        "no Rust sources found under {}",
+        crates_dir.display()
+    );
+
+    let allowed = crates_dir.join("toolpath/src/types.rs");
+    let offenders: Vec<String> = sources
+        .iter()
+        .filter(|file| **file != allowed)
+        .filter(|file| {
+            std::fs::read_to_string(file)
+                .map(|text| text.contains(PATH_KIND_AGENT_CODING_SESSION_V1_0_0))
+                .unwrap_or(false)
+        })
+        .map(|file| {
+            file.strip_prefix(&crates_dir)
+                .unwrap_or(file)
+                .display()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "{PATH_KIND_AGENT_CODING_SESSION_V1_0_0} is spelled outside the legacy constant: {offenders:?}"
+    );
+}
+
+fn collect_rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read src dir").flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_sources(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
 }
 
 #[test]

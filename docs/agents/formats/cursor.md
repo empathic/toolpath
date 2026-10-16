@@ -10,6 +10,21 @@ and every claim here is empirical.
 Date: **2026-06-01**. Revisit when the Cursor minor version bumps or a
 `_v` field on any object increments.
 
+> **Observed 2026-10-15 on Cursor.app 3.24.12 (not yet folded into the
+> sections below).** `composerData._v` is now 18 (16 here). Composer
+> headers live in a `composerHeaders` table (`composerId, workspaceId,
+> createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt,
+> subagentTypeName, value`) with `cursorDiskKV.composer.composerHeaders.migratedToTable = 1`;
+> `ItemTable.composer.composerHeaders` is a legacy key that Cursor
+> re-migrates at launch and then deletes. `toolpath-cursor` still reads
+> and writes the ItemTable key, so projection works (Cursor adopts the
+> head and lists the composer by title in its Agents window) but the
+> reader sees nothing on a 3.24 machine. `cursor <folder>` opens the
+> Agents window with the sidebar collapsed; the projected composer is in
+> the list, not on screen. Cursor computes its own workspaceStorage id and
+> leaves toolpath's `workspace.json`-only entry orphaned. Evidence:
+> `<scratchpad>/review/resume-matrix-v4-cursor.md`.
+
 ## Storage roots
 
 Cursor splits its data across two roots: an Anysphere-specific tree at

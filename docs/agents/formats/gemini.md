@@ -9,6 +9,22 @@ on disk plus cross-checking with Gemini's own internal documentation
 publish a stable schema, so treat this as observed behaviour as of
 **2026-04-24** — forward-compat guards matter.
 
+> **Observed 2026-10-15 on gemini-cli 0.47.0 (not yet folded into the
+> sections below).** Chat files are now JSONL: a header record
+> (`sessionId, projectHash, startTime, lastUpdated, kind, directories`),
+> one record per message, then `{"$set": …}` patch records; on resume the
+> CLI leaves a projected `.json` untouched and writes a `.jsonl` twin plus
+> a new `session-<now>-<short>.jsonl` per launch. `getMatchingSessionFiles`
+> accepts `-<short>.json` or `.jsonl`, but `crates/toolpath-gemini/src/paths.rs`
+> filters `extension == "json"`, so native 0.47 sessions are invisible to
+> `path p derive gemini`. `GEMINI_CLI_HOME` replaces `os.homedir()` (the
+> CLI appends `.gemini`). Slots: a `ProjectRegistry` (`projects.json`)
+> migrates `tmp/<sha256>` to `tmp/<slug>`; an existing hash slot is
+> adopted as the slug. `gemini --resume <id>` renders a projected session
+> before authentication. Evidence:
+> `<scratchpad>/review/resume-matrix-v4-gemini.md`; qualifier record in
+> `crates/toolpath-gemini/src/.qual`.
+
 ## Storage root
 
 ```

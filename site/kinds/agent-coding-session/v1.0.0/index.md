@@ -11,6 +11,8 @@ permalink: /kinds/agent-coding-session/v1.0.0/
   <dd><code>https://toolpath.net/kinds/agent-coding-session/v1.0.0</code></dd>
   <dt>Schema</dt>
   <dd><a href="./schema.json"><code>schema.json</code></a></dd>
+  <dt>Status</dt>
+  <dd><strong>Read-only legacy.</strong> Superseded by <a href="/kinds/agent-coding-session/v1.1.0/">v1.1.0</a> on 2026-06-17. <strong>Not supported for writing:</strong> no toolpath producer emits this URI and new documents must not carry it. Readers accept it (the URI is immutable and these documents stay valid); <code>path p validate</code> prints a warning that points at the erratum below.</dd>
 </dl>
 
 A Toolpath path whose `meta.kind` is this URI records an AI coding conversation. It is an ordinary path with the extra structure described here. `head`-ancestry, dead ends, signatures, and `base` all behave as in the [base format](/format/).

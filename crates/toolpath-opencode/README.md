@@ -9,9 +9,9 @@ database under `~/.local/share/opencode/` — `opencode-stable.db` for
 current releases, `opencode.db` for older ones (the rule is in
 `src/paths.rs`). This crate reads that database directly (read-only)
 and maps it to Toolpath
-documents, so every opencode-assisted change has a traceable origin
-with real unified diffs reconstructed from the sibling snapshot
-git repositories.
+documents. When the sibling snapshot git repository is on disk it can
+attach real unified diffs to file changes; no fixture exercises that
+path yet.
 
 ## Overview
 
@@ -28,7 +28,8 @@ git repositories.
   matching snapshot git repo is still on disk, file changes per
   turn surface as sibling artifacts with a real `git diff` as the
   `raw` perspective — no diff reconstruction from tool output
-  required.
+  required. This path is implemented but not covered by a test or
+  golden (the captured fixture has no snapshot repo).
 
 ## Mapping
 
