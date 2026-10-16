@@ -10,6 +10,11 @@
 //! Layout under the root: `goldens/manifest.json`, `goldens/<name>/input.jsonl`,
 //! `goldens/<name>/to-<target>.jsonl`, `goldens/known-defect/*.tsv`.
 
+// The clap `///` help strings below use `<set>`, `$<AGENT>_BIN` and `<agent>` as placeholders;
+// rustdoc reads them as unclosed HTML tags and the doc gate runs with `-D warnings`. Backticks
+// would change `--help`, so the lint is allowed for this module instead.
+#![allow(rustdoc::invalid_html_tags)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
