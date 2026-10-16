@@ -1,0 +1,420 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_copilot
+  agent: copilot
+  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
+input_file: goldens/copilot/input.jsonl
+---
+{
+  "source": {
+    "lines": 64,
+    "bytes": 86345,
+    "string_chars": 70894,
+    "by_type": {
+      "assistant.message": 13,
+      "assistant.turn_end": 11,
+      "assistant.turn_start": 11,
+      "session.model_change": 1,
+      "session.shutdown": 1,
+      "session.start": 1,
+      "subagent.completed": 1,
+      "subagent.started": 1,
+      "system.message": 1,
+      "tool.execution_complete": 11,
+      "tool.execution_start": 11,
+      "user.message": 1
+    }
+  },
+  "ir": {
+    "bytes": 47890,
+    "string_chars": 41738,
+    "steps": 14,
+    "text_chars": 4594,
+    "tool_uses": 11
+  },
+  "projections": {
+    "claude": {
+      "lines": 26,
+      "bytes": 26548,
+      "string_chars": 18313,
+      "by_type": {
+        "assistant": 11,
+        "permission-mode": 1,
+        "session.model_change": 1,
+        "system.message": 1,
+        "user": 12
+      }
+    },
+    "codex": {
+      "lines": 81,
+      "bytes": 32519,
+      "string_chars": 24177,
+      "by_type": {
+        "event_msg/agent_message": 11,
+        "event_msg/exec_command_end": 1,
+        "event_msg/token_count": 11,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 11,
+        "response_item/function_call_output": 11,
+        "response_item/message": 12,
+        "response_item/reasoning": 11,
+        "session_meta": 1,
+        "turn_context": 11
+      }
+    },
+    "pi": {
+      "lines": 24,
+      "bytes": 23174,
+      "string_chars": 15978,
+      "by_type": {
+        "message": 23,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 58,
+    "bytes": 32865,
+    "event_types_shed": {
+      "assistant.message": {
+        "source": 13,
+        "after": 11
+      },
+      "session.model_change": {
+        "source": 1,
+        "after": 0
+      },
+      "session.shutdown": {
+        "source": 1,
+        "after": 0
+      },
+      "subagent.completed": {
+        "source": 1,
+        "after": 0
+      },
+      "system.message": {
+        "source": 1,
+        "after": 0
+      }
+    },
+    "key_paths": {
+      "source": 136,
+      "after": 62,
+      "lost": 77,
+      "gained": 3
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "agentId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.apiCallId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.codeChanges.filesModified[]",
+        "example": "/tmp/elicit-scratch/notes.md"
+      },
+      {
+        "path": "data.codeChanges.linesAdded",
+        "example": "10"
+      },
+      {
+        "path": "data.codeChanges.linesRemoved",
+        "example": "1"
+      },
+      {
+        "path": "data.conversationTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.currentModel",
+        "example": "claude-haiku-4.5"
+      },
+      {
+        "path": "data.currentTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.delivery",
+        "example": "idle"
+      },
+      {
+        "path": "data.error.code",
+        "example": "failure"
+      },
+      {
+        "path": "data.error.message",
+        "example": "Path does not exist"
+      },
+      {
+        "path": "data.eventsFileSizeBytes",
+        "example": "87319"
+      },
+      {
+        "path": "data.interactionId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.requests.cost",
+        "example": "0.33"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.requests.count",
+        "example": "13"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.cache_read.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.cache_write.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.input.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.tokenDetails.output.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.totalNanoAiu",
+        "example": "6439490000"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.cacheReadTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.cacheWriteTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.inputTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.outputTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.modelMetrics.claude-haiku-4.5.usage.reasoningTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newModel",
+        "example": "auto"
+      },
+      {
+        "path": "data.parentAgentTaskId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.parentToolCallId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.reasoningEffort",
+        "example": "null"
+      },
+      {
+        "path": "data.reasoningOpaque",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.requestId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.role",
+        "example": "system"
+      },
+      {
+        "path": "data.serviceRequestId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.sessionStartTime",
+        "example": "1783006095745"
+      },
+      {
+        "path": "data.shellToolInfo.hasWriteFileRedirection",
+        "example": "false"
+      },
+      {
+        "path": "data.shellToolInfo.possiblePaths[]",
+        "example": "/tmp/elicit-scratch/count.sh"
+      },
+      {
+        "path": "data.shutdownType",
+        "example": "routine"
+      },
+      {
+        "path": "data.systemTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.tokenDetails.cache_read.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.tokenDetails.cache_write.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.tokenDetails.input.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.tokenDetails.output.tokenCount",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.toolDefinitionsTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.toolRequests[].intentionSummary",
+        "example": "view the file at /tmp/elicit-scratch."
+      },
+      {
+        "path": "data.toolRequests[].type",
+        "example": "function"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.commandTimeout",
+        "example": "30000"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.file_count",
+        "example": "1"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.numberOfToolCallsMadeByAgent",
+        "example": "1"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.responseTokenLimit",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.response_length",
+        "example": "380"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.resultForLlmLength",
+        "example": "0"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.resultLength",
+        "example": "0"
+      },
+      {
+        "path": "data.toolTelemetry.metrics.result_length",
+        "example": "10"
+      },
+      {
+        "path": "data.toolTelemetry.properties.agent_name",
+        "example": "task"
+      },
+      {
+        "path": "data.toolTelemetry.properties.agent_type",
+        "example": "task"
+      },
+      {
+        "path": "data.toolTelemetry.properties.asyncOnlyShell",
+        "example": "false"
+      },
+      {
+        "path": "data.toolTelemetry.properties.customTimeout",
+        "example": "false"
+      },
+      {
+        "path": "data.toolTelemetry.properties.detached",
+        "example": "false"
+      },
+      {
+        "path": "data.toolTelemetry.properties.executionMode",
+        "example": "sync"
+      },
+      {
+        "path": "data.toolTelemetry.properties.execution_mode",
+        "example": "sync"
+      },
+      {
+        "path": "data.toolTelemetry.properties.files_found",
+        "example": "true"
+      },
+      {
+        "path": "data.toolTelemetry.properties.inputs",
+        "example": "[\"path\",\"command\"]"
+      },
+      {
+        "path": "data.toolTelemetry.properties.matches_found",
+        "example": "true"
+      },
+      {
+        "path": "data.toolTelemetry.properties.options",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.toolTelemetry.properties.output_mode",
+        "example": "files_with_matches"
+      },
+      {
+        "path": "data.toolTelemetry.properties.prompt_length",
+        "example": "105"
+      },
+      {
+        "path": "data.toolTelemetry.properties.response_length",
+        "example": "380"
+      },
+      {
+        "path": "data.toolTelemetry.properties.sandboxApplied",
+        "example": "false"
+      },
+      {
+        "path": "data.toolTelemetry.properties.sandboxOptOutRequested",
+        "example": "false"
+      },
+      {
+        "path": "data.toolTelemetry.properties.viewType",
+        "example": "directory"
+      },
+      {
+        "path": "data.toolTelemetry.restrictedProperties.agent_name",
+        "example": "task"
+      },
+      {
+        "path": "data.toolTelemetry.restrictedProperties.path",
+        "example": "."
+      },
+      {
+        "path": "data.toolTelemetry.restrictedProperties.pattern",
+        "example": "note*"
+      },
+      {
+        "path": "data.totalApiDurationMs",
+        "example": "38053"
+      },
+      {
+        "path": "data.totalNanoAiu",
+        "example": "6439490000"
+      },
+      {
+        "path": "data.totalPremiumRequests",
+        "example": "0.33"
+      },
+      {
+        "path": "data.transformedContent",
+        "example": "<current_datetime>2026-07-02T11:28:18.42…"
+      }
+    ]
+  }
+}

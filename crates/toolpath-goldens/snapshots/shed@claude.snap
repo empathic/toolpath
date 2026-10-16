@@ -1,0 +1,345 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
+input_file: goldens/claude/input.jsonl
+---
+{
+  "source": {
+    "lines": 80,
+    "bytes": 106194,
+    "string_chars": 57018,
+    "by_type": {
+      "ai-title": 4,
+      "assistant": 46,
+      "attachment": 5,
+      "last-prompt": 3,
+      "queue-operation": 2,
+      "user": 20
+    }
+  },
+  "ir": {
+    "bytes": 58337,
+    "string_chars": 36242,
+    "steps": 61,
+    "text_chars": 4563,
+    "tool_uses": 19
+  },
+  "projections": {
+    "codex": {
+      "lines": 136,
+      "bytes": 43985,
+      "string_chars": 28154,
+      "by_type": {
+        "event_msg/agent_message": 14,
+        "event_msg/exec_command_end": 8,
+        "event_msg/token_count": 20,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 19,
+        "response_item/function_call_output": 19,
+        "response_item/message": 34,
+        "session_meta": 1,
+        "turn_context": 20
+      }
+    },
+    "copilot": {
+      "lines": 180,
+      "bytes": 65534,
+      "string_chars": 42421,
+      "by_type": {
+        "assistant.message": 46,
+        "assistant.turn_end": 46,
+        "assistant.turn_start": 46,
+        "session.start": 1,
+        "subagent.completed": 1,
+        "subagent.started": 1,
+        "tool.execution_complete": 19,
+        "tool.execution_start": 19,
+        "user.message": 1
+      }
+    },
+    "pi": {
+      "lines": 67,
+      "bytes": 41024,
+      "string_chars": 20910,
+      "by_type": {
+        "message": 66,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 80,
+    "bytes": 69119,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 124,
+      "after": 72,
+      "lost": 63,
+      "gained": 11
+    },
+    "renamed": [
+      {
+        "from": "message.stop_reason",
+        "to": "message.stopReason"
+      }
+    ],
+    "dropped": [
+      {
+        "path": "message.content[].caller.type",
+        "example": "direct"
+      },
+      {
+        "path": "message.content[].content[].text",
+        "example": "There is no `notes.md` file in the worki…"
+      },
+      {
+        "path": "message.content[].content[].type",
+        "example": "text"
+      },
+      {
+        "path": "message.content[].input.output_mode",
+        "example": "content"
+      },
+      {
+        "path": "message.content[].signature",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.stop_details",
+        "example": "null"
+      },
+      {
+        "path": "message.stop_reason",
+        "example": "tool_use"
+      },
+      {
+        "path": "message.stop_sequence",
+        "example": "null"
+      },
+      {
+        "path": "message.type",
+        "example": "message"
+      },
+      {
+        "path": "message.usage.cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.inference_geo",
+        "example": ""
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].type",
+        "example": "message"
+      },
+      {
+        "path": "message.usage.server_tool_use.web_fetch_requests",
+        "example": "0"
+      },
+      {
+        "path": "message.usage.server_tool_use.web_search_requests",
+        "example": "0"
+      },
+      {
+        "path": "message.usage.speed",
+        "example": "standard"
+      },
+      {
+        "path": "permissionMode",
+        "example": "default"
+      },
+      {
+        "path": "promptId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "requestId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.agentId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.agentType",
+        "example": "general-purpose"
+      },
+      {
+        "path": "toolUseResult.content[].text",
+        "example": "There is no `notes.md` file in the worki…"
+      },
+      {
+        "path": "toolUseResult.content[].type",
+        "example": "text"
+      },
+      {
+        "path": "toolUseResult.durationMs",
+        "example": "6"
+      },
+      {
+        "path": "toolUseResult.mode",
+        "example": "content"
+      },
+      {
+        "path": "toolUseResult.numLines",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.prompt",
+        "example": "Count the words in `notes.md` and report…"
+      },
+      {
+        "path": "toolUseResult.status",
+        "example": "completed"
+      },
+      {
+        "path": "toolUseResult.toolStats.bashCount",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.toolStats.editFileCount",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.linesAdded",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.linesRemoved",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.otherToolCount",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.readCount",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.searchCount",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.totalDurationMs",
+        "example": "9627"
+      },
+      {
+        "path": "toolUseResult.totalTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.totalToolUseCount",
+        "example": "2"
+      },
+      {
+        "path": "toolUseResult.truncated",
+        "example": "false"
+      },
+      {
+        "path": "toolUseResult.usage.cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.inference_geo",
+        "example": ""
+      },
+      {
+        "path": "toolUseResult.usage.input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].type",
+        "example": "message"
+      },
+      {
+        "path": "toolUseResult.usage.output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.server_tool_use.web_fetch_requests",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.usage.server_tool_use.web_search_requests",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.usage.service_tier",
+        "example": "standard"
+      },
+      {
+        "path": "toolUseResult.usage.speed",
+        "example": "standard"
+      }
+    ]
+  }
+}
