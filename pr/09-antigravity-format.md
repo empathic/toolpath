@@ -1,6 +1,6 @@
 # docs(formats): Antigravity CLI format reference (derive-first adapter proposal)
 
-Status: draft · Base: main · Independent
+Status: opened #364 (draft, 2026-10-16) — was: draft · Base: main · Independent
 
 Commits: `docs(formats): antigravity …` (baca3b5).
 

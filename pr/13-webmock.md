@@ -1,6 +1,6 @@
 # test(webmock): record/replay for every harness's model API and for path ↔ pathbase
 
-Status: draft (crate skeleton; consumers next) · Base: pr/12-goldens-all-harnesses · Independent of the resume fixes
+Status: opened #368 (draft, 2026-10-16) — was: draft (crate skeleton; consumers next) · Base: pr/12-goldens-all-harnesses · Independent of the resume fixes
 
 Commits: `test(webmock): …` (703be69).
 

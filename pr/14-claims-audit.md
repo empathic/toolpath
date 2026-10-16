@@ -1,6 +1,6 @@
 # docs: every public claim carries its evidence; kind v1.0.0 is read-only legacy
 
-Status: ready · Base: main · Independent
+Status: opened #369 (draft, 2026-10-16) — was: ready · Base: main · Independent
 
 Commits: `docs(claims): README support table has a "Verified (2026-10-15)" column…` · `docs(kinds): v1.1.0 is the only version producers write; v1.0.0 read-only legacy…` · `path-cli: tests that every producer writes the current kind; validate warns on v1.0.0` (61c923d | 5f82a35 | 4a3d18c).
 

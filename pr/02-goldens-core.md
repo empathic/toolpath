@@ -1,6 +1,6 @@
 # test(path-cli): hermetic goldens over the committed fixtures (`path goldens capture|check|diff|list`)
 
-Status: draft · Base: main · Stack 1/4
+Status: opened #360 (draft, 2026-10-16) — was: draft · Base: main · Stack 1/4
 
 Commits, in wip order: `test(path-cli): hermetic goldens for codex<->claude over real fixtures…` · `test(path-cli): claude-origin golden from the compacted fixture…` · `feat(path-cli): path goldens (capture/check/diff/list/init/capture-claude)…` · `feat(goldens): copilot/pi goldens, caller-cwd known defect, sha-pinned manifest…` · `goldens: repo_rev 'code differs' counts only code; toolpath-golden fixtures crate…` · `fix(goldens): only the input and the outputs can fail a set` · its repin.
 

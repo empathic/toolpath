@@ -1,6 +1,6 @@
 # fix(pi,copilot,claude): projected sessions resume with their history in every agent
 
-Status: ready · Base: pr/02-goldens-all (the recaptured projections live there) · Three independent fixes; split into three PRs by giving each its own recapture if preferred.
+Status: opened #361 (draft, 2026-10-16) — was: ready · Base: pr/02-goldens-all (the recaptured projections live there) · Three independent fixes; split into three PRs by giving each its own recapture if preferred.
 
 Commits: `fix(pi): keep the parent chain through tool results so a projected Pi session resumes with its history` · `fix(copilot): a failed tool call keeps its error message, and workspace.yaml gets a datetime Copilot accepts` · `fix(claude): never project an errored tool_result with empty content` · one repin (`goldens capture --all`).
 

@@ -1,6 +1,6 @@
 # feat(goldens): round trips, shed reports and known defects
 
-Status: draft · Base: pr/02 · Stack 2/4
+Status: not cut (the first-cut plan; see HOLD.md and README) — was: draft · Base: pr/02 · Stack 2/4
 
 Commits: `feat(goldens): path goldens roundtrip (IR -> adapter -> IR per set)…` · `feat(goldens): path goldens shed [set]…` · `feat(goldens): check recomputes shed per set and fails on newly dropped key paths or lost text` · `feat(goldens): round-trip check fails on newly gained key paths` · `fix(goldens): known-defect check tells FIXED from changed-and-worse` (+ their repins, folded).
 

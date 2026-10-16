@@ -1,6 +1,6 @@
 # fix(opencode): projected ids use opencode's own shape, so Zen's free tier accepts resumed sessions
 
-Status: ready · Base: pr/08-resume-opencode · Independent of the other resume fixes
+Status: opened #365 (draft, 2026-10-16) — was: ready · Base: pr/08-resume-opencode · Independent of the other resume fixes
 
 Commits: `fix(opencode): …` (5ff0d26).
 

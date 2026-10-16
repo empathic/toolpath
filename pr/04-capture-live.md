@@ -1,6 +1,6 @@
 # feat(goldens): capture-live, one real headless session per agent, leak-checked
 
-Status: draft · Base: pr/03 · Stack 3/4
+Status: not cut (the first-cut plan; see HOLD.md and README) — was: draft · Base: pr/03 · Stack 3/4
 
 Commits: `feat(goldens): capture-claude-session.sh and an optional claude-session golden case` · `fix(goldens): capture script decodes a hex-encoded Keychain value…` · `fix(goldens): capture-claude leak check allows only the attribution address…` · `goldens: captured Claude session` · `feat(goldens): capture-live <claude|codex|pi|copilot> with per-agent drivers…` · `fix(goldens): capture-live redacts account identifiers instead of refusing them…`.
 

@@ -1,6 +1,6 @@
 # docs(formats): format references for Factory Droid, Goose, Qwen Code, Cline CLI and Hermes Agent
 
-Status: draft · Base: main · Independent
+Status: opened #366 (draft, 2026-10-16) — was: draft · Base: main · Independent
 
 Commits: `docs(formats): …` (30e2c0a), 1,138 lines, five drafts.
 

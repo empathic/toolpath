@@ -1,6 +1,6 @@
 # test: tests read captured goldens instead of hand-typed fixtures
 
-Status: draft · Base: pr/04 · Stack 4/4
+Status: not cut (the first-cut plan; see HOLD.md and README) — was: draft · Base: pr/04 · Stack 4/4
 
 Commits: `test: golden() stub factory (input/events/slice/with_field/first_string); roundtrip test runs on the captured claude session; FABRICATED tag`.
 

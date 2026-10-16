@@ -168,3 +168,11 @@ The rules, from now on:
   clippy `-D warnings`, `cargo test --workspace`, doc `-D warnings` — the gates `scripts/quality_gates.sh`
   runs in CI. `cut.sh` runs the same per piece.
 Both default their paths to the scratchpad they were written in; set `S` to run them elsewhere.
+
+## Opening the PRs: `pr/open.sh`
+
+One gated step, one script, driven by these records: `pr/open.sh [--repo owner/name] [NN ...]`
+reads each `NN-<slug>.md` (title = line 1, head = `pr/<stem>`, base = its `Base:` line or the
+previous piece), skips records already `opened #N`, refuses a head that is not on origin, opens
+the draft with the record as body and writes `opened #N` back. Bobby runs it; agents only prepare
+the records and push wip. Commit `pr/` afterwards so the numbers live on wip.

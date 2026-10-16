@@ -1,6 +1,6 @@
 # test(webmock): no_secrets gate over the committed fixture surfaces; cassette provenance
 
-Status: ready · Base: pr/13-webmock · Independent of the goldens and resume PRs
+Status: opened #370 (draft, 2026-10-16) — was: ready · Base: pr/13-webmock · Independent of the goldens and resume PRs
 
 Commits (signed, on wip after the squash): `fix(webmock): x-gemini-api-privileged-user-id is a secret header…`, `test(webmock): no_secrets gate…`, `docs(webmock): cassette provenance…`, `fix(quality-gates): the secrets gate scans . from the repo root…`, `fix(webmock): needless_borrow at up_headers_for_client`.
 

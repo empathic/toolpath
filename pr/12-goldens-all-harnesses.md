@@ -1,6 +1,6 @@
 # test(goldens): cover all seven harnesses, pin schema validation, assert the accounting contract
 
-Status: ready · Base: pr/07-insta-goldens · Independent of the resume fixes
+Status: opened #367 (draft, 2026-10-16) — was: ready · Base: pr/07-insta-goldens · Independent of the resume fixes
 
 Commits: `test(goldens): cover all seven harnesses, pin validate, assert the accounting contract` (78b4e80).
 

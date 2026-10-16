@@ -1,6 +1,6 @@
 # fix(opencode): resume writes the database opencode actually reads
 
-Status: ready · Base: pr/02-goldens-core · Independent of the other resume fixes
+Status: opened #363 (draft, 2026-10-16) — was: ready · Base: pr/02-goldens-core · Independent of the other resume fixes
 
 Commits: `fix(opencode): …` (4b2d71c).
 

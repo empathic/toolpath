@@ -1,6 +1,6 @@
 # fix(convo): per-turn token breakdowns survive extract_conversation
 
-Status: ready · Base: main · Independent (no stack)
+Status: opened #359 (draft, 2026-10-16) — was: ready · Base: main · Independent (no stack)
 
 Commits: `fix(convo): extract_conversation sums per-turn token breakdowns into total_usage` · `docs(convo): a session total's breakdowns are the per-turn breakdowns summed class by class`
 

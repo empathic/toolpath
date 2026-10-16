@@ -1,6 +1,6 @@
 # test(goldens): toolpath-goldens, the goldens as insta snapshots beside `path goldens`
 
-Status: ready (Bobby chose the insta shape as the long-term goldens tool, 2026-10-15) · Base: pr/02-goldens-core's inputs · Independent of the resume fixes
+Status: opened #362 (draft, 2026-10-16) — was: ready (Bobby chose the insta shape as the long-term goldens tool, 2026-10-15) · Base: pr/02-goldens-core's inputs · Independent of the resume fixes
 
 Commits: `test(goldens): toolpath-goldens, the goldens as insta snapshots beside path goldens`.
 
