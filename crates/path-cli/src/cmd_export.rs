@@ -12,7 +12,9 @@
 //!   JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`,
 //!   loadable via `codex resume <session-uuid>`.
 //! - `export opencode` projects a Path document into rows in opencode's
-//!   `~/.local/share/opencode/opencode.db` so the session is visible to
+//!   database under `~/.local/share/opencode/` (`opencode-stable.db` for
+//!   current releases, `opencode.db` for older ones — see
+//!   `toolpath_opencode::PathResolver`) so the session is visible to
 //!   the `opencode` CLI; or to a JSON file / stdout.
 //! - `export pathbase` uploads the document to a Pathbase server.
 
@@ -151,8 +153,9 @@ pub enum ExportTarget {
         input: String,
 
         /// Target project directory. With this flag, inserts session,
-        /// message, and part rows into `~/.local/share/opencode/opencode.db`
-        /// so the `opencode` CLI sees the session in its picker.
+        /// message, and part rows into the opencode database under
+        /// `~/.local/share/opencode/` (`opencode-stable.db`, or `opencode.db`
+        /// for older releases) so the `opencode` CLI sees the session.
         /// Defaults to cwd when neither --project nor --output is given.
         #[arg(short, long)]
         project: Option<PathBuf>,

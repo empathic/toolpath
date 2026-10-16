@@ -5,15 +5,17 @@ Derive Toolpath provenance documents from
 
 opencode stores every conversation — sessions, messages, typed
 parts, tool calls, filesystem snapshots — in a single SQLite
-database at `~/.local/share/opencode/opencode.db`. This crate reads
-that database directly (read-only) and maps it to Toolpath
+database under `~/.local/share/opencode/` — `opencode-stable.db` for
+current releases, `opencode.db` for older ones (the rule is in
+`src/paths.rs`). This crate reads that database directly (read-only)
+and maps it to Toolpath
 documents, so every opencode-assisted change has a traceable origin
 with real unified diffs reconstructed from the sibling snapshot
 git repositories.
 
 ## Overview
 
-- **Reading**: open `opencode.db` with `rusqlite`, enumerate
+- **Reading**: open the database with `rusqlite`, enumerate
   projects and sessions, materialize typed `Message` / `Part` rows
   from the JSON-in-TEXT `data` columns.
 - **Provider**: implements
