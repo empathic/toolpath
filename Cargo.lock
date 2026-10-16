@@ -5547,12 +5547,15 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "toml",
+ "walkdir",
  "zstd",
 ]
 

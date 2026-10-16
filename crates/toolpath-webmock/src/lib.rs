@@ -42,13 +42,30 @@ use tokio::sync::mpsc;
 pub const SECRET_HEADERS: &[&str] = &[
     "authorization",
     "x-api-key",
+    // Gemini's API key travels in this header, not in `authorization`. The first gemini
+    // recording wrote the real key to disk before this entry existed.
+    "x-goog-api-key",
+    "api-key",
     "proxy-authorization",
     "cookie",
     "set-cookie",
     "chatgpt-account-id",
     "openai-organization",
     "x-github-token",
+    // The Gemini API answers with the account id behind the key. An identifier, not a credential,
+    // but it ties a public cassette to one Google account; the first gemini recordings kept it.
+    "x-gemini-api-privileged-user-id",
 ];
+
+/// A header is a secret when it is listed above or when its name ends in `-key`, `-token`
+/// or `-secret`: a provider's new credential header must never reach a cassette by default.
+pub fn is_secret_header(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    SECRET_HEADERS.contains(&n.as_str())
+        || n.ends_with("-key")
+        || n.ends_with("-token")
+        || n.ends_with("-secret")
+}
 
 /// Hop-by-hop / framing headers never forwarded or stored. Request `content-encoding` is NOT
 /// here: codex zstd-compresses its request bodies and forwarding the bytes without that header
@@ -359,7 +376,7 @@ fn storable_headers(h: &HeaderMap) -> HashMap<String, String> {
         if HOP_HEADERS.contains(&k) {
             continue;
         }
-        let val = if SECRET_HEADERS.contains(&k) {
+        let val = if is_secret_header(k) {
             "<redacted>".to_string()
         } else {
             String::from_utf8_lossy(v.as_bytes()).into_owned()
@@ -738,9 +755,7 @@ async fn record(
 fn up_headers_for_client(stored: &HashMap<String, String>) -> Vec<(String, String)> {
     stored
         .iter()
-        .filter(|(k, _)| {
-            !HOP_HEADERS.contains(&k.as_str()) && !SECRET_HEADERS.contains(&k.as_str())
-        })
+        .filter(|(k, _)| !HOP_HEADERS.contains(&k.as_str()) && !is_secret_header(k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect()
 }

@@ -30,3 +30,7 @@ zstd-bodies = ["dep:zstd"]
 
 [dev-dependencies]
 tempfile.workspace = true
+# tests/no_secrets.rs: the fixture-surface secret gate, rules read from /.gitleaks.toml
+regex = "1"
+toml.workspace = true
+walkdir = "2"
