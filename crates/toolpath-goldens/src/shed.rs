@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::keypaths::{counts, json_lines, raw_paths, snake_case, string_chars};
+use crate::keypaths::{counts, json_values, raw_paths, snake_case, string_chars};
 use crate::model::{
     Agent, DocumentStats, Dropped, Kept, KeyPathTally, Rename, SameFormat, Shed, TranscriptStats,
 };
@@ -44,7 +44,7 @@ pub fn transcript_stats(text: &str) -> TranscriptStats {
     TranscriptStats {
         lines: text.lines().count(),
         bytes: text.len(),
-        string_chars: json_lines(text).map(|v| string_chars(&v)).sum(),
+        string_chars: json_values(text).map(|v| string_chars(&v)).sum(),
         by_type: type_counts(text),
     }
 }
@@ -119,7 +119,7 @@ pub fn event_type(v: &Value) -> String {
 /// How many lines of each event type a transcript has.
 pub fn type_counts(text: &str) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
-    for l in json_lines(text) {
+    for l in json_values(text) {
         *m.entry(event_type(&l)).or_default() += 1;
     }
     m

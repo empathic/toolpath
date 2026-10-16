@@ -5471,6 +5471,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "insta",
+ "jsonschema",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5480,6 +5481,9 @@ dependencies = [
  "toolpath-codex",
  "toolpath-convo",
  "toolpath-copilot",
+ "toolpath-cursor",
+ "toolpath-gemini",
+ "toolpath-opencode",
  "toolpath-pi",
  "uuid",
 ]

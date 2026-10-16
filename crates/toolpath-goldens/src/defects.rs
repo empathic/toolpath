@@ -4,13 +4,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::keypaths::{json_lines, raw_paths};
+use serde_json::Value;
+use toolpath_convo::ConversationView;
+
+use crate::accounting;
+use crate::keypaths::{json_values, raw_paths};
 use crate::model::{Agent, Finding, KnownDefect, Set};
 use crate::shed::renames;
 
 /// The outputs a defect can be measured on.
 pub struct Evidence<'a> {
     pub set: &'a Set,
+    /// The adapter's conversation view.
+    pub ir: &'a ConversationView,
+    /// The toolpath graph derived from the set.
+    pub document: &'a Value,
     pub projections: &'a BTreeMap<Agent, String>,
     /// The set projected back to its own format.
     pub same_format: &'a str,
@@ -21,6 +29,8 @@ pub struct Evidence<'a> {
 enum Target {
     Projection(Agent),
     SameFormat,
+    /// The document and the IR it was derived from.
+    Document,
 }
 
 impl Target {
@@ -28,6 +38,7 @@ impl Target {
         match self {
             Target::Projection(a) => a.name().to_owned(),
             Target::SameFormat => "self".to_owned(),
+            Target::Document => "document".to_owned(),
         }
     }
 }
@@ -71,7 +82,46 @@ const DEFECTS: &[Defect] = &[
         target: Target::SameFormat,
         measure: |e| round_trip_renames(&e.set.text(), e.same_format),
     },
+    // Copilot's `assistant.message` reports only `outputTokens`; the
+    // session's input and cache totals are on `session.shutdown` alone, and
+    // `toolpath_copilot::to_view` fills `total_usage` from there. No step
+    // carries them, so the sum over steps and the extracted total lack what
+    // the IR total has: the accounting contract (`crate::accounting`) does
+    // not hold for this set until the derive carries session-level totals.
+    Defect {
+        name: "copilot-session-totals-not-on-steps",
+        set: "copilot",
+        target: Target::Document,
+        measure: accounting_gap,
+    },
+    // `toolpath_gemini::provider::sum_usage` adds the four counters of every
+    // turn and drops their breakdowns, so the IR's `total_usage` has no
+    // `output.reasoning` while every step's `token_usage` carries one (and
+    // the extracted total, which sums breakdowns since c65a6b6, has it).
+    Defect {
+        name: "gemini-total-usage-drops-breakdowns",
+        set: "gemini",
+        target: Target::Document,
+        measure: accounting_gap,
+    },
+    // `toolpath_opencode::provider::accumulate_total` does the same: the
+    // per-message `reasoning` tokens go into each turn's breakdowns and
+    // never into the session total.
+    Defect {
+        name: "opencode-total-usage-drops-breakdowns",
+        set: "opencode",
+        target: Target::Document,
+        measure: accounting_gap,
+    },
 ];
+
+/// Every field of the token accounting on which the sum over steps, the
+/// IR's total and the extracted total disagree.
+fn accounting_gap(e: &Evidence) -> Finding {
+    Finding::Accounting {
+        mismatches: accounting::check(e.document, e.ir).unwrap_or_default(),
+    }
+}
 
 /// The defects that apply to `evidence.set`, measured.
 pub fn known_defects(evidence: &Evidence) -> Vec<KnownDefect> {
@@ -115,7 +165,7 @@ const CLAUDE_TYPES: &[&str] = &[
 /// counted per type.
 pub fn illegal_claude_types(projection: &str) -> Finding {
     let mut counts = BTreeMap::new();
-    for v in json_lines(projection) {
+    for v in json_values(projection) {
         let t = v["type"].as_str().unwrap_or("<no type>");
         if !CLAUDE_TYPES.contains(&t) {
             *counts.entry(t.to_owned()).or_default() += 1;
@@ -127,8 +177,8 @@ pub fn illegal_claude_types(projection: &str) -> Finding {
 /// The session's own cwd (the first `cwd` in the transcript) against every
 /// `payload.cwd` a codex projection writes.
 pub fn caller_cwd(source: &str, projection: &str) -> Finding {
-    let source_cwd = json_lines(source).find_map(|v| v["cwd"].as_str().map(str::to_owned));
-    let written_cwd: BTreeSet<String> = json_lines(projection)
+    let source_cwd = json_values(source).find_map(|v| v["cwd"].as_str().map(str::to_owned));
+    let written_cwd: BTreeSet<String> = json_values(projection)
         .filter_map(|v| v["payload"]["cwd"].as_str().map(str::to_owned))
         .collect();
     Finding::CallerCwd {
@@ -213,6 +263,8 @@ mod tests {
             BTreeMap::from([(Agent::Claude, "{\"type\":\"token_count\"}\n".to_owned())]);
         let found = known_defects(&Evidence {
             set: &set,
+            ir: &ConversationView::default(),
+            document: &Value::Null,
             projections: &projections,
             same_format: "",
         });

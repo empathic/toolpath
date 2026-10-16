@@ -55,7 +55,7 @@ pub fn key_paths(doc: &Value) -> BTreeSet<KeyPath> {
     out
 }
 
-/// Leaf paths (arrays collapsed, keys kept) of every JSON line of a
+/// Leaf paths (arrays collapsed, keys kept) of every JSON value of a
 /// transcript, each with the first example value seen. Lines that are not
 /// JSON are skipped.
 pub fn raw_paths(text: &str) -> BTreeMap<String, String> {
@@ -76,16 +76,23 @@ pub fn raw_paths(text: &str) -> BTreeMap<String, String> {
         }
     }
     let mut out = BTreeMap::new();
-    for line in json_lines(text) {
-        walk("", &line, &mut out);
+    for value in json_values(text) {
+        walk("", &value, &mut out);
     }
     out
 }
 
-/// Every line of `text` that parses as JSON.
-pub fn json_lines(text: &str) -> impl Iterator<Item = Value> + '_ {
-    text.lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+/// Every JSON value of `text`: the text itself when it is one JSON document
+/// (a Gemini chat file, an opencode or Cursor session as `p export -o`
+/// writes it), else every line that parses as JSON (a JSONL transcript).
+pub fn json_values(text: &str) -> impl Iterator<Item = Value> + '_ {
+    let whole = serde_json::from_str::<Value>(text).ok();
+    let by_line = whole.is_none();
+    whole.into_iter().chain(
+        text.lines()
+            .filter(move |_| by_line)
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok()),
+    )
 }
 
 /// `camelCase` -> `camel_case`, so a rename between the two spellings
@@ -180,6 +187,16 @@ mod tests {
         assert_eq!(got.get("a.b[]").map(String::as_str), Some("1"));
         assert_eq!(got.get("t").map(String::as_str), Some("x"));
         assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn a_whole_document_is_one_value_and_a_stream_is_one_per_line() {
+        let document = "{\n  \"a\": 1,\n  \"b\": [2]\n}\n";
+        assert_eq!(json_values(document).count(), 1);
+        let stream = "{\"a\":1}\n{\"a\":2}\nnot json\n";
+        assert_eq!(json_values(stream).count(), 2);
+        assert_eq!(json_values("{\"a\":1}\n").count(), 1);
+        assert_eq!(json_values("").count(), 0);
     }
 
     #[test]

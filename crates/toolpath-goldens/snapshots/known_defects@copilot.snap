@@ -5,6 +5,34 @@ info:
   adapter: toolpath_copilot
   agent: copilot
   input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
-input_file: goldens/copilot/input.jsonl
+input_file: test-fixtures/copilot/convo.jsonl
 ---
-[]
+[
+  {
+    "name": "copilot-session-totals-not-on-steps",
+    "target": "document",
+    "finding": {
+      "kind": "accounting",
+      "mismatches": [
+        {
+          "field": "input_tokens",
+          "steps": null,
+          "ir": 54,
+          "extracted": null
+        },
+        {
+          "field": "cache_read_tokens",
+          "steps": null,
+          "ir": 198884,
+          "extracted": null
+        },
+        {
+          "field": "cache_write_tokens",
+          "steps": null,
+          "ir": 22998,
+          "extracted": null
+        }
+      ]
+    }
+  }
+]

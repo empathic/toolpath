@@ -1,0 +1,34 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.validate
+info:
+  adapter: toolpath_copilot
+  agent: copilot
+  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
+input_file: test-fixtures/copilot/convo.jsonl
+---
+{
+  "document": {
+    "outcome": "valid"
+  },
+  "round_trips": {
+    "claude": {
+      "outcome": "valid"
+    },
+    "codex": {
+      "outcome": "valid"
+    },
+    "cursor": {
+      "outcome": "valid"
+    },
+    "gemini": {
+      "outcome": "valid"
+    },
+    "opencode": {
+      "outcome": "valid"
+    },
+    "pi": {
+      "outcome": "valid"
+    }
+  }
+}

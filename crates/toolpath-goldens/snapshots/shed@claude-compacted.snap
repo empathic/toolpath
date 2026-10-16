@@ -55,6 +55,30 @@ input_file: goldens/claude-compacted/input.jsonl
         "user.message": 3
       }
     },
+    "cursor": {
+      "lines": 840,
+      "bytes": 26408,
+      "string_chars": 3203,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 129,
+      "bytes": 3341,
+      "string_chars": 1019,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 417,
+      "bytes": 12194,
+      "string_chars": 2934,
+      "by_type": {
+        "?": 1
+      }
+    },
     "pi": {
       "lines": 9,
       "bytes": 3058,

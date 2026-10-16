@@ -14,8 +14,13 @@ toolpath-claude = { workspace = true }
 toolpath-codex = { workspace = true }
 toolpath-copilot = { workspace = true }
 toolpath-pi = { workspace = true }
+toolpath-gemini = { workspace = true }
+toolpath-opencode = { workspace = true }
+toolpath-cursor = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The validator `path p validate` uses, at the same version as path-cli.
+jsonschema = { version = "0.46", default-features = false }
 sha2 = "0.10"
 hex = "0.4"
 tempfile = { workspace = true }

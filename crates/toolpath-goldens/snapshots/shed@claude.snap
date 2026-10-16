@@ -5,7 +5,7 @@ info:
   adapter: toolpath_claude
   agent: claude
   input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
-input_file: goldens/claude/input.jsonl
+input_file: test-fixtures/claude/convo.jsonl
 ---
 {
   "source": {
@@ -59,6 +59,30 @@ input_file: goldens/claude/input.jsonl
         "tool.execution_complete": 19,
         "tool.execution_start": 19,
         "user.message": 1
+      }
+    },
+    "cursor": {
+      "lines": 5424,
+      "bytes": 176047,
+      "string_chars": 23549,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 973,
+      "bytes": 39211,
+      "string_chars": 19879,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 3828,
+      "bytes": 125042,
+      "string_chars": 38541,
+      "by_type": {
+        "?": 1
       }
     },
     "pi": {
