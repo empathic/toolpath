@@ -430,7 +430,7 @@ fn route(state: &mut State, port: u16, req: &Request) -> Response {
             let path = &state.graphs[gi].paths[pi];
             let mut ids = path.step_ids();
             let mut body = serde_json::json!({});
-            if query.contains("through_parents=true") {
+            if query.contains("composed=true") {
                 let chain = walk(state, port, path.parent.as_ref(), true);
                 ids.extend(chain.ids);
                 if let Some(at) = chain.truncated_at {

@@ -148,9 +148,9 @@ Input: a session (harness + id), its destination, the record if any.
    with `has_parent = false`, report "recreated".
 
 **Ownership of a continuation.** `GET` the path's step ids with
-`through_parents=true`; the server lists the path's own ids first, then
+`composed=true`; the server lists the path's own ids first, then
 its parents', nearest first, but does not mark where its own end, so
-`GET` them without `through_parents` too. The second response is `O`,
+`GET` them without `composed` too. The second response is `O`,
 the path's own ids; the rest of the first is `I`, the ids it inherits.
 Every step appended to a continuation keeps only the parents in `O` or
 earlier in the same batch. A merge edge into inherited history is lost
@@ -263,7 +263,7 @@ file-watcher mode is a later design.
 One PR, stacked on #469:
 
 - `GET /api/v1/u/{owner}/repos/{repo}/graphs/{id}/paths/{path_id}/step-ids`:
-  the path's step ids in document order. With `?through_parents=true`,
+  the path's step ids in document order. With `?composed=true`,
   the ids along the parent chain too, nearest first, so a continuation
   client can learn what is already stored upstream in one call. The walk
   stops at a parent the caller cannot read and names it in
@@ -303,7 +303,7 @@ and fails saying what to set when they are missing.
 4. Freeze the graph with `POST .../freeze`. Grow the file. Run a pass.
    Assert a new graph exists whose `parent.uri` is the frozen graph's
    `url` as the server reports it and whose `parent.step` follows step 6,
-   that its steps are the new ones only and its step ids through parents
+   that its steps are the new ones only and its composed step ids
    reach the frozen path's, and that the record is re-keyed to it with
    `has_parent` true.
    Then truncate the file below the continuation boundary, regrow it

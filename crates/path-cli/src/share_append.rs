@@ -1092,7 +1092,7 @@ mod tests {
         assert_eq!(out, Outcome::UpToDate);
         let reqs = fake.requests();
         assert_eq!(reqs.len(), 1);
-        assert!(reqs[0].target.ends_with("/step-ids?through_parents=true"));
+        assert!(reqs[0].target.ends_with("/step-ids?composed=true"));
         let (same, record) = record_on(cfg.path(), &d).unwrap();
         assert_eq!(same, key);
         assert_eq!(
@@ -1801,7 +1801,7 @@ mod tests {
     }
 
     /// A frozen continuation is continued again: the new path descends
-    /// from a step the continuation owns, and its ids through parents
+    /// from a step the continuation owns, and its composed ids
     /// reach both frozen paths.
     #[test]
     fn a_frozen_continuation_is_continued_again() {

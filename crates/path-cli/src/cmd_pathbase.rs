@@ -1331,7 +1331,7 @@ pub(crate) fn append_steps(
 /// A stored path's step ids, as the step-ids route answers.
 #[derive(Debug, Deserialize)]
 pub(crate) struct StepIds {
-    /// The path's ids in document order, followed (through parents) by
+    /// The path's ids in document order, followed (composed) by
     /// each parent's along the chain, nearest first.
     pub(crate) step_ids: Vec<String>,
     /// The parent the caller cannot read, where the walk stopped: ids
@@ -1341,18 +1341,18 @@ pub(crate) struct StepIds {
 }
 
 /// The ids of the steps stored in the path at `path_url`, in document
-/// order, followed with `through_parents` by the ids stored along its
+/// order, followed with `composed` by the ids stored along its
 /// parent chain, nearest first, as far as the caller can read.
 pub(crate) fn path_step_ids(
     base_url: &str,
     token: &str,
     path_url: &str,
-    through_parents: bool,
+    composed: bool,
 ) -> std::result::Result<StepIds, AppendError> {
     let client =
         BatchClient::new(base_url, token).map_err(|e| AppendError::Other(e.to_string()))?;
-    let url = if through_parents {
-        format!("{path_url}/step-ids?through_parents=true")
+    let url = if composed {
+        format!("{path_url}/step-ids?composed=true")
     } else {
         format!("{path_url}/step-ids")
     };

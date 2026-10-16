@@ -92,8 +92,8 @@ impl Server {
     }
 
     /// The path's step ids followed by its parents', nearest first.
-    fn step_ids_through_parents(&self, path_url: &str) -> Vec<String> {
-        self.read_step_ids(&format!("{path_url}/step-ids?through_parents=true"))
+    fn step_ids_composed(&self, path_url: &str) -> Vec<String> {
+        self.read_step_ids(&format!("{path_url}/step-ids?composed=true"))
     }
 
     fn read_step_ids(&self, url: &str) -> Vec<String> {
@@ -748,7 +748,7 @@ fn run_loop(
     assert_ne!(new_key, key, "the record is re-keyed to the continuation");
     assert_eq!(server.step_ids(&new_key), want[before.len()..]);
     assert_eq!(
-        server.step_ids_through_parents(&new_key),
+        server.step_ids_composed(&new_key),
         [&want[before.len()..], &frozen_ids[..]].concat(),
         "the continuation is linked to the frozen path"
     );
@@ -794,7 +794,7 @@ fn run_loop(
     // continuation, their edges among themselves intact and those into
     // inherited history dropped.
     let own_before = server.step_ids(&key);
-    let held_before: HashSet<String> = server.step_ids_through_parents(&key).into_iter().collect();
+    let held_before: HashSet<String> = server.step_ids_composed(&key).into_iter().collect();
     lines = all[..first].to_vec();
     lines.extend(session.exchange(&lines, 200, true));
     lines.extend(session.exchange(&lines, 201, true));
@@ -856,7 +856,7 @@ fn run_loop(
     // descending from a step the first one owns.
     server.freeze(&key);
     let owned_by_first = server.step_ids(&key);
-    let held_before: HashSet<String> = server.step_ids_through_parents(&key).into_iter().collect();
+    let held_before: HashSet<String> = server.step_ids_composed(&key).into_iter().collect();
     lines.extend(session.exchange(&lines, 203, true));
     lines.extend(session.exchange(&lines, 204, false));
     write_lines(&session.file(), &lines);

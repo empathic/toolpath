@@ -1463,7 +1463,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: line 1 is not a `PathOpen`, a line is malformed (the message names its 1-based number), or a step `Signature` names a step that is neither stored nor earlier in the body. `invalid_document`: a step id is empty, a `Step` line reuses a stored step ID with a different payload, or a step cites a parent that is neither stored in the path nor earlier in the body. `invalid_parent`: `PathOpen.parent` is malformed, or names a graph on this server with no such readable graph, path or step. `inherited_step_redefined`: a step reuses an id stored along the parent chain. A malformed line or a refused parent is refused before anything is written; a refused `Signature` or `Step` leaves the path created with no lines applied.",
+            "description": "`bad_request`: line 1 is not a `PathOpen`, a line is malformed (the message names its 1-based number), or a step `Signature` names a step that is neither stored nor earlier in the body. `invalid_document`: a step id is empty, the body carries one step ID twice with different payloads, a `Step` line re-sends a stored step with different `parents`, or a step cites a parent that is neither stored in the path nor earlier in the body. `invalid_parent`: `PathOpen.parent` is malformed, or names a graph on this server with no such readable graph, path or step. `inherited_step_redefined`: a step reuses an id stored along the parent chain. A malformed line or a refused parent is refused before anything is written; a refused `Signature` or `Step` leaves the path created with no lines applied.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2246,7 +2246,7 @@
         "tags": [
           "Graphs"
         ],
-        "summary": "The path's Toolpath step ids, in document order. With\n`through_parents=true`, followed by the step ids of each path along its\nparent chain on this server, nearest parent first, each in document\norder, as far as the caller can read. Readable by anyone who can read\nthe path; every parent on the chain is checked for the caller as well.\nWhen `truncated_at` is present, an append can still be refused with\n`inherited_step_redefined` for an id stored above it that this list\ndoes not show; a client should then start a fresh graph.",
+        "summary": "The path's Toolpath step ids, in document order. With\n`composed=true`, followed by the step ids of each path along its\nparent chain on this server, nearest parent first, each in document\norder, as far as the caller can read. Readable by anyone who can read\nthe path; every parent on the chain is checked for the caller as well.\nWhen `truncated_at` is present, an append can still be refused with\n`inherited_step_redefined` for an id stored above it that this list\ndoes not show; a client should then start a fresh graph.",
         "operationId": "get_graph_path_step_ids",
         "parameters": [
           {
@@ -2284,7 +2284,7 @@
             }
           },
           {
-            "name": "through_parents",
+            "name": "composed",
             "in": "query",
             "description": "Also list the step ids of every path along the parent chain.",
             "required": false,
@@ -2329,7 +2329,7 @@
           "Graphs"
         ],
         "summary": "Continue a constituent path with more toolpath JSONL lines. Requires\nwrite permission on the repo. The lines are applied in order, in one\ntransaction:",
-        "description": "- `Step` is stored; one already stored with an identical payload is\n  skipped. Parent edges resolve against steps already stored, so send\n  parents first.\n- `Head` sets the path's head to the step ID it carries, stored as sent\n  like `path.head` of a `POST /graphs` document; the newest `Head` wins.\n  The head is empty until one arrives.\n- `PathMeta` overwrites the patched `meta` fields; `ActorDef` sets\n  `meta.actors[actor]`.\n- `Signature` is appended to the path's or the stored step's\n  `meta.signatures` unless an identical one is present.\n- `PathClose` changes nothing; unknown variants are skipped.\n\nRe-sending a request after a lost response is a no-op.",
+        "description": "- `Step` is stored. One already stored is skipped when its payload is\n  identical and otherwise replaces the stored payload, keeping that\n  step's position, `parents` and signatures. Parent edges resolve\n  against steps already stored, so send parents first.\n- `Head` sets the path's head to the step ID it carries, stored as sent\n  like `path.head` of a `POST /graphs` document; the newest `Head` wins.\n  The head is empty until one arrives.\n- `PathMeta` overwrites the patched `meta` fields; `ActorDef` sets\n  `meta.actors[actor]`.\n- `Signature` is appended to the path's or the stored step's\n  `meta.signatures` unless an identical one is present.\n- `PathClose` changes nothing; unknown variants are skipped.\n\nRe-sending a request after a lost response is a no-op.",
         "operationId": "append_graph_path_steps",
         "parameters": [
           {
@@ -2390,7 +2390,7 @@
             }
           },
           "400": {
-            "description": "`bad_request`: a line is malformed (the message names its 1-based number), is a `PathOpen`, or is a step `Signature` naming a step that is neither stored nor earlier in the body. `invalid_document`: a step id is empty, a `Step` line reuses a stored step ID with a different payload, or a step cites a parent that is neither stored in the path nor earlier in the body. `inherited_step_redefined`: a step reuses an id stored along the path's parent chain. Nothing is written.",
+            "description": "`bad_request`: a line is malformed (the message names its 1-based number), is a `PathOpen`, or is a step `Signature` naming a step that is neither stored nor earlier in the body. `invalid_document`: a step id is empty, the body carries one step ID twice with different payloads, a `Step` line re-sends a stored step with different `parents`, or a step cites a parent that is neither stored in the path nor earlier in the body. `inherited_step_redefined`: a step reuses an id stored along the path's parent chain. Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2825,7 +2825,7 @@
           },
           "inserted": {
             "type": "integer",
-            "description": "Number of `Step` lines newly stored. A step that was already stored\nwith an identical payload is not counted.",
+            "description": "Number of `Step` lines newly stored. A step that was already stored\nis not counted, whether it was skipped or replaced.",
             "minimum": 0
           }
         }
@@ -3631,7 +3631,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The path's step ids in document order; with `through_parents=true`,\nfollowed by those of each path along its parent chain on this\nserver, nearest parent first."
+            "description": "The path's step ids in document order; with `composed=true`,\nfollowed by those of each path along its parent chain on this\nserver, nearest parent first."
           },
           "truncated_at": {
             "nullable": true,
@@ -3640,7 +3640,7 @@
                 "$ref": "#/components/schemas/PathParent"
               }
             ],
-            "description": "With `through_parents=true`: the parent, as written, that the\ncaller cannot read. The list stops before its ids. Absent when the\nwhole chain was read, which includes a walk that ended at a parent\non another host or one that was deleted."
+            "description": "With `composed=true`: the parent, as written, that the\ncaller cannot read. The list stops before its ids. Absent when the\nwhole chain was read, which includes a walk that ended at a parent\non another host or one that was deleted."
           }
         }
       },
