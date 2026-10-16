@@ -158,3 +158,13 @@ The rules, from now on:
   `pull_request` head.
 - **Verify with the toolchain CI pins.** `rust-toolchain.toml` says 1.94.0; a 1.94.1 rustup
   toolchain is what is installed here and is what the gates ran with. Say so in the evidence.
+
+## Repair tools (2026-10-16)
+
+- `pr/era-restore.sh`: after a fileset cut from a squashed tip, give each piece its owned paths at the
+  end of that piece's era in the pre-squash history (era map inside; mixed files = main + era delta;
+  the scrub re-asserted on the files a piece changes; HOLD absorbs the rest). Prints its rollback op id.
+- `pr/gate-piece.sh <jj clone> <worktree> <pr/NN> <log dir>`: one piece on its own tree — metadata, fmt,
+  clippy `-D warnings`, `cargo test --workspace`, doc `-D warnings` — the gates `scripts/quality_gates.sh`
+  runs in CI. `cut.sh` runs the same per piece.
+Both default their paths to the scratchpad they were written in; set `S` to run them elsewhere.
