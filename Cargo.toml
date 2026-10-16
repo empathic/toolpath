@@ -17,6 +17,7 @@ members = [
     "crates/path-cli",
     "crates/toolpath-golden",
     "crates/toolpath-goldens",
+    "crates/toolpath-webmock",
 ]
 exclude = ["crates/toolpath-cli"]
 resolver = "2"

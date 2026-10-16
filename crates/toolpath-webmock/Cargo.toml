@@ -1,0 +1,32 @@
+[package]
+name = "toolpath-webmock"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Record/replay HTTP mock for the model APIs and Pathbase endpoints the harness cells call (dev/test only)"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+bytes = "1"
+flate2 = "1"
+futures-core = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+tokio.workspace = true
+# codex 0.162 zstd-compresses request bodies; without this feature such a body is keyed on its raw
+# bytes (a loud miss on replay) instead of its JSON.
+zstd = { version = "0.13", optional = true }
+
+[features]
+default = []
+zstd-bodies = ["dep:zstd"]
+
+[dev-dependencies]
+tempfile.workspace = true
