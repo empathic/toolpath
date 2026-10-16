@@ -7,7 +7,7 @@
         "harness": {
           "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
           "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
-          "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
+          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
         },
         "nix_pinned_binary": {
           "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
@@ -30,10 +30,10 @@
       "name": "claude",
       "pins": {
         "producer": {
-          "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
           "dirty": true,
           "nix_store_path": null,
-          "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
         }
       },
       "project": null,
@@ -50,7 +50,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude --all && path p export pi -i {ir} -o {out}",
           "file": "goldens/claude/to-pi.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "f2d5923d1a59cf48a548c5456c1d86468e3b4e57076d28fb999a2aa13abb00b2",
+          "output_sha256": "9e65c0c00c475bb153c8a8f134be5fc60fda5e5bd1c6162fd88d9b4f3b720320",
           "status": "ok",
           "target": "pi"
         },
@@ -71,7 +71,7 @@
         "harness": {
           "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
           "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
-          "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
+          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
         },
         "nix_pinned_binary": {
           "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
@@ -94,10 +94,10 @@
       "name": "claude-compacted",
       "pins": {
         "producer": {
-          "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
           "dirty": true,
           "nix_store_path": null,
-          "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
         }
       },
       "project": null,
@@ -114,7 +114,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /work --all && path p export pi -i {ir} -o {out}",
           "file": "goldens/claude-compacted/to-pi.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "db34625d1716ea5b0da48b311795f500b5e04dcc58314c739941fd7c9a69f61e",
+          "output_sha256": "b84159f31936c67b09d4c7883dcc38ec7ca571d291482183848e6383da74039d",
           "status": "ok",
           "target": "pi"
         },
@@ -135,7 +135,7 @@
         "harness": {
           "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
           "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
-          "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
+          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
         },
         "nix_pinned_binary": {
           "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
@@ -171,10 +171,10 @@
       "name": "claude-session",
       "pins": {
         "producer": {
-          "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
           "dirty": true,
           "nix_store_path": null,
-          "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
         }
       },
       "project": null,
@@ -191,7 +191,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive claude --project /private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project --all && path p export pi -i {ir} -o {out}",
           "file": "goldens/claude-session/to-pi.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "ebfe6e05f6b9f52b912d32c21844cddcf1536fa436ea885dc0bf72a10f6495cb",
+          "output_sha256": "7dbc517af038ab7c9f41baadc8f89e73b3cbde62bb0e4d48bfeada86f445a4d6",
           "status": "ok",
           "target": "pi"
         },
@@ -212,7 +212,7 @@
         "harness": {
           "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
           "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
-          "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
+          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
         },
         "nix_pinned_binary": {
           "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
@@ -235,10 +235,10 @@
       "name": "codex",
       "pins": {
         "producer": {
-          "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
           "dirty": true,
           "nix_store_path": null,
-          "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
         }
       },
       "project": null,
@@ -255,7 +255,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive codex --all && path p export pi -i {ir} -o {out}",
           "file": "goldens/codex/to-pi.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "3b1f3b290ea63e952bef9b3ab8de92267442723e7fbc84af6c4fa79dbba70007",
+          "output_sha256": "c287a80aa11cf44abf5948cf0cc5baed615016be20b2c4bbda5de21b51eeb661",
           "status": "ok",
           "target": "pi"
         },
@@ -276,7 +276,7 @@
         "harness": {
           "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
           "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
-          "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
+          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
         },
         "nix_pinned_binary": {
           "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
@@ -299,10 +299,10 @@
       "name": "copilot",
       "pins": {
         "producer": {
-          "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
           "dirty": true,
           "nix_store_path": null,
-          "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
         }
       },
       "project": null,
@@ -311,7 +311,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive copilot --all && path p project claude -i {ir} -o {out}",
           "file": "goldens/copilot/to-claude.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "55ed7b9d8ebe6f4bc467acd91bf8ffcfa410a4eb3fdf2d3412923400e66c5bf5",
+          "output_sha256": "6937e24a32560c9640561ec706a804ba9efdfdd5c47b92834eef36e227ed4202",
           "status": "ok",
           "target": "claude"
         },
@@ -319,7 +319,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive copilot --all && path p export codex -i {ir} -o {out}",
           "file": "goldens/copilot/to-codex.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "b790aeba02285675740923d7fdb482f75f8a06886764e900ee35fc3e37a3c64f",
+          "output_sha256": "798b00298f6b43da6b73138395ce35bc01f5e48c422a6c2e64d136b26f67bd35",
           "status": "ok",
           "target": "codex"
         },
@@ -327,7 +327,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive copilot --all && path p export pi -i {ir} -o {out}",
           "file": "goldens/copilot/to-pi.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "f780882624c7e30b3325c511678f01fea5e38739f30a1ce6f6eaf16e925a3be1",
+          "output_sha256": "a6fa7c6d32551737d413379a3892b1fa48de5cd7ceca6f4f9a98486827dff0c0",
           "status": "ok",
           "target": "pi"
         }
@@ -340,7 +340,7 @@
         "harness": {
           "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
           "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
-          "scripts/goldens.sh": "b35dc653b3b97a919e57e7cc7189421236cd579c103f05a1882442705772e064"
+          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
         },
         "nix_pinned_binary": {
           "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
@@ -363,10 +363,10 @@
       "name": "pi",
       "pins": {
         "producer": {
-          "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
           "dirty": true,
           "nix_store_path": null,
-          "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
         }
       },
       "project": null,
@@ -375,7 +375,7 @@
           "command": "cd / && env -i HOME=<tmp> XDG_*=<tmp> CLAUDE_CONFIG_DIR=<tmp> CODEX_HOME=<tmp> path p derive pi --project /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi --all && path p project claude -i {ir} -o {out}",
           "file": "goldens/pi/to-claude.jsonl",
           "output_form": "raw bytes",
-          "output_sha256": "dabbd206cdc0055caa1e725b66d4b5e09e9be82b08a9eb7e7c5d91252a811cd9",
+          "output_sha256": "5668c8558fc08f4718e3fedcb7ae041b3787ac841070dbb4b11913e063818e9a",
           "status": "ok",
           "target": "claude"
         },
@@ -401,7 +401,7 @@
   "informational": {
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
     "toolpath_dirty": false,
-    "toolpath_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+    "toolpath_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
   },
   "known_defects": [
     {
@@ -430,180 +430,180 @@
     {
       "file": "goldens/roundtrip/claude-codex.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "7e6ea9e6d866e4bee9885c3f2fe836981e8228dc33dd07015da013cbba65ef89"
     },
     {
       "file": "goldens/roundtrip/claude-compacted-codex.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
     },
     {
       "file": "goldens/roundtrip/claude-compacted-copilot.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "29be8cb8c53fa3d9a49ec74c4f3c373adc973f8f03a9113a7accaaa74692d6f0"
     },
     {
       "file": "goldens/roundtrip/claude-compacted-pi.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
     },
     {
       "file": "goldens/roundtrip/claude-copilot.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "9c72e3e059c6ba73c3e75e8be9f28242cfbd8d23ce6112daf0310c5880f5d7b8"
     },
     {
       "file": "goldens/roundtrip/claude-pi.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "1a7c14aa1d5521511d710acaa9aa43f8c6b91ce1433fffe91a911fbe75c3c0ec"
     },
     {
       "file": "goldens/roundtrip/claude-session-codex.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "d5fee6928c95df428b1688f48949b4280b92022abe2e2254640e55dcb5f01273"
     },
     {
       "file": "goldens/roundtrip/claude-session-copilot.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "90b16b3f49f9b48e546d0f9c55b8109b0a076b65fa0baf4fb44bf7a70de34e80"
     },
     {
       "file": "goldens/roundtrip/claude-session-pi.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "bc8ae191b9776da0470eefacb6dd084fc7eb733505b6dc1612aa582a3fca8eec"
     },
     {
       "file": "goldens/roundtrip/codex-claude.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "8a1d7742939d8a32b2d97eb56eb02e8cdaafe6f5cdeb05a4fc2350d37e9003d9"
     },
     {
       "file": "goldens/roundtrip/codex-copilot.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "7df3f81e3dd637aabee9ee606c3b2387541a6d62b86c333b6048936c2a5d573f"
     },
     {
       "file": "goldens/roundtrip/codex-pi.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
     },
     {
       "file": "goldens/roundtrip/copilot-claude.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
     },
     {
       "file": "goldens/roundtrip/copilot-codex.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "c55f0de8d0b297de18a1201c8d57560e8fc9d3c7f6fffb6b89d73e1dceafd809"
     },
     {
       "file": "goldens/roundtrip/copilot-pi.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "d7e405a24064cf585263d7fc443b7cf330694d27c4611fce46f098d95a4cf9e5"
     },
     {
       "file": "goldens/roundtrip/pi-claude.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
     },
     {
       "file": "goldens/roundtrip/pi-codex.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
     },
     {
       "file": "goldens/roundtrip/pi-copilot.json",
       "producer": {
-        "binary_sha256": "42331a5eba2d435560795fbcd6dd8be241304e0a31e2491580aa580a7d144c82",
+        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
         "dirty": true,
         "nix_store_path": null,
-        "repo_rev": "baa5e0572dd773261e7c8a3b0673eefa78c9a723"
+        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
       },
       "sha256": "cfdc5a9e5091fa29e5b2fa4e276c4c4b65a04cb931206f6fc536730010af901a"
     }

@@ -162,10 +162,40 @@ fn project_view(
         })
         .collect();
 
+    // Pi's main thread is the newest leaf's ancestry. An assistant turn with
+    // results expands into the assistant entry plus a chain of `toolResult`
+    // entries hanging off it; whatever followed that turn in the view must
+    // hang off the LAST of those, or the results are siblings off the thread
+    // and a resume sees a tool call with no result (and no history past it).
+    let mut rewrites: HashMap<String, String> = HashMap::new();
     for turn in &view.turns {
         let pi = pi_extras(turn).cloned().unwrap_or_default();
+        let rechained: Turn;
+        let turn = match turn.parent_id.as_deref().and_then(|p| rewrites.get(p)) {
+            Some(tail) => {
+                rechained = Turn {
+                    parent_id: Some(tail.clone()),
+                    ..turn.clone()
+                };
+                &rechained
+            }
+            None => turn,
+        };
         emit_pending_meta(&mut entries, turn, &pi);
+        let before = entries.len();
         emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+        if let Some(tail) = entries[before..].iter().rev().find(|e| {
+            matches!(
+                e,
+                Entry::Message {
+                    message: AgentMessage::ToolResult { .. },
+                    ..
+                }
+            )
+        }) && tail.entry_id() != turn.id
+        {
+            rewrites.insert(turn.id.clone(), tail.entry_id().to_string());
+        }
     }
 
     Ok(PiSession {
@@ -903,6 +933,34 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_turn_after_tool_results_hangs_off_the_last_result_entry() {
+        // a1 (one call with a result) <- a2. Pi's thread is the leaf's
+        // ancestry, so a2 must be parented to the synthesized tool-result
+        // entry, not to a1, or that result (and a1's whole line) drops off.
+        let mut a1 = assistant_turn("a1", "reading");
+        a1.tool_uses = vec![ToolInvocation {
+            id: "tc1".into(),
+            name: "read".into(),
+            input: serde_json::json!({"path": "x.rs"}),
+            result: Some(ToolResult {
+                content: "fn main(){}".into(),
+                is_error: false,
+            }),
+            category: Some(ToolCategory::FileRead),
+        }];
+        let mut a2 = assistant_turn("a2", "done");
+        a2.parent_id = Some("a1".into());
+        let session = PiProjector::default()
+            .project(&view_with(vec![a1, a2]))
+            .unwrap();
+        let ids: Vec<&str> = session.entries.iter().map(|e| e.entry_id()).collect();
+        assert_eq!(ids, ["session-uuid", "a1", "a1-tr-1", "a2"]);
+        assert_eq!(session.entries[3].parent_entry_id(), Some("a1-tr-1"));
+        let thread: Vec<&str> = session.main_thread().iter().map(|e| e.entry_id()).collect();
+        assert_eq!(thread, ["a1", "a1-tr-1", "a2"]);
     }
 
     #[test]
