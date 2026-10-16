@@ -122,9 +122,10 @@ their position in that stream.
   API URL
   (`<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`)
   and holds how many steps of the derive the remote has, the id of the
-  last of them, the head the remote was last told, where the remote
-  path's own steps begin (`owned_from`: 0, or a continuation's
-  boundary), and the local source's stamp at the time (`modified` and
+  last of them, the head the remote was last told, whether the remote
+  path carries a `path.parent` (`has_parent`: a continuation, whose
+  owned ids are read from the server; absent in older records, read as
+  false), and the local source's stamp at the time (`modified` and
   `size`, typed as in the manifest, absent when the source provides
   neither). An authed `path share` writes one after a successful push
   (anonymous uploads write none; `p export pathbase`, a full dump with
@@ -142,8 +143,10 @@ their position in that stream.
   session already has a record on the destination, it appends the steps
   it gained to that path instead of uploading another graph: by
   position when the record still matches the derive, and then re-sends
-  as above; by step id when it does not, sending only the steps the
-  server lacks and leaving every stored step as it is. A frozen
+  as above; by step id when it does not, sending on that pass only the
+  steps the server lacks and leaving every stored step as it is; from
+  the next pass the open region follows the local derive again, so a
+  stored step newer than the local copy is overwritten then. A frozen
   remote path is continued in a new graph holding the steps the
   server lacks, whose path names the frozen graph as `parent` by the URL
   the server reports for it; a remote path the server no longer has, or

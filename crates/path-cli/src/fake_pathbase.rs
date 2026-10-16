@@ -11,8 +11,9 @@
 //! invalid_document` when its parents differ), an id repeated within one
 //! streamed body is skipped with the same payload and `400
 //! invalid_document` with a different one, a `POST /graphs` document that
-//! repeats a step id is `400 invalid_document`, every parent must be stored in the path or earlier
-//! in the request (`400 invalid_document`), a frozen graph refuses writes
+//! repeats a step id is `400 invalid_document`, every parent must be
+//! stored in the path or earlier in the request (`400
+//! invalid_document`), a frozen graph refuses writes
 //! (`409 write_to_frozen`), a missing graph or path, or a graph named
 //! under an owner or repo it is not in, is `404 not_found`, a
 //! step stored along the parent chain is `400 inherited_step_redefined`,
@@ -25,7 +26,7 @@
 
 #![cfg(test)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -706,11 +707,7 @@ fn apply(
         return api_error(409, "write_to_frozen", "the graph is frozen");
     }
     let path = &state.graphs[gi].paths[pi];
-    let mut new_steps: Vec<(String, serde_json::Value)> = Vec::new();
-    // Stored steps a line of this body replaces, with their new payload.
-    let mut replaced: Vec<(String, serde_json::Value)> = Vec::new();
-    // Each id's payload as this body first carries it.
-    let mut seen: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut steps: Vec<Step> = Vec::new();
     let mut head = None;
     for (n, line) in body.lines().enumerate() {
         let v: serde_json::Value = match serde_json::from_str(line) {
@@ -732,53 +729,71 @@ fn apply(
         let Some(step) = v.get("Step") else {
             continue;
         };
-        let step: Step = match serde_json::from_value(step.clone()) {
-            Ok(s) => s,
+        match serde_json::from_value(step.clone()) {
+            Ok(s) => steps.push(s),
             Err(e) => return api_error(400, "bad_request", &e.to_string()),
-        };
-        let id = step.step.id.clone();
-        let known = |s: &str| path.holds(s) || new_steps.iter().any(|(n, _)| n == s);
-        if upstream.contains(&id) {
-            return api_error(
-                400,
-                "inherited_step_redefined",
-                &format!("step {id} is stored along the parent chain"),
-            );
         }
-        let now = payload(&step);
-        if let Some(first) = seen.get(&id) {
-            if *first != now {
+    }
+    // Checked in the server's order, each over the whole body: the parent
+    // chain, then repeated ids, then parents, then changed parents.
+    if let Some(s) = steps.iter().find(|s| upstream.contains(&s.step.id)) {
+        return api_error(
+            400,
+            "inherited_step_redefined",
+            &format!("step {} is stored along the parent chain", s.step.id),
+        );
+    }
+    // Each id's payload as this body first carries it, in body order.
+    let mut unique: Vec<(String, serde_json::Value, &Step)> = Vec::new();
+    for step in &steps {
+        let now = payload(step);
+        match unique.iter().find(|(id, _, _)| *id == step.step.id) {
+            Some((id, first, _)) if *first != now => {
                 return api_error(
                     400,
                     "invalid_document",
                     &format!("step {id} appears twice with different payloads"),
                 );
             }
-            continue;
+            Some(_) => {}
+            None => unique.push((step.step.id.clone(), now, step)),
         }
-        seen.insert(id.clone(), now.clone());
-        if let Some((_, stored)) = path.steps.iter().find(|(s, _)| *s == id) {
-            if *stored == now {
-                continue;
-            }
-            if stored["step"]["parents"] != now["step"]["parents"] {
-                return api_error(
-                    400,
-                    "invalid_document",
-                    &format!("step {id} changes its parents"),
-                );
-            }
-            replaced.push((id, now));
-            continue;
-        }
-        if let Some(p) = step.step.parents.iter().find(|p| !known(p)) {
+    }
+    let mut earlier: HashSet<&str> = HashSet::new();
+    for (id, _, step) in &unique {
+        if let Some(p) = step
+            .step
+            .parents
+            .iter()
+            .find(|p| !path.holds(p) && !earlier.contains(p.as_str()))
+        {
             return api_error(
                 400,
                 "invalid_document",
                 &format!("step {id} cites unstored parent {p}"),
             );
         }
-        new_steps.push((id, now));
+        earlier.insert(id.as_str());
+    }
+    let mut new_steps: Vec<(String, serde_json::Value)> = Vec::new();
+    // Stored steps a line of this body replaces, with their new payload.
+    let mut replaced: Vec<(String, serde_json::Value)> = Vec::new();
+    for (id, now, _) in unique {
+        let Some((_, stored)) = path.steps.iter().find(|(s, _)| *s == id) else {
+            new_steps.push((id, now));
+            continue;
+        };
+        if *stored == now {
+            continue;
+        }
+        if stored["step"]["parents"] != now["step"]["parents"] {
+            return api_error(
+                400,
+                "invalid_document",
+                &format!("step {id} changes its parents"),
+            );
+        }
+        replaced.push((id, now));
     }
     let inserted = new_steps.len();
     let path = &mut state.graphs[gi].paths[pi];
@@ -978,12 +993,22 @@ mod tests {
         assert!(foreign.is_ok());
 
         let continued = create(&fake, child(parent(&page, "b"))).unwrap();
+        // The parent chain is checked over the whole body first.
+        append(&fake, &continued, vec![step("d", Some("c"))]).unwrap();
+        assert!(matches!(
+            append(&fake, &continued, vec![step("d", None)]),
+            Err(AppendError::InvalidDocument(_))
+        ));
+        assert!(matches!(
+            append(&fake, &continued, vec![step("d", None), step("a", None)]),
+            Err(AppendError::InheritedStepRedefined(_))
+        ));
         let read = path_step_ids(&fake.base(), "tok", &continued, true).unwrap();
-        assert_eq!(read.step_ids, ["c", "a", "b"]);
+        assert_eq!(read.step_ids, ["c", "d", "a", "b"]);
         assert_eq!(read.truncated_at, None);
         fake.hide(graph);
         let read = path_step_ids(&fake.base(), "tok", &continued, true).unwrap();
-        assert_eq!(read.step_ids, ["c"]);
+        assert_eq!(read.step_ids, ["c", "d"]);
         assert_eq!(read.truncated_at, Some(parent(&page, "b")));
     }
 

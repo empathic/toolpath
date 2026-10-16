@@ -58,10 +58,12 @@ copy is the one the implementing PRs cite.
 3. **Mismatch is handled, not fatal.** When the local derive no longer
    starts with what the record says was sent, the client continues in the
    same remote path, pushing only the steps the server lacks, and leaves
-   the server's extra steps where they are. On a mismatch the server's
-   copy of every stored step stands: nothing says the local copy is the
-   newer one. Re-sending happens only on the fast path, where the local
-   derive is known to be at least as new as what is stored.
+   the server's extra steps where they are. On the mismatch pass itself
+   only missing ids are sent and every stored step stands; from the next
+   pass the open region follows the local derive again, so a stored step
+   newer than the local copy is overwritten then. The local file is the
+   source; the mismatch pass only avoids writing before the record
+   describes the derive.
 4. **A missing remote is recreated.** `404 not_found` on append means the
    graph is gone: create a fresh graph, re-key the record, report it.
 5. **Freezing is the server's.** `409 write_to_frozen` on append means
@@ -109,13 +111,20 @@ Input: a session (harness + id), its destination, the record if any.
    fit what is stored, e.g. a parent the server lacks or a re-sent step
    whose parents changed), go to 5. Step 5 does not re-send, so a step
    whose parents changed keeps its stored copy, and while it stays in
-   the re-send window every pass that sends takes 5.
+   the re-send window every pass that sends takes 5. The refusal is of
+   the whole batch, so every other re-sent step in that window also
+   keeps its stored form until the group settles: a result that lands
+   in a sibling during that time is never stored.
 5. **Record, mismatch (only when 4 fails, O(n) ids).** Read what the
    chain stores: for `has_parent == false`, the path's step ids
    (`O`, with `I` empty); for `has_parent == true`, its ownership. Send
    only the steps `S[i]` whose id is not in `O ∪ I`, in document order,
-   parents filtered as below, with a trailing `Head`: on a mismatch the
-   server's copy of every stored step stands; only missing ids are sent.
+   parents filtered as below, with a trailing `Head`: on the mismatch
+   pass itself only missing ids are sent and every stored step stands;
+   from the next pass the open region follows the local derive again,
+   so a stored step newer than the local copy is overwritten then. The
+   local file is the source; the mismatch pass only avoids writing
+   before the record describes the derive.
    None missing: refresh the record, keep the head the server was last
    told. On `2xx`, write the record from the derive as in 4. On
    `400 invalid_document` (a new step's parent is neither stored nor

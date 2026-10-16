@@ -596,10 +596,10 @@ distinguish the cases.
 ### Should there be a `StepRef` line for late step-level metadata?
 
 A writer might learn, after emitting a step, that the step's `meta.intent`
-should change or that a new ref should be attached. v1 has no mechanism
-for this — a step is immutable once its path is frozen; while mutable, a
-re-sent `Step` replaces it. A future `StepPatch` line
-could cover the case, guarded by a version bump.
+should change or that a new ref should be attached. v1 can change a step
+only by re-sending it while its path is mutable; once the path is frozen
+the step is immutable. A future `StepPatch` line could cover the case,
+guarded by a version bump.
 
 ## Prior Art
 

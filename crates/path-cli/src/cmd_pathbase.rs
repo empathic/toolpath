@@ -1331,7 +1331,7 @@ pub(crate) fn append_steps(
 /// A stored path's step ids, as the step-ids route answers.
 #[derive(Debug, Deserialize)]
 pub(crate) struct StepIds {
-    /// The path's ids in document order, followed (composed) by
+    /// The path's ids in document order; with `composed`, followed by
     /// each parent's along the chain, nearest first.
     pub(crate) step_ids: Vec<String>,
     /// The parent the caller cannot read, where the walk stopped: ids

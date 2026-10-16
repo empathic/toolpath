@@ -11,10 +11,13 @@
 //! token counts or more turns: on a mutable path a re-sent step replaces
 //! the stored one. A settled step is final, so once sent past its open
 //! region it is not sent again. When the record no longer describes the
-//! derive, only the steps the server lacks are sent, found by id, and the
-//! server's copy of every step it stores stands; a frozen path is
-//! continued in a new graph, its stored steps final as they are; a path
-//! the server no longer has is recreated.
+//! derive, that pass sends only the steps the server lacks, found by id,
+//! and every stored step stands; from the next pass the open region
+//! follows the local derive again, so a stored step newer than the local
+//! copy is overwritten then. The local file is the source; the mismatch
+//! pass only avoids writing before the record describes the derive. A
+//! frozen path is continued in a new graph, its stored steps final as
+//! they are; a path the server no longer has is recreated.
 
 #![cfg(not(target_os = "emscripten"))]
 
@@ -268,9 +271,9 @@ impl Push<'_> {
     }
 
     /// Step 5: the record does not describe the derive. Send the steps
-    /// the server lacks, by id, in document order. Without the record
-    /// nothing says a local copy is newer than the stored one, so the
-    /// server's copy of every step it stores stands.
+    /// the server lacks, by id, in document order; every stored step
+    /// stands on this pass. The record written after it describes the
+    /// derive, so the next pass re-sends the open region from it.
     fn update_by_ids(&self, url: &str, record: &RemoteRecord) -> Result<Outcome> {
         let stored = match self.stored(url, record.has_parent) {
             Ok(stored) => stored,
@@ -284,11 +287,11 @@ impl Push<'_> {
     }
 
     /// Send the steps at `send` to the recorded path at `url` and advance
-    /// the record, or take the step the refusal calls for. `stored` is what the server
-    /// was read to hold, when it was read; without it, the steps it holds
-    /// are the record's first `record.steps`. Nothing to send: the
-    /// server's extra steps stay where they are, and so does the head it
-    /// was last told.
+    /// the record, or take the step the refusal calls for. `stored` is
+    /// what the server was read to hold, when it was read; without it,
+    /// the steps it holds are the record's first `record.steps`. Nothing
+    /// to send: the server's extra steps stay where they are, and so does
+    /// the head it was last told.
     fn send(
         &self,
         url: &str,
@@ -609,8 +612,7 @@ fn inherited(msg: &str) -> String {
 /// group (the trailing run of turns sharing the last turn's `group_id`,
 /// or the last turn alone when it has none) and takes every step from
 /// there on: its turns may still gain tool results, token counts or more
-/// turns of the group. A tool call without a result does not move the
-/// boundary. A path with no turn has no settled step.
+/// turns of the group. A path with no turn has no settled step.
 pub(crate) fn settled_len(steps: &[Step]) -> usize {
     let Some(last) = steps.iter().rposition(|s| turn(s).is_some()) else {
         return 0;
@@ -1152,7 +1154,9 @@ mod tests {
     /// The session is truncated so that `t2`'s open copy, without the
     /// tool result the server stored, is the local tail: the record no
     /// longer holds, the ids path sends nothing for `t2`, and the server
-    /// keeps its newer payload.
+    /// keeps its newer payload for that pass. The next pass that reads the
+    /// source re-sends the open `t2` from the local derive, which replaces
+    /// the stored result.
     #[test]
     fn a_mismatch_leaves_a_stored_step_as_the_server_has_it() {
         let fake = FakePathbase::start();
@@ -1170,19 +1174,91 @@ mod tests {
         let out = push_to(cfg.path(), &d, &with_call(3, false), (None, Some(50))).unwrap();
         assert_eq!(out, Outcome::UpToDate);
         assert!(fake.writes().is_empty(), "{:?}", fake.writes());
+        let result_of = |fake: &FakePathbase| {
+            fake.path_at(&key).unwrap().step("t2").unwrap()["change"][KEY]["structural"]
+                ["tool_uses"][0]
+                .get("result")
+                .cloned()
+        };
         let stored = fake.path_at(&key).unwrap();
         assert_eq!(stored.step_ids(), strs(&["t0", "t1", "t2", "t3"]));
         assert_eq!(
-            stored.step("t2").unwrap()["change"][KEY]["structural"]["tool_uses"][0]["result"],
-            serde_json::json!({"content": "ok", "is_error": false})
+            result_of(&fake),
+            Some(serde_json::json!({"content": "ok", "is_error": false}))
         );
+        fake.clear_log();
+
+        let out = push_to(cfg.path(), &d, &with_call(3, false), (None, Some(60))).unwrap();
+        assert_eq!(
+            out,
+            Outcome::Appended {
+                steps: 0,
+                resent: 1
+            }
+        );
+        let bodies: Vec<Vec<String>> = fake.writes().iter().map(|w| w.step_ids()).collect();
+        assert_eq!(bodies, vec![strs(&["t2"])]);
+        assert_eq!(result_of(&fake), None);
     }
 
-    /// A re-sent step whose parents changed is refused on the fast path;
-    /// the ids path sends only what the server lacks, so the stored step
-    /// keeps its parents and the path is not recreated.
+    /// A re-sent step whose parents changed is refused on the fast path,
+    /// and with it the whole batch: the ids path sends only what the
+    /// server lacks, so `t2` keeps its stored parents and the result that
+    /// lands in its sibling `a2` is never stored while the group stays
+    /// open. Every pass takes the refusal and the ids read again; the
+    /// path is not recreated.
     #[test]
     fn a_resent_step_with_changed_parents_keeps_the_stored_step() {
+        let fake = FakePathbase::start();
+        let cfg = tempfile::tempdir().unwrap();
+        let d = dest(&fake, "x");
+        let session = |reparented: bool| {
+            let mut path = session_of(3);
+            if reparented {
+                path.steps[2].step.parents = strs(&["t0"]);
+            }
+            path.steps
+                .push(turn_step("a2", Some("t2"), Some("g2"), &[reparented]));
+            path.path.head = "a2".into();
+            path
+        };
+        push_to(cfg.path(), &d, &session(false), STAMP).unwrap();
+        let (key, _) = record_on(cfg.path(), &d).unwrap();
+        let result_of = |fake: &FakePathbase| {
+            fake.path_at(&key).unwrap().step("a2").unwrap()["change"][KEY]["structural"]
+                ["tool_uses"][0]
+                .get("result")
+                .cloned()
+        };
+
+        for stamp in [200, 300] {
+            fake.clear_log();
+            let out = push_to(cfg.path(), &d, &session(true), (None, Some(stamp))).unwrap();
+            assert_eq!(out, Outcome::UpToDate);
+            let reqs = fake.requests();
+            assert_eq!(reqs.len(), 2, "{reqs:?}");
+            assert_eq!(reqs[0].method, "POST");
+            assert_eq!(reqs[0].step_ids(), strs(&["t2", "a2"]));
+            assert_eq!(reqs[1].method, "GET");
+            assert!(reqs[1].target.contains("/step-ids"), "{}", reqs[1].target);
+            assert_eq!(result_of(&fake), None);
+        }
+        let stored = fake.path_at(&key).unwrap();
+        assert_eq!(stored.step_ids(), strs(&["t0", "t1", "t2", "a2"]));
+        assert_eq!(
+            stored.step("t2").unwrap()["step"]["parents"],
+            serde_json::json!(["t1"])
+        );
+        assert_eq!(record_on(cfg.path(), &d).unwrap().0, key);
+        assert_eq!(record_count(cfg.path()), 1);
+        assert_eq!(fake.graphs().len(), 1);
+    }
+
+    /// Nothing new, only the open `t2` reparented and the stamp moved:
+    /// the fast path is refused, the ids show nothing missing, and the
+    /// pass ends up to date in the same graph.
+    #[test]
+    fn a_reparented_open_step_alone_is_refused_and_ends_up_to_date() {
         let fake = FakePathbase::start();
         let cfg = tempfile::tempdir().unwrap();
         let d = dest(&fake, "x");
@@ -1190,28 +1266,19 @@ mod tests {
         let (key, _) = record_on(cfg.path(), &d).unwrap();
         fake.clear_log();
 
-        let mut reparented = session_of(4);
+        let mut reparented = session_of(3);
         reparented.steps[2].step.parents = strs(&["t0"]);
         let out = push_to(cfg.path(), &d, &reparented, (None, Some(200))).unwrap();
-        assert_eq!(
-            out,
-            Outcome::Appended {
-                steps: 1,
-                resent: 0
-            }
-        );
+        assert_eq!(out, Outcome::UpToDate);
         let reqs = fake.requests();
-        assert_eq!(reqs.len(), 3, "{reqs:?}");
-        assert_eq!(reqs[0].step_ids(), strs(&["t2", "t3"]));
-        assert!(reqs[1].target.contains("/step-ids"));
-        assert_eq!(reqs[2].step_ids(), strs(&["t3"]));
-        let stored = fake.path_at(&key).unwrap();
-        assert_eq!(stored.step_ids(), strs(&["t0", "t1", "t2", "t3"]));
+        assert_eq!(reqs.len(), 2, "{reqs:?}");
+        assert!(reqs[0].target.ends_with("/steps"), "{}", reqs[0].target);
+        assert_eq!(reqs[0].step_ids(), strs(&["t2"]));
+        assert!(reqs[1].target.contains("/step-ids"), "{}", reqs[1].target);
         assert_eq!(
-            stored.step("t2").unwrap()["step"]["parents"],
+            fake.path_at(&key).unwrap().step("t2").unwrap()["step"]["parents"],
             serde_json::json!(["t1"])
         );
-        assert_eq!(record_on(cfg.path(), &d).unwrap().0, key);
         assert_eq!(fake.graphs().len(), 1);
     }
 
