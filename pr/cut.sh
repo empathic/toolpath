@@ -83,5 +83,37 @@ echo "stack.json written; this exact stack is operation $op (jj op restore $op)"
 echo
 jj log -r "$base..$tip"
 echo
+
+# Every piece must build on its own tree (pr/README.md, "Shared files are not file-level"):
+# cargo metadata, fmt --check, clippy -D warnings, RUSTFLAGS=-D warnings test --workspace, doc,
+# the way scripts/quality_gates.sh runs them in CI, each in a temp worktree of the colocated
+# clone at that piece's commit. A shared CARGO_TARGET_DIR keeps the twelve runs incremental.
+# PR_GATES=0 skips it (never before a push). No push line is printed while a piece fails.
+if [ "${PR_GATES:-1}" != 0 ]; then
+  export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$JJ_CLONE/target}
+  gate_wt=$(mktemp -d "${TMPDIR:-/tmp}/pr-gate.XXXXXX")
+  git worktree add --detach -q "$gate_wt" "$(jj log -r "$base" --no-graph -T commit_id)"
+  trap 'git -C "$JJ_CLONE" worktree remove --force "$gate_wt" >/dev/null 2>&1 || true' EXIT
+  failed=0
+  while read -r c bm; do
+    [ -n "$bm" ] || continue
+    git -C "$gate_wt" checkout -q --detach "$c"
+    res=""
+    for g in "metadata:cargo metadata --format-version 1 --offline" \
+             "fmt:cargo fmt --all --check" \
+             "clippy:cargo clippy --workspace --all-targets --offline -- -D warnings" \
+             "test:env RUSTFLAGS=-D\ warnings cargo test --workspace --offline" \
+             "doc:env RUSTDOCFLAGS=-D\ warnings cargo doc --workspace --no-deps --offline"; do
+      name=${g%%:*}; cmd=${g#*:}
+      if (cd "$gate_wt" && eval "$cmd" >"$gate_wt.$name.log" 2>&1); then res+=" $name=ok"; else res+=" $name=FAIL($gate_wt.$name.log)"; failed=1; fi
+    done
+    echo "$bm ${c:0:8}$res"
+  done < <(jj log -r "$base..$tip & bookmarks(glob:\"pr/*\")" --reversed --no-graph -T 'commit_id ++ " " ++ bookmarks ++ "\n"')
+  if [ "$failed" != 0 ]; then
+    echo "a piece does not build on its own tree; move the hunks it is missing or carrying early (pr/README.md), then rerun" >&2
+    exit 1
+  fi
+fi
+
 echo "push line (Bobby runs it, never this script; pushes the pr/* bookmarks in the range, the HOLD remainder has none and is private):"
 echo "  jj -R $JJ_CLONE git push --remote $remote -r '$base..$tip'"

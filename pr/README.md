@@ -111,3 +111,50 @@ remote; never in this checkout):
 
 `patches/NN-<slug>.patch` are a convenience export of the pre-squash commits (mbox,
 `git am --3way`-able, machine paths scrubbed); the filesets are the source.
+
+## Shared files are not file-level (2026-10-15, first CI run of the stack)
+
+The first push of the twelve toolpath pieces was red from pr/02 on: `cargo fmt` could not
+read `crates/toolpath-goldens/Cargo.toml`. The fileset cut gave the whole root `Cargo.toml`
+and `Cargo.lock` to pr/02 (the earliest piece touching them), so pr/02's manifest named two
+workspace members (`toolpath-goldens`, `toolpath-webmock`) that arrive in pr/07 and pr/13,
+and its lock carried their entries. The same shape broke four more places: pr/02 carried the
+goldens outputs recaptured after the pr/06 resume fixes (so `path goldens check` failed on
+`claude -> pi`), pr/07 carried `toolpath-goldens/src/lib.rs` declaring the `accounting` and
+`validate` modules pr/12 adds, pr/08 carried the `cmd_export.rs` call into
+`cmd_pathbase::resolve_session_url`, a HOLD-era function, and every piece failed the doc gate
+on four `<set>`/`<agent>` placeholders in clap help text (a wip bug, fixed on wip).
+pathbase's cut had the same defects (`pub mod leaks` in pr/01's `lib.rs` for a file pr/05 adds;
+`support.rs` without main's `make_mutable`, which main's own tests call).
+
+The rules, from now on:
+
+- **A file several pieces touched is assigned per hunk, not whole.** Each hunk goes to the
+  piece that introduces what it references: a `[workspace] members` line to the piece that
+  adds the crate, a `Cargo.lock` entry likewise, a `pub mod x;` line to the piece that adds
+  `x.rs`, a call to the piece that adds the callee. `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`,
+  `README.md`, `CLAUDE.md`, crate `lib.rs` files and test support modules are the usual cases.
+  HOLD-era hunks (wip commits before the series) stay in HOLD even inside a file a piece owns;
+  `HOLD.md` lists such a file as *shared*.
+- **Generated files follow the code that produced them.** `goldens/**` outputs and the
+  manifest, insta `*.snap` files and cassette provenance belong with the piece whose code
+  captured them: a repin after a fix is part of that fix's piece, not of the piece that
+  created the set.
+- **A piece's lock is wip's lock pruned to its manifest.** Restore wip's `Cargo.lock` into
+  the piece, then `cargo metadata --offline`: cargo drops the entries nothing reachable needs
+  and changes no versions. Never `cargo update --workspace` (it drifted `openssl-src`) and
+  never edit the lock by hand. Every piece that completes the member set has the wip lock
+  byte for byte.
+- **The pre-squash history is the source of per-hunk content.** `wip-pre-squash-2026-10-15`
+  (local tag) and the jj clone's `wip/bdelanghe@github` still carry the series; the content a
+  piece's files had at the end of its era is `jj restore --from <era commit> -- <paths>`,
+  with the scrub re-applied (the squash scrubbed an address out of
+  `crates/path-cli/src/goldens.rs` and redacted two cassettes; a restore from history must not
+  bring them back, so assert `git grep` finds none of the scrubbed strings in any piece).
+- **Every piece must pass `cargo metadata`, `cargo fmt --check`, `cargo clippy -D warnings`,
+  `cargo test --workspace` and `cargo doc` on its own tree before the stack is pushed.**
+  `cut.sh` now runs that per piece in a temp worktree (its last step, after the HOLD check)
+  and refuses to print the push line while any piece fails; CI runs the same gates on every
+  `pull_request` head.
+- **Verify with the toolchain CI pins.** `rust-toolchain.toml` says 1.94.0; a 1.94.1 rustup
+  toolchain is what is installed here and is what the gates ran with. Say so in the evidence.
