@@ -134,12 +134,14 @@ their position in that stream.
   earlier entry. `path resume` writes none: a pulled path becomes a new
   local session.
 - **`path-cli`** (0.30.0): path sync client. An authed `path share`
-  pushes only settled steps (the open message group and an unanswered
-  trailing tool call wait for the next turn) and, when the session
-  already has a record on the destination, appends the steps it gained
+  pushes every step and re-sends the open message group (with an
+  unanswered trailing tool call) each pass until it settles, a re-sent
+  step replacing the stored one while the remote path is mutable. When
+  the session already has a record on the destination, it appends the
+  steps it gained
   to that path instead of uploading another graph: by position when the
   record still matches the derive, by step id when it does not. A frozen
-  remote path is continued in a new graph holding the settled steps the
+  remote path is continued in a new graph holding the steps the
   server lacks, whose path names the frozen graph as `parent` by the URL
   the server reports for it; a remote path the server no longer has, or
   one that refuses a step stored along its parents, is recreated. A

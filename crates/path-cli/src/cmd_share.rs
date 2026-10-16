@@ -915,11 +915,8 @@ fn share_explicit(
         },
         false,
     )?;
-    if outcome == crate::share_append::Outcome::NothingSettled {
-        eprintln!(
-            "{summary}: nothing to share yet: the session has no completed turn \
-             (the current turn is shared once the next one starts)"
-        );
+    if outcome == crate::share_append::Outcome::Empty {
+        eprintln!("{summary}: nothing to share yet: the session has no steps");
         return Ok(());
     }
     eprintln!(
@@ -1861,12 +1858,12 @@ mod tests {
                     "{base}/api/v1/u/me/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/{SERVER_PATH_ID}"
                 )
             );
-            // The open turn (the assistant's reply) is not sent.
-            let k = crate::share_append::settled_len(&path.steps);
-            assert_eq!(k, path.steps.len() - 1);
-            assert_eq!(remote.steps, k);
-            assert_eq!(remote.last_step, path.steps[k - 1].step.id);
-            assert_eq!(remote.head, crate::share_append::settled_head(path, k));
+            // Every step is sent, the open turn (the assistant's reply)
+            // included.
+            let n = path.steps.len();
+            assert_eq!(remote.steps, n);
+            assert_eq!(remote.last_step, path.steps[n - 1].step.id);
+            assert_eq!(remote.head, path.path.head);
             let bundle = HarnessBundle::from_environment();
             let stamp = crate::sync::sources::source_for(&bundle, ArtifactType::Claude)
                 .unwrap()
@@ -2057,8 +2054,9 @@ mod tests {
         std::fs::write(dir.join(format!("{session}.jsonl")), lines).unwrap();
     }
 
-    /// Sharing a recorded session again appends its new settled steps to
-    /// the same graph instead of uploading a second one.
+    /// Sharing a recorded session again appends its new steps, and the
+    /// reply that was open, to the same graph instead of uploading a
+    /// second one.
     #[test]
     fn a_repeat_share_appends_to_the_recorded_path() {
         use crate::fake_pathbase::FakePathbase;
@@ -2068,19 +2066,22 @@ mod tests {
             write_claude_turns(&claude, "s1", 2);
             run_single("s1", &fake.base()).unwrap();
             let (key, first) = remotes_of("s1").into_iter().next().unwrap();
-            assert_eq!(first.steps, 3);
-            assert_eq!(fake.path_at(&key).unwrap().step_ids(), ["u0", "a0", "u1"]);
+            assert_eq!(first.steps, 4);
+            assert_eq!(
+                fake.path_at(&key).unwrap().step_ids(),
+                ["u0", "a0", "u1", "a1"]
+            );
 
             write_claude_turns(&claude, "s1", 4);
             fake.clear_log();
             run_single("s1", &fake.base()).unwrap();
             let remotes = remotes_of("s1");
             assert_eq!(remotes.len(), 1);
-            assert_eq!(remotes[&key].steps, 7);
+            assert_eq!(remotes[&key].steps, 8);
             assert_eq!(fake.graphs().len(), 1, "no second graph");
             let writes = fake.writes();
             assert_eq!(writes.len(), 1);
-            assert_eq!(writes[0].step_ids(), ["a1", "u2", "a2", "u3"]);
+            assert_eq!(writes[0].step_ids(), ["a1", "u2", "a2", "u3", "a3"]);
         });
     }
 

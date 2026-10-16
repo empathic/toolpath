@@ -202,6 +202,11 @@ Zero or more. The body is the existing `Step` JSON shape verbatim — including
 `step.meta`, which may carry step-level signatures, intent, refs, or actor
 definitions.
 
+Streamed to a store, a `Step` line whose id is already stored on a mutable
+path replaces that step's payload; its id, position and parents must be
+unchanged. This lets a live writer re-send a step that is still growing (a
+tool result arriving, a token count) without a patch line kind.
+
 ```json
 {"Step": {
   "step": {

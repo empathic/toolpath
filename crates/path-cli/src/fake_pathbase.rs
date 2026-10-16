@@ -5,10 +5,11 @@
 //! every request that stored it.
 //!
 //! It answers as Pathbase does wherever the client's tests depend on the
-//! answer: a step is stored once (an identical resend, or an identical
-//! repeat within one streamed body, is skipped; a different payload
-//! under a stored id, signatures aside, is `400 invalid_document`), a
-//! `POST /graphs` document that repeats a step id is `400
+//! answer: a step is stored once, at the position it was first stored
+//! (an identical resend, or an identical repeat within one streamed
+//! body, is skipped; a different payload under a stored id, signatures
+//! aside, replaces the stored payload, and is `400 invalid_document`
+//! when its parents differ), a `POST /graphs` document that repeats a step id is `400
 //! invalid_document`, every parent must be stored in the path or earlier
 //! in the request (`400 invalid_document`), a frozen graph refuses writes
 //! (`409 write_to_frozen`), a missing graph or path, or a graph named
@@ -92,8 +93,13 @@ impl FakePath {
         self.steps.iter().map(|(id, _)| id.clone()).collect()
     }
 
+    /// The stored step `id`, signatures aside.
+    pub(crate) fn step(&self, id: &str) -> Option<&serde_json::Value> {
+        self.steps.iter().find(|(s, _)| s == id).map(|(_, p)| p)
+    }
+
     fn holds(&self, id: &str) -> bool {
-        self.steps.iter().any(|(s, _)| s == id)
+        self.step(id).is_some()
     }
 }
 
@@ -695,6 +701,8 @@ fn apply(
     }
     let path = &state.graphs[gi].paths[pi];
     let mut new_steps: Vec<(String, serde_json::Value)> = Vec::new();
+    // Stored steps a line of this body replaces, with their new payload.
+    let mut replaced: Vec<(String, serde_json::Value)> = Vec::new();
     let mut head = None;
     for (n, line) in body.lines().enumerate() {
         let v: serde_json::Value = match serde_json::from_str(line) {
@@ -729,14 +737,30 @@ fn apply(
                 &format!("step {id} is stored along the parent chain"),
             );
         }
-        let earlier = path.steps.iter().chain(&new_steps).find(|(s, _)| *s == id);
+        let earlier = new_steps
+            .iter()
+            .chain(&replaced)
+            .chain(&path.steps)
+            .find(|(s, _)| *s == id);
         if let Some((_, stored)) = earlier {
-            if *stored != payload(&step) {
+            let now = payload(&step);
+            if *stored == now {
+                continue;
+            }
+            if stored["step"]["parents"] != now["step"]["parents"] {
                 return api_error(
                     400,
                     "invalid_document",
-                    &format!("step {id} differs from the stored one"),
+                    &format!("step {id} changes its parents"),
                 );
+            }
+            match new_steps
+                .iter_mut()
+                .chain(replaced.iter_mut())
+                .find(|(s, _)| *s == id)
+            {
+                Some(earlier) => earlier.1 = now,
+                None => replaced.push((id, now)),
             }
             continue;
         }
@@ -751,6 +775,11 @@ fn apply(
     }
     let inserted = new_steps.len();
     let path = &mut state.graphs[gi].paths[pi];
+    for (id, now) in replaced {
+        if let Some(stored) = path.steps.iter_mut().find(|(s, _)| *s == id) {
+            stored.1 = now;
+        }
+    }
     path.steps.extend(new_steps);
     if head.is_some() {
         path.head = head;
@@ -827,40 +856,62 @@ mod tests {
     }
 
     #[test]
-    fn a_step_is_stored_once_and_never_changed() {
+    fn a_step_is_stored_once_and_a_resend_replaces_its_payload_in_place() {
         let fake = FakePathbase::start();
         let err = create(&fake, path(vec![step("a", None), step("a", None)], None)).unwrap_err();
         assert_eq!(refusal_code(&err), Some("invalid_document"), "{err:#}");
 
-        let url = create(&fake, path(vec![step("a", None)], None)).unwrap();
+        let url = create(
+            &fake,
+            path(vec![step("a", None), step("b", Some("a"))], None),
+        )
+        .unwrap();
         let mut changed = step("a", None);
         changed.meta = Some(StepMeta {
             intent: Some("other".into()),
             ..Default::default()
         });
-        assert!(matches!(
-            append(&fake, &url, vec![changed]),
-            Err(AppendError::InvalidDocument(_))
-        ));
+        append(&fake, &url, vec![changed, step("c", Some("b"))]).unwrap();
+        let stored = fake.path_at(&url).unwrap();
+        assert_eq!(stored.step_ids(), ["a", "b", "c"], "a keeps its position");
+        assert_eq!(stored.step("a").unwrap()["meta"]["intent"], "other");
+
+        // An identical resend, or a repeat within one body, is a no-op.
         append(
             &fake,
             &url,
-            vec![step("a", None), step("b", Some("a")), step("b", Some("a"))],
+            vec![
+                step("b", Some("a")),
+                step("d", Some("c")),
+                step("d", Some("c")),
+            ],
         )
         .unwrap();
-        assert_eq!(fake.path_at(&url).unwrap().step_ids(), ["a", "b"]);
+        assert_eq!(fake.path_at(&url).unwrap().step_ids(), ["a", "b", "c", "d"]);
+
+        // Parents are fixed, stored or earlier in the body.
+        for refused in [
+            vec![step("b", None)],
+            vec![step("e", Some("d")), step("e", Some("a"))],
+            vec![step("f", Some("elsewhere"))],
+        ] {
+            assert!(matches!(
+                append(&fake, &url, refused),
+                Err(AppendError::InvalidDocument(_))
+            ));
+        }
+        assert_eq!(fake.path_at(&url).unwrap().step_ids(), ["a", "b", "c", "d"]);
+
+        // A frozen path's steps are final.
+        fake.freeze(ids_of(&url).unwrap().0);
         assert!(matches!(
-            append(
-                &fake,
-                &url,
-                vec![step("c", Some("b")), step("c", Some("a"))]
-            ),
-            Err(AppendError::InvalidDocument(_))
+            append(&fake, &url, vec![step("a", None)]),
+            Err(AppendError::Frozen)
         ));
-        assert!(matches!(
-            append(&fake, &url, vec![step("d", Some("elsewhere"))]),
-            Err(AppendError::InvalidDocument(_))
-        ));
+        assert_eq!(
+            fake.path_at(&url).unwrap().step("a").unwrap()["meta"]["intent"],
+            "other"
+        );
     }
 
     #[test]

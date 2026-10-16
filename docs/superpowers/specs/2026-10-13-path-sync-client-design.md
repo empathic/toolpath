@@ -17,9 +17,9 @@ copy is the one the implementing PRs cite.
   the path's API URL
   `<server>/api/v1/u/<owner>/repos/<repo>/graphs/<g>/paths/<p>`. Value:
   `{ steps, last_step, head, has_parent, source_stamp? }`, where `steps`
-  is how far into the local settled derive the remote chain covers (a
+  is how far into the local derive the remote chain covers (a
   continuation's parents included), `last_step` is the id at that
-  position, and `has_parent` is true when the remote path carries a
+  position, `head` is the path's head as last sent, and `has_parent` is true when the remote path carries a
   `path.parent`, i.e. it was created as a continuation. The server
   stores a path's edges only among its own steps (root steps descend
   implicitly from `parent.step`), so a batch appended to a continuation
@@ -36,18 +36,24 @@ copy is the one the implementing PRs cite.
   resolves it today (server, owner, repo).
 - **Settled step**: a derived step that a later turn follows. The current
   message group and any trailing steps whose tool calls have no result yet
-  are unsettled.
+  are unsettled: the **open region**, whose steps may still gain tool
+  results, token counts or turns.
 
 ## Decisions
 
-1. **A pushed step is immutable.** A mutable path is append-only. A
-   result or token count that would change a step after it was pushed
-   does not reach the server. Editing stored history is a separate RFC (a
+1. **A stored step is final once its path is frozen; while mutable, a
+   re-sent step replaces it.** On a mutable path a `Step` line whose id
+   is already stored replaces that step's payload; its id, position and
+   parents are fixed (a changed parent list is `400 invalid_document`),
+   and an identical payload is a no-op. A frozen path answers
+   `409 write_to_frozen`. Editing frozen history is a separate RFC (a
    mutation-log sidecar path), not this work.
-2. **Only settled steps are pushed.** This is what makes 1 safe in
-   practice: harnesses deliver tool results and close a message group
-   before the next turn, so a step with a later turn after it is final. A
-   shared session lags its source by the current turn.
+2. **Every step is pushed; the open region is re-sent each pass until it
+   settles.** Harnesses deliver tool results and close a message group
+   before the next turn, so a settled step is final: it is sent in its
+   final form once and not again. The open region is sent as it stands
+   and re-sent on each pass that changes the source, so a shared session
+   shows the current turn as it grows.
 3. **Mismatch is handled, not fatal.** When the local derive no longer
    starts with what the record says was sent, the client continues in the
    same remote path, pushing the steps the server lacks, and leaves the
@@ -64,48 +70,60 @@ copy is the one the implementing PRs cite.
 Input: a session (harness + id), its destination, the record if any.
 
 1. **Derive** the session with the harness reader. Let `S` be the steps
-   in document order and `n = len(S)`.
-2. **Settle.** Let `k` be the index of the last settled step plus one:
-   drop from the tail every step in the last message group (same
-   `group_id`) and every trailing step with a `tool_use` that has no
-   `result`. Steps `S[0..k)` are pushable. If `k == 0`, stop.
-3. **No record → create.** Stream `S[0..k)` as a new graph (open with
-   the first batch, append the rest, trailing `Head` = the head among the
-   pushed steps). Write the record from the create response:
-   `steps = k`, `last_step = S[k-1].id`, `head`, `has_parent = false`,
+   in document order and `n = len(S)`. If `n == 0`, stop: nothing is
+   sent and no record is written.
+2. **Settle.** `settled_len(S')` is the index of the last settled step
+   of a step list `S'` plus one: drop from the tail every step in the
+   last message group (same `group_id`) and every trailing step with a
+   `tool_use` that has no `result`. It no longer bounds what is sent;
+   it says where re-sending starts.
+3. **No record → create.** Stream all of `S` as a new graph (open with
+   the first batch, append the rest, trailing `Head` = the path's head).
+   Write the record from the create response: `steps = n`,
+   `last_step = S[n-1].id`, `head`, `has_parent = false`,
    `source_stamp`.
-4. **Record, fast check (every pass, O(1)).** If `k >= record.steps` and
-   `S[record.steps - 1].id == record.last_step`, the prefix holds. If
-   `k == record.steps`, nothing to send; refresh `source_stamp` only, so
-   an unchanged session costs no request. Otherwise:
+4. **Record, fast check (every pass, O(1)).** Let `r = record.steps`.
+   If `n >= r` and `S[r-1].id == record.last_step`, the prefix holds.
+   If `n == r` and the source stamp is known and equal to the record's,
+   nothing changed: send nothing, write nothing. Otherwise the last pass
+   sent `S[0..r)`, of which `S[settled_len(S[0..r))..r)` was open then
+   and may have changed since; everything before it was settled, so
+   sent in its final form. Send `S[settled_len(S[0..r))..n)`: that
+   re-send window and every new step.
    - `has_parent == false` (a fresh graph, nothing inherited): append
-     `S[record.steps..k)` to the recorded path URL plus `/steps`, with
-     a trailing `Head`, in batches as the streaming client already
-     does. Nothing is stripped, because nothing is inherited.
+     the window to the recorded path URL plus `/steps`, with a trailing
+     `Head`, in batches as the streaming client already does. Nothing
+     is stripped, because nothing is inherited.
    - `has_parent == true`: read the path's ownership (below), and
-     append the steps of `S[record.steps..k)` not in `O ∪ I`, each
-     with its parents filtered as below. One read per pass for a
-     continuation that grew is the accepted cost.
+     append the window's steps not in `I` (an inherited step is in a
+     frozen path, so final), each with its parents filtered as below.
+     One read per pass for a continuation that changed is the accepted
+     cost.
 
-   On `2xx`, advance the record. On `400 invalid_document` (a new step
-   does not fit what is stored, e.g. a parent the server lacks), go
-   to 5.
+   On `2xx`, write the record: `steps = n`, `last_step = S[n-1].id`,
+   `head` the path's head. On `400 invalid_document` (a step does not
+   fit what is stored, e.g. a parent the server lacks or a re-sent step
+   whose parents changed), go to 5.
 5. **Record, mismatch (only when 4 fails, O(n) ids).** Read what the
    chain stores: for `has_parent == false`, the path's step ids
-   (`O`, with `I` empty); for `has_parent == true`, its ownership. New
-   steps are the settled steps `S[i]`, `i < k`, whose id is not in
-   `O ∪ I`, in document order; append them, parents filtered as below,
-   with a trailing `Head`. On `2xx`, write the record from the derive:
-   `steps = k`, `last_step = S[k-1].id`. On `400 invalid_document` (a
-   new step's parent is neither stored nor earlier in the batch; the
-   derivation changed shape), go to 7. When the response carries
-   `truncated_at`, `I` is partial: proceed, and a refusal with
-   `inherited_step_redefined` recreates (7).
+   (`O`, with `I` empty); for `has_parent == true`, its ownership. The
+   record no longer says what was sent open, so send the steps `S[i]`
+   whose id is not in `O ∪ I`, and the steps of the current open region,
+   `i >= settled_len(S)`, whose id is in `O`, in document order, parents
+   filtered as below, with a trailing `Head`. On `2xx`, write the record
+   from the derive as in 4. On `400 invalid_document` (a new step's
+   parent is neither stored nor earlier in the batch, or a re-sent
+   step's parents changed; the derivation changed shape), go to 7. When
+   the response carries `truncated_at`, `I` is partial: proceed, and a
+   refusal with `inherited_step_redefined` recreates (7).
 6. **`409 write_to_frozen`** on any append, from 4 or 5 alike: the path
-   is frozen. Read what its chain stores as in 5 and take the settled
-   steps not in `O ∪ I`; this is the continuation's step set, so steps
-   an unrecorded earlier append stored are never claimed twice (none
-   missing: refresh the record, create nothing). Build a new document
+   is frozen, and its steps are final as stored, re-send window
+   included. Read what its chain stores as in 5 and take the steps not
+   in `O ∪ I`; this is the continuation's step set, so steps an
+   unrecorded earlier append stored are never claimed twice (none
+   missing: refresh the record, create nothing). It holds the current
+   open region wherever the frozen chain lacks it, and the next pass
+   re-sends that region to the continuation by 4. Build a new document
    whose single path carries
    `path.parent = { uri, path: <toolpath path id>, step }` on its
    `PathOpen`, where `uri` is the frozen graph's `url` as
@@ -115,13 +133,13 @@ Input: a session (harness + id), its destination, the record if any.
    path owns), else `record.head`. Each step keeps only the parents
    earlier among the new steps. Create it as a new graph in the same
    destination and re-key the record to the new path URL with
-   `steps = k`, `last_step = S[k-1].id` and `has_parent = true`. Report
+   `steps = n`, `last_step = S[n-1].id` and `has_parent = true`. Report
    "continued". A continuation of a continuation is the same step.
 7. **`404 not_found`** on append, `400 invalid_document` from step 5, or
    `400 inherited_step_redefined` on any append or on the continuation's
    create (an id stored above a parent the list could not show): create
-   a fresh graph from `S[0..k)` exactly as in 3, replace the record with
-   `has_parent = false`, report "recreated".
+   a fresh graph from all of `S` exactly as in 3, replace the record
+   with `has_parent = false`, report "recreated".
 
 **Ownership of a continuation.** `GET` the path's step ids with
 `through_parents=true`; the server lists the path's own ids first, then
@@ -148,20 +166,30 @@ rather than creating a duplicate every pass. When that delete fails, the
 warning, the session's failure line and the pass's "Failed:" summary
 name the graph's URL, so the user can delete it.
 
-A single `path share` of a session with nothing settled prints one line
-saying the session has no completed turn yet, and exits 0.
+A single `path share` of a session that derives to no step prints one
+line saying there is nothing to share yet, and exits 0.
 
 What the client never does: freeze, PUT, replay with idempotency keys,
-compare step content, keep a list of pushed ids, or build a server URL
-the server can report.
+compare step content, keep a list of pushed ids or payloads, or build a
+server URL the server can report.
 
 ### Why the fast check is enough
 
-Under decision 1 the server keeps whatever it has, in the order it has it.
-A reorder inside the prefix that happens to keep the same last id is
-therefore invisible by design, not a bug. The only facts the client needs
-are "how far did we get" and "is that still where we are", which `steps`
-and `last_step` answer.
+Ids never move: under decision 1 a stored step keeps its id and position
+whatever payload replaces it, and the server keeps whatever it has, in
+the order it has it. A reorder inside the prefix that happens to keep the
+same last id is therefore invisible by design, not a bug. The only facts
+the client needs are "how far did we get" and "is that still where we
+are", which `steps` and `last_step` answer; which of those steps may
+since have changed is `settled_len` of that prefix, computed from the
+derive, so the record needs nothing more.
+
+The re-send window is computed on the current payloads of `S[0..r)`. Its
+message-group part depends only on ids and `group_id`s, which do not
+change; its tool-call part could start later than it did on the last
+pass if a step before the last group had an unanswered call then and has
+its result now. Harnesses write a tool result before the next turn, so
+such a step is not followed by a later group while its call is open.
 
 ### Prefix stability
 
@@ -206,9 +234,8 @@ non-zero if any eligible session failed.
 `path share` of a single session takes the same code path, so a repeat
 share of a recorded session appends instead of creating a second graph.
 
-`path export pathbase` is not part of this: it uploads a whole document,
-unsettled steps included, and writes no record, so a later append never
-trusts it as a cursor.
+`path export pathbase` is not part of this: it uploads a whole document
+and writes no record, so a later append never trusts it as a cursor.
 
 ## Periodic job: `path sync`
 
@@ -235,6 +262,10 @@ One PR, stacked on #469:
   client can learn what is already stored upstream in one call. The walk
   stops at a parent the caller cannot read and names it in
   `truncated_at: {uri, path, step}`.
+- On a mutable path, a streamed `Step` line whose id is already stored
+  replaces that step's payload (decision 1): id, position and parents
+  fixed, a changed parent list `400 invalid_document`, an identical
+  payload a no-op.
 
 Already on the branches and relied on here: streamed open and append with
 `Head` lines and `409 write_to_frozen` (#486); `parent` on `PathOpen`
@@ -254,13 +285,15 @@ and fails saying what to set when they are missing.
 
 1. Copy a real Claude Code session file into a temp harness directory,
    truncated to its first N lines. Run one pass. Assert the server path's
-   step ids equal the local settled derive's, and the record matches.
-2. Grow the file by M lines. Run a pass. Assert only the new settled steps
-   were sent (count the request bodies), the server path equals the
-   derive, the record advanced.
+   step ids equal the local derive's, all of it, and the record matches.
+2. Grow the file by M lines. Run a pass. Assert exactly the re-send
+   window and the new steps were sent (count the request bodies), the
+   server path equals the derive, the record advanced.
 3. Repeat 2 until the file is complete. Assert the server path equals the
-   full settled derive (the test appends a closing user line so the last
-   group settles).
+   full derive. Then let a step already sent change: truncate the file
+   to end on a tool call without its result, run a pass, restore the
+   result line, run a pass, and assert the server's stored step now
+   carries the result.
 4. Freeze the graph with `POST .../freeze`. Grow the file. Run a pass.
    Assert a new graph exists whose `parent.uri` is the frozen graph's
    `url` as the server reports it and whose `parent.step` follows step 6,
@@ -282,8 +315,6 @@ and fails saying what to set when they are missing.
 
 - Pull records, resume linking (`resumed_from` → `path.parent` at derive),
   resumption uploads: one follow-up PR after #356.
-- Rewind-and-reappend of the unsettled tail as an append-route option, if
-  the one-turn lag turns out to matter. Needs no record or format change.
 - The mutation-log sidecar RFC for editing frozen history.
 - The file-watcher sync mode.
 - The UI: the delete dialog fed by the dependents reads, stub rendering for

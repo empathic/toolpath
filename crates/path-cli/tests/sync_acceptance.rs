@@ -419,6 +419,10 @@ fn conversation(step: &Value) -> Option<&Value> {
         .map(|c| &c["structural"])
 }
 
+fn ids(steps: &[Value]) -> Vec<String> {
+    steps.iter().map(step_id).collect()
+}
+
 /// Ids of the settled steps: everything before the trailing run of the
 /// last turn's message group, less trailing turns with an unanswered
 /// tool call.
@@ -453,6 +457,23 @@ fn settled(steps: &[Value]) -> Vec<String> {
         .iter()
         .map(|s| s["step"]["id"].as_str().unwrap().to_string())
         .collect()
+}
+
+/// What a pass sends after one that sent `sent` steps: the steps from
+/// the open region of what it sent last on.
+fn resend_window(steps: &[Value], sent: usize) -> Vec<String> {
+    ids(&steps[settled(&steps[..sent]).len()..])
+}
+
+/// The tool calls of the turn `step`, when it is one.
+fn tool_calls(step: &Value) -> &[Value] {
+    conversation(step)
+        .and_then(|c| c["tool_uses"].as_array())
+        .map_or(&[], Vec::as_slice)
+}
+
+fn answered(call: &Value) -> bool {
+    call.get("result").is_some_and(|r| !r.is_null())
 }
 
 // ── Sessions on disk ────────────────────────────────────────────────
@@ -602,12 +623,13 @@ fn run_loop(
     let derive_args: Vec<&str> = derive_args.iter().map(String::as_str).collect();
     let all = fixture(fixture_name);
 
-    // 1. A truncated copy, one pass: the server holds the settled derive.
+    // 1. A truncated copy, one pass: the server holds the whole derive.
     let mut lines = all[..first].to_vec();
     write_lines(&session.file(), &lines);
     let stderr = cli.pass(harness);
-    let mut want = settled(&cli.derive(&derive_args));
-    assert!(!want.is_empty(), "the first {first} lines settle something");
+    let mut steps = cli.derive(&derive_args);
+    let mut want = ids(&steps);
+    assert!(!want.is_empty(), "the first {first} lines derive something");
     let (mut key, record) = cli.record(harness, id);
     assert_eq!(server.step_ids(&key), want, "step 1:\n{stderr}");
     assert_eq!(record["steps"], want.len());
@@ -618,26 +640,18 @@ fn run_loop(
     );
     cli.proxy.take();
 
-    // 2 and 3. Grow, pass, until the file is complete; then a closing
-    // user line settles the last group.
-    let mut at = first;
-    let mut closing = 0;
-    let mut grew = 0;
-    loop {
-        let before = want.clone();
-        if at < all.len() {
-            at = (at + grow).min(all.len());
-            lines = all[..at].to_vec();
-        } else {
-            closing += 1;
-            lines.extend(session.exchange(&lines, closing, false));
-        }
-        write_lines(&session.file(), &lines);
+    // One pass after another: each sends the re-send window and the new
+    // steps, and the server ends up holding the derive.
+    let pass = |lines: &[String], before: &[Value]| -> Vec<Value> {
+        write_lines(&session.file(), lines);
         let stderr = cli.pass(harness);
-        want = settled(&cli.derive(&derive_args));
+        let steps = cli.derive(&derive_args);
+        let want = ids(&steps);
         assert!(
-            want.starts_with(&before),
-            "the {harness} derive is not prefix-stable at {at} lines:\n  before: {before:?}\n  now:    {want:?}"
+            want.starts_with(&ids(before)),
+            "the {harness} derive is not prefix-stable at {} lines:\n  before: {:?}\n  now:    {want:?}",
+            lines.len(),
+            ids(before)
         );
         let sent: Vec<String> = cli
             .proxy
@@ -648,25 +662,82 @@ fn run_loop(
             .collect();
         assert_eq!(
             sent,
-            want[before.len()..],
-            "only the new settled steps are sent:\n{stderr}"
+            resend_window(&steps, before.len()),
+            "the open region and the new steps are sent:\n{stderr}"
         );
         eprintln!(
-            "{harness}: {} lines, {} settled, {} sent",
+            "{harness}: {} lines, {} steps, {} sent",
             lines.len(),
             want.len(),
             sent.len()
         );
-        grew += usize::from(!sent.is_empty());
         let (k, record) = cli.record(harness, id);
         assert_eq!(k, key, "the pass appended to the same path:\n{stderr}");
         assert_eq!(server.step_ids(&key), want);
         assert_eq!(record["steps"], want.len());
         assert_eq!(record["last_step"], want[want.len() - 1].as_str());
-        if closing > 0 {
-            break;
-        }
+        steps
+    };
+
+    // 2. A step already sent changes: the file ends on a tool call whose
+    // result has not arrived, and then the result arrives.
+    let (at_call, call_id) = (first + 1..all.len())
+        .find_map(|n| {
+            write_lines(&session.file(), &all[..n]);
+            let steps = cli.derive(&derive_args);
+            let last = steps.iter().rev().find(|s| conversation(s).is_some())?;
+            let calls = tool_calls(last);
+            (!calls.is_empty() && !calls.iter().all(answered)).then(|| (n, step_id(last)))
+        })
+        .expect("the fixture has a tool call after the first lines");
+    let at_result = (at_call + 1..=all.len())
+        .find(|&n| {
+            write_lines(&session.file(), &all[..n]);
+            cli.derive(&derive_args)
+                .iter()
+                .find(|s| step_id(s) == call_id)
+                .is_some_and(|s| tool_calls(s).iter().all(answered))
+        })
+        .expect("the fixture answers the tool call");
+    let stored_calls = |key: &str| -> Vec<Value> {
+        let doc = server.document(key);
+        doc["paths"][0]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| step_id(s) == call_id)
+            .map(|s| tool_calls(s).to_vec())
+            .unwrap()
+    };
+    let mut grew = 0;
+    let before = steps.len();
+    lines = all[..at_call].to_vec();
+    steps = pass(&lines, &steps);
+    grew += usize::from(steps.len() > before);
+    assert!(
+        !stored_calls(&key).iter().all(answered),
+        "{call_id} is stored with its call open"
+    );
+    let before = steps.len();
+    lines = all[..at_result].to_vec();
+    steps = pass(&lines, &steps);
+    grew += usize::from(steps.len() > before);
+    assert!(
+        stored_calls(&key).iter().all(answered),
+        "the re-sent {call_id} replaced the stored one, its result included"
+    );
+    eprintln!("{harness}: {call_id} re-sent with its tool result");
+
+    // 3. Grow, pass, until the file is complete.
+    let mut at = at_result;
+    while at < all.len() {
+        let before = steps.len();
+        at = (at + grow).min(all.len());
+        lines = all[..at].to_vec();
+        steps = pass(&lines, &steps);
+        grew += usize::from(steps.len() > before);
     }
+    want = ids(&steps);
     assert!(
         grew >= 2,
         "growth reached the server on at least two passes"
@@ -685,7 +756,7 @@ fn run_loop(
     let stderr = cli.pass(harness);
     assert!(stderr.contains("continued"), "{stderr}");
     let steps = cli.derive(&derive_args);
-    want = settled(&steps);
+    want = ids(&steps);
     let (new_key, record) = cli.record(harness, id);
     assert_ne!(new_key, key, "the record is re-keyed to the continuation");
     assert_eq!(server.step_ids(&new_key), want[before.len()..]);
@@ -722,7 +793,7 @@ fn run_loop(
     lines.extend(session.exchange(&lines, 103, false));
     write_lines(&session.file(), &lines);
     cli.pass(harness);
-    want = settled(&cli.derive(&derive_args));
+    want = ids(&cli.derive(&derive_args));
     assert_eq!(cli.record(harness, id).0, key);
     let stored: HashSet<String> = server.step_ids(&key).into_iter().collect();
     assert!(want[before.len()..].iter().all(|s| stored.contains(s)));
@@ -745,11 +816,20 @@ fn run_loop(
     cli.proxy.take();
     let stderr = cli.pass(harness);
     let steps = cli.derive(&derive_args);
-    want = settled(&steps);
+    want = ids(&steps);
     let new: Vec<String> = want
         .iter()
         .filter(|id| !held_before.contains(*id))
         .cloned()
+        .collect();
+    // The record no longer describes the derive: the steps the chain
+    // lacks go, with the open region where the continuation owns it.
+    let open = settled(&steps).len();
+    let expected: Vec<String> = want
+        .iter()
+        .enumerate()
+        .filter(|(i, id)| !held_before.contains(*id) || (*i >= open && own_before.contains(*id)))
+        .map(|(_, id)| id.clone())
         .collect();
     let sent: Vec<Value> = cli
         .proxy
@@ -760,7 +840,7 @@ fn run_loop(
         .collect();
     let sent_ids: Vec<String> = sent.iter().map(step_id).collect();
     assert_eq!(
-        sent_ids, new,
+        sent_ids, expected,
         "the steps the chain lacks are sent:\n{stderr}"
     );
     assert!(!new.is_empty(), "the regrowth settles new steps:\n{stderr}");
@@ -770,7 +850,7 @@ fn run_loop(
     assert_eq!(record["steps"], want.len());
     assert_eq!(record["last_step"], want[want.len() - 1].as_str());
     assert_eq!(record["has_parent"], true);
-    let mut owned: HashSet<String> = own_before.into_iter().collect();
+    let mut owned: HashSet<String> = own_before.iter().cloned().collect();
     let mut kept_edges = 0;
     for step in &sent {
         let local = steps.iter().find(|s| step_id(s) == step_id(step)).unwrap();
@@ -787,7 +867,7 @@ fn run_loop(
         "edges among the new steps are kept"
     );
     eprintln!(
-        "{harness}: truncated to {first} lines and regrown: {} settled, {} sent to the continuation",
+        "{harness}: truncated to {first} lines and regrown: {} steps, {} sent to the continuation",
         want.len(),
         sent_ids.len()
     );
@@ -802,7 +882,7 @@ fn run_loop(
     write_lines(&session.file(), &lines);
     let stderr = cli.pass(harness);
     assert!(stderr.contains("continued"), "{stderr}");
-    want = settled(&cli.derive(&derive_args));
+    want = ids(&cli.derive(&derive_args));
     let new: Vec<String> = want
         .iter()
         .filter(|id| !held_before.contains(*id))
@@ -835,7 +915,7 @@ fn run_loop(
     write_lines(&session.file(), &lines);
     let stderr = cli.pass(harness);
     assert!(stderr.contains("recreated"), "{stderr}");
-    want = settled(&cli.derive(&derive_args));
+    want = ids(&cli.derive(&derive_args));
     let (recreated, record) = cli.record(harness, id);
     assert_ne!(recreated, key);
     assert_eq!(server.step_ids(&recreated), want);

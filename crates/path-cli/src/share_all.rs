@@ -204,7 +204,7 @@ impl Report {
                         Outcome::Created { steps, .. } => bump("created", *steps),
                         Outcome::Appended { steps, .. } => bump("appended", *steps),
                         Outcome::UpToDate => bump("up to date", 0),
-                        Outcome::NothingSettled => bump("nothing settled", 0),
+                        Outcome::Empty => bump("empty", 0),
                         Outcome::Continued { steps, .. } => bump("continued", *steps),
                         Outcome::Recreated { steps, .. } => bump("recreated", *steps),
                     }
@@ -228,7 +228,7 @@ impl Report {
             ("recreated", true),
             ("up to date", false),
             ("unchanged", false),
-            ("nothing settled", false),
+            ("empty", false),
             ("failed", false),
         ];
         for (kind, with_steps) in order {
@@ -666,8 +666,8 @@ mod tests {
                 .map(|(k, r)| (k.to_string(), r.clone()))
         }
 
-        /// The settled step ids of the Claude session as it is now.
-        fn claude_settled(&self, id: &str) -> Vec<String> {
+        /// The Claude session's steps as it is now.
+        fn claude_derive(&self, id: &str) -> Vec<toolpath::v1::Step> {
             let bundle = self.bundle();
             let doc = crate::derive::derive_claude_session_with(
                 bundle.claude.as_ref().unwrap(),
@@ -676,9 +676,22 @@ mod tests {
             )
             .unwrap()
             .doc;
-            let path = doc.single_path().unwrap();
-            let k = share_append::settled_len(&path.steps);
-            path.steps[..k].iter().map(|s| s.step.id.clone()).collect()
+            doc.single_path().unwrap().steps.clone()
+        }
+
+        /// The step ids of the Claude session as it is now.
+        fn claude_steps(&self, id: &str) -> Vec<String> {
+            self.claude_derive(id)
+                .iter()
+                .map(|s| s.step.id.clone())
+                .collect()
+        }
+
+        /// The settled step ids of the Claude session as it is now.
+        fn claude_settled(&self, id: &str) -> Vec<String> {
+            let steps = self.claude_derive(id);
+            let k = share_append::settled_len(&steps);
+            steps[..k].iter().map(|s| s.step.id.clone()).collect()
         }
     }
 
@@ -725,10 +738,11 @@ mod tests {
         assert_eq!(plan(&[None], stamp), Plan::Update);
     }
 
-    /// Sessions with no settled step: only the first prompt, and only
-    /// lines that are no turn at all.
+    /// Sessions with no settled step, only the first prompt or only
+    /// lines that are no turn at all, are shared at once, every step
+    /// included.
     #[test]
-    fn an_empty_session_is_skipped_and_writes_no_record() {
+    fn a_session_with_nothing_settled_is_created_with_every_step() {
         let lines = fixture("claude/convo.jsonl");
         for kept in [&lines[2..3], &lines[..2]] {
             let h = Harnesses::new();
@@ -738,25 +752,34 @@ mod tests {
             let d = dest(&fake, "x");
             let (plans, report) = h.pass(&d);
             assert_eq!(plans, [Plan::Create]);
-            assert!(matches!(
-                only(&report),
-                SessionResult::Pushed(Outcome::NothingSettled)
-            ));
-            assert!(fake.requests().is_empty());
-            assert_eq!(h.record(ArtifactType::Claude, CLAUDE_ID, &d), None);
+            assert!(
+                matches!(
+                    only(&report),
+                    SessionResult::Pushed(Outcome::Created { .. })
+                ),
+                "{report:?}"
+            );
+            let (key, record) = h.record(ArtifactType::Claude, CLAUDE_ID, &d).unwrap();
+            let all = h.claude_steps(CLAUDE_ID);
+            assert!(!all.is_empty());
+            assert_eq!(fake.path_at(&key).unwrap().step_ids(), all);
+            assert_eq!(record.steps, all.len());
             assert_eq!(report.failed(), 0);
         }
     }
 
-    /// Shared once, then grown: the second pass sends only the steps
-    /// that settled since, and a third pass with nothing new is a no-op.
+    /// Shared once, then grown: the second pass sends the new steps and
+    /// re-sends the ones that were open, and a third pass with nothing
+    /// new is a no-op.
     #[test]
-    fn a_grown_session_appends_only_new_settled_steps_and_a_repeat_is_a_no_op() {
+    fn a_grown_session_appends_new_steps_resends_open_ones_and_a_repeat_is_a_no_op() {
         let h = Harnesses::new();
         let fake = FakePathbase::start();
         let d = dest(&fake, "x");
         h.claude(CLAUDE_ID, 30);
-        let first = h.claude_settled(CLAUDE_ID);
+        let first = h.claude_steps(CLAUDE_ID);
+        let open = share_append::settled_len(&h.claude_derive(CLAUDE_ID));
+        assert!(open < first.len());
         let (_, report) = h.pass(&d);
         assert!(matches!(
             only(&report),
@@ -767,7 +790,7 @@ mod tests {
         assert_eq!(record.steps, first.len());
 
         h.claude(CLAUDE_ID, 60);
-        let grown = h.claude_settled(CLAUDE_ID);
+        let grown = h.claude_steps(CLAUDE_ID);
         assert_eq!(
             grown[..first.len()],
             first[..],
@@ -776,12 +799,15 @@ mod tests {
         fake.clear_log();
         let (plans, report) = h.pass(&d);
         assert_eq!(plans, [Plan::Update]);
-        let SessionResult::Pushed(Outcome::Appended { steps, .. }) = only(&report) else {
+        let SessionResult::Pushed(Outcome::Appended { steps, resent }) = only(&report) else {
             panic!("{report:?}");
         };
-        assert_eq!(*steps, grown.len() - first.len());
+        assert_eq!(
+            (*steps, *resent),
+            (grown.len() - first.len(), first.len() - open)
+        );
         let sent: Vec<String> = fake.writes().iter().flat_map(|w| w.step_ids()).collect();
-        assert_eq!(sent, grown[first.len()..]);
+        assert_eq!(sent, grown[open..]);
         assert_eq!(fake.path_at(&key).unwrap().step_ids(), grown);
 
         fake.clear_log();
@@ -818,7 +844,7 @@ mod tests {
         h.claude(CLAUDE_ID, 60);
         let (plans, _) = h.pass(&x);
         assert_eq!(plans, [Plan::Update]);
-        let grown = h.claude_settled(CLAUDE_ID);
+        let grown = h.claude_steps(CLAUDE_ID);
         assert_eq!(fake.path_at(&x_key).unwrap().step_ids(), grown);
         assert_ne!(fake.path_at(&y_key).unwrap().step_ids(), grown);
         h.claude(CLAUDE_ID, 70);
@@ -826,7 +852,7 @@ mod tests {
         assert_eq!(plans, [Plan::Update]);
         assert_eq!(
             fake.path_at(&y_key).unwrap().step_ids(),
-            h.claude_settled(CLAUDE_ID)
+            h.claude_steps(CLAUDE_ID)
         );
         assert_eq!(fake.graphs().len(), 2);
     }
@@ -852,11 +878,19 @@ mod tests {
         );
         let (new, record) = h.record(ArtifactType::Claude, CLAUDE_ID, &d).unwrap();
         assert_ne!(new, old);
-        let settled = h.claude_settled(CLAUDE_ID);
+        let steps = h.claude_derive(CLAUDE_ID);
+        let all = h.claude_steps(CLAUDE_ID);
         let continuation = fake.path_at(&new).unwrap();
-        assert_eq!(continuation.step_ids(), settled[old_record.steps..]);
-        assert_eq!(continuation.parent.unwrap().step, old_record.head);
-        assert_eq!(record.steps, settled.len());
+        assert_eq!(continuation.step_ids(), all[old_record.steps..]);
+        let frozen = fake.path_at(&old).unwrap().step_ids();
+        let from = steps[old_record.steps]
+            .step
+            .parents
+            .first()
+            .filter(|p| frozen.contains(p))
+            .unwrap_or(&old_record.head);
+        assert_eq!(&continuation.parent.unwrap().step, from);
+        assert_eq!(record.steps, all.len());
 
         h.claude(CLAUDE_ID, 70);
         let (_, report) = h.pass(&d);
@@ -896,7 +930,7 @@ mod tests {
         let (new, _) = h.record(ArtifactType::Claude, CLAUDE_ID, &d).unwrap();
         assert_eq!(
             fake.path_at(&new).unwrap().step_ids(),
-            h.claude_settled(CLAUDE_ID)
+            h.claude_steps(CLAUDE_ID)
         );
 
         h.claude(CLAUDE_ID, 70);
@@ -912,8 +946,8 @@ mod tests {
     }
 
     /// The local copy lost steps (truncated): the pass finds by id that
-    /// the remote has them all, keeps the same path, and growth after
-    /// that lands in it.
+    /// the remote has them all, re-sends only the open ones, keeps the
+    /// same path, and growth after that lands in it.
     #[test]
     fn a_truncated_local_copy_continues_in_the_same_path() {
         let h = Harnesses::new();
@@ -928,10 +962,15 @@ mod tests {
         fake.clear_log();
         let (_, report) = h.pass(&d);
         assert!(
-            matches!(only(&report), SessionResult::Pushed(Outcome::UpToDate)),
+            matches!(
+                only(&report),
+                SessionResult::Pushed(Outcome::Appended { steps: 0, .. })
+            ),
             "{report:?}"
         );
-        assert!(fake.writes().is_empty());
+        let open = share_append::settled_len(&h.claude_derive(CLAUDE_ID));
+        let sent: Vec<String> = fake.writes().iter().flat_map(|w| w.step_ids()).collect();
+        assert_eq!(sent, h.claude_steps(CLAUDE_ID)[open..]);
         assert!(
             fake.requests()
                 .iter()
@@ -939,7 +978,7 @@ mod tests {
         );
         let (same, record) = h.record(ArtifactType::Claude, CLAUDE_ID, &d).unwrap();
         assert_eq!(same, key);
-        assert_eq!(record.steps, h.claude_settled(CLAUDE_ID).len());
+        assert_eq!(record.steps, h.claude_steps(CLAUDE_ID).len());
 
         h.claude(CLAUDE_ID, 80);
         h.pass(&d);
@@ -1125,13 +1164,19 @@ mod tests {
                     ArtifactType::Claude,
                     "b".into(),
                     "me/x".into(),
-                    SessionResult::Pushed(Outcome::Appended { steps: 2 }),
+                    SessionResult::Pushed(Outcome::Appended {
+                        steps: 2,
+                        resent: 1,
+                    }),
                 ),
                 (
                     ArtifactType::Codex,
                     "c".into(),
                     "me/y".into(),
-                    SessionResult::Pushed(Outcome::Appended { steps: 3 }),
+                    SessionResult::Pushed(Outcome::Appended {
+                        steps: 3,
+                        resent: 0,
+                    }),
                 ),
                 (
                     ArtifactType::Codex,
