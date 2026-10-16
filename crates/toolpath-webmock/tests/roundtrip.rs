@@ -190,12 +190,11 @@ async fn committed_pathbase_cassette_replays() {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .find(|p| {
+            // the cassette, not the index and not provenance.json (read_dir order is not stable)
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
             p.extension().is_some_and(|x| x == "json")
-                && !p
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("index")
+                && !name.starts_with("index")
+                && name != "provenance.json"
         })
         .unwrap();
     let c: toolpath_webmock::Cassette =
