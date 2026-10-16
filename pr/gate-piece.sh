@@ -12,7 +12,8 @@ n=${bm#pr/}
 res=""
 t0=$SECONDS
 if cargo metadata --format-version 1 --offline >/dev/null 2>"$logdir/$n.meta.log"; then res+=" metadata=ok"; else res+=" metadata=FAIL"; fi
-if cargo fmt --all --check >"$logdir/$n.fmt.log" 2>&1; then res+=" fmt=ok"; else res+=" fmt=FAIL"; fi
+# fmt = the CI format gate: cargo fmt plus prettier over site/ (scripts/quality_gates.sh gate_format)
+if cargo fmt --all --check >"$logdir/$n.fmt.log" 2>&1 && { [ ! -d site ] || (cd site && nix run nixpkgs#prettier -- --check --no-color '**/*.{md,css,json,js}' >>"$logdir/$n.fmt.log" 2>&1); }; then res+=" fmt=ok"; else res+=" fmt=FAIL"; fi
 if cargo clippy --workspace --all-targets --offline -- -D warnings >"$logdir/$n.clippy.log" 2>&1; then res+=" clippy=ok"; else res+=" clippy=FAIL"; fi
 if RUSTFLAGS="-D warnings" cargo test --workspace --offline >"$logdir/$n.test.log" 2>&1; then res+=" test=ok($(grep -c '^test result' "$logdir/$n.test.log")suites)"; else res+=" test=FAIL"; fi
 if RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --offline >"$logdir/$n.doc.log" 2>&1; then res+=" doc=ok"; else res+=" doc=FAIL"; fi
