@@ -34,10 +34,10 @@ copy is the one the implementing PRs cite.
   the old. Anonymous uploads and `path export pathbase` write none.
 - **Destination**: where a session goes, resolved from config as `share`
   resolves it today (server, owner, repo).
-- **Settled step**: a derived step that a later turn follows. The current
-  message group and any trailing steps whose tool calls have no result yet
-  are unsettled: the **open region**, whose steps may still gain tool
-  results, token counts or turns.
+- **Settled step**: a derived step before the first turn of the last
+  message group. That turn and every step after it are unsettled: the
+  **open region**, where change can still happen, whose steps may still
+  gain tool results, token counts or turns.
 
 ## Decisions
 
@@ -48,16 +48,20 @@ copy is the one the implementing PRs cite.
    and an identical payload is a no-op. A frozen path answers
    `409 write_to_frozen`. Editing frozen history is a separate RFC (a
    mutation-log sidecar path), not this work.
-2. **Every step is pushed; the open region is re-sent each pass until it
+2. **Every step is pushed; the open region is re-sent until it
    settles.** Harnesses deliver tool results and close a message group
    before the next turn, so a settled step is final: it is sent in its
    final form once and not again. The open region is sent as it stands
-   and re-sent on each pass that changes the source, so a shared session
-   shows the current turn as it grows.
+   and re-sent on each pass that reads the source (a known, unchanged
+   stamp sends nothing), so a shared session shows the current turn as
+   it grows.
 3. **Mismatch is handled, not fatal.** When the local derive no longer
    starts with what the record says was sent, the client continues in the
-   same remote path, pushing the steps the server lacks, and leaves the
-   server's extra steps where they are.
+   same remote path, pushing only the steps the server lacks, and leaves
+   the server's extra steps where they are. On a mismatch the server's
+   copy of every stored step stands: nothing says the local copy is the
+   newer one. Re-sending happens only on the fast path, where the local
+   derive is known to be at least as new as what is stored.
 4. **A missing remote is recreated.** `404 not_found` on append means the
    graph is gone: create a fresh graph, re-key the record, report it.
 5. **Freezing is the server's.** `409 write_to_frozen` on append means
@@ -73,10 +77,10 @@ Input: a session (harness + id), its destination, the record if any.
    in document order and `n = len(S)`. If `n == 0`, stop: nothing is
    sent and no record is written.
 2. **Settle.** `settled_len(S')` is the index of the last settled step
-   of a step list `S'` plus one: drop from the tail every step in the
-   last message group (same `group_id`) and every trailing step with a
-   `tool_use` that has no `result`. It no longer bounds what is sent;
-   it says where re-sending starts.
+   of a step list `S'` plus one: the index of the first turn of the
+   trailing run of turns sharing the last turn's `group_id` (a turn
+   without a group is its own group). It says where re-sending starts:
+   a pass re-sends what it last sent from there on.
 3. **No record → create.** Stream all of `S` as a new graph (open with
    the first batch, append the rest, trailing `Head` = the path's head).
    Write the record from the create response: `steps = n`,
@@ -103,17 +107,19 @@ Input: a session (harness + id), its destination, the record if any.
    On `2xx`, write the record: `steps = n`, `last_step = S[n-1].id`,
    `head` the path's head. On `400 invalid_document` (a step does not
    fit what is stored, e.g. a parent the server lacks or a re-sent step
-   whose parents changed), go to 5.
+   whose parents changed), go to 5. Step 5 does not re-send, so a step
+   whose parents changed keeps its stored copy, and while it stays in
+   the re-send window every pass that sends takes 5.
 5. **Record, mismatch (only when 4 fails, O(n) ids).** Read what the
    chain stores: for `has_parent == false`, the path's step ids
-   (`O`, with `I` empty); for `has_parent == true`, its ownership. The
-   record no longer says what was sent open, so send the steps `S[i]`
-   whose id is not in `O ∪ I`, and the steps of the current open region,
-   `i >= settled_len(S)`, whose id is in `O`, in document order, parents
-   filtered as below, with a trailing `Head`. On `2xx`, write the record
-   from the derive as in 4. On `400 invalid_document` (a new step's
-   parent is neither stored nor earlier in the batch, or a re-sent
-   step's parents changed; the derivation changed shape), go to 7. When
+   (`O`, with `I` empty); for `has_parent == true`, its ownership. Send
+   only the steps `S[i]` whose id is not in `O ∪ I`, in document order,
+   parents filtered as below, with a trailing `Head`: on a mismatch the
+   server's copy of every stored step stands; only missing ids are sent.
+   None missing: refresh the record, keep the head the server was last
+   told. On `2xx`, write the record from the derive as in 4. On
+   `400 invalid_document` (a new step's parent is neither stored nor
+   earlier in the batch; the derivation changed shape), go to 7. When
    the response carries `truncated_at`, `I` is partial: proceed, and a
    refusal with `inherited_step_redefined` recreates (7).
 6. **`409 write_to_frozen`** on any append, from 4 or 5 alike: the path
@@ -184,12 +190,12 @@ are", which `steps` and `last_step` answer; which of those steps may
 since have changed is `settled_len` of that prefix, computed from the
 derive, so the record needs nothing more.
 
-The re-send window is computed on the current payloads of `S[0..r)`. Its
-message-group part depends only on ids and `group_id`s, which do not
-change; its tool-call part could start later than it did on the last
-pass if a step before the last group had an unanswered call then and has
-its result now. Harnesses write a tool result before the next turn, so
-such a step is not followed by a later group while its call is open.
+The re-send window is computed on the current payloads of `S[0..r)`,
+but depends only on their ids and `group_id`s, which do not change, so
+it is the open region as it stood when `S[0..r)` was sent. A tool result
+that lands in a step before the last message group (a parallel call
+crossing a group boundary) is not re-sent; harnesses deliver results
+before the next turn, so it does not occur in Claude Code or Codex logs.
 
 ### Prefix stability
 
@@ -289,11 +295,11 @@ and fails saying what to set when they are missing.
 2. Grow the file by M lines. Run a pass. Assert exactly the re-send
    window and the new steps were sent (count the request bodies), the
    server path equals the derive, the record advanced.
-3. Repeat 2 until the file is complete. Assert the server path equals the
-   full derive. Then let a step already sent change: truncate the file
-   to end on a tool call without its result, run a pass, restore the
-   result line, run a pass, and assert the server's stored step now
-   carries the result.
+3. Grow the file to end on a tool call whose result has not arrived,
+   run a pass, and assert the stored step carries the call without a
+   result. Grow it to the result, run a pass, and assert the stored step
+   now carries the result. Then repeat 2 until the file is complete and
+   assert the server path equals the full derive.
 4. Freeze the graph with `POST .../freeze`. Grow the file. Run a pass.
    Assert a new graph exists whose `parent.uri` is the frozen graph's
    `url` as the server reports it and whose `parent.step` follows step 6,

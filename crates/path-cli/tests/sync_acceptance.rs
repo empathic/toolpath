@@ -424,8 +424,7 @@ fn ids(steps: &[Value]) -> Vec<String> {
 }
 
 /// Ids of the settled steps: everything before the trailing run of the
-/// last turn's message group, less trailing turns with an unanswered
-/// tool call.
+/// last turn's message group.
 fn settled(steps: &[Value]) -> Vec<String> {
     let Some(last) = steps.iter().rposition(|s| conversation(s).is_some()) else {
         return Vec::new();
@@ -440,18 +439,6 @@ fn settled(steps: &[Value]) -> Vec<String> {
                 Some(_) => break,
             }
         }
-    }
-    let open = |s: &Value| {
-        conversation(s)
-            .and_then(|c| c["tool_uses"].as_array())
-            .is_some_and(|calls| {
-                calls
-                    .iter()
-                    .any(|c| c.get("result").is_none_or(Value::is_null))
-            })
-    };
-    while k > 0 && open(&steps[k - 1]) {
-        k -= 1;
     }
     steps[..k]
         .iter()
@@ -822,15 +809,6 @@ fn run_loop(
         .filter(|id| !held_before.contains(*id))
         .cloned()
         .collect();
-    // The record no longer describes the derive: the steps the chain
-    // lacks go, with the open region where the continuation owns it.
-    let open = settled(&steps).len();
-    let expected: Vec<String> = want
-        .iter()
-        .enumerate()
-        .filter(|(i, id)| !held_before.contains(*id) || (*i >= open && own_before.contains(*id)))
-        .map(|(_, id)| id.clone())
-        .collect();
     let sent: Vec<Value> = cli
         .proxy
         .take()
@@ -839,8 +817,10 @@ fn run_loop(
         .flat_map(|r| r.steps())
         .collect();
     let sent_ids: Vec<String> = sent.iter().map(step_id).collect();
+    // The record no longer describes the derive: only the steps the
+    // chain lacks are sent.
     assert_eq!(
-        sent_ids, expected,
+        sent_ids, new,
         "the steps the chain lacks are sent:\n{stderr}"
     );
     assert!(!new.is_empty(), "the regrowth settles new steps:\n{stderr}");

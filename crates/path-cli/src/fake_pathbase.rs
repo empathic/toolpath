@@ -6,11 +6,12 @@
 //!
 //! It answers as Pathbase does wherever the client's tests depend on the
 //! answer: a step is stored once, at the position it was first stored
-//! (an identical resend, or an identical repeat within one streamed
-//! body, is skipped; a different payload under a stored id, signatures
-//! aside, replaces the stored payload, and is `400 invalid_document`
-//! when its parents differ), a `POST /graphs` document that repeats a step id is `400
-//! invalid_document`, every parent must be stored in the path or earlier
+//! (an identical resend is skipped; a different payload under a stored
+//! id, signatures aside, replaces the stored payload, and is `400
+//! invalid_document` when its parents differ), an id repeated within one
+//! streamed body is skipped with the same payload and `400
+//! invalid_document` with a different one, a `POST /graphs` document that
+//! repeats a step id is `400 invalid_document`, every parent must be stored in the path or earlier
 //! in the request (`400 invalid_document`), a frozen graph refuses writes
 //! (`409 write_to_frozen`), a missing graph or path, or a graph named
 //! under an owner or repo it is not in, is `404 not_found`, a
@@ -24,7 +25,7 @@
 
 #![cfg(test)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -154,11 +155,16 @@ const WEB_APP_PAGE: &str = "<!doctype html><html><body>Pathbase</body></html>";
 
 /// What the fake compares to tell "the same step" from "a different
 /// step under that id": the whole step less its signatures, which ride
-/// their own lines in JSONL.
+/// their own lines in JSONL, and less `meta` when nothing else is in it.
 fn payload(step: &Step) -> serde_json::Value {
     let mut value = serde_json::to_value(step).expect("a step serializes");
-    if let Some(meta) = value.get_mut("meta").and_then(|m| m.as_object_mut()) {
+    if let Some(obj) = value.as_object_mut()
+        && let Some(meta) = obj.get_mut("meta").and_then(|m| m.as_object_mut())
+    {
         meta.remove("signatures");
+        if meta.is_empty() {
+            obj.remove("meta");
+        }
     }
     value
 }
@@ -703,6 +709,8 @@ fn apply(
     let mut new_steps: Vec<(String, serde_json::Value)> = Vec::new();
     // Stored steps a line of this body replaces, with their new payload.
     let mut replaced: Vec<(String, serde_json::Value)> = Vec::new();
+    // Each id's payload as this body first carries it.
+    let mut seen: HashMap<String, serde_json::Value> = HashMap::new();
     let mut head = None;
     for (n, line) in body.lines().enumerate() {
         let v: serde_json::Value = match serde_json::from_str(line) {
@@ -737,13 +745,19 @@ fn apply(
                 &format!("step {id} is stored along the parent chain"),
             );
         }
-        let earlier = new_steps
-            .iter()
-            .chain(&replaced)
-            .chain(&path.steps)
-            .find(|(s, _)| *s == id);
-        if let Some((_, stored)) = earlier {
-            let now = payload(&step);
+        let now = payload(&step);
+        if let Some(first) = seen.get(&id) {
+            if *first != now {
+                return api_error(
+                    400,
+                    "invalid_document",
+                    &format!("step {id} appears twice with different payloads"),
+                );
+            }
+            continue;
+        }
+        seen.insert(id.clone(), now.clone());
+        if let Some((_, stored)) = path.steps.iter().find(|(s, _)| *s == id) {
             if *stored == now {
                 continue;
             }
@@ -754,14 +768,7 @@ fn apply(
                     &format!("step {id} changes its parents"),
                 );
             }
-            match new_steps
-                .iter_mut()
-                .chain(replaced.iter_mut())
-                .find(|(s, _)| *s == id)
-            {
-                Some(earlier) => earlier.1 = now,
-                None => replaced.push((id, now)),
-            }
+            replaced.push((id, now));
             continue;
         }
         if let Some(p) = step.step.parents.iter().find(|p| !known(p)) {
@@ -771,7 +778,7 @@ fn apply(
                 &format!("step {id} cites unstored parent {p}"),
             );
         }
-        new_steps.push((id, payload(&step)));
+        new_steps.push((id, now));
     }
     let inserted = new_steps.len();
     let path = &mut state.graphs[gi].paths[pi];
@@ -876,18 +883,30 @@ mod tests {
         assert_eq!(stored.step_ids(), ["a", "b", "c"], "a keeps its position");
         assert_eq!(stored.step("a").unwrap()["meta"]["intent"], "other");
 
-        // An identical resend, or a repeat within one body, is a no-op.
+        // An identical resend, a repeat within one body, or a resend whose
+        // `meta` holds nothing, is a no-op.
+        let mut empty_meta = step("b", Some("a"));
+        empty_meta.meta = Some(StepMeta::default());
         append(
             &fake,
             &url,
-            vec![
-                step("b", Some("a")),
-                step("d", Some("c")),
-                step("d", Some("c")),
-            ],
+            vec![empty_meta, step("d", Some("c")), step("d", Some("c"))],
         )
         .unwrap();
-        assert_eq!(fake.path_at(&url).unwrap().step_ids(), ["a", "b", "c", "d"]);
+        let stored = fake.path_at(&url).unwrap();
+        assert_eq!(stored.step_ids(), ["a", "b", "c", "d"]);
+        assert_eq!(stored.step("b").unwrap().get("meta"), None);
+
+        // One id twice in a body with different payloads is refused.
+        let mut other = step("e", Some("d"));
+        other.meta = Some(StepMeta {
+            intent: Some("other".into()),
+            ..Default::default()
+        });
+        assert!(matches!(
+            append(&fake, &url, vec![step("e", Some("d")), other]),
+            Err(AppendError::InvalidDocument(_))
+        ));
 
         // Parents are fixed, stored or earlier in the body.
         for refused in [

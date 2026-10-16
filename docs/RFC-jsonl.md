@@ -202,9 +202,9 @@ Zero or more. The body is the existing `Step` JSON shape verbatim — including
 `step.meta`, which may carry step-level signatures, intent, refs, or actor
 definitions.
 
-Streamed to a store, a `Step` line whose id is already stored on a mutable
-path replaces that step's payload; its id, position and parents must be
-unchanged. This lets a live writer re-send a step that is still growing (a
+A `Step` line whose id is already stored on a mutable path replaces that
+step's payload; its `parents` must be unchanged, the stored step keeps its
+position, and an identical payload is a no-op. This lets a live writer re-send a step that is still growing (a
 tool result arriving, a token count) without a patch line kind.
 
 ```json
@@ -498,7 +498,8 @@ An earlier sketch considered a `StepOpen` / `StepPatch` / `StepClose`
 lifecycle so that a single step could stream in pieces — for example, the
 intent becomes known at t=0, the diff at t=20s. This was rejected for v1:
 
-- Atomic steps preserve append-only semantics — no line is ever
+- Atomic steps preserve append-only semantics of the file (a store may
+  replace a step while its path is mutable, see `Step`) — no line is ever
   conditional on a later line's arrival.
 - Live agent traces can emit a step as soon as the agent
   knows both the artifact and the change. The "progress before diff is
@@ -596,7 +597,8 @@ distinguish the cases.
 
 A writer might learn, after emitting a step, that the step's `meta.intent`
 should change or that a new ref should be attached. v1 has no mechanism
-for this — a step is immutable once emitted. A future `StepPatch` line
+for this — a step is immutable once its path is frozen; while mutable, a
+re-sent `Step` replaces it. A future `StepPatch` line
 could cover the case, guarded by a version bump.
 
 ## Prior Art

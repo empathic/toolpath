@@ -188,25 +188,27 @@ impl Report {
     /// The closing summary: one line per kind of outcome that occurred,
     /// then one line per destination written to.
     pub(crate) fn render(&self) -> String {
-        let mut counts: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
-        let mut bump = |kind: &'static str, steps: usize| {
+        // Per kind: sessions, steps, re-sent steps.
+        let mut counts: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
+        let mut bump = |kind: &'static str, steps: usize, resent: usize| {
             let e = counts.entry(kind).or_default();
             e.0 += 1;
             e.1 += steps;
+            e.2 += resent;
         };
         let mut by_dest: BTreeMap<&str, usize> = BTreeMap::new();
         for (_, _, dest, result) in &self.sessions {
             match result {
-                SessionResult::Unchanged => bump("unchanged", 0),
-                SessionResult::Failed(_) => bump("failed", 0),
+                SessionResult::Unchanged => bump("unchanged", 0, 0),
+                SessionResult::Failed(_) => bump("failed", 0, 0),
                 SessionResult::Pushed(o) => {
                     match o {
-                        Outcome::Created { steps, .. } => bump("created", *steps),
-                        Outcome::Appended { steps, .. } => bump("appended", *steps),
-                        Outcome::UpToDate => bump("up to date", 0),
-                        Outcome::Empty => bump("empty", 0),
-                        Outcome::Continued { steps, .. } => bump("continued", *steps),
-                        Outcome::Recreated { steps, .. } => bump("recreated", *steps),
+                        Outcome::Created { steps, .. } => bump("created", *steps, 0),
+                        Outcome::Appended { steps, resent } => bump("appended", *steps, *resent),
+                        Outcome::UpToDate => bump("up to date", 0, 0),
+                        Outcome::Empty => bump("empty", 0, 0),
+                        Outcome::Continued { steps, .. } => bump("continued", *steps, 0),
+                        Outcome::Recreated { steps, .. } => bump("recreated", *steps, 0),
                     }
                     if matches!(
                         o,
@@ -232,12 +234,16 @@ impl Report {
             ("failed", false),
         ];
         for (kind, with_steps) in order {
-            let Some((n, steps)) = counts.get(kind) else {
+            let Some((n, steps, resent)) = counts.get(kind) else {
                 continue;
             };
             if with_steps {
+                let resent = match resent {
+                    0 => String::new(),
+                    r => format!(", {r} re-sent"),
+                };
                 out.push_str(&format!(
-                    "  {kind:<16}{n:>5}  ({})\n",
+                    "  {kind:<16}{n:>5}  ({}{resent})\n",
                     plural(*steps, "step")
                 ));
             } else {
@@ -946,8 +952,8 @@ mod tests {
     }
 
     /// The local copy lost steps (truncated): the pass finds by id that
-    /// the remote has them all, re-sends only the open ones, keeps the
-    /// same path, and growth after that lands in it.
+    /// the remote has them all, sends nothing, keeps the same path, and
+    /// growth after that lands in it.
     #[test]
     fn a_truncated_local_copy_continues_in_the_same_path() {
         let h = Harnesses::new();
@@ -962,15 +968,10 @@ mod tests {
         fake.clear_log();
         let (_, report) = h.pass(&d);
         assert!(
-            matches!(
-                only(&report),
-                SessionResult::Pushed(Outcome::Appended { steps: 0, .. })
-            ),
+            matches!(only(&report), SessionResult::Pushed(Outcome::UpToDate)),
             "{report:?}"
         );
-        let open = share_append::settled_len(&h.claude_derive(CLAUDE_ID));
-        let sent: Vec<String> = fake.writes().iter().flat_map(|w| w.step_ids()).collect();
-        assert_eq!(sent, h.claude_steps(CLAUDE_ID)[open..]);
+        assert!(fake.writes().is_empty());
         assert!(
             fake.requests()
                 .iter()
@@ -1202,7 +1203,7 @@ mod tests {
             report.render(),
             "6 sessions in scope\n  \
              created             1  (4 steps)\n  \
-             appended            2  (5 steps)\n  \
+             appended            2  (5 steps, 1 re-sent)\n  \
              unchanged           1\n  \
              failed              2\n\
              Written to:\n  me/x  2 sessions\n  me/y  1 session\n\
