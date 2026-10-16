@@ -496,7 +496,7 @@ impl Store {
 
 #[derive(Debug, Clone)]
 pub enum Mode {
-    /// Forward to this upstream base URL (scheme + host[:port], no trailing slash) and record.
+    /// Forward to this upstream base URL (scheme + host\[:port\], no trailing slash) and record.
     Record { upstream: String },
     /// Serve cassettes only; never open an upstream connection.
     Replay,

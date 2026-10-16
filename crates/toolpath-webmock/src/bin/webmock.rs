@@ -1,9 +1,11 @@
 //! Standalone recorder/replayer, env-configured so a shell harness (the resume matrix, the goldens'
 //! capture-live) can point an agent's base URL at it:
 //!
-//!   WEBMOCK_MODE=record WEBMOCK_UPSTREAM=https://api.anthropic.com WEBMOCK_AGENT=claude \
-//!     WEBMOCK_DIR=crates/toolpath-webmock/cassettes WEBMOCK_PORT=8900 webmock
-//!   WEBMOCK_MODE=replay WEBMOCK_AGENT=claude WEBMOCK_DIR=… WEBMOCK_PORT=8900 webmock
+//! ```text
+//! WEBMOCK_MODE=record WEBMOCK_UPSTREAM=https://api.anthropic.com WEBMOCK_AGENT=claude \
+//!   WEBMOCK_DIR=crates/toolpath-webmock/cassettes WEBMOCK_PORT=8900 webmock
+//! WEBMOCK_MODE=replay WEBMOCK_AGENT=claude WEBMOCK_DIR=… WEBMOCK_PORT=8900 webmock
+//! ```
 //!
 //! Cassettes land in `WEBMOCK_DIR/<agent>/`. `GET /__webmock/health` reports the mode.
 

@@ -56,9 +56,14 @@ fn capture_with(store: bool) -> (tempfile::TempDir, Goldens) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     for rel in COPIED {
+        let from = repo().join(rel);
+        // `main` has no flake.lock; the manifest records a missing environment file as null.
+        if !from.exists() {
+            continue;
+        }
         let to = root.join(rel);
         fs::create_dir_all(to.parent().unwrap()).unwrap();
-        fs::copy(repo().join(rel), to).unwrap();
+        fs::copy(from, to).unwrap();
     }
     git(&root, &["init", "-q"]);
     git(&root, &["add", "."]);
