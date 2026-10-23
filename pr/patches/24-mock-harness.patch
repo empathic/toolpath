@@ -1,0 +1,996 @@
+From 8f6837ee0d39f0d1c43ac4a918572fd4aa7c3d77 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 15:52:59 -0400
+Subject: [PATCH] test(harness-mock): what Claude Code would send when it
+ resumes a projected session, without the binary
+
+toolpath-harness-mock stands in for the agent the way toolpath-webmock stands
+in for the model: claude::resume models Claude Code's loader (leaf, parentUuid
+walk, roles, merges by message.id, parallel tool results) and check_api the
+Messages API's rules. Tests: every projection into Claude Code resumes whole
+except two pinned findings (opencode -> claude reaches 2 of 22 entries: every
+assistant hangs off the first user turn; cursor -> claude has an unanswered
+tool call); the pi parent-chain and copilot empty-errored-result bugs,
+re-introduced in fixture copies, are caught; contract against the codex ->
+claude webmock cassette. docs/mock-harness.md; pr/24.
+---
+ Cargo.lock                                   |   7 +
+ Cargo.toml                                   |   1 +
+ crates/toolpath-harness-mock/Cargo.toml      |  10 +
+ crates/toolpath-harness-mock/src/claude.rs   | 263 ++++++++++++++++++
+ crates/toolpath-harness-mock/src/lib.rs      | 217 +++++++++++++++
+ crates/toolpath-harness-mock/tests/claude.rs | 277 +++++++++++++++++++
+ docs/mock-harness.md                         |  91 ++++++
+ pr/24-mock-harness.md                        |  37 +++
+ 8 files changed, 903 insertions(+)
+ create mode 100644 crates/toolpath-harness-mock/Cargo.toml
+ create mode 100644 crates/toolpath-harness-mock/src/claude.rs
+ create mode 100644 crates/toolpath-harness-mock/src/lib.rs
+ create mode 100644 crates/toolpath-harness-mock/tests/claude.rs
+ create mode 100644 docs/mock-harness.md
+ create mode 100644 pr/24-mock-harness.md
+
+diff --git a/Cargo.lock b/Cargo.lock
+index a41e82c9..8f2c61dc 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5496,6 +5496,13 @@ dependencies = [
+  "uuid",
+ ]
+ 
++[[package]]
++name = "toolpath-harness-mock"
++version = "0.1.0"
++dependencies = [
++ "serde_json",
++]
++
+ [[package]]
+ name = "toolpath-md"
+ version = "0.7.0"
+diff --git a/Cargo.toml b/Cargo.toml
+index c701fd5b..895f048b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -19,6 +19,7 @@ members = [
+     "crates/toolpath-goldens",
+     "crates/toolpath-webmock",
+     "crates/toolpath-model",
++    "crates/toolpath-harness-mock",
+ ]
+ exclude = ["crates/toolpath-cli"]
+ resolver = "2"
+diff --git a/crates/toolpath-harness-mock/Cargo.toml b/crates/toolpath-harness-mock/Cargo.toml
+new file mode 100644
+index 00000000..d1854d13
+--- /dev/null
++++ b/crates/toolpath-harness-mock/Cargo.toml
+@@ -0,0 +1,10 @@
++[package]
++name = "toolpath-harness-mock"
++version = "0.1.0"
++edition.workspace = true
++license.workspace = true
++publish = false
++description = "What a harness's loader would send to the model when it resumes a session file, without the harness binary (dev/test only)"
++
++[dependencies]
++serde_json.workspace = true
+diff --git a/crates/toolpath-harness-mock/src/claude.rs b/crates/toolpath-harness-mock/src/claude.rs
+new file mode 100644
+index 00000000..abe8b75a
+--- /dev/null
++++ b/crates/toolpath-harness-mock/src/claude.rs
+@@ -0,0 +1,263 @@
++//! Claude Code's resume loader, modelled.
++//!
++//! The rules, each one a behaviour a real resume depended on:
++//!
++//! 1. **Leaf.** The history ends at the last conversation entry (`type` `user` or `assistant`,
++//!    not a sidechain) in file order.
++//! 2. **Walk.** From the leaf, follow `parentUuid` to the root. Only entries on that chain are
++//!    sent; an entry the walk never reaches is lost history (pi → claude, 2026-10-15: 10 of 11
++//!    assistant lines had `parentUuid: null`, so the model saw only the newest message).
++//!    Non-conversation entries on the chain (`permission-mode`, unknown types) are walked through
++//!    and not sent.
++//! 3. **Roles.** A `user` entry is a user message whatever its `message.role` (a projected
++//!    `"system"` turn is sent as user text).
++//! 4. **Merge.** Consecutive user entries become one user message. Assistant entries that share a
++//!    `message.id` become one assistant message even when tool results sit between them; inside
++//!    it, `tool_use` blocks go last and the tool results follow as the next user message.
++//! 5. **Parallel tool results.** When one assistant entry makes several tool calls, their result
++//!    entries are siblings under it and the walk passes through only the last; the loader brings
++//!    the others back right after the assistant.
++//!
++//! What the rules were checked against: rules 1–4, the committed cassette
++//! `toolpath-webmock/cassettes/claude/9d1356…json`, Claude Code 2.1.285 resuming the codex
++//! golden's projection (`tests/claude.rs::agrees_with_what_claude_code_sent`). Rule 5 is
++//! inferred, not recorded: copilot → claude, whose projection has a two-call turn, resumed and
++//! answered in the 2026-10-15 matrix, which the Messages API would refuse with a tool call left
++//! unanswered. A cassette of that resume would make it a checked rule.
++
++use serde_json::Value;
++
++use crate::{Block, Message, Resumed, Role, content_text};
++
++/// Resume a Claude Code session file (JSONL) the way Claude Code's loader does.
++pub fn resume(jsonl: &str) -> Resumed {
++    let entries: Vec<Value> = jsonl
++        .lines()
++        .filter(|l| !l.trim().is_empty())
++        .filter_map(|l| serde_json::from_str(l).ok())
++        .collect();
++
++    let is_convo = |e: &Value| {
++        matches!(
++            e.get("type").and_then(Value::as_str),
++            Some("user" | "assistant")
++        ) && !e
++            .get("isSidechain")
++            .and_then(Value::as_bool)
++            .unwrap_or(false)
++    };
++    let uuid = |e: &Value| e.get("uuid").and_then(Value::as_str).map(str::to_owned);
++
++    let by_uuid: std::collections::HashMap<String, &Value> = entries
++        .iter()
++        .filter_map(|e| uuid(e).map(|u| (u, e)))
++        .collect();
++
++    // 1–2: leaf, then the parentUuid walk.
++    let mut chain: Vec<&Value> = Vec::new();
++    if let Some(leaf) = entries.iter().rev().find(|e| is_convo(e)) {
++        let mut seen = std::collections::HashSet::new();
++        let mut cur = Some(leaf);
++        while let Some(e) = cur {
++            if let Some(u) = uuid(e)
++                && !seen.insert(u)
++            {
++                break; // a cycle: Claude Code would stop too
++            }
++            chain.push(e);
++            cur = e
++                .get("parentUuid")
++                .and_then(Value::as_str)
++                .and_then(|p| by_uuid.get(p).copied());
++        }
++        chain.reverse();
++    }
++    // 2b: parallel tool calls. Results of one assistant entry's several tool calls are siblings
++    // (all children of that assistant); the walk passes through only the last one. The loader
++    // brings the other results back right after the assistant, or the Messages API would refuse
++    // the unanswered tool_use.
++    let on_chain: std::collections::HashSet<String> =
++        chain.iter().filter_map(|e| uuid(e)).collect();
++    let mut with_siblings: Vec<&Value> = Vec::with_capacity(chain.len());
++    for e in chain {
++        with_siblings.push(e);
++        if e.get("type").and_then(Value::as_str) == Some("assistant")
++            && let Some(u) = uuid(e)
++        {
++            with_siblings.extend(entries.iter().filter(|s| {
++                is_convo(s)
++                    && s.get("parentUuid").and_then(Value::as_str) == Some(u.as_str())
++                    && uuid(s).is_some_and(|su| !on_chain.contains(&su))
++                    && is_tool_results(s)
++            }));
++        }
++    }
++    let chain = with_siblings;
++    let reached: std::collections::HashSet<String> = chain.iter().filter_map(|e| uuid(e)).collect();
++    let unreachable = entries
++        .iter()
++        .filter(|e| is_convo(e))
++        .filter_map(uuid)
++        .filter(|u| !reached.contains(u))
++        .collect();
++
++    // 3–4: messages.
++    let mut messages: Vec<Message> = Vec::new();
++    // index of the last assistant message and its message.id, while only tool results follow it
++    let mut open_assistant: Option<(usize, String)> = None;
++    for e in chain.into_iter().filter(|e| is_convo(e)) {
++        let msg = e.get("message").cloned().unwrap_or(Value::Null);
++        let blocks = blocks_of(&msg);
++        if e.get("type").and_then(Value::as_str) == Some("assistant") {
++            let mid = msg.get("id").and_then(Value::as_str).map(str::to_owned);
++            if let (Some((ai, open_mid)), Some(mid)) = (&open_assistant, &mid)
++                && open_mid == mid
++            {
++                let ai = *ai;
++                messages[ai].blocks.extend(blocks);
++                tool_uses_last(&mut messages[ai].blocks);
++                continue;
++            }
++            match messages.last_mut() {
++                Some(last) if last.role == Role::Assistant && mid.is_none() => {
++                    last.blocks.extend(blocks);
++                }
++                _ => messages.push(Message {
++                    role: Role::Assistant,
++                    blocks,
++                }),
++            }
++            let ai = messages.len() - 1;
++            tool_uses_last(&mut messages[ai].blocks);
++            open_assistant = mid.map(|m| (ai, m));
++        } else {
++            let only_results =
++                !blocks.is_empty() && blocks.iter().all(|b| matches!(b, Block::ToolResult { .. }));
++            if !only_results {
++                open_assistant = None;
++            }
++            match messages.last_mut() {
++                Some(last) if last.role == Role::User => last.blocks.extend(blocks),
++                _ => messages.push(Message {
++                    role: Role::User,
++                    blocks,
++                }),
++            }
++        }
++    }
++
++    Resumed {
++        messages,
++        unreachable,
++    }
++}
++
++fn is_tool_results(e: &Value) -> bool {
++    e.get("type").and_then(Value::as_str) == Some("user")
++        && e.pointer("/message/content")
++            .and_then(Value::as_array)
++            .is_some_and(|a| {
++                !a.is_empty()
++                    && a.iter()
++                        .all(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
++            })
++}
++
++fn tool_uses_last(blocks: &mut [Block]) {
++    blocks.sort_by_key(|b| matches!(b, Block::ToolUse { .. }));
++}
++
++fn blocks_of(msg: &Value) -> Vec<Block> {
++    match msg.get("content") {
++        Some(Value::String(s)) => vec![Block::Text(s.clone())],
++        Some(Value::Array(a)) => a
++            .iter()
++            .filter_map(|b| match b.get("type").and_then(Value::as_str) {
++                Some("text") => Some(Block::Text(str_of(b, "text"))),
++                Some("thinking") => Some(Block::Thinking(str_of(b, "thinking"))),
++                Some("tool_use") => Some(Block::ToolUse {
++                    id: str_of(b, "id"),
++                    name: str_of(b, "name"),
++                    input: b.get("input").cloned().unwrap_or(Value::Null),
++                }),
++                Some("tool_result") => Some(Block::ToolResult {
++                    tool_use_id: str_of(b, "tool_use_id"),
++                    is_error: b.get("is_error").and_then(Value::as_bool).unwrap_or(false),
++                    content: content_text(b.get("content").unwrap_or(&Value::Null)),
++                }),
++                _ => None,
++            })
++            .collect(),
++        _ => Vec::new(),
++    }
++}
++
++fn str_of(v: &Value, k: &str) -> String {
++    v.get(k)
++        .and_then(Value::as_str)
++        .unwrap_or_default()
++        .to_owned()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn line(v: Value) -> String {
++        v.to_string()
++    }
++
++    #[test]
++    fn walks_from_the_leaf_and_reports_what_it_never_reached() {
++        let f = [
++            line(serde_json::json!({"type":"user","uuid":"u1","message":{"role":"user","content":"first"}})),
++            line(serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"text","text":"one"}]}})),
++            line(serde_json::json!({"type":"user","uuid":"u2","parentUuid":null,"message":{"role":"user","content":"second"}})),
++        ]
++        .join("\n");
++        let r = resume(&f);
++        assert_eq!(
++            r.messages,
++            vec![Message {
++                role: Role::User,
++                blocks: vec![Block::Text("second".into())]
++            }]
++        );
++        assert_eq!(r.unreachable, vec!["u1".to_string(), "a1".to_string()]);
++    }
++
++    #[test]
++    fn same_message_id_merges_across_tool_results_with_tool_use_last() {
++        let f = [
++            line(serde_json::json!({"type":"user","uuid":"u1","message":{"role":"user","content":"go"}})),
++            line(serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"t1"},{"type":"tool_use","id":"c","name":"Bash","input":{}}]}})),
++            line(serde_json::json!({"type":"user","uuid":"r1","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":"ok"}]}})),
++            line(serde_json::json!({"type":"assistant","uuid":"a2","parentUuid":"r1","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"t2"}]}})),
++        ]
++        .join("\n");
++        let r = resume(&f);
++        assert!(r.unreachable.is_empty());
++        assert_eq!(r.messages.len(), 3);
++        assert_eq!(r.messages[1].blocks.len(), 3);
++        assert!(matches!(r.messages[1].blocks[2], Block::ToolUse { .. }));
++        assert_eq!(r.messages[1].blocks[1], Block::Text("t2".into()));
++        assert!(matches!(r.messages[2].blocks[0], Block::ToolResult { .. }));
++        assert!(crate::check_api(&r.messages).is_ok());
++    }
++
++    #[test]
++    fn parallel_tool_results_come_back_with_their_assistant() {
++        let f = [
++            line(serde_json::json!({"type":"user","uuid":"u1","message":{"role":"user","content":"go"}})),
++            line(serde_json::json!({"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"Bash","input":{}},{"type":"tool_use","id":"c2","name":"Bash","input":{}}]}})),
++            line(serde_json::json!({"type":"user","uuid":"r1","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":"one"}]}})),
++            line(serde_json::json!({"type":"user","uuid":"r2","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"c2","content":"two"}]}})),
++            line(serde_json::json!({"type":"assistant","uuid":"a2","parentUuid":"r2","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}})),
++        ]
++        .join("\n");
++        let r = resume(&f);
++        assert!(r.unreachable.is_empty(), "{:?}", r.unreachable);
++        assert_eq!(r.messages[2].blocks.len(), 2);
++        assert!(crate::check_api(&r.messages).is_ok());
++    }
++}
+diff --git a/crates/toolpath-harness-mock/src/lib.rs b/crates/toolpath-harness-mock/src/lib.rs
+new file mode 100644
+index 00000000..1e019b89
+--- /dev/null
++++ b/crates/toolpath-harness-mock/src/lib.rs
+@@ -0,0 +1,217 @@
++//! A mock harness: what a harness's own loader would send to the model as history when it
++//! resumes a session file, computed without the harness binary.
++//!
++//! `toolpath-webmock` stands in for the model API; this crate stands in for the agent. A test can
++//! then say "projected for Claude Code, Claude Code would send these messages" in plain
++//! `cargo test`, where today only a live resume (the resume matrix) can say it.
++//!
++//! Each harness module models the loader's rules that resume bugs have actually depended on, and
++//! nothing more. The model is kept honest by a contract test: for a committed webmock cassette
++//! recorded from the real binary resuming a projected session, the mock's messages must be a
++//! prefix of the request body the binary really sent (`tests/claude.rs`). See
++//! `docs/mock-harness.md`.
++
++pub mod claude;
++
++use serde_json::Value;
++
++/// Who a message is from, as the model API sees it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Role {
++    User,
++    Assistant,
++}
++
++/// One content block of a message, reduced to what the comparison needs.
++#[derive(Debug, Clone, PartialEq)]
++pub enum Block {
++    Text(String),
++    Thinking(String),
++    ToolUse {
++        id: String,
++        name: String,
++        input: Value,
++    },
++    ToolResult {
++        tool_use_id: String,
++        is_error: bool,
++        content: String,
++    },
++}
++
++/// One message of the history the harness would send.
++#[derive(Debug, Clone, PartialEq)]
++pub struct Message {
++    pub role: Role,
++    pub blocks: Vec<Block>,
++}
++
++/// What resuming a session file gives: the history sent, and the conversation entries in the file
++/// the loader never reached (a non-empty list is a lost-history resume).
++#[derive(Debug, Clone, PartialEq)]
++pub struct Resumed {
++    pub messages: Vec<Message>,
++    pub unreachable: Vec<String>,
++}
++
++/// Why the model API would refuse the resumed history (the copilot → claude 400).
++#[derive(Debug, Clone, PartialEq)]
++pub struct Rejected {
++    pub message_index: usize,
++    pub reason: String,
++}
++
++/// The model API's own rules on a history, independent of any harness.
++pub fn check_api(messages: &[Message]) -> Result<(), Rejected> {
++    for (i, m) in messages.iter().enumerate() {
++        // Every tool call is answered by a tool_result in the next message (the last message may
++        // end on a tool call: the harness answers it before sending).
++        if m.role == Role::Assistant
++            && let Some(next) = messages.get(i + 1)
++        {
++            for b in &m.blocks {
++                if let Block::ToolUse { id, .. } = b {
++                    let answered = next.blocks.iter().any(
++                        |nb| matches!(nb, Block::ToolResult { tool_use_id, .. } if tool_use_id == id),
++                    );
++                    if !answered {
++                        return Err(Rejected {
++                            message_index: i,
++                            reason: format!(
++                                "messages.{i}: tool_use {id} has no tool_result in the next message"
++                            ),
++                        });
++                    }
++                }
++            }
++        }
++        for b in &m.blocks {
++            if let Block::ToolResult {
++                tool_use_id,
++                is_error,
++                content,
++            } = b
++            {
++                if *is_error && content.trim().is_empty() {
++                    return Err(Rejected {
++                        message_index: i,
++                        reason: format!(
++                            "messages.{i}: tool_result {tool_use_id}: content cannot be empty if is_error is true"
++                        ),
++                    });
++                }
++                let prev_uses = i
++                    .checked_sub(1)
++                    .and_then(|p| messages.get(p))
++                    .filter(|p| p.role == Role::Assistant)
++                    .map(|p| {
++                        p.blocks
++                            .iter()
++                            .any(|pb| matches!(pb, Block::ToolUse { id, .. } if id == tool_use_id))
++                    })
++                    .unwrap_or(false);
++                if !prev_uses {
++                    return Err(Rejected {
++                        message_index: i,
++                        reason: format!(
++                            "messages.{i}: tool_result {tool_use_id} has no matching tool_use in the previous message"
++                        ),
++                    });
++                }
++            }
++        }
++    }
++    Ok(())
++}
++
++/// The text of a tool_result's `content`, string or block array.
++pub(crate) fn content_text(v: &Value) -> String {
++    match v {
++        Value::String(s) => s.clone(),
++        Value::Array(a) => a
++            .iter()
++            .filter_map(|b| b.get("text").and_then(Value::as_str))
++            .collect::<Vec<_>>()
++            .join("\n"),
++        Value::Null => String::new(),
++        other => other.to_string(),
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn tr(id: &str, err: bool, c: &str) -> Block {
++        Block::ToolResult {
++            tool_use_id: id.into(),
++            is_error: err,
++            content: c.into(),
++        }
++    }
++    fn tu(id: &str) -> Block {
++        Block::ToolUse {
++            id: id.into(),
++            name: "Bash".into(),
++            input: Value::Null,
++        }
++    }
++
++    #[test]
++    fn an_errored_tool_result_must_not_be_empty() {
++        let h = vec![
++            Message {
++                role: Role::Assistant,
++                blocks: vec![tu("a")],
++            },
++            Message {
++                role: Role::User,
++                blocks: vec![tr("a", true, "")],
++            },
++        ];
++        let e = check_api(&h).unwrap_err();
++        assert_eq!(e.message_index, 1);
++        assert!(e.reason.contains("cannot be empty"));
++    }
++
++    #[test]
++    fn a_tool_result_needs_its_tool_use_in_the_previous_message() {
++        let h = vec![
++            Message {
++                role: Role::Assistant,
++                blocks: vec![tu("a")],
++            },
++            Message {
++                role: Role::User,
++                blocks: vec![tr("b", false, "x")],
++            },
++        ];
++        let e = check_api(&h).unwrap_err();
++        assert!(
++            e.reason.contains("tool_use a has no tool_result"),
++            "{}",
++            e.reason
++        );
++        let orphan = vec![Message {
++            role: Role::User,
++            blocks: vec![tr("b", false, "x")],
++        }];
++        assert!(
++            check_api(&orphan)
++                .unwrap_err()
++                .reason
++                .contains("no matching tool_use")
++        );
++        let ok = vec![
++            Message {
++                role: Role::Assistant,
++                blocks: vec![tu("a")],
++            },
++            Message {
++                role: Role::User,
++                blocks: vec![tr("a", false, "x")],
++            },
++        ];
++        assert!(check_api(&ok).is_ok());
++    }
++}
+diff --git a/crates/toolpath-harness-mock/tests/claude.rs b/crates/toolpath-harness-mock/tests/claude.rs
+new file mode 100644
+index 00000000..58c48008
+--- /dev/null
++++ b/crates/toolpath-harness-mock/tests/claude.rs
+@@ -0,0 +1,277 @@
++//! The Claude Code mock against the committed goldens and the committed cassette.
++//!
++//! * Every projection into Claude Code in `toolpath-goldens/snapshots/` must resume whole: every
++//!   conversation entry reached, and a history the Messages API accepts.
++//! * The two historical bugs the mock models, re-introduced in a copy of the fixture (never in
++//!   code), must be caught: pi → claude's broken parent chain, copilot → claude's empty errored
++//!   tool_result (the 400).
++//! * Contract: on the codex golden's projection, the mock's history is a prefix of the request
++//!   Claude Code 2.1.285 really sent when it resumed that projection (webmock cassette).
++
++use std::fs;
++use std::path::{Path, PathBuf};
++
++use serde_json::Value;
++use toolpath_harness_mock::{Block, Message, Role, check_api, claude};
++
++fn crates() -> PathBuf {
++    Path::new(env!("CARGO_MANIFEST_DIR"))
++        .parent()
++        .unwrap()
++        .to_path_buf()
++}
++
++/// The JSONL body of an insta snapshot (everything after the second `---` line).
++fn snapshot_body(name: &str) -> String {
++    let text = fs::read_to_string(crates().join("toolpath-goldens/snapshots").join(name))
++        .unwrap_or_else(|e| panic!("{name}: {e}"));
++    let mut seps = 0;
++    text.lines()
++        .filter(|l| {
++            if *l == "---" {
++                seps += 1;
++                return false;
++            }
++            seps >= 2
++        })
++        .collect::<Vec<_>>()
++        .join("\n")
++}
++
++fn projections_into_claude() -> Vec<String> {
++    let mut v: Vec<String> = fs::read_dir(crates().join("toolpath-goldens/snapshots"))
++        .unwrap()
++        .filter_map(|e| e.ok()?.file_name().into_string().ok())
++        .filter(|n| n.starts_with("projection@") && n.ends_with("@claude.snap"))
++        .collect();
++    v.sort();
++    v
++}
++
++fn edit_lines(jsonl: &str, f: impl Fn(&mut Value)) -> String {
++    jsonl
++        .lines()
++        .map(|l| match serde_json::from_str::<Value>(l) {
++            Ok(mut v) => {
++                f(&mut v);
++                v.to_string()
++            }
++            Err(_) => l.to_string(),
++        })
++        .collect::<Vec<_>>()
++        .join("\n")
++}
++
++fn first_user_text(m: &[Message]) -> Option<&str> {
++    m.iter()
++        .filter(|m| m.role == Role::User)
++        .flat_map(|m| &m.blocks)
++        .find_map(|b| {
++            if let Block::Text(t) = b {
++                Some(t.as_str())
++            } else {
++                None
++            }
++        })
++}
++
++/// What the mock finds today, pinned like `known_defects`: a change in either direction fails,
++/// so a fix has to remove its line here. None of these resumes has been run live.
++enum Known {
++    /// The loader never reaches this many conversation entries.
++    Unreached(usize),
++    /// The Messages API would refuse the history with this reason.
++    Refused(&'static str),
++}
++
++const KNOWN: &[(&str, Known)] = &[
++    // opencode records each assistant message's parent as the user message it answers, and the
++    // projection writes that as `parentUuid`: every assistant hangs off the first user turn.
++    // Claude Code's walk from the leaf then reaches only the first and the last turn: the
++    // pi -> claude bug class. opencode was never a source in the resume matrix.
++    (
++        "projection@opencode@claude.snap",
++        Known::Unreached(OPENCODE_UNREACHED),
++    ),
++    // The cursor golden has a Glob call with no result anywhere in the session; the projection
++    // writes the tool_use and nothing answers it. Unless Claude Code repairs it on load (not
++    // verified), the API refuses an unanswered tool call.
++    (
++        "projection@cursor@claude.snap",
++        Known::Refused(
++            "tool_use tool_488515c4-acb2-45f6-929d-3c19689d35d has no tool_result in the next message",
++        ),
++    ),
++];
++const OPENCODE_UNREACHED: usize = 20; // of 22 conversation entries
++
++#[test]
++fn every_projection_into_claude_resumes_whole() {
++    let names = projections_into_claude();
++    assert!(
++        names.len() >= 6,
++        "expected the six projections into claude, found {names:?}"
++    );
++    for name in names {
++        let r = claude::resume(&snapshot_body(&name));
++        assert!(!r.messages.is_empty(), "{name}: nothing sent");
++        let known = KNOWN.iter().find(|(n, _)| *n == name).map(|(_, k)| k);
++        match known {
++            Some(Known::Unreached(n)) => assert_eq!(
++                r.unreachable.len(),
++                *n,
++                "{name}: unreached entries changed (fixed? remove its KNOWN entry): {:?}",
++                r.unreachable
++            ),
++            _ => assert!(
++                r.unreachable.is_empty(),
++                "{name}: entries the loader never reaches: {:?}",
++                r.unreachable
++            ),
++        }
++        match (check_api(&r.messages), known) {
++            (Err(e), Some(Known::Refused(why))) => {
++                assert!(
++                    e.reason.contains(why),
++                    "{name}: refused for another reason now: {}",
++                    e.reason
++                )
++            }
++            (Ok(()), Some(Known::Refused(why))) => {
++                panic!("{name}: resumes now; remove its KNOWN entry ({why})")
++            }
++            (Err(e), _) => panic!("{name}: the Messages API would refuse it: {}", e.reason),
++            (Ok(()), _) => {}
++        }
++    }
++}
++
++#[test]
++fn catches_the_pi_parent_chain_bug() {
++    let good = snapshot_body("projection@pi@claude.snap");
++    let ok = claude::resume(&good);
++    assert!(ok.unreachable.is_empty());
++    let first = first_user_text(&ok.messages)
++        .expect("a first user message")
++        .to_owned();
++
++    // 2026-10-15: assistant lines after a tool call were written with no parent.
++    let broken = edit_lines(&good, |v| {
++        if v.get("type").and_then(Value::as_str) == Some("assistant") {
++            v["parentUuid"] = Value::Null;
++        }
++    });
++    let r = claude::resume(&broken);
++    assert!(
++        !r.unreachable.is_empty(),
++        "the broken chain must leave history unreached"
++    );
++    assert_ne!(
++        first_user_text(&r.messages),
++        Some(first.as_str()),
++        "the first user message must be lost"
++    );
++}
++
++#[test]
++fn catches_the_copilot_empty_errored_result() {
++    let good = snapshot_body("projection@copilot@claude.snap");
++    assert!(check_api(&claude::resume(&good).messages).is_ok());
++
++    // 2026-10-15: a failed tool call's result was written errored and empty.
++    let broken = edit_lines(&good, |v| {
++        if let Some(blocks) = v
++            .pointer_mut("/message/content")
++            .and_then(Value::as_array_mut)
++        {
++            for b in blocks {
++                if b.get("type").and_then(Value::as_str) == Some("tool_result")
++                    && b.get("is_error").and_then(Value::as_bool) == Some(true)
++                {
++                    b["content"] = Value::String(String::new());
++                }
++            }
++        }
++    });
++    let e = check_api(&claude::resume(&broken).messages).expect_err("the API must refuse it");
++    assert!(e.reason.contains("cannot be empty"), "{}", e.reason);
++}
++
++/// One block in comparable form: role, kind, and its identity (text, tool id).
++fn flat(m: &[Message]) -> Vec<(Role, String)> {
++    m.iter()
++        .flat_map(|m| {
++            m.blocks.iter().map(move |b| {
++                let k = match b {
++                    // Trailing whitespace is not compared: Claude Code 2.1.285 sent one projected text with a
++                    // trailing newline the projection does not have.
++                    Block::Text(t) => format!("text:{}", t.trim_end()),
++                    Block::Thinking(_) => "thinking".to_string(),
++                    Block::ToolUse { id, name, .. } => format!("tool_use:{id}:{name}"),
++                    Block::ToolResult {
++                        tool_use_id,
++                        is_error,
++                        content,
++                    } => {
++                        format!(
++                            "tool_result:{tool_use_id}:{is_error}:{}",
++                            content.trim_end()
++                        )
++                    }
++                };
++                (m.role, k)
++            })
++        })
++        .collect()
++}
++
++fn cassette_messages(file: &Path) -> Vec<Message> {
++    let c: Value = serde_json::from_str(&fs::read_to_string(file).unwrap()).unwrap();
++    let body: Value = match &c["request"]["body"] {
++        Value::String(s) => serde_json::from_str(s).unwrap(),
++        v => v.clone(),
++    };
++    // A body is the jsonl of one assistant/user line per message, so reuse the loader's block
++    // parsing by wrapping each message as a session line.
++    let lines: Vec<String> = body["messages"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .enumerate()
++        .map(|(i, m)| {
++            let t = if m["role"] == "assistant" { "assistant" } else { "user" };
++            serde_json::json!({
++                "type": t, "uuid": format!("m{i}"),
++                "parentUuid": if i == 0 { Value::Null } else { Value::String(format!("m{}", i - 1)) },
++                "message": {"id": format!("m{i}"), "role": m["role"], "content": m["content"]},
++            })
++            .to_string()
++        })
++        .collect();
++    claude::resume(&lines.join("\n")).messages
++}
++
++#[test]
++fn agrees_with_what_claude_code_sent() {
++    let cassette = crates()
++        .join("toolpath-webmock/cassettes/claude/9d135681ef63faa4b1e550dc5e17be258c2b25ab3da95f8fa8ae109846adbb42.json");
++    let sent = flat(&cassette_messages(&cassette));
++    let mock = flat(&claude::resume(&snapshot_body("projection@codex@claude.snap")).messages);
++    assert!(mock.len() > 3, "the mock sent too little: {mock:?}");
++    assert!(
++        sent.len() >= mock.len(),
++        "Claude Code sent fewer blocks ({}) than the mock ({})",
++        sent.len(),
++        mock.len()
++    );
++    for (i, (m, s)) in mock.iter().zip(&sent).enumerate() {
++        // Claude Code appends its own <system-reminder> text inside the tool_result it sends
++        // last, so a result block only has to start with what the mock sent.
++        let same =
++            m == s || (m.0 == s.0 && m.1.starts_with("tool_result:") && s.1.starts_with(&m.1));
++        assert!(
++            same,
++            "block {i}: mock {m:?}\n  vs what Claude Code sent {s:?}"
++        );
++    }
++}
+diff --git a/docs/mock-harness.md b/docs/mock-harness.md
+new file mode 100644
+index 00000000..7dc2f66d
+--- /dev/null
++++ b/docs/mock-harness.md
+@@ -0,0 +1,91 @@
++# Mock harness: what an agent would send when it resumes
++
++`toolpath-webmock` stands in for the model API. A **mock harness** stands in for the agent: given
++a session file toolpath projected for a harness, it computes the history that harness's own
++loader would send to the model on resume. With both, "resume works" becomes a `cargo test`
++assertion instead of a live run of seven agent binaries.
++
++## Why
++
++Resume is proven today only by the resume matrix: the real binary reopens the projected session
++and a live model turn answers. That cannot run in CI (binaries, credentials, quota). And every
++resume bug found so far lived in the *harness-local* half of a session file, the half a
++projection has to invent (`review/payload-to-session.md`: 56% of appended fields):
++
++| bug (2026-10-15) | what the loader did | modelled by |
++|---|---|---|
++| pi → claude, pi → pi | the `parentUuid` / `parentId` walk stopped at the first assistant with no parent; the model saw only the newest message | the leaf-to-root walk, `unreachable` |
++| copilot → claude | the Messages API refused an errored `tool_result` with empty content (400) | `check_api` |
++| (claude projector guard) | same rule, defensively for every source | `check_api` |
++
++## Buy / borrow / build
++
++| option | verdict | why |
++|---|---|---|
++| Run the real binary (resume matrix, understudy screens) | keep, as the oracle | the only ground truth, but needs binaries, auth and a model; not CI |
++| understudy (our TUI driver) | borrow for the contract run | drives the real TUI; says what is on screen, not what reaches the model |
++| `real_fixture_roundtrip`, `cross_harness_matrix` tests | keep | prove our reader accepts our writer's output; they never apply the *harness's* loading rules, so the pi chain bug passed them |
++| Call the harness's own loader as a library | per harness, later | codex (Rust, open source), gemini-cli and opencode (TypeScript, open source) and pi have loaders we could call or port; Claude Code and Copilot CLI ship minified bundles, no library. Linking four toolchains into `cargo test` costs more than modelling the rules that matter |
++| webmock cassettes as the oracle for the model | borrow | a recorded resume already holds the exact `messages[]` the binary sent; the mock is checked against it |
++| **Build: a small per-harness model** | build | the rules that bugs depended on are few and documented in `docs/agents/formats/*`; checked against cassettes, so drift shows up |
++
++## Design
++
++Crate `toolpath-harness-mock` (`publish = false`, test/dev only, like `toolpath-goldens`).
++
++- `Message { role, blocks }`, `Block::{Text, Thinking, ToolUse, ToolResult}`: the history as the
++  model API sees it, reduced to what comparisons need.
++- `<harness>::resume(session) -> Resumed { messages, unreachable }`: the loader's rules for that
++  harness. `unreachable` lists conversation entries present in the file that the loader never
++  reaches: lost history, named by id.
++- `check_api(messages)`: the model API's own rules (errored `tool_result` not empty; a
++  `tool_result` follows its `tool_use`).
++
++**Kept honest by a contract.** For each harness, a committed webmock cassette recorded from the
++real binary resuming a projected session holds the `messages[]` it really sent. The mock's history
++for that same projection must be a prefix of it (the binary appends the new prompt and its own
++reminders). When a harness version changes how it loads, the cassette is re-recorded and the
++contract says whether the mock still agrees.
++
++**Claude Code rules** (`src/claude.rs`, checked against Claude Code 2.1.285's cassette): leaf =
++last conversation entry; walk `parentUuid` to the root, through non-conversation entries; a
++`user` entry is user text whatever its `message.role`; consecutive user entries merge; assistant
++entries sharing `message.id` merge across intervening tool results, `tool_use` last, results
++after. Results of one assistant entry's several tool calls are siblings; the loader brings back the
++ones the walk passed by (rule 5, inferred).
++
++## What it catches (tests/claude.rs)
++
++- **Historical bugs, re-introduced in a copy of the fixture** (never in code): the pi parent-chain
++  bug (entries unreached, first user message lost) and the copilot empty errored result
++  (`check_api` refuses it with the API's own message). Both fail as they should.
++- **Contract:** the codex golden's projection, block for block, is a prefix of what Claude Code
++  2.1.285 sent (cassette `9d1356…`). Two allowances, both Claude Code's own doing: trailing
++  whitespace of a text block, and the `<system-reminder>` text it appends inside the last
++  `tool_result` it sends.
++- **New findings on today's goldens, pinned in `KNOWN`** (a change either way fails the test):
++  - **opencode → claude loses its history.** opencode records each assistant message's parent as
++    the user message it answers; the projection writes that as `parentUuid`, so every assistant
++    hangs off the first user turn. Claude Code's walk reaches 2 of 22 conversation entries. The
++    pi → claude bug class, in a source the resume matrix never ran.
++  - **cursor → claude has an unanswered tool call.** The cursor golden's Glob call has no result
++    anywhere; the projection writes the `tool_use` and nothing answers it, which the Messages API
++    refuses unless Claude Code repairs it on load (not verified).
++- The other four projections into Claude Code (codex, copilot, gemini, pi) resume whole.
++
++Rule 5 (parallel tool results) is inferred, not recorded: copilot → claude has a two-call turn and
++resumed in the 2026-10-15 matrix. A cassette of that resume would make it a checked rule.
++
++## Order for the other harnesses
++
++1. **pi**: the same chain bug class (main-thread `parentId` walk); open-source loader to read the
++   rules from; a pi cassette exists.
++2. **copilot**: event validation (the errored result, `workspace.yaml` timestamps it rejected);
++   cassette exists (replays since pr/21).
++3. **codex**: `threads.rollout_path` (the absolute-path known defect) and the rollout's
++   `response_item` history; open source, so rules can be lifted exactly.
++4. **opencode**: database rows (`opencode-stable.db`) and the pi → opencode no-reply cell, which
++   this would help diagnose without a live call.
++5. **gemini**: 0.47 record replay (now in the reader); blocked on a recordable cassette (key).
++6. **cursor**: composer heads in `composerHeaders`; no model cassette (no headless mode), so the
++   contract would rest on Allie reading the transcript back.
+diff --git a/pr/24-mock-harness.md b/pr/24-mock-harness.md
+new file mode 100644
+index 00000000..a33acb17
+--- /dev/null
++++ b/pr/24-mock-harness.md
+@@ -0,0 +1,37 @@
++# test(harness-mock): what Claude Code would send when it resumes a projected session, without the binary
++
++Status: planned (asked 2026-10-19 on the goldens demo deck: "we have a webmock could we create a mock harness too?") · Base: the goldens and webmock stacks once merged
++
++## Why
++Resume is proven only by running the real agent binaries (the resume matrix), which CI cannot do. Every resume bug so
++far lived in the harness-local half of a session file: pi → claude's broken `parentUuid` chain (the model saw only the
++newest message) and copilot → claude's empty errored `tool_result` (a 400). `toolpath-webmock` stands in for the model;
++this stands in for the agent: given a projected session, compute the history the harness's own loader would send.
++
++## What changes
++- `crates/toolpath-harness-mock` (`publish = false`): `Message`/`Block`, `check_api` (the Messages API's rules: every
++  tool call answered in the next message, a result follows its call, an errored result is not empty), and
++  `claude::resume`, Claude Code's loader as five rules (leaf, `parentUuid` walk, roles, merges by `message.id`,
++  parallel tool results) returning the messages and the conversation entries the walk never reaches.
++- `tests/claude.rs`: every projection into Claude Code in `toolpath-goldens/snapshots` resumes whole, except two pinned
++  findings; the two historical bugs, re-introduced in a copy of the fixture, are caught; contract: on the codex golden's
++  projection the mock's history is a prefix of what Claude Code 2.1.285 really sent (webmock cassette `9d1356…`).
++- `docs/mock-harness.md`: buy/borrow/build, the design, what it catches, the order for the other six harnesses.
++
++## Findings (pinned in `KNOWN`, unverified live)
++- opencode → claude: every assistant is parented to the first user turn (opencode's own parent field), so Claude Code's
++  walk reaches 2 of 22 conversation entries: the pi → claude bug class, in a source the matrix never ran.
++- cursor → claude: the golden's Glob call has no result; the projection writes an unanswered `tool_use`.
++
++## Verification
++`cargo test -p toolpath-harness-mock`: 5 unit + 4 integration tests. Workspace gates with `--features path-cli/goldens`:
++fmt, clippy `-D warnings` (all targets), `cargo test --workspace` (83 suites, private target dir: a shared one raced
++with other builds overwriting `target/debug/path`), doc, shellcheck.
++
++## Paths
++```
++Cargo.toml
++Cargo.lock
++crates/toolpath-harness-mock/
++docs/mock-harness.md
++```
+-- 
+2.55.0
+

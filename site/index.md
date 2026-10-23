@@ -10,8 +10,8 @@ nav: home
     <h1>The <span>Missing IR</span> for Agent Sessions</h1>
     <p class="tagline">
       Toolpath is an open, versioned format for coding-agent sessions.
-      <strong>Parse any agent’s session in, project it out to any harness, and
-      build your tools once for all of them.</strong>
+      <strong>Parse any supported agent’s session in, project it out to any
+      supported harness, and build your tools once for all of them.</strong>
     </p>
     <div class="hero-actions">
       <a class="hero-cta" href="/format/">Read the spec</a>
@@ -110,7 +110,8 @@ them.
   harness expects. Any writable harness, not just the one the session
   started in.
 - **Resume.** A projection followed by a handoff: start in one agent,
-  continue in another, with everything the last one knew.
+  continue in another, with the conversation and its tool calls. What a
+  harness cannot hold is dropped, and the goldens' shed reports say what.
 
 <div class="scenarios">
   <h2>Build it once</h2>
@@ -127,8 +128,8 @@ them.
     <div class="object-card">
       <h3>Resume anywhere</h3>
       <p><code>path resume --harness codex</code> moves a Claude Code
-      session into Codex: the intent, the state, and the dead ends
-      already ruled out.</p>
+      session into Codex: the conversation and its tool calls, so Codex
+      starts from what Claude Code was told and tried.</p>
     </div>
     <div class="object-card">
       <h3>Archive and search</h3>
@@ -183,10 +184,16 @@ them.
   <li><a href="https://docs.rs/toolpath-cursor">Cursor IDE</a></li>
 </ul>
 
-Parsing captures the full session: prompts, tool calls, reasoning, file
-changes, sub-agent work, token usage. Projecting writes a session the
-harness accepts as its own, so it resumes natively. Where a harness’s
-log doesn’t record something, the [format notes]({{ site.repo }}/tree/main/docs/agents/formats)
+Parsing captures the conversation: prompts, tool calls, reasoning, file
+changes, sub-agent work, token usage. Projecting writes a session in the
+harness’s own layout. On 2026-10-15, Claude Code 2.1.285, Codex CLI
+0.162.1, Pi 0.84.3 and Copilot CLI 1.0.61 resumed projected sessions and
+answered from their history; Gemini CLI 0.47.0 and opencode 1.18.18
+rendered them without a model turn; Cursor 3.24.12 opens the workspace
+with the composer listed. The
+[support table]({{ site.repo }}#supported-harnesses) says what each
+harness is verified against, and where a harness’s log doesn’t record
+something, the [format notes]({{ site.repo }}/tree/main/docs/agents/formats)
 say so.
 
 Git history and GitHub pull requests parse into the same schema, so a
@@ -228,7 +235,7 @@ path query 'group_by(.step.actor) | map({actor: .[0].step.actor, output_tokens: 
 
 # Share a session, then resume it in the original harness or a different one
 path share
-path resume https://pathbase.dev/alex/pathstash/path-pr-42 --harness codex
+path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/4e865c65-7bb0-460e-9e86-6c76d31949ce --harness codex
 ```
 
 <svg class="topo topo-wide" viewBox="0 0 900 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -250,7 +257,8 @@ path resume https://pathbase.dev/alex/pathstash/path-pr-42 --harness codex
     <div class="object-card">
       <h3>Build on the crates</h3>
       <p>Everything the CLI does is a library call: core types, a
-      provider crate per harness, renderers for DOT and Markdown. See
+      provider crate per harness (it reads sessions and writes them back; the
+      CLI's <code>projection</code> modules in <code>path_cli</code> wire the writers in), renderers for DOT and Markdown. See
       <a href="/crates/">the crates</a> or the
       <a href="https://docs.rs/toolpath">API reference</a>.</p>
     </div>

@@ -1,0 +1,378 @@
+From e0415cd6d1b994c498efacfa41bf1264a6da8a39 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 14:25:08 -0400
+Subject: [PATCH] fix(cursor): read Cursor 3.24's composerHeaders table; write
+ a row there too
+
+Cursor 3.24 migrates ItemTable.composer.composerHeaders into a
+composerHeaders table at launch (cursorDiskKV
+composer.composerHeaders.migratedToTable = 1) and deletes the key, so the
+reader listed no composers on a 3.24 machine. read_composer_headers now
+reads the table's rows (most recent first) and fills in heads from the
+legacy key that the table does not hold. Checked against a copy of a real
+3.24.12 state.vscdb: 0 heads before, 2 after (both empty drafts).
+
+The projection also upserts a composerHeaders row when the table exists,
+and keeps writing the legacy key, which Cursor was seen to migrate and
+list (resume matrix v4). Tests: reader over a synthetic 3.24-shaped DB
+(schema as 3.24.12 creates it), table-first merge with the blob, the
+empty case; projection into both shapes read back through DbReader.
+Qualifier: a pass on the reader with the real-DB result, a concern that
+the written row is not yet checked against a live Cursor. README, site
+crate blurb and docs/agents/formats/cursor.md updated.
+---
+ README.md                                |   2 +-
+ crates/path-cli/src/projection/.qual     |   1 +
+ crates/path-cli/src/projection/cursor.rs | 111 +++++++++++++++++++++
+ crates/toolpath-cursor/src/.qual         |   1 +
+ crates/toolpath-cursor/src/reader.rs     | 119 ++++++++++++++++++++++-
+ docs/agents/formats/cursor.md            |  10 +-
+ site/_data/crates.json                   |   2 +-
+ 7 files changed, 235 insertions(+), 11 deletions(-)
+ create mode 100644 crates/toolpath-cursor/src/.qual
+
+diff --git a/README.md b/README.md
+index 4ea13841..3459edbb 100644
+--- a/README.md
++++ b/README.md
+@@ -38,7 +38,7 @@ one format and writes them back. With everything in one format you can:
+ | Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` | Preview. Goldens for read and write. Resume: copilot CLI 1.0.61 answered from the projected history. |
+ | Gemini CLI | ✓ | ✓ | `gemini --resume` | Crate tests, no golden yet. Reads the `.json` chat files of gemini-cli ≤ 0.46; 0.47 writes `.jsonl`, which the reader does not see yet. Resume: gemini-cli 0.47.0 rendered the projected history; no model turn was run. Sub-agent chat files are folded in (unit-tested); reasoning-token counts survive a round trip (crate test). |
+ | opencode | ✓ | ✓ | `opencode --session` | Crate tests, no golden yet. Reads `opencode-stable.db` (1.18) and the older `opencode.db`. Resume: opencode 1.18.18 opened the projected session in its TUI; no model turn was run. Snapshot-repo file diffs are implemented but not exercised by any test. |
+-| Cursor (IDE) | ✓ | ✓ | opens workspace | Crate tests, no golden yet. Reads the ≤ 3.6 header layout; Cursor 3.24 keeps headers in a table the reader does not read yet. A projected composer is adopted and listed by title in Cursor.app 3.24.12; the transcript body was not opened. |
++| Cursor (IDE) | ✓ | ✓ | opens workspace | Crate tests, no golden yet. Reads both header layouts: the ≤ 3.6 ItemTable key and Cursor 3.24's `composerHeaders` table. A projected composer is adopted and listed by title in Cursor.app 3.24.12; the transcript body was not opened. |
+ 
+ Read means `path p import`, `path p list`, and `path show`. Write means
+ `path p export`. Resume means `path resume`, which projects the session
+diff --git a/crates/path-cli/src/projection/.qual b/crates/path-cli/src/projection/.qual
+index 0243476f..145138cf 100644
+--- a/crates/path-cli/src/projection/.qual
++++ b/crates/path-cli/src/projection/.qual
+@@ -2,3 +2,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/projection/codex.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T17:18:22.561920Z","id":"369140c010d565fa6ea0891145128451e73d803f19aba2562acd5ef654fc8475","body":{"detail":"Known defect, pinned by crates/path-cli/tests/codex_home_copy.rs (snapshot codex_home_copy__rollout_path). Codex resumes by appending to threads.rollout_path; the row names the rollout under the CODEX_HOME it was written in, so a cell copy, backup or another machine's home appends to the original (resume matrix 2026-10-15: v2 codex cell 33 -> 93 lines). The other agents' resume targets carry no such indirection: claude/pi/copilot/gemini files and the opencode/cursor databases are self-contained under their home.","kind":"concern","span":{"start":{"line":133},"end":{"line":133},"content_hash":"c156f82116be64939c03287ed1c7c2e1915f5fc09c8d62fd5dfe5acb77327cdf"},"suggested_fix":"Write the path relative to CODEX_HOME if codex accepts it, else re-register the row when a home is copied (a path verb), and accept the snapshot diff.","summary":"threads.rollout_path is absolute: a copied CODEX_HOME still appends to the original rollout","tags":["known-defect","append-after-turn","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/projection/gemini.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T17:24:16.874767Z","id":"33770bc9f6892d6166d34654bd3dd9e7e7e28c5be77b3598940915ec3d6ea7d9","body":{"detail":"gemini-cli 0.47.0 loads the projected history (4/4 cells drawn), but no run has produced a complete model answer to pin: Login-with-Google is refused for individuals (moved to Antigravity), and the API-key run recorded by webmock (codex -> gemini) got 429 on pro twice and a flash stream cut without finishReason at 218 s. The request body is pinned (cassettes/gemini); the response is not. Closes with a key that has quota: record one complete exchange and replay it.","kind":"concern","summary":"resume into gemini-cli is unpinned: no answered model turn has been recorded","tags":["declared-limit","unpinned","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/projection/cursor.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T17:24:16.891995Z","id":"d997d42792eba2459ddf7dba222871565630be50c34c73565157650fd16a2fe6","body":{"detail":"cursor <workspace> opens the Agents window and adopts the projected composer heads (4/4 listed by title, Allie AX read), but with no deeplink to a composer and agent mode off the body is never rendered, so there is nothing to compare. cursor-agent is a different store toolpath neither derives nor projects. Closes with a composer deeplink or an AX read of an opened composer.","kind":"concern","summary":"resume into Cursor.app is unpinned: the transcript body is never shown","tags":["declared-limit","unpinned","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/path-cli/src/projection/cursor.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T18:18:40.135394Z","id":"4849d73649e6cda51af12cb21e2b16d312521b6f592c6046b59b85c834dd8ca0","body":{"detail":"Projection now upserts a composerHeaders row when the table exists and still writes the legacy ItemTable key, which Cursor 3.24.12 was seen to migrate and list (resume matrix v4, 2026-10-15). Whether Cursor accepts a row toolpath wrote directly (columns derived from the head: workspaceId, recency = lastUpdatedAt) has not been run against Cursor.app.","kind":"concern","span":{"start":{"line":215},"end":{"line":215},"content_hash":"4af180e73ebdb6c7db9eebdfb6445775e60b69d29dcffa1ace8f04cd25ae9304"},"summary":"The composerHeaders table row the projection writes is not yet checked against a live Cursor 3.24","tags":["cursor","pr/20","declared-limit","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/path-cli/src/projection/cursor.rs b/crates/path-cli/src/projection/cursor.rs
+index 1624ab21..5eebd6d2 100644
+--- a/crates/path-cli/src/projection/cursor.rs
++++ b/crates/path-cli/src/projection/cursor.rs
+@@ -193,6 +193,7 @@ fn upsert_cursor_composer_header(
+     };
+ 
+     let composer_id = session.data.composer_id.clone();
++    upsert_cursor_composer_header_row(tx, &new_head)?;
+     headers
+         .all_composers
+         .retain(|h| h.composer_id != composer_id);
+@@ -205,3 +206,113 @@ fn upsert_cursor_composer_header(
+     )?;
+     Ok(())
+ }
++
++/// Cursor 3.24+ keeps heads in the `composerHeaders` table and reads
++/// them from there; write our head as a row too when the table exists.
++/// The ItemTable blob above stays: Cursor 3.24 migrates it at launch
++/// (seen in the 2026-10-15 resume matrix), so a DB from either side of
++/// the migration lists the composer.
++fn upsert_cursor_composer_header_row(
++    tx: &rusqlite::Transaction<'_>,
++    head: &toolpath_cursor::ComposerHead,
++) -> Result<()> {
++    use toolpath_cursor::reader::HEADERS_TABLE;
++
++    let exists: bool = tx.query_row(
++        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
++        rusqlite::params![HEADERS_TABLE],
++        |r| r.get(0),
++    )?;
++    if !exists {
++        return Ok(());
++    }
++    let workspace_id = head.workspace_identifier.as_ref().map(|w| w.id.clone());
++    let recency = head.last_updated_at.or(head.created_at);
++    tx.execute(
++        &format!(
++            "INSERT OR REPLACE INTO {HEADERS_TABLE} \
++             (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value) \
++             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)"
++        ),
++        rusqlite::params![
++            head.composer_id,
++            workspace_id,
++            head.created_at,
++            head.last_updated_at,
++            head.is_archived,
++            recency,
++            serde_json::to_string(head)?,
++        ],
++    )?;
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const BASE_SCHEMA: &str = "
++        CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
++        CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);";
++    /// As Cursor 3.24.12 creates it.
++    const HEADERS_TABLE_3_24: &str = "
++        CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, subagentTypeName TEXT, value TEXT);
++        INSERT INTO cursorDiskKV (key, value) VALUES ('composer.composerHeaders.migratedToTable', '1');";
++
++    fn fixture_session() -> toolpath_cursor::CursorSession {
++        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++            .join("../../test-fixtures/cursor/convo.json");
++        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
++    }
++
++    /// Write the fixture's head into a DB built from `schema`, then list
++    /// heads back through the reader.
++    fn write_head_then_list(schema: &str) -> (tempfile::NamedTempFile, Vec<String>) {
++        let f = tempfile::NamedTempFile::new().unwrap();
++        let mut conn = rusqlite::Connection::open(f.path()).unwrap();
++        conn.execute_batch(schema).unwrap();
++        let tx = conn.transaction().unwrap();
++        upsert_cursor_composer_header(&tx, &fixture_session()).unwrap();
++        tx.commit().unwrap();
++        drop(conn);
++        let ids = toolpath_cursor::DbReader::open(f.path())
++            .unwrap()
++            .list_composer_ids()
++            .unwrap();
++        (f, ids)
++    }
++
++    #[test]
++    fn head_lands_in_the_3_24_table_and_the_blob() {
++        let (f, ids) = write_head_then_list(&format!("{BASE_SCHEMA}{HEADERS_TABLE_3_24}"));
++        let id = fixture_session().data.composer_id;
++        assert_eq!(ids, vec![id.clone()]);
++        let conn = rusqlite::Connection::open(f.path()).unwrap();
++        let (ws, recency, value): (String, i64, String) = conn
++            .query_row(
++                "SELECT workspaceId, recency, value FROM composerHeaders WHERE composerId = ?1",
++                [&id],
++                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
++            )
++            .unwrap();
++        assert_eq!(ws, "37d08546371c642419dba431e57bcbde");
++        assert_eq!(recency, 1780338804591);
++        let head: toolpath_cursor::ComposerHead = serde_json::from_str(&value).unwrap();
++        assert_eq!(head.composer_id, id);
++        // The legacy key stays: Cursor 3.24 migrates it at launch.
++        let blob: i64 = conn
++            .query_row(
++                "SELECT COUNT(*) FROM ItemTable WHERE key = 'composer.composerHeaders'",
++                [],
++                |r| r.get(0),
++            )
++            .unwrap();
++        assert_eq!(blob, 1);
++    }
++
++    #[test]
++    fn head_lands_in_the_blob_before_3_24() {
++        let (_f, ids) = write_head_then_list(BASE_SCHEMA);
++        assert_eq!(ids, vec![fixture_session().data.composer_id]);
++    }
++}
+diff --git a/crates/toolpath-cursor/src/.qual b/crates/toolpath-cursor/src/.qual
+new file mode 100644
+index 00000000..8a3cdc7f
+--- /dev/null
++++ b/crates/toolpath-cursor/src/.qual
+@@ -0,0 +1 @@
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-cursor/src/reader.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T18:18:40.129196Z","id":"602d8026b01ee06f06f0cb67bea3b8a5100fcd76ecb659485f59229217b70104","body":{"detail":"Before (45cb679) the reader read only ItemTable.composer.composerHeaders, which Cursor 3.24 migrates into the composerHeaders table and deletes. Checked 2026-10-19 against a copy of a real Cursor 3.24.12 state.vscdb (resume-matrix baseline, migratedToTable=1, 2 table rows, no ItemTable key): list_composer_ids returned 0 heads before and 2 after (recency order). Both heads in that DB are empty drafts, so a full derive of a 3.24 conversation with bubbles is covered only by the synthetic 3.24-shaped fixture (reader tests), not a real one.","kind":"pass","span":{"start":{"line":61},"end":{"line":61},"content_hash":"07ce472c5cbcd084fd17e96bb7ee42b1861652b9432390e754e02330135b859e"},"summary":"Cursor 3.24 heads are read from the composerHeaders table, the legacy ItemTable key fills in","tags":["fix","cursor","pr/20","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-cursor/src/reader.rs b/crates/toolpath-cursor/src/reader.rs
+index e35c8795..c284c66f 100644
+--- a/crates/toolpath-cursor/src/reader.rs
++++ b/crates/toolpath-cursor/src/reader.rs
+@@ -16,8 +16,14 @@ pub const COMPOSER_DATA_PREFIX: &str = "composerData:";
+ pub const BUBBLE_PREFIX: &str = "bubbleId:";
+ /// Prefix for content-addressed file blobs.
+ pub const CONTENT_PREFIX: &str = "composer.content.";
+-/// Cross-workspace composer index key (in `ItemTable`).
++/// Cross-workspace composer index key (in `ItemTable`). Cursor 3.24
++/// migrates it into the [`HEADERS_TABLE`] table at launch and deletes
++/// the key.
+ pub const HEADERS_KEY: &str = "composer.composerHeaders";
++/// The composer index as a table (Cursor 3.24+; `cursorDiskKV`
++/// `composer.composerHeaders.migratedToTable = 1`): one row per head,
++/// the head's JSON in `value`.
++pub const HEADERS_TABLE: &str = "composerHeaders";
+ 
+ /// Thin wrapper around a rusqlite connection opened read-only against
+ /// Cursor's `state.vscdb`.
+@@ -47,9 +53,60 @@ impl DbReader {
+         &self.path
+     }
+ 
+-    /// Read `ItemTable.composer.composerHeaders`. Returns the parsed
+-    /// blob, or an empty `ComposerHeaders` when the key is missing.
++    /// Every composer head: the rows of the `composerHeaders` table
++    /// (Cursor 3.24+), most recent first, then any head in the legacy
++    /// `ItemTable.composer.composerHeaders` blob the table does not
++    /// already hold (a head written before Cursor next migrates it).
++    /// Empty when neither exists.
+     pub fn read_composer_headers(&self) -> Result<ComposerHeaders> {
++        let mut headers = self.read_headers_table()?;
++        let legacy = self.read_headers_blob()?;
++        for head in legacy.all_composers {
++            if !headers
++                .all_composers
++                .iter()
++                .any(|h| h.composer_id == head.composer_id)
++            {
++                headers.all_composers.push(head);
++            }
++        }
++        Ok(headers)
++    }
++
++    /// The `composerHeaders` table's heads, most recent first; empty
++    /// when the table does not exist (Cursor before 3.24).
++    fn read_headers_table(&self) -> Result<ComposerHeaders> {
++        let exists: bool = self.conn.query_row(
++            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
++            params![HEADERS_TABLE],
++            |r| r.get(0),
++        )?;
++        if !exists {
++            return Ok(ComposerHeaders::default());
++        }
++        let mut stmt = self.conn.prepare(&format!(
++            "SELECT composerId, value FROM {HEADERS_TABLE} ORDER BY recency DESC, composerId"
++        ))?;
++        let rows = stmt.query_map([], |r| {
++            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
++        })?;
++        let mut all_composers = Vec::new();
++        for row in rows {
++            let (id, value) = row?;
++            let Some(value) = value else { continue };
++            let head: ComposerHead =
++                serde_json::from_str(&value).map_err(|e| CursorError::MalformedPayload {
++                    what: format!("{HEADERS_TABLE}:{id}"),
++                    detail: e.to_string(),
++                })?;
++            all_composers.push(head);
++        }
++        Ok(ComposerHeaders { all_composers })
++    }
++
++    /// `ItemTable.composer.composerHeaders`, or empty when the key is
++    /// missing.
++    fn read_headers_blob(&self) -> Result<ComposerHeaders> {
+         let raw: Option<String> = self
+             .conn
+             .query_row(
+@@ -70,8 +127,8 @@ impl DbReader {
+         }
+     }
+ 
+-    /// All composer ids known to the DB, in the order they appear in
+-    /// `composer.composerHeaders.allComposers`. Composers with no
++    /// All composer ids known to the DB, in [`Self::read_composer_headers`]
++    /// order. Composers with no
+     /// bubbles are included — call [`Self::composer_has_bubbles`] to filter
+     /// drafts.
+     pub fn list_composer_ids(&self) -> Result<Vec<String>> {
+@@ -333,6 +390,58 @@ pub(crate) mod tests {
+           ('composer.content.ABC', 'fn main() {}');
+     "#;
+ 
++    /// The Cursor 3.24 shape: the head lives in the `composerHeaders`
++    /// table (schema as Cursor 3.24.12 creates it), the ItemTable key
++    /// is gone, and `cursorDiskKV` records the migration.
++    pub(crate) const HEADERS_TABLE_3_24: &str = r#"
++        CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, subagentTypeName TEXT, value TEXT);
++        CREATE INDEX idx_composerHeaders_0 ON composerHeaders (workspaceId, isSubagent, isArchived, recency);
++        CREATE INDEX idx_composerHeaders_1 ON composerHeaders (recency, composerId);
++        INSERT INTO composerHeaders (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value)
++          SELECT json_extract(h.value, '$.composerId'), json_extract(h.value, '$.workspaceIdentifier.id'),
++                 json_extract(h.value, '$.createdAt'), json_extract(h.value, '$.lastUpdatedAt'), 0, 0,
++                 json_extract(h.value, '$.lastUpdatedAt'), h.value
++          FROM ItemTable, json_each(ItemTable.value, '$.allComposers') AS h
++          WHERE ItemTable.key = 'composer.composerHeaders';
++        DELETE FROM ItemTable WHERE key = 'composer.composerHeaders';
++        INSERT INTO cursorDiskKV (key, value) VALUES ('composer.composerHeaders.migratedToTable', '1');
++    "#;
++
++    #[test]
++    fn reads_heads_from_the_3_24_table() {
++        let f = fixture_db(&format!("{BASIC_FIXTURE}{HEADERS_TABLE_3_24}"));
++        let r = DbReader::open(f.path()).unwrap();
++        assert_eq!(r.list_composer_ids().unwrap(), vec!["c1"]);
++        let head = r.read_composer_head("c1").unwrap().unwrap();
++        assert_eq!(head.name.as_deref(), Some("T"));
++        let s = r.load_session("c1").unwrap();
++        assert_eq!(s.bubbles.len(), 3);
++        assert_eq!(s.head.unwrap().composer_id, "c1");
++    }
++
++    #[test]
++    fn table_heads_come_first_and_the_legacy_blob_fills_in() {
++        // A head toolpath wrote to the blob after Cursor migrated (c2),
++        // plus a stale blob copy of a migrated head (c1): table wins.
++        let setup = format!(
++            r#"{BASIC_FIXTURE}{HEADERS_TABLE_3_24}
++            INSERT INTO ItemTable (key, value) VALUES ('composer.composerHeaders',
++              '{{"allComposers":[{{"composerId":"c2","name":"new"}},{{"composerId":"c1","name":"stale"}}]}}');"#
++        );
++        let f = fixture_db(&setup);
++        let r = DbReader::open(f.path()).unwrap();
++        assert_eq!(r.list_composer_ids().unwrap(), vec!["c1", "c2"]);
++        let c1 = r.read_composer_head("c1").unwrap().unwrap();
++        assert_eq!(c1.name.as_deref(), Some("T"));
++    }
++
++    #[test]
++    fn no_table_and_no_blob_is_empty() {
++        let f = fixture_db("");
++        let r = DbReader::open(f.path()).unwrap();
++        assert!(r.list_composer_ids().unwrap().is_empty());
++    }
++
+     #[test]
+     fn opens_and_lists_composers() {
+         let f = fixture_db(BASIC_FIXTURE);
+diff --git a/docs/agents/formats/cursor.md b/docs/agents/formats/cursor.md
+index 66a94c03..37239292 100644
+--- a/docs/agents/formats/cursor.md
++++ b/docs/agents/formats/cursor.md
+@@ -16,10 +16,12 @@ Date: **2026-06-01**. Revisit when the Cursor minor version bumps or a
+ > createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt,
+ > subagentTypeName, value`) with `cursorDiskKV.composer.composerHeaders.migratedToTable = 1`;
+ > `ItemTable.composer.composerHeaders` is a legacy key that Cursor
+-> re-migrates at launch and then deletes. `toolpath-cursor` still reads
+-> and writes the ItemTable key, so projection works (Cursor adopts the
+-> head and lists the composer by title in its Agents window) but the
+-> reader sees nothing on a 3.24 machine. `cursor <folder>` opens the
++> re-migrates at launch and then deletes. `toolpath-cursor` reads the
++> table's rows (most recent first) and fills in from the legacy key
++> (pr/20, 2026-10-19; checked against a copy of a real 3.24.12 DB);
++> projection writes a table row when the table exists and keeps writing
++> the key, which Cursor adopts and lists by title in its Agents window.
++> `cursor <folder>` opens the
+ > Agents window with the sidebar collapsed; the projected composer is in
+ > the list, not on screen. Cursor computes its own workspaceStorage id and
+ > leaves toolpath's `workspace.json`-only entry orphaned. Evidence:
+diff --git a/site/_data/crates.json b/site/_data/crates.json
+index 4983680e..9750282b 100644
+--- a/site/_data/crates.json
++++ b/site/_data/crates.json
+@@ -85,7 +85,7 @@
+     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",
+     "docs": "https://docs.rs/toolpath-cursor",
+     "crate": "https://crates.io/crates/toolpath-cursor",
+-    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) \u2014 composers, bubbles, content-addressed blobs \u2014 and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. `CursorProjector` writes a composer back that Cursor.app 3.24 adopts and lists by title (whether its body renders is not yet verified), and every TOOL_TABLE id round-trips (unit-tested). The reader follows the Cursor 3.6 header layout; 3.24 keeps headers in a `composerHeaders` table it does not read yet."
++    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) \u2014 composers, bubbles, content-addressed blobs \u2014 and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. `CursorProjector` writes a composer back that Cursor.app 3.24 adopts and lists by title (whether its body renders is not yet verified), and every TOOL_TABLE id round-trips (unit-tested). The reader reads both header layouts: Cursor 3.6's ItemTable key and 3.24's `composerHeaders` table."
+   },
+   {
+     "name": "toolpath-dot",
+-- 
+2.55.0
+

@@ -1,8 +1,13 @@
 # Claude Code on-disk format
 
-> **Reference revision:** 2026-04-23
+> **Reference revision:** 2026-10-19
 > **Tracks:** Claude Code 2.1.x
 > **First-hand samples:** 2.1.37, 2.1.90, 2.1.110, 2.1.112
+> **Recordings in the baseline:** 2.1.132 (`test-fixtures/claude/convo.jsonl`)
+> and 2.1.285 (`goldens/claude-session/input.jsonl`, a live capture). Every
+> field those recordings carry, per entry type, with its shape and whether it
+> was ever missing, is generated in [observed/claude.md](../observed/claude.md);
+> the 2.1.285 capture adds `cost-state` (below, in [entry-types.md](entry-types.md)).
 >
 > When you change anything in this directory, bump the revision date
 > here and in [format-changelog.md](format-changelog.md) so downstream

@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Counts": {
+      "description": "Size of a toolpath document: steps, conversation text, tool uses, and distinct generalised key paths.",
+      "properties": {
+        "key_paths": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "steps": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "text_chars": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "tool_uses": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "key_paths",
+        "steps",
+        "text_chars",
+        "tool_uses"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "One writer on its own: the generated full-view document projected by a single harness's writer and read back by that harness's reader.",
+  "oneOf": [
+    {
+      "description": "The adapter read its projection; this is what survived.",
+      "properties": {
+        "after": {
+          "$ref": "#/definitions/Counts"
+        },
+        "before": {
+          "$ref": "#/definitions/Counts"
+        },
+        "gained": {
+          "description": "Key paths present only after: vestigial or invented.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lost": {
+          "description": "Key paths of the document absent after the round trip.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outcome": {
+          "enum": [
+            "compared"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "after",
+        "before",
+        "gained",
+        "lost",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The adapter could not read what was projected for it.",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "unreadable"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "outcome"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "writer snapshot"
+}

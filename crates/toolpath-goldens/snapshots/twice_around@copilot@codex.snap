@@ -1,0 +1,17 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.twice_around[agent]"
+info:
+  adapter: toolpath_copilot
+  agent: copilot
+  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
+input_file: test-fixtures/copilot/convo.jsonl
+---
+{
+  "outcome": "compared",
+  "lost": [],
+  "gained": [],
+  "changed": [
+    "paths[].steps[].change.<artifact>.structural.turn_id"
+  ]
+}

@@ -1,0 +1,1912 @@
+From b1c5ec5fbc7a28f590ad50f0b81223ee96d84209 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:02:34 -0400
+Subject: [PATCH] fix(convo): file-change keys are relative to the working
+ directory, one key per file (pr/67)
+
+normalize_artifact_path files a change under the path relative to the session's
+cwd (macOS /private/var and /var are one), so one file is one key. Snapshots and
+examples re-recorded; round-trip pins and qualifier anchors need the dev shell.
+---
+ crates/toolpath-codex/src/derive.rs           |  6 +-
+ crates/toolpath-codex/tests/fidelity.rs       |  9 +-
+ crates/toolpath-convo/src/derive.rs           | 95 ++++++++++++++++++-
+ crates/toolpath-cursor/src/derive.rs          |  6 +-
+ .../snapshots/document@claude.snap            | 80 ++++++++--------
+ .../snapshots/document@copilot.snap           | 60 ++++++------
+ .../snapshots/document@cursor.snap            | 46 ++++-----
+ .../snapshots/document@opencode.snap          |  6 +-
+ .../snapshots/projection@claude@cursor.snap   |  2 +-
+ .../snapshots/round_trip@claude@codex.snap    | 14 ++-
+ .../snapshots/round_trip@claude@copilot.snap  | 14 ++-
+ .../round_trip@claude@cursor-agent.snap       | 17 +++-
+ .../snapshots/round_trip@claude@cursor.snap   | 10 +-
+ .../snapshots/round_trip@claude@gemini.snap   | 17 +++-
+ .../snapshots/round_trip@claude@opencode.snap |  8 +-
+ .../snapshots/round_trip@claude@pi.snap       | 19 +++-
+ .../snapshots/round_trip@copilot@claude.snap  | 26 ++++-
+ .../snapshots/round_trip@copilot@codex.snap   | 26 +++--
+ .../round_trip@copilot@cursor-agent.snap      | 29 +++---
+ .../snapshots/round_trip@copilot@cursor.snap  |  6 +-
+ .../snapshots/round_trip@copilot@gemini.snap  | 26 ++++-
+ .../round_trip@copilot@opencode.snap          | 26 ++++-
+ .../snapshots/round_trip@copilot@pi.snap      | 26 +++--
+ .../snapshots/round_trip@cursor@claude.snap   |  6 +-
+ .../snapshots/round_trip@cursor@codex.snap    | 28 +++++-
+ .../snapshots/round_trip@cursor@copilot.snap  | 30 +++++-
+ .../round_trip@cursor@cursor-agent.snap       | 33 ++++++-
+ .../snapshots/round_trip@cursor@gemini.snap   | 31 +++++-
+ .../snapshots/round_trip@cursor@opencode.snap | 14 +--
+ .../snapshots/round_trip@cursor@pi.snap       | 28 +++++-
+ .../snapshots/round_trip@opencode@claude.snap | 10 +-
+ .../snapshots/round_trip@opencode@codex.snap  | 18 ++--
+ .../round_trip@opencode@copilot.snap          | 18 +++-
+ .../round_trip@opencode@cursor-agent.snap     | 18 ++--
+ .../snapshots/round_trip@opencode@gemini.snap | 18 ++--
+ .../snapshots/round_trip@opencode@pi.snap     | 18 ++--
+ .../snapshots/shed@claude.snap                |  2 +-
+ .../snapshots/shed@copilot.snap               |  2 +-
+ .../snapshots/shed@cursor.snap                |  2 +-
+ .../snapshots/shed@opencode.snap              |  2 +-
+ crates/toolpath-opencode/src/derive.rs        |  5 +-
+ examples/path-02-local-session.path.json      | 80 ++++++++--------
+ examples/path-02-local-session.path.jsonl     |  8 +-
+ pr/67-file-change-paths-relative.md           | 31 ++++++
+ 44 files changed, 679 insertions(+), 297 deletions(-)
+ create mode 100644 pr/67-file-change-paths-relative.md
+
+diff --git a/crates/toolpath-codex/src/derive.rs b/crates/toolpath-codex/src/derive.rs
+index e48cbb13..4152f8d7 100644
+--- a/crates/toolpath-codex/src/derive.rs
++++ b/crates/toolpath-codex/src/derive.rs
+@@ -139,13 +139,13 @@ mod tests {
+         let session = mgr.read_session(&id).unwrap();
+         let path = derive_path(&session, &DeriveConfig::default());
+         // The assistant turn that ran `apply_patch` carries a sibling
+-        // `file.write` entry keyed by the file path.
++        // `file.write` entry keyed by the file path, relative to the session's cwd (/tmp/proj).
+         let file_step = path
+             .steps
+             .iter()
+-            .find(|s| s.change.contains_key("/tmp/proj/a.rs"))
++            .find(|s| s.change.contains_key("a.rs"))
+             .expect("no step carries the file artifact");
+-        let change = &file_step.change["/tmp/proj/a.rs"];
++        let change = &file_step.change["a.rs"];
+         assert!(change.raw.is_some(), "raw perspective must be populated");
+         assert!(
+             change.raw.as_ref().unwrap().contains("+fn main() {}"),
+diff --git a/crates/toolpath-codex/tests/fidelity.rs b/crates/toolpath-codex/tests/fidelity.rs
+index 0441c73c..f7c62748 100644
+--- a/crates/toolpath-codex/tests/fidelity.rs
++++ b/crates/toolpath-codex/tests/fidelity.rs
+@@ -316,8 +316,15 @@ fn patch_apply_files_all_surface_as_artifacts() {
+                 continue;
+             }
+             for file_path in patch.changes.keys() {
++                // Keys are relative to the session's working directory when inside it.
++                let wd = path
++                    .path
++                    .base
++                    .as_ref()
++                    .and_then(|b| b.uri.strip_prefix("file://"));
++                let key = toolpath_convo::derive::normalize_artifact_path(file_path, wd);
+                 assert!(
+-                    artifact_keys.contains(file_path.as_str()),
++                    artifact_keys.contains(key.as_str()),
+                     "file {} from successful patch_apply_end not found in derived artifacts",
+                     file_path
+                 );
+diff --git a/crates/toolpath-convo/src/derive.rs b/crates/toolpath-convo/src/derive.rs
+index f6007e23..9c5ff1b1 100644
+--- a/crates/toolpath-convo/src/derive.rs
++++ b/crates/toolpath-convo/src/derive.rs
+@@ -110,8 +110,23 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+     // The step of the conversation's last turn: `path.head` must keep it in
+     // its ancestry, or the conversation itself reads as a dead end.
+     let mut last_turn_step: Option<String> = None;
++    // Where the session ran: file-change keys are written relative to it.
++    let session_wd: Option<String> = view
++        .base
++        .as_ref()
++        .and_then(|b| b.working_dir.clone())
++        .or_else(|| {
++            view.turns
++                .iter()
++                .find_map(|t| t.environment.as_ref()?.working_dir.clone())
++        });
+ 
+     for (idx, turn) in view.turns.iter().enumerate() {
++        let turn_wd: Option<&str> = turn
++            .environment
++            .as_ref()
++            .and_then(|e| e.working_dir.as_deref())
++            .or(session_wd.as_deref());
+         // Step id: use the turn's native id when set so it round-trips
+         // through `extract_conversation`; otherwise synthesize sequentially.
+         let step_id = if turn.id.is_empty() {
+@@ -298,7 +313,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+                 );
+             }
+             step.change.insert(
+-                fm.path.clone(),
++                normalize_artifact_path(&fm.path, turn_wd),
+                 ArtifactChange {
+                     raw: fm.raw_diff.clone(),
+                     structural: Some(StructuralChange {
+@@ -325,7 +340,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+                 serde_json::Value::String(tool.id.clone()),
+             );
+             step.change.insert(
+-                path,
++                normalize_artifact_path(&path, turn_wd),
+                 ArtifactChange {
+                     raw,
+                     structural: Some(StructuralChange {
+@@ -609,6 +624,48 @@ fn record_actor(
+     actors.insert(actor.to_string(), def);
+ }
+ 
++/// The key a file change is filed under: `path` relative to the session's working directory when
++/// it lies inside it, with any leading `./` dropped, else `path` as given. One file is then one
++/// key whether the tool wrote it as `/work/dir/a.rs`, `./a.rs` or `a.rs`. The working directory
++/// itself is `.`. A path outside the working directory stays absolute.
++///
++/// macOS spells the same directory `/private/var/...` and `/var/...` (likewise `/tmp`, `/etc`);
++/// the two are compared as one.
++pub fn normalize_artifact_path(path: &str, working_dir: Option<&str>) -> String {
++    let mut p = path;
++    while let Some(rest) = p.strip_prefix("./") {
++        p = rest;
++    }
++    if let Some(wd) = working_dir {
++        let wd = strip_private_alias(wd.trim_end_matches('/'));
++        let abs = strip_private_alias(p);
++        if !wd.is_empty() && abs.starts_with('/') {
++            if abs == wd {
++                return ".".to_string();
++            }
++            if let Some(rest) = abs.strip_prefix(wd)
++                && let Some(rel) = rest.strip_prefix('/')
++                && !rel.is_empty()
++            {
++                return rel.to_string();
++            }
++        }
++    }
++    p.to_string()
++}
++
++/// `/private/var/x` -> `/var/x` (also `/private/tmp`, `/private/etc`): macOS's symlinked roots.
++fn strip_private_alias(p: &str) -> &str {
++    for root in ["/var", "/tmp", "/etc"] {
++        if let Some(rest) = p.strip_prefix("/private")
++            && (rest == root || rest.starts_with(&format!("{root}/")))
++        {
++            return rest;
++        }
++    }
++    p
++}
++
+ fn extract_file_path(tool: &ToolInvocation) -> Option<String> {
+     for field in &["file_path", "path", "filename", "file"] {
+         if let Some(v) = tool.input.get(*field)
+@@ -1201,6 +1258,40 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn one_file_is_one_key_however_the_tool_spelled_it() {
++        let wd = Some("/private/var/folders/x/proj");
++        for spelling in [
++            "/private/var/folders/x/proj/notes.md",
++            "/var/folders/x/proj/notes.md",
++            "./notes.md",
++            "notes.md",
++        ] {
++            assert_eq!(
++                normalize_artifact_path(spelling, wd),
++                "notes.md",
++                "{spelling}"
++            );
++        }
++        assert_eq!(
++            normalize_artifact_path("/private/var/folders/x/proj/src/a.rs", wd),
++            "src/a.rs"
++        );
++        assert_eq!(
++            normalize_artifact_path("/private/var/folders/x/proj", wd),
++            "."
++        );
++        // outside the working directory, or a sibling that merely shares the prefix: untouched
++        assert_eq!(
++            normalize_artifact_path("/private/var/folders/x/proj2/a.rs", wd),
++            "/private/var/folders/x/proj2/a.rs"
++        );
++        assert_eq!(normalize_artifact_path("/etc/hosts", wd), "/etc/hosts");
++        // no working directory: only the leading ./ goes
++        assert_eq!(normalize_artifact_path("./a.rs", None), "a.rs");
++        assert_eq!(normalize_artifact_path("/abs/a.rs", None), "/abs/a.rs");
++    }
++
+     fn fw_tool(name: &str, id: &str, input: serde_json::Value) -> ToolInvocation {
+         ToolInvocation {
+             id: id.to_string(),
+diff --git a/crates/toolpath-cursor/src/derive.rs b/crates/toolpath-cursor/src/derive.rs
+index 8642f0c3..088dcf07 100644
+--- a/crates/toolpath-cursor/src/derive.rs
++++ b/crates/toolpath-cursor/src/derive.rs
+@@ -114,9 +114,9 @@ mod tests {
+         let file_step = path
+             .steps
+             .iter()
+-            .find(|s| s.change.contains_key("/p/x.rs"))
+-            .expect("no step carries /p/x.rs");
+-        let change = &file_step.change["/p/x.rs"];
++            .find(|s| s.change.contains_key("x.rs"))
++            .expect("no step carries x.rs (/p/x.rs, relative to the workspace /p)");
++        let change = &file_step.change["x.rs"];
+         let structural = change.structural.as_ref().unwrap();
+         assert_eq!(structural.change_type, "file.write");
+         assert_eq!(structural.extra["operation"], "add");
+diff --git a/crates/toolpath-goldens/snapshots/document@claude.snap b/crates/toolpath-goldens/snapshots/document@claude.snap
+index 7e2763fa..f03388c1 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude.snap
+@@ -193,16 +193,6 @@ input_file: test-fixtures/claude/convo.jsonl
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01RPrf5jHtWQzAbkxG1z1oW1",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -236,6 +226,16 @@ input_file: test-fixtures/claude/convo.jsonl
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01RPrf5jHtWQzAbkxG1z1oW1",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -300,16 +300,6 @@ input_file: test-fixtures/claude/convo.jsonl
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01Xvb5T7yT98kxsf6r5da1iV",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -343,6 +333,16 @@ input_file: test-fixtures/claude/convo.jsonl
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01Xvb5T7yT98kxsf6r5da1iV",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -551,16 +551,6 @@ input_file: test-fixtures/claude/convo.jsonl
+         },
+         {
+           "change": {
+-            "/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01HoHkjGKfrWZ5SZUESJCKQF",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -594,6 +584,16 @@ input_file: test-fixtures/claude/convo.jsonl
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01HoHkjGKfrWZ5SZUESJCKQF",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -1193,16 +1193,6 @@ input_file: test-fixtures/claude/convo.jsonl
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01NiN2vKquvDheZcfcatNx6J",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -1236,6 +1226,16 @@ input_file: test-fixtures/claude/convo.jsonl
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01NiN2vKquvDheZcfcatNx6J",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+diff --git a/crates/toolpath-goldens/snapshots/document@copilot.snap b/crates/toolpath-goldens/snapshots/document@copilot.snap
+index 4cc39871..40044005 100644
+--- a/crates/toolpath-goldens/snapshots/document@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/document@copilot.snap
+@@ -103,16 +103,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+         },
+         {
+           "change": {
+-            "/tmp/elicit-scratch/notes.md": {
+-              "raw": "\ndiff --git a/tmp/elicit-scratch/notes.md b/tmp/elicit-scratch/notes.md\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/tmp/elicit-scratch/notes.md\n@@ -1,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.",
+-                "operation": "add",
+-                "tool": "create",
+-                "tool_id": "toolu_bdrk_01WiqjjhjievQeWtxytJRURR",
+-                "type": "file.write"
+-              }
+-            },
+             "copilot://7a80f0ee-0c9f-4e1a-acbd-d655a5721cfe": {
+               "structural": {
+                 "role": "assistant",
+@@ -139,6 +129,16 @@ input_file: test-fixtures/copilot/convo.jsonl
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "\ndiff --git a/tmp/elicit-scratch/notes.md b/tmp/elicit-scratch/notes.md\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/tmp/elicit-scratch/notes.md\n@@ -1,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.",
++                "operation": "add",
++                "tool": "create",
++                "tool_id": "toolu_bdrk_01WiqjjhjievQeWtxytJRURR",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -190,16 +190,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+         },
+         {
+           "change": {
+-            "/tmp/elicit-scratch/notes.md": {
+-              "raw": "\ndiff --git a/tmp/elicit-scratch/notes.md b/tmp/elicit-scratch/notes.md\nindex 0000000..0000000 100644\n--- a/tmp/elicit-scratch/notes.md\n+++ b/tmp/elicit-scratch/notes.md\n@@ -1,2 +1,2 @@\n-scratch — feature elicitation\n+fixture — feature elicitation\n this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "fixture — feature elicitation",
+-                "operation": "update",
+-                "tool": "edit",
+-                "tool_id": "toolu_bdrk_01PjTe5kaxxPqT23PaJBTpzt",
+-                "type": "file.write"
+-              }
+-            },
+             "copilot://7a80f0ee-0c9f-4e1a-acbd-d655a5721cfe": {
+               "structural": {
+                 "role": "assistant",
+@@ -227,6 +217,16 @@ input_file: test-fixtures/copilot/convo.jsonl
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "\ndiff --git a/tmp/elicit-scratch/notes.md b/tmp/elicit-scratch/notes.md\nindex 0000000..0000000 100644\n--- a/tmp/elicit-scratch/notes.md\n+++ b/tmp/elicit-scratch/notes.md\n@@ -1,2 +1,2 @@\n-scratch — feature elicitation\n+fixture — feature elicitation\n this file will be edited and searched.\n",
++              "structural": {
++                "after": "fixture — feature elicitation",
++                "operation": "update",
++                "tool": "edit",
++                "tool_id": "toolu_bdrk_01PjTe5kaxxPqT23PaJBTpzt",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -354,16 +354,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+         },
+         {
+           "change": {
+-            "/tmp/elicit-scratch/count.sh": {
+-              "raw": "\ndiff --git a/tmp/elicit-scratch/count.sh b/tmp/elicit-scratch/count.sh\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/tmp/elicit-scratch/count.sh\n@@ -1,0 +1,7 @@\n+#!/bin/bash\n+echo 1\n+echo 2\n+echo 3\n+echo 4\n+echo 5\n+\n",
+-              "structural": {
+-                "after": "#!/bin/bash\necho 1\necho 2\necho 3\necho 4\necho 5\n",
+-                "operation": "add",
+-                "tool": "create",
+-                "tool_id": "toolu_bdrk_013frCT7o3w25S2RvaDpZYco",
+-                "type": "file.write"
+-              }
+-            },
+             "copilot://7a80f0ee-0c9f-4e1a-acbd-d655a5721cfe": {
+               "structural": {
+                 "role": "assistant",
+@@ -390,6 +380,16 @@ input_file: test-fixtures/copilot/convo.jsonl
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "count.sh": {
++              "raw": "\ndiff --git a/tmp/elicit-scratch/count.sh b/tmp/elicit-scratch/count.sh\ncreate file mode 100644\nindex 0000000..0000000\n--- a/dev/null\n+++ b/tmp/elicit-scratch/count.sh\n@@ -1,0 +1,7 @@\n+#!/bin/bash\n+echo 1\n+echo 2\n+echo 3\n+echo 4\n+echo 5\n+\n",
++              "structural": {
++                "after": "#!/bin/bash\necho 1\necho 2\necho 3\necho 4\necho 5\n",
++                "operation": "add",
++                "tool": "create",
++                "tool_id": "toolu_bdrk_013frCT7o3w25S2RvaDpZYco",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+diff --git a/crates/toolpath-goldens/snapshots/document@cursor.snap b/crates/toolpath-goldens/snapshots/document@cursor.snap
+index 67754e0f..4146701f 100644
+--- a/crates/toolpath-goldens/snapshots/document@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/document@cursor.snap
+@@ -197,17 +197,6 @@ input_file: test-fixtures/cursor/convo.json
+         },
+         {
+           "change": {
+-            "/Users/ben/projects/temp/cursortest2/notes.md": {
+-              "raw": "--- a/Users/ben/projects/temp/cursortest2/notes.md\n+++ b/Users/ben/projects/temp/cursortest2/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "before": "",
+-                "operation": "add",
+-                "tool": "edit_file_v2",
+-                "tool_id": "tool_269dc5dd-1b25-4573-996c-30447b24d6b",
+-                "type": "file.write"
+-              }
+-            },
+             "cursor://ad9f62d0-57b4-42f4-9310-b6fd3213af85": {
+               "structural": {
+                 "environment": {
+@@ -234,6 +223,17 @@ input_file: test-fixtures/cursor/convo.json
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/Users/ben/projects/temp/cursortest2/notes.md\n+++ b/Users/ben/projects/temp/cursortest2/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "before": "",
++                "operation": "add",
++                "tool": "edit_file_v2",
++                "tool_id": "tool_269dc5dd-1b25-4573-996c-30447b24d6b",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -329,17 +329,6 @@ input_file: test-fixtures/cursor/convo.json
+         },
+         {
+           "change": {
+-            "/Users/ben/projects/temp/cursortest2/notes.md": {
+-              "raw": "--- a/Users/ben/projects/temp/cursortest2/notes.md\n+++ b/Users/ben/projects/temp/cursortest2/notes.md\n--- \n+++ \n@@ -1,2 +1,2 @@\n-scratch — feature elicitation\n+fixture — feature elicitation\n this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "fixture — feature elicitation\nthis file will be edited and searched.\n",
+-                "before": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "update",
+-                "tool": "edit_file_v2",
+-                "tool_id": "tool_b466f456-5ffc-4ece-b63b-ee0dd969c94",
+-                "type": "file.write"
+-              }
+-            },
+             "cursor://ad9f62d0-57b4-42f4-9310-b6fd3213af85": {
+               "structural": {
+                 "environment": {
+@@ -367,6 +356,17 @@ input_file: test-fixtures/cursor/convo.json
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/Users/ben/projects/temp/cursortest2/notes.md\n+++ b/Users/ben/projects/temp/cursortest2/notes.md\n--- \n+++ \n@@ -1,2 +1,2 @@\n-scratch — feature elicitation\n+fixture — feature elicitation\n this file will be edited and searched.\n",
++              "structural": {
++                "after": "fixture — feature elicitation\nthis file will be edited and searched.\n",
++                "before": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "update",
++                "tool": "edit_file_v2",
++                "tool_id": "tool_b466f456-5ffc-4ece-b63b-ee0dd969c94",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -577,7 +577,7 @@ input_file: test-fixtures/cursor/convo.json
+         },
+         {
+           "change": {
+-            "/Users/ben/projects/temp/cursortest2/count.sh": {
++            "count.sh": {
+               "raw": "--- a/Users/ben/projects/temp/cursortest2/count.sh\n+++ b/Users/ben/projects/temp/cursortest2/count.sh\n--- \n+++ \n@@ -0,0 +1,6 @@\n+#!/usr/bin/env bash\n+echo 1\n+echo 2\n+echo 3\n+echo 4\n+echo 5\n",
+               "structural": {
+                 "after": "#!/usr/bin/env bash\necho 1\necho 2\necho 3\necho 4\necho 5\n",
+diff --git a/crates/toolpath-goldens/snapshots/document@opencode.snap b/crates/toolpath-goldens/snapshots/document@opencode.snap
+index 4b8c23a1..d960b605 100644
+--- a/crates/toolpath-goldens/snapshots/document@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/document@opencode.snap
+@@ -112,7 +112,7 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md": {
++            "notes.md": {
+               "structural": {
+                 "operation": "add",
+                 "tool": "write",
+@@ -217,7 +217,7 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md": {
++            "notes.md": {
+               "structural": {
+                 "operation": "update",
+                 "tool": "edit",
+@@ -421,7 +421,7 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh": {
++            "count.sh": {
+               "structural": {
+                 "operation": "add",
+                 "tool": "write",
+diff --git a/crates/toolpath-goldens/snapshots/projection@claude@cursor.snap b/crates/toolpath-goldens/snapshots/projection@claude@cursor.snap
+index 08cb53b4..43386717 100644
+--- a/crates/toolpath-goldens/snapshots/projection@claude@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@claude@cursor.snap
+@@ -5465,7 +5465,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "composerId": "89f4d66a-510b-48b3-94b8-d6a8f981b143",
+     "conversationCheckpointLastUpdatedAt": 1778178415400,
+     "createdAt": 1778178310103,
+-    "filesChangedCount": 3,
++    "filesChangedCount": 1,
+     "forceMode": "edit",
+     "hasUnreadMessages": false,
+     "isArchived": false,
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap
+index 371f4f9e..502a3a0e 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 79
+   },
+   "after": {
+     "steps": 98,
+@@ -24,8 +24,6 @@ input_file: test-fixtures/claude/convo.jsonl
+   "lost": [
+     "paths[].meta.files_changed[]",
+     "paths[].path.base.branch",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content",
+@@ -52,6 +50,16 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+   "gained": [
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.aggregated_output",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap
+index f596c5d1..b22b4579 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 79
+   },
+   "after": {
+     "steps": 34,
+@@ -54,6 +54,18 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.version"
+   ],
+   "gained": [
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
+   ]
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap
+index 9840c89a..b45ef7fc 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 79
+   },
+   "after": {
+     "steps": 34,
+@@ -28,8 +28,6 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].meta.producer.version",
+     "paths[].path.base.branch",
+     "paths[].path.base.uri",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+@@ -66,5 +64,16 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.version",
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type"
++  ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
+index 52ca83d8..976feeaa 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
+@@ -13,25 +13,19 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 79
+   },
+   "after": {
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 52
++    "key_paths": 46
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+     "paths[].path.base.branch",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap
+index 029d308e..08175a62 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 79
+   },
+   "after": {
+     "steps": 47,
+@@ -53,5 +53,18 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.user_type",
+     "paths[].steps[].change.<artifact>.structural.version"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type"
++  ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+index 08ac21d5..5020c309 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+@@ -13,21 +13,17 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 79
+   },
+   "after": {
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.branch",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@pi.snap
+index 67fc05fe..f54077d6 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@pi.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_claude
+   agent: claude
+   input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
+-input_file: goldens/claude/input.jsonl
++input_file: test-fixtures/claude/convo.jsonl
+ ---
+ {
+   "outcome": "compared",
+@@ -13,7 +13,7 @@ input_file: goldens/claude/input.jsonl
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 79
+   },
+   "after": {
+     "steps": 47,
+@@ -25,8 +25,6 @@ input_file: goldens/claude/input.jsonl
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+     "paths[].path.base.branch",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+@@ -54,5 +52,16 @@ input_file: goldens/claude/input.jsonl
+     "paths[].steps[].change.<artifact>.structural.version",
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
++    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type"
++  ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@claude.snap
+index 28647bfe..6576df61 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@claude.snap
+@@ -25,10 +25,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+     "paths[].path.base.uri",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+@@ -36,9 +32,29 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+     "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap
+index 5478ccfd..49265d44 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap
+@@ -23,19 +23,31 @@ input_file: test-fixtures/copilot/convo.jsonl
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+     "paths[].steps[].change.<artifact>.structural.reasoningEffort",
+-    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens"
++    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.aggregated_output",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap
+index 3d7c75d2..ac95699f 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap
+@@ -27,15 +27,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+     "paths[].path.base.uri",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+@@ -47,7 +38,23 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+     "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
+     "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+-    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens"
++    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type"
++  ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+index 5a920e6f..5b692a0e 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+@@ -39,8 +39,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.pattern"
+   ],
+   "gained": [
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.before",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.before",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+@@ -49,6 +47,8 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.globPattern",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.targetFile"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.targetFile",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.notes.md.structural.before"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap
+index 648fdc48..bd4d8919 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap
+@@ -24,19 +24,35 @@ input_file: test-fixtures/copilot/convo.jsonl
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+     "paths[].steps[].change.<artifact>.structural.reasoningEffort",
+-    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens"
++    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir"
+   ]
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+index 1bfdb295..81c1807d 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+@@ -23,19 +23,35 @@ input_file: test-fixtures/copilot/convo.jsonl
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+-    "paths[].steps[].change.<artifact>.structural.reasoningEffort"
++    "paths[].steps[].change.<artifact>.structural.reasoningEffort",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
+     "paths[].path.base.ref",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason"
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@pi.snap
+index 24afa9c6..0b7af926 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@pi.snap
+@@ -24,20 +24,32 @@ input_file: test-fixtures/copilot/convo.jsonl
+   "lost": [
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+-    "paths[].steps[].change.<artifact>.structural.reasoningEffort"
++    "paths[].steps[].change.<artifact>.structural.reasoningEffort",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
++    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason"
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+index 4504c816..a1637a40 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+@@ -24,8 +24,6 @@ input_file: test-fixtures/cursor/convo.json
+   "lost": [
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.caseInsensitive",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription",
+@@ -39,7 +37,9 @@ input_file: test-fixtures/cursor/convo.json
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.additionalReadwritePaths[]",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.enableSharedBuildCache",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.networkAccess",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.type"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.type",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.notes.md.structural.before"
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+index c7cf8070..636531c6 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+@@ -23,12 +23,34 @@ input_file: test-fixtures/cursor/convo.json
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation"
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.before",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.type",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.aggregated_output",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+index 33d5aa17..6e53adab 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+@@ -22,17 +22,41 @@ input_file: test-fixtures/cursor/convo.json
+     "key_paths": 67
+   },
+   "lost": [
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.before",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.type",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str"
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+index 841b6872..4c6777c2 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+@@ -26,13 +26,36 @@ input_file: test-fixtures/cursor/convo.json
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+     "paths[].path.base.uri",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+-    "paths[].steps[].change.<artifact>.structural.environment.working_dir"
++    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.before",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.type",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.type"
++  ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+index b31331c9..724488b7 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+@@ -23,8 +23,33 @@ input_file: test-fixtures/cursor/convo.json
+   },
+   "lost": [
+     "paths[].meta.producer.version",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before"
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.before",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.type",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.type"
++  ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+index ead6e455..6d694916 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+@@ -22,15 +22,15 @@ input_file: test-fixtures/cursor/convo.json
+     "key_paths": 69
+   },
+   "lost": [
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.before"
+   ],
+   "gained": [
+     "paths[].path.base.ref",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+index 69951640..0ae488c1 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+@@ -24,12 +24,34 @@ input_file: test-fixtures/cursor/convo.json
+   "lost": [
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation"
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.count.sh.structural.before",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.before",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.type",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool_id",
++    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.stop_reason"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+index 299ae16b..6eae9522 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+@@ -33,10 +33,6 @@ input_file: test-fixtures/opencode/convo.json
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.raw",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.after",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.raw",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.after",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+@@ -44,6 +40,10 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change.<artifact>.structural.raw.type",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string",
++    "paths[].steps[].change.count.sh.raw",
++    "paths[].steps[].change.count.sh.structural.after",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+index 231f5c66..b19a6bef 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+@@ -24,16 +24,16 @@ input_file: test-fixtures/opencode/convo.json
+   "lost": [
+     "paths[].meta.files_changed[]",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+-    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning"
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+index c29e3420..63c67ed7 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+@@ -25,13 +25,29 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.raw",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.after",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.raw",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.after",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
++    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+index d79b41c5..6dd45783 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+@@ -27,14 +27,6 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+     "paths[].path.base.uri",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+@@ -43,7 +35,15 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+     "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+     "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+-    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens"
++    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": []
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+index 54587554..579da116 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+@@ -25,15 +25,15 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.type",
+-    "paths[].steps[].change.<artifact>.structural.stop_reason"
++    "paths[].steps[].change.<artifact>.structural.stop_reason",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": []
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+index 1c0af97e..4e338203 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+@@ -26,15 +26,15 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.type",
+-    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning"
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.count.sh.structural.operation",
++    "paths[].steps[].change.count.sh.structural.tool",
++    "paths[].steps[].change.count.sh.structural.tool_id",
++    "paths[].steps[].change.count.sh.structural.type",
++    "paths[].steps[].change.notes.md.structural.operation",
++    "paths[].steps[].change.notes.md.structural.tool",
++    "paths[].steps[].change.notes.md.structural.tool_id",
++    "paths[].steps[].change.notes.md.structural.type"
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider"
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude.snap b/crates/toolpath-goldens/snapshots/shed@claude.snap
+index d878de2d..3be29fd7 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude.snap
+@@ -22,7 +22,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 58293,
++    "bytes": 57953,
+     "string_chars": 36212,
+     "steps": 61,
+     "text_chars": 4563,
+diff --git a/crates/toolpath-goldens/snapshots/shed@copilot.snap b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+index 938b02b6..042a6c58 100644
+--- a/crates/toolpath-goldens/snapshots/shed@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+@@ -28,7 +28,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 47921,
++    "bytes": 47861,
+     "string_chars": 41731,
+     "steps": 14,
+     "text_chars": 4594,
+diff --git a/crates/toolpath-goldens/snapshots/shed@cursor.snap b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+index 3a859c9c..8cb08d38 100644
+--- a/crates/toolpath-goldens/snapshots/shed@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+@@ -17,7 +17,7 @@ input_file: test-fixtures/cursor/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 19427,
++    "bytes": 19316,
+     "string_chars": 12070,
+     "steps": 22,
+     "text_chars": 4150,
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index fc036d2b..11b27dc6 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -17,7 +17,7 @@ input_file: test-fixtures/opencode/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 16345,
++    "bytes": 16078,
+     "string_chars": 10145,
+     "steps": 12,
+     "text_chars": 2851,
+diff --git a/crates/toolpath-opencode/src/derive.rs b/crates/toolpath-opencode/src/derive.rs
+index 1468bd2c..553879ff 100644
+--- a/crates/toolpath-opencode/src/derive.rs
++++ b/crates/toolpath-opencode/src/derive.rs
+@@ -201,9 +201,10 @@ mod tests {
+         let file_step = p
+             .steps
+             .iter()
+-            .find(|s| s.change.contains_key("/tmp/proj/main.cpp"))
++            .find(|s| s.change.contains_key("main.cpp"))
+             .expect("no step carries the file artifact");
+-        let change = &file_step.change["/tmp/proj/main.cpp"];
++        // keyed relative to the session's working directory (/tmp/proj)
++        let change = &file_step.change["main.cpp"];
+         let structural = change.structural.as_ref().unwrap();
+         assert_eq!(structural.change_type, "file.write");
+         assert_eq!(structural.extra["operation"], "add");
+diff --git a/examples/path-02-local-session.path.json b/examples/path-02-local-session.path.json
+index bea7eda6..9389dab8 100644
+--- a/examples/path-02-local-session.path.json
++++ b/examples/path-02-local-session.path.json
+@@ -184,16 +184,6 @@
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01RPrf5jHtWQzAbkxG1z1oW1",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -227,6 +217,16 @@
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01RPrf5jHtWQzAbkxG1z1oW1",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -291,16 +291,6 @@
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01Xvb5T7yT98kxsf6r5da1iV",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -334,6 +324,16 @@
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01Xvb5T7yT98kxsf6r5da1iV",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -542,16 +542,6 @@
+         },
+         {
+           "change": {
+-            "/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01HoHkjGKfrWZ5SZUESJCKQF",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -585,6 +575,16 @@
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01HoHkjGKfrWZ5SZUESJCKQF",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+@@ -1184,16 +1184,6 @@
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md": {
+-              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
+-              "structural": {
+-                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
+-                "operation": "add",
+-                "tool": "Write",
+-                "tool_id": "toolu_01NiN2vKquvDheZcfcatNx6J",
+-                "type": "file.write"
+-              }
+-            },
+             "claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143": {
+               "structural": {
+                 "environment": {
+@@ -1227,6 +1217,16 @@
+                 ],
+                 "type": "conversation.append"
+               }
++            },
++            "notes.md": {
++              "raw": "--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n",
++              "structural": {
++                "after": "scratch — feature elicitation\nthis file will be edited and searched.\n",
++                "operation": "add",
++                "tool": "Write",
++                "tool_id": "toolu_01NiN2vKquvDheZcfcatNx6J",
++                "type": "file.write"
++              }
+             }
+           },
+           "step": {
+diff --git a/examples/path-02-local-session.path.jsonl b/examples/path-02-local-session.path.jsonl
+index 650de0ee..a648da29 100644
+--- a/examples/path-02-local-session.path.jsonl
++++ b/examples/path-02-local-session.path.jsonl
+@@ -7,17 +7,17 @@
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_018QuYw7PN36pgvzGvo6QEQM","role":"assistant","stop_reason":"tool_use","text":"I'll work through the tasks in order, using dedicated tools where available.\n\n**Step 1:** Listing files in the current directory.","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"67570e24-14d5-4f75-a0ab-6e0a69594ad9","parents":["e02b0d0c-8b4a-40f2-a6cc-8c9e353348eb"],"timestamp":"2026-05-07T18:25:14.322Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_018QuYw7PN36pgvzGvo6QEQM","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":18183,"cache_write_tokens":8404,"input_tokens":6,"output_tokens":218},"tool_uses":[{"category":"shell","id":"toolu_01CmEGCECW3kbLoLaGoBrWbp","input":{"command":"ls -la","description":"List files in current directory"},"name":"Bash","result":{"content":"total 0\ndrwxr-xr-x 3 ben staff 96 May  7 14:25 .\ndrwx------ 3 ben staff 96 May  7 14:25 ..\n-rw-r--r-- 1 ben staff  0 May  7 14:25 .stderr.log","is_error":false}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"0034fc0e-d7bf-4ad1-97aa-f2e2c53ab469","parents":["67570e24-14d5-4f75-a0ab-6e0a69594ad9"],"timestamp":"2026-05-07T18:25:14.473Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01Bx2S5C93iR5qDg2qaVaUFf","role":"assistant","stop_reason":"tool_use","text":"**Step 2:** Writing `notes.md` with the Write tool.","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"ee2d362c-182a-4073-8949-ad31e64567ba","parents":["0034fc0e-d7bf-4ad1-97aa-f2e2c53ab469"],"timestamp":"2026-05-07T18:25:16.815Z"}}}
+-{"Step":{"change":{"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md":{"raw":"--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01RPrf5jHtWQzAbkxG1z1oW1","type":"file.write"}},"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01Bx2S5C93iR5qDg2qaVaUFf","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":26587,"cache_write_tokens":327,"input_tokens":1,"output_tokens":190},"tool_uses":[{"category":"file_write","id":"toolu_01RPrf5jHtWQzAbkxG1z1oW1","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"97d5f9f8-8ffd-4c1e-9dd2-accd0f0d0008","parents":["ee2d362c-182a-4073-8949-ad31e64567ba"],"timestamp":"2026-05-07T18:25:19.187Z"}}}
++{"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01Bx2S5C93iR5qDg2qaVaUFf","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":26587,"cache_write_tokens":327,"input_tokens":1,"output_tokens":190},"tool_uses":[{"category":"file_write","id":"toolu_01RPrf5jHtWQzAbkxG1z1oW1","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}},"notes.md":{"raw":"--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01RPrf5jHtWQzAbkxG1z1oW1","type":"file.write"}}},"step":{"actor":"agent:claude-opus-4-7","id":"97d5f9f8-8ffd-4c1e-9dd2-accd0f0d0008","parents":["ee2d362c-182a-4073-8949-ad31e64567ba"],"timestamp":"2026-05-07T18:25:19.187Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01ACyrV1Jg1nJ1kszsGvbzVM","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"7abf1013-5fd2-41ef-afc1-2075c6aa0c99","parents":["97d5f9f8-8ffd-4c1e-9dd2-accd0f0d0008"],"timestamp":"2026-05-07T18:25:21.545Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01ACyrV1Jg1nJ1kszsGvbzVM","role":"assistant","stop_reason":"tool_use","text":"The Write tool needs permission. Let me retry — if denied I'll fall back to heredoc.","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"f1259ae1-e1b6-46ad-ba58-98ed344bd18b","parents":["7abf1013-5fd2-41ef-afc1-2075c6aa0c99"],"timestamp":"2026-05-07T18:25:22.257Z"}}}
+-{"Step":{"change":{"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md":{"raw":"--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01Xvb5T7yT98kxsf6r5da1iV","type":"file.write"}},"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01ACyrV1Jg1nJ1kszsGvbzVM","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":26914,"cache_write_tokens":294,"input_tokens":1,"output_tokens":241},"tool_uses":[{"category":"file_write","id":"toolu_01Xvb5T7yT98kxsf6r5da1iV","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"8c9f5dd4-2637-4de6-97fa-53a33a3c2480","parents":["f1259ae1-e1b6-46ad-ba58-98ed344bd18b"],"timestamp":"2026-05-07T18:25:22.966Z"}}}
++{"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01ACyrV1Jg1nJ1kszsGvbzVM","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":26914,"cache_write_tokens":294,"input_tokens":1,"output_tokens":241},"tool_uses":[{"category":"file_write","id":"toolu_01Xvb5T7yT98kxsf6r5da1iV","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}},"notes.md":{"raw":"--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01Xvb5T7yT98kxsf6r5da1iV","type":"file.write"}}},"step":{"actor":"agent:claude-opus-4-7","id":"8c9f5dd4-2637-4de6-97fa-53a33a3c2480","parents":["f1259ae1-e1b6-46ad-ba58-98ed344bd18b"],"timestamp":"2026-05-07T18:25:22.966Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_017Gif8KKhirZsT6p4hwdmsy","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"5edb47ba-9b1c-4e72-92ad-650c721d6745","parents":["8c9f5dd4-2637-4de6-97fa-53a33a3c2480"],"timestamp":"2026-05-07T18:25:25.605Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_017Gif8KKhirZsT6p4hwdmsy","role":"assistant","stop_reason":"tool_use","text":"Falling back to a heredoc since the Write tool was denied.","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"22be48db-6c1b-44db-ad13-641db72ce03b","parents":["5edb47ba-9b1c-4e72-92ad-650c721d6745"],"timestamp":"2026-05-07T18:25:25.971Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_017Gif8KKhirZsT6p4hwdmsy","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":27208,"cache_write_tokens":345,"input_tokens":1,"output_tokens":226},"tool_uses":[{"category":"shell","id":"toolu_01UVrAkuZ7VzjEhgx1ZxtueN","input":{"command":"cat > notes.md <<'EOF'\nscratch — feature elicitation\nthis file will be edited and searched.\nEOF","description":"Write notes.md via heredoc"},"name":"Bash","result":{"content":"Output redirection to '/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md' was blocked. For security, Claude Code may only write to files in the allowed working directories for this session: '/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude', '/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude'.","is_error":true}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"5f78afa5-7ede-4c30-95b1-f3a4485f642b","parents":["22be48db-6c1b-44db-ad13-641db72ce03b"],"timestamp":"2026-05-07T18:25:26.483Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01TMmt8JMhBZyiJYxqh1CQ9D","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"69dd089c-5da9-4617-be1b-dc1d1df1b98b","parents":["5f78afa5-7ede-4c30-95b1-f3a4485f642b"],"timestamp":"2026-05-07T18:25:30.509Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01TMmt8JMhBZyiJYxqh1CQ9D","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":27553,"cache_write_tokens":460,"input_tokens":1,"output_tokens":234},"tool_uses":[{"category":"shell","id":"toolu_01AKwTM2MstTiYf7sroPUk3G","input":{"command":"pwd","description":"Show current directory"},"name":"Bash","result":{"content":"/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude","is_error":false}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"c938f23c-cff7-417c-9084-62c5ad940307","parents":["69dd089c-5da9-4617-be1b-dc1d1df1b98b"],"timestamp":"2026-05-07T18:25:30.833Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01PfVisRdWW4YPj1nKaGcanB","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"47f9dac8-88a0-44d1-a0cc-a5dec91bec8d","parents":["c938f23c-cff7-417c-9084-62c5ad940307"],"timestamp":"2026-05-07T18:25:33.344Z"}}}
+-{"Step":{"change":{"/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md":{"raw":"--- a/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01HoHkjGKfrWZ5SZUESJCKQF","type":"file.write"}},"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01PfVisRdWW4YPj1nKaGcanB","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":28013,"cache_write_tokens":300,"input_tokens":1,"output_tokens":220},"tool_uses":[{"category":"file_write","id":"toolu_01HoHkjGKfrWZ5SZUESJCKQF","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"4935ab4c-d8ad-4504-adb7-81541095e110","parents":["47f9dac8-88a0-44d1-a0cc-a5dec91bec8d"],"timestamp":"2026-05-07T18:25:34.170Z"}}}
++{"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01PfVisRdWW4YPj1nKaGcanB","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":28013,"cache_write_tokens":300,"input_tokens":1,"output_tokens":220},"tool_uses":[{"category":"file_write","id":"toolu_01HoHkjGKfrWZ5SZUESJCKQF","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}},"notes.md":{"raw":"--- a/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01HoHkjGKfrWZ5SZUESJCKQF","type":"file.write"}}},"step":{"actor":"agent:claude-opus-4-7","id":"4935ab4c-d8ad-4504-adb7-81541095e110","parents":["47f9dac8-88a0-44d1-a0cc-a5dec91bec8d"],"timestamp":"2026-05-07T18:25:34.170Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_017W5MWBtbW6yCqSNznzzFbb","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"81fe0aae-a396-447a-82a0-714009d0d878","parents":["4935ab4c-d8ad-4504-adb7-81541095e110"],"timestamp":"2026-05-07T18:25:37.276Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_017W5MWBtbW6yCqSNznzzFbb","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":28313,"cache_write_tokens":477,"input_tokens":1,"output_tokens":296},"tool_uses":[{"category":"shell","id":"toolu_017sH9BxDD3wvB29K14wukGg","input":{"command":"cat > /var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md <<'EOF'\nscratch — feature elicitation\nthis file will be edited and searched.\nEOF\necho \"wrote notes.md\"","description":"Write notes.md via heredoc to allowed path"},"name":"Bash","result":{"content":"Output redirection to '/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md' was blocked. For security, Claude Code may only write to files in the allowed working directories for this session: '/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude', '/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude'.","is_error":true}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"82c628ae-d623-4e26-ac7b-0fbce6c872fd","parents":["81fe0aae-a396-447a-82a0-714009d0d878"],"timestamp":"2026-05-07T18:25:42.325Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01WUHowXkCpW2D5K2C7MVPvC","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"cd5927df-96c6-4de8-a4ac-d84f24fd43b2","parents":["82c628ae-d623-4e26-ac7b-0fbce6c872fd"],"timestamp":"2026-05-07T18:25:48.616Z"}}}
+@@ -35,7 +35,7 @@
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01Dv3Ao98cA48zsdDvJjRdoX","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":30474,"cache_write_tokens":518,"input_tokens":1,"output_tokens":419},"tool_uses":[{"category":"file_read","id":"toolu_019N5rMPZK59SGuMsoRRS4mC","input":{"file_path":"/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Read","result":{"content":"File does not exist. Note: your current working directory is /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude.","is_error":true}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"24a529a0-2cbc-422b-a6e2-0910f658ec0e","parents":["3a4a1e09-50a3-4385-beaa-f79ea4dc79d2"],"timestamp":"2026-05-07T18:26:13.599Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01DqA4wYs2bJBvV4iXYNbVqs","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"d6147f0f-f679-4589-bbbd-65c0ca1b2848","parents":["24a529a0-2cbc-422b-a6e2-0910f658ec0e"],"timestamp":"2026-05-07T18:26:15.925Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01DqA4wYs2bJBvV4iXYNbVqs","role":"assistant","stop_reason":"tool_use","text":"The Read tool reports cwd as `/private/var/...`. Let me retry writes with that path.","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"f7e21ba0-a05a-438c-8eb6-981b6ca5bade","parents":["d6147f0f-f679-4589-bbbd-65c0ca1b2848"],"timestamp":"2026-05-07T18:26:16.295Z"}}}
+-{"Step":{"change":{"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md":{"raw":"--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01NiN2vKquvDheZcfcatNx6J","type":"file.write"}},"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01DqA4wYs2bJBvV4iXYNbVqs","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":30992,"cache_write_tokens":511,"input_tokens":1,"output_tokens":252},"tool_uses":[{"category":"file_write","id":"toolu_01NiN2vKquvDheZcfcatNx6J","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"259dbb77-bd91-48f3-8a85-a6be5eaa26f4","parents":["f7e21ba0-a05a-438c-8eb6-981b6ca5bade"],"timestamp":"2026-05-07T18:26:17.081Z"}}}
++{"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01DqA4wYs2bJBvV4iXYNbVqs","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":30992,"cache_write_tokens":511,"input_tokens":1,"output_tokens":252},"tool_uses":[{"category":"file_write","id":"toolu_01NiN2vKquvDheZcfcatNx6J","input":{"content":"scratch — feature elicitation\nthis file will be edited and searched.\n","file_path":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md"},"name":"Write","result":{"content":"Claude requested permissions to write to /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md, but you haven't granted it yet.","is_error":true}}],"type":"conversation.append"}},"notes.md":{"raw":"--- a/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n+++ b/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md\n--- \n+++ \n@@ -0,0 +1,2 @@\n+scratch — feature elicitation\n+this file will be edited and searched.\n","structural":{"after":"scratch — feature elicitation\nthis file will be edited and searched.\n","operation":"add","tool":"Write","tool_id":"toolu_01NiN2vKquvDheZcfcatNx6J","type":"file.write"}}},"step":{"actor":"agent:claude-opus-4-7","id":"259dbb77-bd91-48f3-8a85-a6be5eaa26f4","parents":["f7e21ba0-a05a-438c-8eb6-981b6ca5bade"],"timestamp":"2026-05-07T18:26:17.081Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01EPMDRddaWJ5W9qaSCFyfKR","role":"assistant","stop_reason":"tool_use","text":"","thinking":"","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"a5c3e651-07da-4f66-8e48-3e4a860eea59","parents":["259dbb77-bd91-48f3-8a85-a6be5eaa26f4"],"timestamp":"2026-05-07T18:26:23.652Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01EPMDRddaWJ5W9qaSCFyfKR","role":"assistant","stop_reason":"tool_use","text":"I'll continue and clearly note each blocker.\n\n**Step 4:** Edit `notes.md` — blocked because the file doesn't exist (writes denied in step 2). Skipping the actual edit.\n\n**Step 5:** Find files starting with \"note\" using Glob.","type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"7612e76e-ba00-4f0f-843f-bdabe40cf857","parents":["a5c3e651-07da-4f66-8e48-3e4a860eea59"],"timestamp":"2026-05-07T18:26:24.949Z"}}}
+ {"Step":{"change":{"claude-code://89f4d66a-510b-48b3-94b8-d6a8f981b143":{"structural":{"environment":{"vcs_branch":"HEAD","working_dir":"/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"},"group_id":"msg_01EPMDRddaWJ5W9qaSCFyfKR","role":"assistant","stop_reason":"tool_use","text":"","token_usage":{"cache_read_tokens":31503,"cache_write_tokens":511,"input_tokens":1,"output_tokens":446},"tool_uses":[{"category":"file_search","id":"toolu_0175hRdjaPd1pVC5qFudECxT","input":{"pattern":"note*"},"name":"Glob","result":{"content":"No files found","is_error":false}}],"type":"conversation.append"}}},"step":{"actor":"agent:claude-opus-4-7","id":"b2a3fd0b-4433-4294-8846-db915937604b","parents":["7612e76e-ba00-4f0f-843f-bdabe40cf857"],"timestamp":"2026-05-07T18:26:25.012Z"}}}
+diff --git a/pr/67-file-change-paths-relative.md b/pr/67-file-change-paths-relative.md
+new file mode 100644
+index 00000000..3262bfb4
+--- /dev/null
++++ b/pr/67-file-change-paths-relative.md
+@@ -0,0 +1,31 @@
++# fix(convo): file-change keys are relative to the working directory, one key per file
++
++Status: draft · Base: pr/66-codex-model-provider-from-the-view · Code + recorded snapshots + examples
++
++## Why
++Asked from the deck's "gains" slide: the Claude source listed one file under three spellings. In `toolpath_convo::derive_path`
++the `change` key of a file write was whatever the tool or the snapshot diff said: the absolute `/private/var/.../claude/notes.md`,
++the macOS alias `/var/.../claude/notes.md` (same directory, other spelling), or a relative `notes.md`. One file, three keys, so a
++reader could not tell it was one file and the round-trip counts counted it three times. Bug in the shared derive, undocumented.
++
++## What changes
++- `toolpath-convo/src/derive.rs`: `normalize_artifact_path(path, working_dir)` (public) files a change under the path relative to
++  the session's working directory when it lies inside it (the turn's `environment.working_dir`, else `view.base.working_dir`,
++  else the first turn's), drops a leading `./`, treats `/private/var` and `/var` (and `/private/tmp`, `/private/etc`) as one,
++  maps the working directory itself to `.`, and leaves a path outside it, or a sibling that only shares a prefix, as given.
++  Used for both `file_mutations` and the tool-input fallback. Unit test for the spellings.
++- Four tests that asserted absolute keys now assert the relative key (codex derive and fidelity, cursor, opencode).
++- Snapshots re-recorded (INSTA_UPDATE=always), reviewed: `document`, `shed`, 27 `round_trip` files and one projection, and
++  `examples/path-02-local-session.path.json(l)` (UPDATE_EXAMPLES=1). The diffs are file keys that lose their directory prefix
++  and the lost/gained key counts that follow from one file no longer being three.
++
++## Open (need the dev shell / qualifier)
++- `path d baseline check` problems: round-trip pins (claude -> codex/pi/copilot gains, copilot -> codex/pi loses and gains), and
++  the output goldens from pr/65 and pr/66; all intended. One `path d baseline capture --all` in `nix develop` covers pr/64-67.
++- qualifier review: 2 annotations in `crates/toolpath-convo/src/derive.rs` drift because this piece adds lines above them
++  (`:400` "derive_path chains a parentless event..." and `:428` "path.head is the latest step..."). The code they describe is
++  unchanged; re-anchor them with the qualifier (as pr/62 did for the RFC), do not hand-edit `.qual`.
++
++## Not changed
++- Absolute paths are still written when the file is outside the working directory.
++- Nothing run unsandboxed: gitleaks, `just baseline`, the pinned toolchain.
+-- 
+2.55.0
+

@@ -1,0 +1,49 @@
+{
+  "agent": "pathbase",
+  "recorded_at": "2026-10-23T19:08:21.434Z",
+  "key": "349cd8d0aeb822b9499f54882cc664793062f1895f91ecde41400b29f470d534",
+  "loose_key": "6a4461da83e8c00f09ed2ee49b2c3978ff70199bfee1e553626d4305c30baa75",
+  "model": "",
+  "request": {
+    "method": "POST",
+    "url": "/api/v1/u/sync/repos/pathstash/graphs",
+    "upstream": "http://127.0.0.1:18899",
+    "headers": {
+      "cookie": "<redacted>",
+      "content-type": "application/json",
+      "accept": "*/*"
+    },
+    "body": "{\"document\":{\"graph\":{\"id\":\"stream-graph\"},\"paths\":[]},\"name\":\"streamed\"}",
+    "body_encoding": "identity",
+    "normalized": {
+      "document": {
+        "graph": {},
+        "paths": []
+      },
+      "name": "streamed"
+    }
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "x-request-id": "39394a50-1f87-41a1-9064-90e6a3ff83cd",
+      "cache-control": "private, no-cache, must-revalidate",
+      "access-control-allow-origin": "*",
+      "content-type": "application/json",
+      "vary": "Authorization",
+      "date": "Fri, 23 Oct 2026 19:08:21 GMT",
+      "x-pathbase-version": "0.1.0+d874b09",
+      "x-content-type-options": "nosniff"
+    },
+    "chunks": [
+      {
+        "t_ms": 7,
+        "b64": "eyJpZCI6ImY3MDM2MzAxLWM0ZTYtNDgyOC04ZmYyLTJiZGY4YzE2MjY0YiIsIm11dGFiaWxpdHkiOiJtdXRhYmxlIiwicmVwb19pZCI6IjNiYjEyZjUwLWIxYjUtNDQzNS05ZmM3LTMxMWRkMmRiNmNlNyIsIm5hbWUiOiJzdHJlYW1lZCIsInRvb2xwYXRoX2lkIjoic3RyZWFtLWdyYXBoIiwidGl0bGUiOm51bGwsImhlYWRlciI6eyJncmFwaCI6eyJpZCI6InN0cmVhbS1ncmFwaCJ9fSwidmlzaWJpbGl0eSI6InVubGlzdGVkIiwiY3JlYXRlZF9hdCI6IjIwMjYtMTAtMjNUMTk6MDg6MjEuNDM5OTEwWiIsInVwZGF0ZWRfYXQiOiIyMDI2LTEwLTIzVDE5OjA4OjIxLjQzOTkxMFoiLCJwYXRoX2NvdW50IjowLCJkb2N1bWVudCI6e30sInVybCI6Imh0dHA6Ly8xMjcuMC4wLjE6MTg4OTkvdS9zeW5jL3BhdGhzdGFzaC9ncmFwaHMvZjcwMzYzMDEtYzRlNi00ODI4LThmZjItMmJkZjhjMTYyNjRiIiwicGF0aHMiOltdfQ=="
+      }
+    ],
+    "bytes": 460,
+    "duration_ms": 7,
+    "sse": false,
+    "text_preview": "{\"id\":\"f7036301-c4e6-4828-8ff2-2bdf8c16264b\",\"mutability\":\"mutable\",\"repo_id\":\"3bb12f50-b1b5-4435-9fc7-311dd2db6ce7\",\"name\":\"streamed\",\"toolpath_id\":\"stream-graph\",\"title\":null,\"header\":{\"graph\":{\"id\":\"stream-graph\"}},\"visibility\":\"unlisted\",\"created_at\":\"2026-10-23T19:08:21.439910Z\",\"updated_at\":\"2026-10-23T19:08:21.439910Z\",\"path_count\":0,\"document\":{},\"url\":\"http://127.0.0.1:18899/u/sync/pathst"
+  }
+}

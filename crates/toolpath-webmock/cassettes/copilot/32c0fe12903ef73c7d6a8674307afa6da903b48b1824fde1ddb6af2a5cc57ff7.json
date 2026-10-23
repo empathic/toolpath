@@ -1,0 +1,52 @@
+{
+ "agent": "copilot",
+ "recorded_at": "2026-10-15T19:38:47.465Z",
+ "key": "32c0fe12903ef73c7d6a8674307afa6da903b48b1824fde1ddb6af2a5cc57ff7",
+ "loose_key": "36200bc591126d9c1ad53cfae211a5c9242269976d66d98020a775b132c4d974",
+ "model": "",
+ "request": {
+  "method": "POST",
+  "url": "/mcp/readonly",
+  "upstream": "https://api.githubcopilot.com",
+  "headers": {
+   "accept": "application/json, text/event-stream",
+   "authorization": "<redacted>",
+   "content-type": "application/json",
+   "mcp-protocol-version": "2025-11-25",
+   "mcp-session-id": "c195c503-97aa-4761-9ad1-2d9a0e446a15",
+   "user-agent": "copilot/1.0.61 (darwin v24.19.0) term/unknown",
+   "x-mcp-host": "copilot-cli",
+   "x-mcp-tools": "get_file_contents,search_code,get_copilot_space,list_copilot_spaces,web_search,search_users"
+  },
+  "body": "{\"method\":\"notifications/initialized\",\"jsonrpc\":\"2.0\"}",
+  "body_encoding": "identity",
+  "normalized": {
+   "jsonrpc": "2.0",
+   "method": "notifications/initialized"
+  }
+ },
+ "response": {
+  "status": 202,
+  "headers": {
+   "access-control-allow-headers": "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Mcp-Method, Mcp-Name, Last-Event-ID, Authorization, X-MCP-Readonly, X-MCP-Toolsets, X-MCP-Tools, X-MCP-Exclude-Tools, X-MCP-Features, X-MCP-Lockdown, X-MCP-Insiders, Mcp-Param-owner, Mcp-Param-repo",
+   "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "Mcp-Session-Id, WWW-Authenticate",
+   "access-control-max-age": "86400",
+   "content-security-policy": "default-src 'none'; sandbox",
+   "date": "Thu, 15 Oct 2026 19:38:47 GMT",
+   "server": "github.com",
+   "strict-transport-security": "max-age=31536000",
+   "vary": "X-MCP-Features",
+   "x-copilot-service-request-id": "a2822f29-2238-410f-9e1a-36ed83e8015a",
+   "x-github-backend": "Kubernetes",
+   "x-github-edge-region": "iad",
+   "x-github-request-id": "D574:21A1CB:2D19122:2F51DAC:6AD12BC7"
+  },
+  "chunks": [],
+  "bytes": 0,
+  "duration_ms": 145,
+  "sse": false,
+  "text_preview": ""
+ }
+}

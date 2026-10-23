@@ -1,0 +1,723 @@
+From 3dfc94d592d1ff7af32168ce9404eb2dba3711a4 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:31:07 -0400
+Subject: [PATCH] docs(readme): breakdowns are never added into the token
+ counters (pr/80)
+
+total_usage.breakdowns sums them class by class (pr/27), so 'any total'
+overstated. The input/output/cache counters never include them. The
+claim:readme-breakdowns-never-added record is now pass, citing
+test_total_usage_breakdowns_round_trip and the goldens accounting test.
+---
+ .qual                  | 1 +
+ README.md              | 2 +-
+ docs/model/claims.json | 2 +-
+ 3 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/.qual b/.qual
+index db7d15aa..ee811331 100644
+--- a/.qual
++++ b/.qual
+@@ -112,3 +112,4 @@
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T00:19:46.122603Z","id":"56a52af7118207858a2e2155b2ed5a3fb5529dca521debaf284b26b975c6cdc2","body":{"detail":"justfile `ci` runs scripts/quality_gates.sh; .github/workflows/deploy-site.yml (on: pull_request, and push to main) runs scripts/quality_gates.sh --verbose, whose test gate is cargo test --workspace (toolpath-goldens and path-cli's cross_harness_matrix included), with qualifier installed (pr/25).","kind":"pass","span":{"start":{"line":53},"end":{"line":54},"content_hash":"88b7b053ed5d548f6de7595932f536db2a7b4ef626a865a3e7696baa1bc86376"},"summary":"README: the baseline and the matrix run in just ci, which GitHub Actions runs on every pull request — backed","supersedes":"be262c3c6b5746e3afba285e0b6d3f4bdd4b0eb1678c2d6f70c4f60378507b86","tags":["claim:readme-matrix-ci","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T00:22:44.979815Z","id":"c20ada90256cbd56f115ec0c0011ab081eefcb0d3634c01c3bd87b8e07691498","body":{"detail":"crates/toolpath-goldens/snapshots: ir and document for 9 sets (claude, claude-compacted, claude-session, codex, copilot, cursor, gemini, opencode, pi), projection@ and round_trip@ for 54 set/target pairs (each set into the six other harnesses), writer@ for each of the seven. Checked by cargo test -p toolpath-goldens (tests/goldens.rs).","kind":"pass","span":{"start":{"line":49},"end":{"line":51},"content_hash":"86ddf4ba1cf1ba3e40a497cfa9742a1d758837781330a082cfe4bbd1d3a68479"},"summary":"README: the baseline pins read, write and round trip for all seven harnesses (nine sets) against the other six — backed","supersedes":"2847154b7f92942dbde38409ac5fd50dede345449fb6344a2ac5157df75e7a20","tags":["claim:readme-goldens-four","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T15:42:17.617943Z","id":"f48a6a0136c0b3295500b848c402366b13df71e20ff805cf02ef89d30adf4f5f","body":{"kind":"resolve","summary":"Fixed by pr/60: RFC.md rule 1 now states UTF-16 code unit order (RFC 8785 §3.2.3) and where it differs from UTF-8 byte order","supersedes":"a25ba26430c759fbb5a70689bdad82f6db78d3d91589c21fc3b44cda0cf0ddec","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:30:27.087357Z","id":"c9a67a656e550d2caf18b973d27d38957e8dbc30ad39bba204e9b444dc910e59","body":{"detail":"extract_conversation sums each turn's counters into total_usage and adds breakdowns class by class into total_usage.breakdowns, never into input/output/cache counters (crates/toolpath-convo/src/extract.rs:233-250). Pinned by toolpath-convo test_total_usage_breakdowns_round_trip (output 900+100 -> 1000 with reasoning 475 beside it) and toolpath-goldens accounting::steps_add_counters_and_breakdowns_class_by_class.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":187},"end":{"line":188},"content_hash":"f945b171f368a5007aaf4ebfee77c994204bb6bb17707ff2f7e1914137f01385"},"summary":"README breakdowns: never added into the token counters — backed","supersedes":"7eca4b7c6427d1f60ff546cb125a9babf1f3b851325f80ca983ad7662ed2d6e8","tags":["claim:readme-breakdowns-never-added","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/README.md b/README.md
+index 14212f36..897ccd81 100644
+--- a/README.md
++++ b/README.md
+@@ -185,7 +185,7 @@ normalizes all of it into three fields with strict semantics:
+   never guessed from streaming snapshots.
+ - `breakdowns` holds informational decompositions, such as reasoning
+   tokens within output (Gemini, Codex, opencode). These are never added
+-  into any total.
++  into the token counters.
+ 
+ Each provider's quirks (cumulative counters, repeated message totals,
+ zero-filled placeholders) are handled at derivation time, so
+diff --git a/docs/model/claims.json b/docs/model/claims.json
+index 8867548d..55a7965f 100644
+--- a/docs/model/claims.json
++++ b/docs/model/claims.json
+@@ -1446,7 +1446,7 @@
+     {
+       "id": "readme-breakdowns-never-added",
+       "file": "README.md",
+-      "quote": "These are never added into any total.",
++      "quote": "These are never added into the token counters.",
+       "operations": [
+         "parse"
+       ],
+-- 
+2.55.0
+
+From 553a21364d9e5bc71560ac535dc436ff05aed857 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:34:50 -0400
+Subject: [PATCH] build: declare rust-version 1.94 for the workspace; README
+ says Rust 1.94+ (pr/80)
+
+The README said 1.85+, but rust-toolchain.toml pins 1.94.0, nothing built on
+1.85, and no rust-version was declared. [workspace.package] now sets
+rust-version = "1.94" and every member inherits it. The workspace checks
+on rustc 1.94.1 with the develop and verify features. claim:readme-rust-185
+is now pass.
+---
+ .qual                                   | 1 +
+ Cargo.toml                              | 1 +
+ README.md                               | 2 +-
+ crates/path-cli/Cargo.toml              | 1 +
+ crates/pathbase-client/Cargo.toml       | 1 +
+ crates/toolpath-claude/Cargo.toml       | 1 +
+ crates/toolpath-codex/Cargo.toml        | 1 +
+ crates/toolpath-convo/Cargo.toml        | 1 +
+ crates/toolpath-copilot/Cargo.toml      | 1 +
+ crates/toolpath-cursor/Cargo.toml       | 1 +
+ crates/toolpath-dot/Cargo.toml          | 1 +
+ crates/toolpath-gemini/Cargo.toml       | 1 +
+ crates/toolpath-git/Cargo.toml          | 1 +
+ crates/toolpath-github/Cargo.toml       | 1 +
+ crates/toolpath-golden/Cargo.toml       | 1 +
+ crates/toolpath-goldens/Cargo.toml      | 1 +
+ crates/toolpath-harness-mock/Cargo.toml | 1 +
+ crates/toolpath-md/Cargo.toml           | 1 +
+ crates/toolpath-model/Cargo.toml        | 1 +
+ crates/toolpath-opencode/Cargo.toml     | 1 +
+ crates/toolpath-pi/Cargo.toml           | 1 +
+ crates/toolpath-webmock/Cargo.toml      | 1 +
+ crates/toolpath/Cargo.toml              | 1 +
+ docs/model/claims.json                  | 2 +-
+ 24 files changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/.qual b/.qual
+index ee811331..ddecdbd2 100644
+--- a/.qual
++++ b/.qual
+@@ -113,3 +113,4 @@
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T00:22:44.979815Z","id":"c20ada90256cbd56f115ec0c0011ab081eefcb0d3634c01c3bd87b8e07691498","body":{"detail":"crates/toolpath-goldens/snapshots: ir and document for 9 sets (claude, claude-compacted, claude-session, codex, copilot, cursor, gemini, opencode, pi), projection@ and round_trip@ for 54 set/target pairs (each set into the six other harnesses), writer@ for each of the seven. Checked by cargo test -p toolpath-goldens (tests/goldens.rs).","kind":"pass","span":{"start":{"line":49},"end":{"line":51},"content_hash":"86ddf4ba1cf1ba3e40a497cfa9742a1d758837781330a082cfe4bbd1d3a68479"},"summary":"README: the baseline pins read, write and round trip for all seven harnesses (nine sets) against the other six — backed","supersedes":"2847154b7f92942dbde38409ac5fd50dede345449fb6344a2ac5157df75e7a20","tags":["claim:readme-goldens-four","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T15:42:17.617943Z","id":"f48a6a0136c0b3295500b848c402366b13df71e20ff805cf02ef89d30adf4f5f","body":{"kind":"resolve","summary":"Fixed by pr/60: RFC.md rule 1 now states UTF-16 code unit order (RFC 8785 §3.2.3) and where it differs from UTF-8 byte order","supersedes":"a25ba26430c759fbb5a70689bdad82f6db78d3d91589c21fc3b44cda0cf0ddec","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:30:27.087357Z","id":"c9a67a656e550d2caf18b973d27d38957e8dbc30ad39bba204e9b444dc910e59","body":{"detail":"extract_conversation sums each turn's counters into total_usage and adds breakdowns class by class into total_usage.breakdowns, never into input/output/cache counters (crates/toolpath-convo/src/extract.rs:233-250). Pinned by toolpath-convo test_total_usage_breakdowns_round_trip (output 900+100 -> 1000 with reasoning 475 beside it) and toolpath-goldens accounting::steps_add_counters_and_breakdowns_class_by_class.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":187},"end":{"line":188},"content_hash":"f945b171f368a5007aaf4ebfee77c994204bb6bb17707ff2f7e1914137f01385"},"summary":"README breakdowns: never added into the token counters — backed","supersedes":"7eca4b7c6427d1f60ff546cb125a9babf1f3b851325f80ca983ad7662ed2d6e8","tags":["claim:readme-breakdowns-never-added","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:34:45.041029Z","id":"eef37dcf2a763faeb4c48ef303b764ddcf784a0321122d3d4e99a102564bcbda","body":{"detail":"Cargo.toml [workspace.package] rust-version = \"1.94\", inherited by every member crate (cargo metadata: rust_version 1.94 on all 20), so cargo refuses an older toolchain; rust-toolchain.toml pins 1.94.0. cargo check --offline --workspace --all-targets --features path-cli/develop,toolpath/verify passes on rustc 1.94.1 (the rustup toolchain installed here); the nix dev shell builds and tests on 1.97.1.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":441},"end":{"line":441},"content_hash":"91ee9ffc76cee5cc585c20dbe45e8438c4ab8097a01b3610a475e5c528aad22d"},"summary":"README: Rust 1.94+ — declared and built","supersedes":"09cda50b87c12dba1bb21a3e77b370c61ce03de8f38e9c5f84d470d3d0c0d023","tags":["claim:readme-rust-185","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/Cargo.toml b/Cargo.toml
+index 4fb23323..4479a4af 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -27,6 +27,7 @@ resolver = "2"
+ [workspace.package]
+ edition = "2024"
+ license = "Apache-2.0"
++rust-version = "1.94"
+ 
+ [workspace.dependencies]
+ toolpath = { version = "0.7.1", path = "crates/toolpath" }
+diff --git a/README.md b/README.md
+index 897ccd81..7b1888ec 100644
+--- a/README.md
++++ b/README.md
+@@ -438,7 +438,7 @@ See each crate's README for library-level documentation.
+ 
+ ## Requirements
+ 
+-Rust 1.85+ (edition 2024).
++Rust 1.94+ (edition 2024).
+ 
+ ## License
+ 
+diff --git a/crates/path-cli/Cargo.toml b/crates/path-cli/Cargo.toml
+index 628c9896..4f2d05c8 100644
+--- a/crates/path-cli/Cargo.toml
++++ b/crates/path-cli/Cargo.toml
+@@ -3,6 +3,7 @@ name = "path-cli"
+ version = "0.30.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "CLI for deriving, querying, and visualizing Toolpath provenance (binary: path)"
+ keywords = ["provenance", "toolpath", "cli", "audit", "traceability"]
+diff --git a/crates/pathbase-client/Cargo.toml b/crates/pathbase-client/Cargo.toml
+index 57535fc8..0f86f0c3 100644
+--- a/crates/pathbase-client/Cargo.toml
++++ b/crates/pathbase-client/Cargo.toml
+@@ -3,6 +3,7 @@ name = "pathbase-client"
+ version = "0.2.0"
+ edition = { workspace = true }
+ license = { workspace = true }
++rust-version = { workspace = true }
+ repository = "https://github.com/empathic/toolpath"
+ documentation = "https://docs.rs/pathbase-client"
+ description = "Auto-generated typed client for the Pathbase HTTP API (derived from openapi.json via progenitor)."
+diff --git a/crates/toolpath-claude/Cargo.toml b/crates/toolpath-claude/Cargo.toml
+index 19813661..c8347208 100644
+--- a/crates/toolpath-claude/Cargo.toml
++++ b/crates/toolpath-claude/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-claude"
+ version = "0.13.4"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Claude conversation logs"
+ keywords = ["claude", "provenance", "toolpath", "audit", "ai"]
+diff --git a/crates/toolpath-codex/Cargo.toml b/crates/toolpath-codex/Cargo.toml
+index 993527ae..5f91172f 100644
+--- a/crates/toolpath-codex/Cargo.toml
++++ b/crates/toolpath-codex/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-codex"
+ version = "0.6.1"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Codex CLI session logs"
+ keywords = ["codex", "provenance", "toolpath", "audit", "ai"]
+diff --git a/crates/toolpath-convo/Cargo.toml b/crates/toolpath-convo/Cargo.toml
+index d24f535f..75068b21 100644
+--- a/crates/toolpath-convo/Cargo.toml
++++ b/crates/toolpath-convo/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-convo"
+ version = "0.11.1"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Provider-agnostic conversation types, traits, and Toolpath-Path derivation"
+ keywords = ["conversation", "ai", "provider", "toolpath", "abstraction"]
+diff --git a/crates/toolpath-copilot/Cargo.toml b/crates/toolpath-copilot/Cargo.toml
+index e9628c43..27d6d964 100644
+--- a/crates/toolpath-copilot/Cargo.toml
++++ b/crates/toolpath-copilot/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-copilot"
+ version = "0.1.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from GitHub Copilot CLI session logs (preview; schema reverse-engineered)"
+ keywords = ["copilot", "provenance", "toolpath", "audit", "ai"]
+diff --git a/crates/toolpath-cursor/Cargo.toml b/crates/toolpath-cursor/Cargo.toml
+index 6bfae9d3..f4a046a1 100644
+--- a/crates/toolpath-cursor/Cargo.toml
++++ b/crates/toolpath-cursor/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-cursor"
+ version = "0.2.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Cursor's bubble store and agent transcripts"
+ keywords = ["cursor", "provenance", "toolpath", "audit", "ai"]
+diff --git a/crates/toolpath-dot/Cargo.toml b/crates/toolpath-dot/Cargo.toml
+index 075f7424..b05ded50 100644
+--- a/crates/toolpath-dot/Cargo.toml
++++ b/crates/toolpath-dot/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-dot"
+ version = "0.5.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Generate Graphviz DOT visualizations from Toolpath documents"
+ keywords = ["graphviz", "dot", "provenance", "toolpath", "visualization"]
+diff --git a/crates/toolpath-gemini/Cargo.toml b/crates/toolpath-gemini/Cargo.toml
+index 1b2840a5..24f6d4ee 100644
+--- a/crates/toolpath-gemini/Cargo.toml
++++ b/crates/toolpath-gemini/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-gemini"
+ version = "0.6.1"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Gemini CLI conversation logs"
+ keywords = ["gemini", "provenance", "toolpath", "audit", "ai"]
+diff --git a/crates/toolpath-git/Cargo.toml b/crates/toolpath-git/Cargo.toml
+index b7ac0fe4..aa45d3b4 100644
+--- a/crates/toolpath-git/Cargo.toml
++++ b/crates/toolpath-git/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-git"
+ version = "0.6.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from git repository history"
+ keywords = ["git", "provenance", "toolpath", "audit", "traceability"]
+diff --git a/crates/toolpath-github/Cargo.toml b/crates/toolpath-github/Cargo.toml
+index 73fda3cd..a66dfd55 100644
+--- a/crates/toolpath-github/Cargo.toml
++++ b/crates/toolpath-github/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-github"
+ version = "0.6.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from GitHub pull requests"
+ keywords = ["github", "provenance", "toolpath", "audit", "traceability"]
+diff --git a/crates/toolpath-golden/Cargo.toml b/crates/toolpath-golden/Cargo.toml
+index a90d18d3..502b15b1 100644
+--- a/crates/toolpath-golden/Cargo.toml
++++ b/crates/toolpath-golden/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-golden"
+ version = "0.1.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Test-only stub factory: hands tests the captured bytes of a golden set instead of hand-typed fixtures"
+ publish = false
+diff --git a/crates/toolpath-goldens/Cargo.toml b/crates/toolpath-goldens/Cargo.toml
+index 9875839a..f7289129 100644
+--- a/crates/toolpath-goldens/Cargo.toml
++++ b/crates/toolpath-goldens/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-goldens"
+ version = "0.1.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Goldens as insta snapshots: one pure pipeline over each input transcript, one snapshot per stage"
+ publish = false
+diff --git a/crates/toolpath-harness-mock/Cargo.toml b/crates/toolpath-harness-mock/Cargo.toml
+index d1854d13..57c55e2d 100644
+--- a/crates/toolpath-harness-mock/Cargo.toml
++++ b/crates/toolpath-harness-mock/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-harness-mock"
+ version = "0.1.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ publish = false
+ description = "What a harness's loader would send to the model when it resumes a session file, without the harness binary (dev/test only)"
+ 
+diff --git a/crates/toolpath-md/Cargo.toml b/crates/toolpath-md/Cargo.toml
+index d69ca01e..11ede32a 100644
+--- a/crates/toolpath-md/Cargo.toml
++++ b/crates/toolpath-md/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-md"
+ version = "0.7.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Render Toolpath documents as Markdown for LLM consumption"
+ keywords = ["markdown", "provenance", "toolpath", "llm", "rendering"]
+diff --git a/crates/toolpath-model/Cargo.toml b/crates/toolpath-model/Cargo.toml
+index 05d77ed3..dd48ae18 100644
+--- a/crates/toolpath-model/Cargo.toml
++++ b/crates/toolpath-model/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-model"
+ version = "0.1.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "One generated object model of the goldens work: harnesses, sets, snapshots, findings, claims, PR pieces, qualifier concerns and review feedback, with provenance"
+ publish = false
+diff --git a/crates/toolpath-opencode/Cargo.toml b/crates/toolpath-opencode/Cargo.toml
+index 3187a733..c70d622d 100644
+--- a/crates/toolpath-opencode/Cargo.toml
++++ b/crates/toolpath-opencode/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-opencode"
+ version = "0.5.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from opencode session databases"
+ keywords = ["opencode", "provenance", "toolpath", "audit", "ai"]
+diff --git a/crates/toolpath-pi/Cargo.toml b/crates/toolpath-pi/Cargo.toml
+index 331a2837..aaa29352 100644
+--- a/crates/toolpath-pi/Cargo.toml
++++ b/crates/toolpath-pi/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-pi"
+ version = "0.6.1"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Pi (pi.dev) coding-agent session logs"
+ keywords = ["pi", "provenance", "toolpath", "audit", "ai"]
+diff --git a/crates/toolpath-webmock/Cargo.toml b/crates/toolpath-webmock/Cargo.toml
+index 4d9bc88e..47c82d4a 100644
+--- a/crates/toolpath-webmock/Cargo.toml
++++ b/crates/toolpath-webmock/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath-webmock"
+ version = "0.1.0"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ publish = false
+ description = "Record/replay HTTP mock for the model APIs and Pathbase endpoints the harness cells call (dev/test only)"
+ 
+diff --git a/crates/toolpath/Cargo.toml b/crates/toolpath/Cargo.toml
+index f9c783bc..a341a997 100644
+--- a/crates/toolpath/Cargo.toml
++++ b/crates/toolpath/Cargo.toml
+@@ -3,6 +3,7 @@ name = "toolpath"
+ version = "0.7.1"
+ edition.workspace = true
+ license.workspace = true
++rust-version.workspace = true
+ repository = "https://github.com/empathic/toolpath"
+ description = "Types, builders, and query operations for Toolpath provenance documents"
+ keywords = ["provenance", "toolpath", "audit", "traceability", "supply-chain"]
+diff --git a/docs/model/claims.json b/docs/model/claims.json
+index 55a7965f..9574f240 100644
+--- a/docs/model/claims.json
++++ b/docs/model/claims.json
+@@ -1487,7 +1487,7 @@
+     {
+       "id": "readme-rust-185",
+       "file": "README.md",
+-      "quote": "Rust 1.85+ (edition 2024).",
++      "quote": "Rust 1.94+ (edition 2024).",
+       "operations": [],
+       "evidence_kinds": []
+     }
+-- 
+2.55.0
+
+From 2e1298205afa3e129b98d2a3941b3a54e748e22b Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:39:16 -0400
+Subject: [PATCH] docs(site): the FAQ answers 'how does the format evolve?'
+ with versioned kind URIs (pr/80)
+
+It sat under Open design questions with a 'current leaning' that kinds
+already settle: kind URIs are immutable and semver-versioned, revisions ship
+at a new URI, and a superseded URI stays valid. Moved to Format design as an
+answered item linking /kinds/ and the v1.1.0 spec. claim:faq-open-evolution
+is now pass; the three open-question records below it are re-anchored
+(+4 lines) by superseding records with the same content.
+---
+ docs/model/claims.json | 2 +-
+ site/pages/.qual       | 4 ++++
+ site/pages/faq.md      | 8 ++++----
+ 3 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/docs/model/claims.json b/docs/model/claims.json
+index 9574f240..1d4ae75a 100644
+--- a/docs/model/claims.json
++++ b/docs/model/claims.json
+@@ -962,7 +962,7 @@
+     {
+       "id": "faq-open-evolution",
+       "file": "site/pages/faq.md",
+-      "quote": "Current leaning: semver for core schema, with \"old readers ignore unknown fields\" policy.",
++      "quote": "Kind URIs are immutable and semver-versioned: a revision ships at a new version URI, and a superseded URI stays valid with the meaning it always had",
+       "operations": [],
+       "evidence_kinds": []
+     },
+diff --git a/site/pages/.qual b/site/pages/.qual
+index b92e3e0c..8a7e0763 100644
+--- a/site/pages/.qual
++++ b/site/pages/.qual
+@@ -72,3 +72,7 @@
+ {"metabox":"1","type":"annotation","subject":"site/pages/format.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:53:48.892612Z","id":"f757aa88ff956a40c2574d5f93d204bac57c7a00a125385236c281819b1abfce","body":{"detail":"examples/step-01-minimal.json validated by schema_examples::every_example_satisfies_the_schema. Since pr/53 the fixture is generated by path p track (crates/path-cli/tests/examples_generated.rs fails on drift), and the JSON quoted above parses to the same value as the fixture (checked 2026-10-19; not yet a test).","kind":"pass","span":{"start":{"line":65},"end":{"line":65},"content_hash":"569ea0f627492ef44e206fbca4bf990137985164f500d0e5989f0d60c15a05c2"},"summary":"Claim: the minimal example is the canonical fixture step-01-minimal.json — backed","supersedes":"eb6b0e8eb77c36b33772a9e0be4fcc9f9f0e0a2eee899dced2c293f24890745c","tags":["claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/pages/format.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:58:12.644350Z","id":"348d864d4d3614b9c1321650c1bcee16fd1b67f985564b822e82a4ab2baedaff","body":{"detail":"examples/step-01-minimal.json validated by schema_examples::every_example_satisfies_the_schema. Since pr/53 the fixture is generated by path p track (crates/path-cli/tests/examples_generated.rs fails on drift), and the JSON quoted above parses to the same value as the fixture (checked 2026-10-19; not yet a test).","kind":"pass","span":{"start":{"line":65},"end":{"line":65},"content_hash":"569ea0f627492ef44e206fbca4bf990137985164f500d0e5989f0d60c15a05c2"},"summary":"Claim: the minimal example is the canonical fixture step-01-minimal.json — backed","supersedes":"f757aa88ff956a40c2574d5f93d204bac57c7a00a125385236c281819b1abfce","tags":["claim:minimal-fixture","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/pages/format.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:59:29.286883Z","id":"19ff3c16cc59bbb6cdcd6d85ea817ba6060cae1717be1ca00a07738662538bf4","body":{"detail":"examples/step-01-minimal.json validated by schema_examples::every_example_satisfies_the_schema. Since pr/54 the fixture is generated by path p track (crates/path-cli/tests/examples_generated.rs fails on drift), and the JSON quoted above parses to the same value as the fixture (checked 2026-10-19; not yet a test).","kind":"pass","span":{"start":{"line":65},"end":{"line":65},"content_hash":"569ea0f627492ef44e206fbca4bf990137985164f500d0e5989f0d60c15a05c2"},"summary":"Claim: the minimal example is the canonical fixture step-01-minimal.json — backed","supersedes":"348d864d4d3614b9c1321650c1bcee16fd1b67f985564b822e82a4ab2baedaff","tags":["claim:minimal-fixture","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:38:48.770343Z","id":"1f8264af770e225db79963f6d3331bb41391f746fb4fcc49d5fb3e889c3a6e41","body":{"detail":"Agent sessions reuse the harness's own turn id and fall back to step-NNNN (toolpath-convo derive.rs:112-118); git uses step-<short oid> (toolpath-git). Record the de facto rule or choose one; the RFC's uniqueness rule is not enforced (rfc-id-uniqueness).","kind":"concern","ref":"git:04afa53","span":{"start":{"line":99},"end":{"line":99},"content_hash":"1050fcd8beaf810d57b3b46baf1828d0228123a3f79964a11430885fefb65c92"},"summary":"FAQ open question 'how should step IDs be generated?' — producers already decided in practice","supersedes":"56e62dd84c96ead5d6eddd86c91a705309c6e9e747999a944da3b077614dd449","tags":["claim:faq-open-step-ids","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:38:48.770739Z","id":"c3806b6aa1afd46f8ac2d8daac3d7a64b57ef28a7bd536e884e7c6b6c7457d43","body":{"detail":"Every structural.type producers write today: conversation.append, conversation.event, file.write (document@ snapshots); no core.* and no language AST ops.","kind":"concern","ref":"git:04afa53","span":{"start":{"line":103},"end":{"line":103},"content_hash":"765674ccdeae01acca35dd0d205d65c954f61e92b4a2ee0a0f5acf09b6708dce"},"summary":"FAQ open question 'who defines structural types?' — the types in use are not namespaced as leaned","supersedes":"acb700cfd8c435fd200cf35746ee28eab473b5e27797a7dc0885769f947115a7","tags":["claim:faq-open-structural-types","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:38:48.771068Z","id":"f6d3692495b4bdd7e7cf39988b23b2a3be8edf0c462ac3fb886b385f4719229c","body":{"detail":"Agent-session documents embed full text, reasoning and tool output; the only secret control is the no_secrets gate over committed fixtures (crates/toolpath-webmock tests/no_secrets.rs), not over documents users share.","kind":"concern","ref":"git:04afa53","span":{"start":{"line":107},"end":{"line":107},"content_hash":"9c78f1f27ffe878790428c15051bab3ea1265df3fd6b6fa6a94e5cd9a9651e61"},"summary":"FAQ open question 'privacy and redaction' — still open; no redaction marker exists","supersedes":"a6559ff1ff75386196aa77ac3ee7f287230f8cedaba2476b71a8e367df7d802f","tags":["claim:faq-open-privacy","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:39:07.729588Z","id":"a75e314a06b8fc2835161e5b7ec24ca5e7e73c57c48c522d5be34e33c85b6f7c","body":{"detail":"Moved out of Open design questions (it was stale: kinds already answer it). Each kind version ships its own schema at its own URI (crates/path-cli/kinds/agent-coding-session/<v>/schema.json, mirrored under site/kinds; kinds::parse_uri_extracts_name_and_version, bundled_kind_uris_parse); a superseded URI stays valid: cmd_validate::legacy_kind_warns_once_per_path_and_still_validates (v1.0.0 validates, with a warning). Same evidence as claim:kind-index-immutable (site/kinds/index.md:11). The v1.1.0 kind schema sets no additionalProperties: false, and validate@<set>.snap is valid for all 9 sets, so extra properties do not invalidate a path.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":85},"end":{"line":85},"content_hash":"beb034e288ac165f1bf7e726573a9faf76ffb2bf28eea4f82a8adf852889c567"},"summary":"FAQ: the format evolves through kinds — immutable, semver-versioned kind URIs; answered, no longer an open question","supersedes":"6eaf389b4d95244b057b96d6aca8d566af0e38fb62482508b6c3cb70cdce7d0c","tags":["claim:faq-open-evolution","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/site/pages/faq.md b/site/pages/faq.md
+index 20d33799..cd2c92aa 100644
+--- a/site/pages/faq.md
++++ b/site/pages/faq.md
+@@ -80,6 +80,10 @@ A minimal document needs only `step` + `change`. Making `meta` optional means si
+ 
+ Steps have a `parents` array. An empty or omitted array means root step. A single-element array is linear history. Multiple parents represent a merge from parallel work.
+ 
++### How does the format evolve?
++
++Through kinds: shape added on top of the base format is named by a `meta.kind` URI. Kind URIs are immutable and semver-versioned: a revision ships at a new version URI, and a superseded URI stays valid with the meaning it always had ([Path Kinds](/kinds/)). A kind's constraints apply by structural `type`, and extra properties never make a path invalid ([agent-coding-session v1.1.0](/kinds/agent-coding-session/v1.1.0/)).
++
+ <svg class="topo topo-wide" viewBox="0 0 900 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+   <style>.topo-accent{stroke:var(--accent);}.topo-pencil{stroke:var(--text-secondary);}</style>
+   <path d="M0,30 Q200,5 400,35 Q600,60 900,25" class="topo-accent" stroke-width="1" opacity="0.14" fill="none"/>
+@@ -102,10 +106,6 @@ Options: central registry, namespaced extensions (`rust.add_method`), schema-per
+ 
+ Options: reference-don't-embed (store URIs, not content), redaction markers, access tiers, or encryption. Current leaning: reference by default, with optional redaction markers.
+ 
+-### How does the format evolve?
+-
+-Options: semver, date-based, or extension-based (frozen core). Current leaning: semver for core schema, with "old readers ignore unknown fields" policy.
+-
+ ## Links
+ 
+ - [Full specification (RFC)](/rfc/)
+-- 
+2.55.0
+
+From 378f9de317e12cf37280516ed5d66d8e05a427f8 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:43:47 -0400
+Subject: [PATCH] docs(site): the quick start's resume URL is a canonical graph
+ URL; test-quickstart runs it (pr/80)
+
+site/index.md:238 used pathbase.dev/alex/pathstash/path-pr-42, a slug that
+parse_pathbase_ref refuses before any request. It now uses the canonical
+/u/alex/repos/pathstash/graphs/<uuid> form. scripts/test-quickstart.sh no
+longer expects the page's line to be refused: it takes the line from
+site/index.md, rewrites only the host to the Pathbase stub (which serves the
+shared graph under the page's id), and asserts it resolves and execs
+'codex resume'. Concern 8f4d6db1 is resolved (fixed); claim:quickstart-flow
+is now pass.
+---
+ docs/model/claims.json     |  2 +-
+ scripts/test-quickstart.sh | 20 +++++++++++++-------
+ site/.qual                 |  2 ++
+ site/index.md              |  2 +-
+ 4 files changed, 17 insertions(+), 9 deletions(-)
+
+diff --git a/docs/model/claims.json b/docs/model/claims.json
+index 1d4ae75a..0c99b515 100644
+--- a/docs/model/claims.json
++++ b/docs/model/claims.json
+@@ -302,7 +302,7 @@
+     {
+       "id": "quickstart-flow",
+       "file": "site/index.md",
+-      "quote": "path resume https://pathbase.dev/alex/pathstash/path-pr-42 --harness codex",
++      "quote": "path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/4e865c65-7bb0-460e-9e86-6c76d31949ce --harness codex",
+       "operations": [
+         "share",
+         "resume"
+diff --git a/scripts/test-quickstart.sh b/scripts/test-quickstart.sh
+index 79255ecf..3c5547dc 100755
+--- a/scripts/test-quickstart.sh
++++ b/scripts/test-quickstart.sh
+@@ -285,13 +285,6 @@ case "$share_out" in *"uploading anonymously"*) ;; *) fail "share did not say it
+ ok "path share (not logged in) uploads anonymously and prints the graph URL"
+ 
+ # --- path resume <pathbase URL> --harness codex ------------------------------
+-SITE_URL="https://pathbase.dev/alex/pathstash/path-pr-42"
+-if out="$(p resume "$SITE_URL" --harness codex --no-cache 2>&1)"; then
+-    fail "the site's resume URL resolved; it was expected to be refused before any network call"
+-fi
+-case "$out" in *"uuid"*|*"UUID"*) ;; *) fail "site resume URL failed for an unexpected reason: $out" ;; esac
+-cannot "the site's '$SITE_URL' cannot resolve: a Pathbase graph is addressed by UUID, and the CLI refuses a slug ('path-pr-42') before any request"
+-
+ # A codex stub stands in for the harness: it records argv and the rollout
+ # path the projection wrote, so the test can check codex would find it.
+ mkdir -p "$STUBS/codex-bin"
+@@ -317,6 +310,19 @@ head -1 "$new_rollout" | python3 -c 'import json,sys,os; m=json.loads(sys.stdin.
+     || fail "the projected rollout's cwd is not where codex is resumed"
+ ok "path resume <shared Pathbase URL> --harness codex writes a rollout under ~/.codex/sessions and execs 'codex resume <its id>' from the resume directory"
+ 
++# The site's own resume line, with only the host rewritten to the stub. The
++# stub serves the shared graph under the page's example id.
++SITE_LINE="$(grep -o 'path resume https://pathbase\.dev/[^ ]* --harness codex' site/index.md | head -1)"
++[ -n "$SITE_LINE" ] || fail "site/index.md has no 'path resume https://pathbase.dev/… --harness codex' line"
++SITE_URL="${SITE_LINE#path resume }"
++SITE_URL="${SITE_URL% --harness codex}"
++cp "$SANDBOX/pb-store/${SHARED_URL##*/}.json" "$SANDBOX/pb-store/${SITE_URL##*/}.json"
++rm -f "$SANDBOX/codex.argv"
++out="$(cd "$RESUME_DIR" && PATH="$STUBS/codex-bin:$SYS_PATH" "$PATH_BIN" resume "$PB${SITE_URL#https://pathbase.dev}" --harness codex --no-cache 2>&1)" \
++    || fail "the site's '$SITE_LINE' (host rewritten to the stub) failed: $out"
++grep -qx resume "$SANDBOX/codex.argv" 2>/dev/null || fail "the site's resume line did not exec 'codex resume'"
++ok "the site's '$SITE_LINE' resolves (host rewritten to the stub) and execs 'codex resume'"
++
+ # --- Stay in Claude Code: /plugin install path@toolpath ----------------------
+ # The marketplace, the manifest and install-on-first-use (ensure-path.sh's
+ # download/verify/install) are covered offline by scripts/test-plugin.sh.
+diff --git a/site/.qual b/site/.qual
+index 7f04def1..798bcb76 100644
+--- a/site/.qual
++++ b/site/.qual
+@@ -40,3 +40,5 @@
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.653128Z","id":"c006903c62c4a17912a4c7d07045f45677cd2b4e1a986172a4c454e1db559d3c","body":{"detail":"scripts/test-quickstart.sh, a quality gate (0464020) runs cargo install from the checkout; installing the published crate from crates.io is not tested.","kind":"concern","ref":"git:0464020","span":{"start":{"line":220},"end":{"line":220},"content_hash":"d7433311a6a8cef23a0ac938f8d722a4af262a22dbc797259ea70a447d267751"},"summary":"Claim: cargo install path-cli — installs from this checkout in the gate; crates.io is not exercised","supersedes":"47acb254a2562f14ccbe7927c1621e21b9406a911a2f08be2e4165307f1da7f1","tags":["claim:cargo-install","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.653846Z","id":"3c79454a66d2dbe750ae59de89b42c83b37095cc4e0ffd0c120d8c4826bf6263","body":{"detail":"scripts/test-quickstart.sh, a quality gate (0464020): cache sync over all seven harnesses (incremental), the site's query filter verbatim, path share against a stateful Pathbase stub, path resume --harness codex into a codex stub. The page's example URL pathbase.dev/alex/pathstash/path-pr-42 is a slug, not a graph id, and cannot resolve (concern 8f4d6db1).","kind":"concern","ref":"git:0464020","span":{"start":{"line":238},"end":{"line":238},"content_hash":"5b937b262fd07c05376b8b98598cc3fe97c5574cbb9f032785a942cf1c08dcbe"},"summary":"Claim: the quickstart flow — sync, query, share, resume all run offline; the page's resume URL cannot resolve","supersedes":"d3d7bcf119561a3f63a9664bfc8fe17c7f29d7f048bf14cca276420f194b4e23","tags":["claim:quickstart-flow","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.654317Z","id":"67a883ca10b2aa5d639027f243200794ae8c0e6c8f4602bbc478367cad50a304","body":{"detail":"scripts/test-plugin.sh and scripts/test-quickstart.sh, a quality gate (0464020) (the plugin's /path:share and /path:query through ensure-path.sh). Not run inside a real Claude Code.","kind":"pass","ref":"git:0464020","span":{"start":{"line":267},"end":{"line":268},"content_hash":"2c4ebe780e1e05a8ab845d789fb96560fecd1b5b7734e5910afd57baabf03d4d"},"summary":"Claim: /plugin install path@toolpath adds /path:share and /path:query and installs the CLI on first use — backed offline","supersedes":"054f8275f693c9f4b3643f33bd714c64e46c9bb55a81ccadb73defc38a608273","tags":["claim:claude-plugin","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:43:02.104627Z","id":"199f785a9380dcb900b45d5aa7d24679a31eaabc358bab88499b2b19b312bb53","body":{"kind":"resolve","summary":"Fixed: site/index.md:238 now uses the canonical /u/alex/repos/pathstash/graphs/<uuid> form; scripts/test-quickstart.sh runs that line with the host rewritten to the Pathbase stub and it resolves and execs codex resume (13 checks passed).","supersedes":"8f4d6db162f75592e06f5d2207573cecdcc41f1084020c1317b9766889c6e5f6","tags":["session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:fixed"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:43:03.176889Z","id":"83d80345daa2d9aa4d1517de4174ee3cb6df6a72ee5acc363ca6b0e0ee226577","body":{"detail":"scripts/test-quickstart.sh, a quality gate (scripts/quality_gates.sh gate_quickstart): path p cache sync over all seven harnesses (incremental), the site's query filter verbatim, path share against a stateful Pathbase stub (bare 'path share' is the interactive picker; the test drives its picker-free form), path resume <shared URL> --harness codex into a codex stub, and the page's own 'path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/<uuid> --harness codex' line, extracted from site/index.md with only the host rewritten to the stub, resolving and exec'ing 'codex resume'. 13 checks passed.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":238},"end":{"line":238},"content_hash":"727dc9ef41fa72bff01aa44bffa8e9e919177c32fd84b09c04e43f5a76767dba"},"summary":"Claim: the quickstart flow — sync, query, share and the page's own resume line all run offline — backed","supersedes":"3c79454a66d2dbe750ae59de89b42c83b37095cc4e0ffd0c120d8c4826bf6263","tags":["claim:quickstart-flow","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/site/index.md b/site/index.md
+index 94843f01..96e22b24 100644
+--- a/site/index.md
++++ b/site/index.md
+@@ -235,7 +235,7 @@ path query 'group_by(.step.actor) | map({actor: .[0].step.actor, output_tokens:
+ 
+ # Share a session, then resume it in the original harness or a different one
+ path share
+-path resume https://pathbase.dev/alex/pathstash/path-pr-42 --harness codex
++path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/4e865c65-7bb0-460e-9e86-6c76d31949ce --harness codex
+ ```
+ 
+ <svg class="topo topo-wide" viewBox="0 0 900 80" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+-- 
+2.55.0
+
+From 07a257ffba5056d391bccd2ed687ead99002897f Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:51:17 -0400
+Subject: [PATCH] test(quickstart): run the README's dead-end query verbatim on
+ the synced cache (pr/80)
+
+path query 'map(select(.dead_end)) | length' now runs after the seven-harness
+sync and must print an integer. claim:readme-quickstart-dead-end is now pass.
+The fixtures carry no dead ends, so the value there is 0.
+---
+ .qual                      | 1 +
+ scripts/test-quickstart.sh | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/.qual b/.qual
+index ddecdbd2..89ec251a 100644
+--- a/.qual
++++ b/.qual
+@@ -114,3 +114,4 @@
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T15:42:17.617943Z","id":"f48a6a0136c0b3295500b848c402366b13df71e20ff805cf02ef89d30adf4f5f","body":{"kind":"resolve","summary":"Fixed by pr/60: RFC.md rule 1 now states UTF-16 code unit order (RFC 8785 §3.2.3) and where it differs from UTF-8 byte order","supersedes":"a25ba26430c759fbb5a70689bdad82f6db78d3d91589c21fc3b44cda0cf0ddec","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:30:27.087357Z","id":"c9a67a656e550d2caf18b973d27d38957e8dbc30ad39bba204e9b444dc910e59","body":{"detail":"extract_conversation sums each turn's counters into total_usage and adds breakdowns class by class into total_usage.breakdowns, never into input/output/cache counters (crates/toolpath-convo/src/extract.rs:233-250). Pinned by toolpath-convo test_total_usage_breakdowns_round_trip (output 900+100 -> 1000 with reasoning 475 beside it) and toolpath-goldens accounting::steps_add_counters_and_breakdowns_class_by_class.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":187},"end":{"line":188},"content_hash":"f945b171f368a5007aaf4ebfee77c994204bb6bb17707ff2f7e1914137f01385"},"summary":"README breakdowns: never added into the token counters — backed","supersedes":"7eca4b7c6427d1f60ff546cb125a9babf1f3b851325f80ca983ad7662ed2d6e8","tags":["claim:readme-breakdowns-never-added","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:34:45.041029Z","id":"eef37dcf2a763faeb4c48ef303b764ddcf784a0321122d3d4e99a102564bcbda","body":{"detail":"Cargo.toml [workspace.package] rust-version = \"1.94\", inherited by every member crate (cargo metadata: rust_version 1.94 on all 20), so cargo refuses an older toolchain; rust-toolchain.toml pins 1.94.0. cargo check --offline --workspace --all-targets --features path-cli/develop,toolpath/verify passes on rustc 1.94.1 (the rustup toolchain installed here); the nix dev shell builds and tests on 1.97.1.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":441},"end":{"line":441},"content_hash":"91ee9ffc76cee5cc585c20dbe45e8438c4ab8097a01b3610a475e5c528aad22d"},"summary":"README: Rust 1.94+ — declared and built","supersedes":"09cda50b87c12dba1bb21a3e77b370c61ce03de8f38e9c5f84d470d3d0c0d023","tags":["claim:readme-rust-185","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:51:16.518843Z","id":"a23fe2b3c93965456f0b685ff55542d29d95b0610295d8707b7b005141acdce6","body":{"detail":"scripts/test-quickstart.sh (gate_quickstart) runs the README line verbatim after path p cache sync over seven harnesses' sessions and asserts it prints an integer. The fixtures carry no dead ends (producers emit none for agent sessions), so the count there is 0; the dead_end field itself is covered by query.rs dead_ends_as_jaq_form and plan.rs.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":103},"end":{"line":103},"content_hash":"8b05018411bc0049e0d9c69381c0b3eeff1e1e61a50dfcf2ca125f26cf0666b5"},"summary":"README quick start: path query 'map(select(.dead_end)) | length' — runs on a synced cache — backed","supersedes":"061fd066be5570ab9a7dec872ef55b08098ff763af250a93a81329b03562778b","tags":["claim:readme-quickstart-dead-end","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/scripts/test-quickstart.sh b/scripts/test-quickstart.sh
+index 3c5547dc..47d69ed9 100755
+--- a/scripts/test-quickstart.sh
++++ b/scripts/test-quickstart.sh
+@@ -225,6 +225,10 @@ assert sum(r["output_tokens"] for r in agents) > 0, "no output tokens counted fo
+ PY
+ ok "path query '<site filter>' returns output tokens per actor across the synced harnesses"
+ 
++# README.md's quick-start queries, verbatim, over the same cache.
++[[ "$(p query 'map(select(.dead_end)) | length' 2>/dev/null)" =~ ^[0-9]+$ ]] || fail "README's dead-end query did not print an integer"
++ok "path query 'map(select(.dead_end)) | length' (README) prints an integer"
++
+ # --- path share -------------------------------------------------------------
+ # A stateful Pathbase stub: anonymous upload (the route `path share` uses
+ # when not logged in) and download, the shapes the openapi and the recorded
+-- 
+2.55.0
+
+From 673a16c952b383f0591d81f0db7fefadfbf9a0d3 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:51:27 -0400
+Subject: [PATCH] test(quickstart): run the README's --source claude query
+ verbatim and check the scope (pr/80)
+
+The README line runs after the seven-harness sync and must return only claude
+rows. Its filter selects nothing on the fixtures (no turn over 50000 input
+tokens), so a second line checks --source claude scopes the cache to claude
+sessions. claim:readme-quickstart-source is now pass.
+---
+ .qual                      | 1 +
+ scripts/test-quickstart.sh | 4 ++++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/.qual b/.qual
+index 89ec251a..cea229a4 100644
+--- a/.qual
++++ b/.qual
+@@ -115,3 +115,4 @@
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:30:27.087357Z","id":"c9a67a656e550d2caf18b973d27d38957e8dbc30ad39bba204e9b444dc910e59","body":{"detail":"extract_conversation sums each turn's counters into total_usage and adds breakdowns class by class into total_usage.breakdowns, never into input/output/cache counters (crates/toolpath-convo/src/extract.rs:233-250). Pinned by toolpath-convo test_total_usage_breakdowns_round_trip (output 900+100 -> 1000 with reasoning 475 beside it) and toolpath-goldens accounting::steps_add_counters_and_breakdowns_class_by_class.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":187},"end":{"line":188},"content_hash":"f945b171f368a5007aaf4ebfee77c994204bb6bb17707ff2f7e1914137f01385"},"summary":"README breakdowns: never added into the token counters — backed","supersedes":"7eca4b7c6427d1f60ff546cb125a9babf1f3b851325f80ca983ad7662ed2d6e8","tags":["claim:readme-breakdowns-never-added","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:34:45.041029Z","id":"eef37dcf2a763faeb4c48ef303b764ddcf784a0321122d3d4e99a102564bcbda","body":{"detail":"Cargo.toml [workspace.package] rust-version = \"1.94\", inherited by every member crate (cargo metadata: rust_version 1.94 on all 20), so cargo refuses an older toolchain; rust-toolchain.toml pins 1.94.0. cargo check --offline --workspace --all-targets --features path-cli/develop,toolpath/verify passes on rustc 1.94.1 (the rustup toolchain installed here); the nix dev shell builds and tests on 1.97.1.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":441},"end":{"line":441},"content_hash":"91ee9ffc76cee5cc585c20dbe45e8438c4ab8097a01b3610a475e5c528aad22d"},"summary":"README: Rust 1.94+ — declared and built","supersedes":"09cda50b87c12dba1bb21a3e77b370c61ce03de8f38e9c5f84d470d3d0c0d023","tags":["claim:readme-rust-185","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:51:16.518843Z","id":"a23fe2b3c93965456f0b685ff55542d29d95b0610295d8707b7b005141acdce6","body":{"detail":"scripts/test-quickstart.sh (gate_quickstart) runs the README line verbatim after path p cache sync over seven harnesses' sessions and asserts it prints an integer. The fixtures carry no dead ends (producers emit none for agent sessions), so the count there is 0; the dead_end field itself is covered by query.rs dead_ends_as_jaq_form and plan.rs.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":103},"end":{"line":103},"content_hash":"8b05018411bc0049e0d9c69381c0b3eeff1e1e61a50dfcf2ca125f26cf0666b5"},"summary":"README quick start: path query 'map(select(.dead_end)) | length' — runs on a synced cache — backed","supersedes":"061fd066be5570ab9a7dec872ef55b08098ff763af250a93a81329b03562778b","tags":["claim:readme-quickstart-dead-end","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:51:26.773606Z","id":"fec70a7f8c3fa1691a37a6f869f002a2cd1412533d35f5fa23f7674d3c8c1c8d","body":{"detail":"scripts/test-quickstart.sh (gate_quickstart), after path p cache sync over seven harnesses' sessions: the README line runs verbatim and returns a JSON array with only claude rows (empty on the fixtures: no turn there exceeds 50000 input tokens), and --source claude 'map(.cache_id) | unique' is non-empty and all claude-*. The flag is also unit-tested (crates/path-cli/tests/query.rs source_selects_by_prefix).","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":104},"end":{"line":104},"content_hash":"0856950da7b1e3771a4f13917d51d04720b890d1a3777c854c579388aeb6e5fc"},"summary":"README quick start: path query --source claude — runs on a synced cache and scopes it to claude sessions — backed","supersedes":"5268530e3401ce57d82dac78e1db4de2f6223f44364631aba8008cfe411dbfd8","tags":["claim:readme-quickstart-source","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/scripts/test-quickstart.sh b/scripts/test-quickstart.sh
+index 47d69ed9..0142cc75 100755
+--- a/scripts/test-quickstart.sh
++++ b/scripts/test-quickstart.sh
+@@ -228,6 +228,10 @@ ok "path query '<site filter>' returns output tokens per actor across the synced
+ # README.md's quick-start queries, verbatim, over the same cache.
+ [[ "$(p query 'map(select(.dead_end)) | length' 2>/dev/null)" =~ ^[0-9]+$ ]] || fail "README's dead-end query did not print an integer"
+ ok "path query 'map(select(.dead_end)) | length' (README) prints an integer"
++p query --source claude 'map(select(any(.change[].structural.token_usage; .input_tokens > 50000)))' 2>/dev/null | python3 -c 'import json,sys; rows=json.load(sys.stdin); assert isinstance(rows, list) and all(r["cache_id"].startswith("claude") for r in rows), rows' || fail "README's --source claude query failed or returned a non-claude row"
++# The fixtures have no >50000-token turn, so that runs empty; the scope itself, over seven harnesses:
++p query --source claude 'map(.cache_id) | unique' 2>/dev/null | python3 -c 'import json,sys; ids=json.load(sys.stdin); assert ids and all(i.startswith("claude-") for i in ids), ids' || fail "--source claude did not scope the synced cache to claude sessions"
++ok "path query --source claude '<README filter>' (README) runs, and --source claude scopes the seven-harness cache to claude sessions only"
+ 
+ # --- path share -------------------------------------------------------------
+ # A stateful Pathbase stub: anonymous upload (the route `path share` uses
+-- 
+2.55.0
+
+From f8686ba8c85f1754d8504e7c52c85e2df1df32d0 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:51:44 -0400
+Subject: [PATCH] claims: Pathbase resume is tested end to end;
+ pathbase-stores-shares-resumes is pass (pr/80)
+
+The concern said resuming from a Pathbase URL had only a dispatch test.
+scripts/test-quickstart.sh already shares to a stateful Pathbase stub and
+then resumes from the shared URL into Codex (--no-cache, so it downloads),
+checking the rollout it writes and the 'codex resume <id>' it execs. The
+superseding pass record cites those lines. No code change.
+---
+ site/.qual | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/site/.qual b/site/.qual
+index 798bcb76..549cd7af 100644
+--- a/site/.qual
++++ b/site/.qual
+@@ -42,3 +42,4 @@
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.654317Z","id":"67a883ca10b2aa5d639027f243200794ae8c0e6c8f4602bbc478367cad50a304","body":{"detail":"scripts/test-plugin.sh and scripts/test-quickstart.sh, a quality gate (0464020) (the plugin's /path:share and /path:query through ensure-path.sh). Not run inside a real Claude Code.","kind":"pass","ref":"git:0464020","span":{"start":{"line":267},"end":{"line":268},"content_hash":"2c4ebe780e1e05a8ab845d789fb96560fecd1b5b7734e5910afd57baabf03d4d"},"summary":"Claim: /plugin install path@toolpath adds /path:share and /path:query and installs the CLI on first use — backed offline","supersedes":"054f8275f693c9f4b3643f33bd714c64e46c9bb55a81ccadb73defc38a608273","tags":["claim:claude-plugin","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:43:02.104627Z","id":"199f785a9380dcb900b45d5aa7d24679a31eaabc358bab88499b2b19b312bb53","body":{"kind":"resolve","summary":"Fixed: site/index.md:238 now uses the canonical /u/alex/repos/pathstash/graphs/<uuid> form; scripts/test-quickstart.sh runs that line with the host rewritten to the Pathbase stub and it resolves and execs codex resume (13 checks passed).","supersedes":"8f4d6db162f75592e06f5d2207573cecdcc41f1084020c1317b9766889c6e5f6","tags":["session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:fixed"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:43:03.176889Z","id":"83d80345daa2d9aa4d1517de4174ee3cb6df6a72ee5acc363ca6b0e0ee226577","body":{"detail":"scripts/test-quickstart.sh, a quality gate (scripts/quality_gates.sh gate_quickstart): path p cache sync over all seven harnesses (incremental), the site's query filter verbatim, path share against a stateful Pathbase stub (bare 'path share' is the interactive picker; the test drives its picker-free form), path resume <shared URL> --harness codex into a codex stub, and the page's own 'path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/<uuid> --harness codex' line, extracted from site/index.md with only the host rewritten to the stub, resolving and exec'ing 'codex resume'. 13 checks passed.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":238},"end":{"line":238},"content_hash":"727dc9ef41fa72bff01aa44bffa8e9e919177c32fd84b09c04e43f5a76767dba"},"summary":"Claim: the quickstart flow — sync, query, share and the page's own resume line all run offline — backed","supersedes":"3c79454a66d2dbe750ae59de89b42c83b37095cc4e0ffd0c120d8c4826bf6263","tags":["claim:quickstart-flow","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:51:43.098478Z","id":"c5ef76a0479c1d368498daaf6336521c0d5d57f27bbe447b8ef98c28c2eedcdc","body":{"detail":"Store/share/stats/read-back are pinned in pathbase-goldens (stored@, stats@, ir_back@, losses@) and toolpath's share tests. Resume from Pathbase: scripts/test-quickstart.sh (gate_quickstart; lines 287-318 at f308ab5, 288-319 here) runs path share against a stateful Pathbase stub, then path resume <the shared Pathbase URL> --harness codex --no-cache, which downloads the graph from the stub, writes a new rollout under ~/.codex/sessions with cwd = the resume directory, and execs 'codex resume <its session id>' (a codex stub records argv). The page's own resume line resolves the same way (lines 321-332).","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":142},"end":{"line":143},"content_hash":"020584061edffec370520ed5d3c6a18dbc110b0b46fe7a7a6858155a5fcd405f"},"summary":"Claim: Pathbase stores, shares and resumes sessions — share and resume from a shared Pathbase URL both run end to end — backed","supersedes":"1555fcd2b2ab7e656d62eeccee57e14e2313c3ffbc8a6445c33721f0151684ae","tags":["claim:pathbase-stores-shares-resumes","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+-- 
+2.55.0
+
+From 9e8b308385652e355c24d3ab364cfe5f57927865 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 15:00:22 -0400
+Subject: [PATCH] chore(pr): 80-claims-cheap-wins, the record for the seven
+ claims made pass (pr/80)
+
+---
+ pr/80-claims-cheap-wins.md | 41 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+ create mode 100644 pr/80-claims-cheap-wins.md
+
+diff --git a/pr/80-claims-cheap-wins.md b/pr/80-claims-cheap-wins.md
+new file mode 100644
+index 00000000..2f231545
+--- /dev/null
++++ b/pr/80-claims-cheap-wins.md
+@@ -0,0 +1,41 @@
++# claims: seven "partly" claims become pass (wording, rust-version, quick-start checks)
++
++Status: draft · Base: wip f308ab5 (independent of pr/63-70) · README.md, site/index.md, site/pages/faq.md, Cargo.toml + 20 member manifests, scripts/test-quickstart.sh, docs/model/claims.json, qualifier records
++
++## Why
++These were the cheapest entries in the claims-partly-to-yes plan (2026-10-20): a concern on each where the text overstated, the
++example could not run, or the evidence existed but the record did not cite it. Each is fixed in its own commit.
++
++## What changes
++- **readme-breakdowns-never-added** (7f2d869): README.md:188 now says "never added into the token counters". total_usage.breakdowns
++  sums them class by class (pr/27), so "any total" was false; the counters never include them (test_total_usage_breakdowns_round_trip).
++- **readme-rust-185** (c62fc01): README.md:441 now says "Rust 1.94+". `[workspace.package] rust-version = "1.94"`, and all 20
++  members inherit it (`rust-version.workspace = true`). toolpath-cli is excluded from the workspace and unchanged.
++- **faq-open-evolution** (c7eae30): "How does the format evolve?" moves from Open design questions to Format design, answered with
++  versioned kind URIs (links /kinds/ and the v1.1.0 spec). The three open-question records below it moved 4 lines and are
++  re-anchored by superseding records with the same content.
++- **quickstart-flow** (8fb6ba8): site/index.md:238 uses `https://pathbase.dev/u/alex/repos/pathstash/graphs/<uuid>` (a concrete
++  example UUID) in place of the `path-pr-42` slug. test-quickstart.sh no longer expects the page's line to be refused: it reads the
++  line from site/index.md, rewrites only the host to the Pathbase stub, and asserts it resolves and execs `codex resume`. Concern
++  8f4d6db1 is resolved (fixed).
++- **readme-quickstart-dead-end** (6ef546e) and **readme-quickstart-source** (a96f9a1): test-quickstart.sh runs both README
++  quick-start queries verbatim after the seven-harness sync. The dead-end count must be an integer (0 on the fixtures). The
++  `--source claude` line must return only claude rows. Its filter selects nothing on the fixtures, so a second line checks that
++  `--source claude` scopes the cache to claude-* ids.
++- **pathbase-stores-shares-resumes** (008508d): record only. test-quickstart.sh already shares to a stateful stub and resumes from the
++  shared URL into Codex (`--no-cache`, so it downloads). The pass record cites it.
++
++## Checked (nix develop, rustc 1.97.1; CARGO_TARGET_DIR private)
++- `cargo fmt --all --check`; `cargo clippy --workspace --all-targets --features path-cli/develop,toolpath/verify -- -D warnings`: clean.
++- `cargo test --workspace --features path-cli/develop,toolpath/verify` (RUSTFLAGS -D warnings): 2220 passed, 0 failed.
++- `cargo doc --workspace … --no-deps` (RUSTDOCFLAGS -D warnings): clean.
++- `cargo check --offline --workspace --all-targets` (same features) on rustc 1.94.1 (rustup): passes. That supports the 1.94 floor.
++- `scripts/quality_gates.sh secrets shellcheck`: 2/2 pass. Site prettier check: clean.
++- `qualifier review`: 239 checked, 239 fresh, 0 drifted, 0 missing.
++- `just baseline`: ok. `bash scripts/test-quickstart.sh` (offline, stubs): 15 checks passed.
++
++## Open
++- README.md:111 still shows the slug URL `https://pathbase.dev/alex/pathstash/path-pr-42` in its own quick start. It has the
++  same defect but is not one of these claims, so it is left for a follow-up.
++- FAQ.md (repo root) still lists "How does the format evolve?" as open, at line 211. It is not in claims.json.
++- docs/model/model.json is not regenerated here. It still shows the old quotes and statuses until the next `just model`.
+-- 
+2.55.0
+

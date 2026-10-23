@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "Op": {
+      "description": "What a writer does to one key path.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The path survives. Only needed to state it on purpose; checked to be present before and after.",
+          "properties": {
+            "op": {
+              "enum": [
+                "keep"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The path is gone after the round trip. `defect` marks a loss that is a bug to fix, not inherent to the target format.",
+          "properties": {
+            "defect": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "enum": [
+                "drop"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "path",
+            "why"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The same value comes back under another key (a field the target names differently).",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "op": {
+              "enum": [
+                "rename"
+              ],
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "op",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The same value comes back somewhere else in the document.",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "op": {
+              "enum": [
+                "move"
+              ],
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "op",
+            "to"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The writer invents a value the source never had; it comes back under `path`. With `value`, every occurrence equals it; without, the value varies (per call, per turn) and only its presence is checked. `defect` marks an invention that is a bug to fix.",
+          "properties": {
+            "defect": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op": {
+              "enum": [
+                "synthesize"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "value": true,
+            "why": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "path",
+            "why"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The path survives with its value converted, by a named conversion (`how` names it; it is not code).",
+          "properties": {
+            "how": {
+              "type": "string"
+            },
+            "op": {
+              "enum": [
+                "convert"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "how",
+            "op",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "description": "One writer's declared transform.",
+  "properties": {
+    "ops": {
+      "description": "What happens to each key path that changes. Paths not named are expected to survive unchanged.",
+      "items": {
+        "$ref": "#/definitions/Op"
+      },
+      "type": "array"
+    },
+    "writer": {
+      "description": "The agent whose writer (and reader) this describes.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ops",
+    "writer"
+  ],
+  "title": "Contract",
+  "type": "object"
+}

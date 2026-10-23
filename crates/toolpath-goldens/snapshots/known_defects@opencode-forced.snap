@@ -1,0 +1,10 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.known_defects
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: c521172607075bff33beea2d03530829bcc301a344caa66de59cf8061a0443df
+input_file: test-fixtures/opencode/convo-compacted.json
+---
+[]

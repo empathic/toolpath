@@ -2,6 +2,8 @@
 
 mod jsonl;
 mod query;
+#[cfg(feature = "verify")]
+mod sign;
 mod types;
 
 /// The canonical JSON Schema for Toolpath documents, baked into the binary.
@@ -138,6 +140,16 @@ pub mod v1 {
     /// [`Graph::to_jsonl_writer`] / [`Graph::to_jsonl_string`]. The
     /// Path-level methods of the same name remain available for callers
     /// operating directly on an inner `Path`.
+    /// RFC.md "Signature Algorithm": JCS canonical inputs, SHA-256 digests and
+    /// `ssh` signature verification. Behind the `verify` feature.
+    #[cfg(feature = "verify")]
+    pub mod sign {
+        pub use crate::sign::{
+            SSHSIG_NAMESPACE, VerifyError, digest, jcs, key_id, path_author_input,
+            path_reviewer_input, step_author_input, verify_path_signatures, verify_step_signature,
+        };
+    }
+
     pub mod jsonl {
         pub use crate::jsonl::{
             ActorDefBody, HeadBody, JsonlError, JsonlLine, PathCloseBody, PathMetaBody,

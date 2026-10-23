@@ -1,0 +1,285 @@
+{
+  "harness": "codex",
+  "ir": {
+    "bytes": 89920,
+    "steps": 42,
+    "string_chars": 69893,
+    "text_chars": 13445,
+    "tool_uses": 1
+  },
+  "projections": [
+    {
+      "by_type": {
+        "assistant": 2,
+        "permission-mode": 1,
+        "user": 7
+      },
+      "bytes": 17592,
+      "lines": 10,
+      "string_chars": 15605,
+      "target": "claude"
+    },
+    {
+      "by_type": {
+        "message": 9,
+        "session": 1
+      },
+      "bytes": 16355,
+      "lines": 10,
+      "string_chars": 14483,
+      "target": "pi"
+    },
+    {
+      "by_type": {
+        "assistant.message": 2,
+        "assistant.turn_end": 2,
+        "assistant.turn_start": 2,
+        "session.start": 1,
+        "system.message": 2,
+        "tool.execution_complete": 1,
+        "tool.execution_start": 1,
+        "user.message": 4
+      },
+      "bytes": 17565,
+      "lines": 15,
+      "string_chars": 15744,
+      "target": "copilot"
+    }
+  ],
+  "same_format": {
+    "bytes": 44325,
+    "dropped": [
+      {
+        "example": "Confucius",
+        "path": "payload.agent_nickname"
+      },
+      {
+        "example": "null",
+        "path": "payload.content"
+      },
+      {
+        "example": "xhigh",
+        "path": "payload.effort"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.encrypted_content"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.forked_from_id"
+      },
+      {
+        "example": "null",
+        "path": "payload.info"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.info.last_token_usage.cached_input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.info.last_token_usage.input_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.info.last_token_usage.output_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.info.last_token_usage.reasoning_output_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.info.last_token_usage.total_tokens"
+      },
+      {
+        "example": "258400",
+        "path": "payload.info.model_context_window"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.info.total_token_usage.reasoning_output_tokens"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.info.total_token_usage.total_tokens"
+      },
+      {
+        "example": "null",
+        "path": "payload.rate_limits.credits"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.rate_limits.limit_id"
+      },
+      {
+        "example": "null",
+        "path": "payload.rate_limits.limit_name"
+      },
+      {
+        "example": "team",
+        "path": "payload.rate_limits.plan_type"
+      },
+      {
+        "example": "1778196423",
+        "path": "payload.rate_limits.primary.resets_at"
+      },
+      {
+        "example": "1.0",
+        "path": "payload.rate_limits.primary.used_percent"
+      },
+      {
+        "example": "300",
+        "path": "payload.rate_limits.primary.window_minutes"
+      },
+      {
+        "example": "null",
+        "path": "payload.rate_limits.rate_limit_reached_type"
+      },
+      {
+        "example": "1778613473",
+        "path": "payload.rate_limits.secondary.resets_at"
+      },
+      {
+        "example": "2.0",
+        "path": "payload.rate_limits.secondary.used_percent"
+      },
+      {
+        "example": "10080",
+        "path": "payload.rate_limits.secondary.window_minutes"
+      },
+      {
+        "example": "false",
+        "path": "payload.realtime_active"
+      },
+      {
+        "example": "Confucius",
+        "path": "payload.source.subagent.thread_spawn.agent_nickname"
+      },
+      {
+        "example": "null",
+        "path": "payload.source.subagent.thread_spawn.agent_path"
+      },
+      {
+        "example": "null",
+        "path": "payload.source.subagent.thread_spawn.agent_role"
+      },
+      {
+        "example": "1",
+        "path": "payload.source.subagent.thread_spawn.depth"
+      },
+      {
+        "example": "<withheld>",
+        "path": "payload.source.subagent.thread_spawn.parent_thread_id"
+      },
+      {
+        "example": "none",
+        "path": "payload.summary"
+      },
+      {
+        "example": "10000",
+        "path": "payload.truncation_policy.limit"
+      },
+      {
+        "example": "tokens",
+        "path": "payload.truncation_policy.mode"
+      }
+    ],
+    "event_types_shed": {
+      "event_msg/agent_message": {
+        "after": 2,
+        "source": 13
+      },
+      "event_msg/token_count": {
+        "after": 2,
+        "source": 13
+      },
+      "response_item/reasoning": {
+        "after": 0,
+        "source": 1
+      },
+      "session_meta": {
+        "after": 1,
+        "source": 2
+      }
+    },
+    "gained": [
+      {
+        "example": "Chunk ID: 7aa77b Wall time: 0.0000 secon…",
+        "path": "payload.aggregated_output"
+      },
+      {
+        "example": "bash",
+        "path": "payload.command[]"
+      },
+      {
+        "example": "0",
+        "path": "payload.duration.nanos"
+      },
+      {
+        "example": "0",
+        "path": "payload.duration.secs"
+      },
+      {
+        "example": "0",
+        "path": "payload.exit_code"
+      },
+      {
+        "example": "",
+        "path": "payload.formatted_output"
+      },
+      {
+        "example": "wc -w notes.md",
+        "path": "payload.parsed_cmd[].cmd"
+      },
+      {
+        "example": "unknown",
+        "path": "payload.parsed_cmd[].type"
+      },
+      {
+        "example": "null",
+        "path": "payload.rate_limits"
+      },
+      {
+        "example": "completed",
+        "path": "payload.status"
+      },
+      {
+        "example": "",
+        "path": "payload.stderr"
+      },
+      {
+        "example": "",
+        "path": "payload.stdout"
+      }
+    ],
+    "key_paths": {
+      "after": 72,
+      "gained": 12,
+      "lost": 34,
+      "source": 94
+    },
+    "lines": 22,
+    "renamed": []
+  },
+  "set": "codex",
+  "source": {
+    "by_type": {
+      "event_msg/agent_message": 13,
+      "event_msg/task_complete": 1,
+      "event_msg/task_started": 2,
+      "event_msg/token_count": 13,
+      "event_msg/user_message": 2,
+      "response_item/function_call": 1,
+      "response_item/function_call_output": 1,
+      "response_item/message": 8,
+      "response_item/reasoning": 1,
+      "session_meta": 2,
+      "turn_context": 1
+    },
+    "bytes": 80769,
+    "lines": 45,
+    "string_chars": 67268
+  }
+}

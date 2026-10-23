@@ -1,0 +1,1497 @@
+From 5815197faa579f23fa0e452ce8dcac5ccc02d5d5 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 16:40:12 -0400
+Subject: [PATCH] test(goldens): contracts and a regression corpus from
+ CHANGELOG's shipped bugs
+
+contracts.rs: what the harness or the schema rejects, asserted over
+every projection and document (not pinned): JSONL trailing newline,
+Claude null thinking signature, Claude empty errored tool_result,
+parent chains (pi, Claude), opencode session-id shape, unique step ids.
+tests/regressions.rs re-introduces nine shipped bugs as faults in a
+stage's output and requires the named field and stage.
+---
+ crates/toolpath-goldens/src/.qual            |   6 +
+ crates/toolpath-goldens/src/contracts.rs     | 258 +++++++++++++++
+ crates/toolpath-goldens/src/lib.rs           |   1 +
+ crates/toolpath-goldens/src/model.rs         |   5 +
+ crates/toolpath-goldens/src/pipeline.rs      |  19 ++
+ crates/toolpath-goldens/tests/.qual          |   4 +
+ crates/toolpath-goldens/tests/goldens.rs     |  10 +
+ crates/toolpath-goldens/tests/regressions.rs | 316 +++++++++++++++++++
+ pr/35-regression-corpus.md                   |  69 ++++
+ 9 files changed, 688 insertions(+)
+ create mode 100644 crates/toolpath-goldens/src/contracts.rs
+ create mode 100644 crates/toolpath-goldens/tests/regressions.rs
+ create mode 100644 pr/35-regression-corpus.md
+
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index 64089a7c..ca1e2141 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -21,3 +21,9 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/defects.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:08:54.811658Z","id":"d1465c82ea302bedcaf167c2048b4c3974bc35f881e7c42490f2f96b8fbd6f3c","body":{"detail":"The classification of a changed known_defects body is the reviewer's, guided by tests/goldens.rs's doc comment. claude-to-codex-caller-cwd was retired 2026-10-19 as not a defect (pr/22-codex-resume-cwd). The three accounting defects (gemini and opencode totals dropping breakdowns, copilot session totals on no step) were fixed in their adapters the same day (pr/*-accounting-totals) and their Defect entries deleted, with the accounting_gap measure and Target::Document they alone used; a new accounting defect brings both back. Resolve this record when every defect is fixed and its snapshot accepted.","kind":"concern","span":{"start":{"line":50},"end":{"line":50},"content_hash":"2e1040b296bb70b5e4614fe3f886af2ddb83174dab983c22fda92737fc98ffe0"},"summary":"Two defects pinned as expected current behaviour (codex-to-claude-illegal-types, claude-roundtrip-renames), neither an accounting gap: the accounting invariant holds for every set; a diff in known_defects@<set>.snap is FIXED or WORSE and must be read, insta cannot tell the two apart","supersedes":"122da212472671c8e0d215332a5fda04abd602a91ace0a60d6cc56bd40efe017","tags":["goldens","known-defect","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/defects.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:21:50.495071Z","id":"0c8cb0692057add3165a95a2ecba4605a0a24494d2e98ea6af99c1ce81765919","body":{"kind":"resolve","summary":"Every defect is fixed: codex-to-claude-illegal-types and claude-roundtrip-renames fixed in toolpath-claude (pr/28), the accounting three in pr/27; DEFECTS is empty and known_defects@<set>.snap is [] for every set","supersedes":"d1465c82ea302bedcaf167c2048b4c3974bc35f881e7c42490f2f96b8fbd6f3c","tags":["goldens","known-defect","reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:36:28.681029Z","id":"526d3a25a88af2522546bf61d6230665aad73c4ad1fb82df1cd21e829d118d6c","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":506},"end":{"line":506},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"cf4e2d360d37040594dddc82c2217bc51f4a62bec0651d7db679168935f12d90","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.844482Z","id":"6c8a2e928b72b113a2fdf76cf4bf050613d257da64221423d52c9d3f7da42c3a","body":{"detail":"The other five agents' projections are byte-stable across runs and pinned raw. If copilot's export ever takes a fixed session id, or toolpath-cursor's `extra`/content_blobs maps become ordered (BTreeMap), drop the canonical form for that agent so the golden is the real bytes `p export -o` writes.","kind":"concern","span":{"start":{"line":129},"end":{"line":129},"content_hash":"4a694e0ca91a31337ac7971bff42f9e146dbc6c66fe755a12cff8566198c2a4b"},"summary":"Copilot's projection is pinned in canonical form (sorted keys, session id masked) because p export copilot mints a session id per run; Cursor's is pinned with keys sorted because its composer rows carry hash maps written in a different order per run","supersedes":"8d60a30c9a0aba4773d9ea2f561da147417de6323537a02d8275de9cd848c920","tags":["goldens","determinism","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.844607Z","id":"1ed3cef0bf59d394fde4ae0e8ff308b05f59b10adc79f8b2738b6b78b2aaad88","body":{"detail":"test-fixtures/opencode/convo.json is what `opencode export <id>` prints (camelCase, nested info); toolpath_opencode reads rows from opencode-stable.db and has no reader for this file. A `Session::from_export` in the adapter would remove all three copies, and `path p derive opencode` could then take the file.","kind":"concern","span":{"start":{"line":311},"end":{"line":311},"content_hash":"e1f0854ff123c1ce324417c98893618c5a16b9d4d7c747feadd81bba62cca511"},"summary":"The `opencode export` wrapper to Session translation is duplicated from path-cli/tests/cross_harness_matrix.rs and toolpath-opencode/tests/real_fixture_roundtrip.rs; the adapter should own it","supersedes":"2fd56e2601b246b0cd173b564877b9690b12b6b4f924a3f8a9b9c157abcb76dd","tags":["goldens","opencode","duplication","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.844920Z","id":"2ab7d3eadd1d77ab6800807715c314eefa5042fa785b672dc45ada66cf316667","body":{"detail":"Not a defect. path resume --harness codex -C <dir> (cmd_resume -> projection::codex::project_codex) and path export codex --project <dir> write the -C/--project directory into session_meta.cwd, every turn_context.cwd and the state_5.sqlite thread row; export -o without --project uses the shell's cwd. That is what codex needs: codex resume's picker lists only sessions whose cwd is the directory it runs in (--all disables the cwd filter), so the source cwd would hide a resumed session from the picker in the directory the user resumed in, and is usually a path that does not exist on the resuming machine. The goldens wrote / because the hermetic harness runs from / (CALLER_CWD); the pin compared against the source cwd, so a change to write the source cwd would have been judged FIXED while breaking resume. Pin and Finding::CallerCwd removed; contract pinned by path-cli projection::codex::tests::project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd. pr/22.","kind":"comment","span":{"start":{"line":36},"end":{"line":36},"content_hash":"0beee873aef40908b4e7e97e085fcd88e7802bd043a4260b138f92949e0799bd"},"summary":"CALLER_CWD is the directory a projection is resumed in, not a stand-in for a defect: the caller's cwd is the contract for codex, pi, copilot and gemini","supersedes":"b839958fe42d822f01f5667e1e873da8cce97aa34e4f89fbb635e4e6bb7133c5","tags":["goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.846375Z","id":"beccf27a693360a690f29582cb171406fccfdb93db45c3a5fe98b0864374d651","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":515},"end":{"line":515},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"cf4e2d360d37040594dddc82c2217bc51f4a62bec0651d7db679168935f12d90","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:07:28.661842Z","id":"bb6afd8866188eb99c3f66ce358f807ead6a02f3119c24e43ae1e7ec2809ac39","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":525},"end":{"line":525},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"526d3a25a88af2522546bf61d6230665aad73c4ad1fb82df1cd21e829d118d6c","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:07:28.661976Z","id":"3bddc20ddcbf075908a7433461e31eecec9c2997c4b5fc17a0c43e8469676822","body":{"kind":"resolve","summary":"Duplicate: the same concern was re-anchored twice from cf4e2d36 by two pieces landing together; the live record is the one re-anchored from 526d3a25","supersedes":"beccf27a693360a690f29582cb171406fccfdb93db45c3a5fe98b0864374d651","tags":["reason:duplicate","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/src/contracts.rs b/crates/toolpath-goldens/src/contracts.rs
+new file mode 100644
+index 00000000..af880d67
+--- /dev/null
++++ b/crates/toolpath-goldens/src/contracts.rs
+@@ -0,0 +1,258 @@
++//! Writer and document contracts: properties a projection or a document must
++//! hold for its consumer to accept it, each one learned from a bug that
++//! shipped (CHANGELOG.md, the resume matrix). Snapshots pin bytes; these pin
++//! meaning, so a recapture that accepts a broken output still fails here.
++//!
++//! The goldens test asserts every contract over every projection and every
++//! document; `tests/regressions.rs` re-introduces each historical bug as a
++//! fault in a stage's output and requires the matching contract to name it.
++
++use std::collections::BTreeSet;
++use std::fmt;
++
++use serde_json::Value;
++
++use crate::model::Agent;
++
++/// One broken contract: where (target, line), which field, which rule.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct Violation {
++    /// The rule's name, stable for tests: `trailing-newline`,
++    /// `claude-null-signature`, `claude-empty-error-result`,
++    /// `parent-chain`, `opencode-session-id`, `unique-step-ids`.
++    pub rule: &'static str,
++    /// The output it was found in: an agent name, or `document`.
++    pub target: String,
++    /// 1-based line for JSONL outputs, 0 otherwise.
++    pub line: usize,
++    /// The key path of the offending field.
++    pub field: String,
++    pub detail: String,
++}
++
++impl fmt::Display for Violation {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(
++            f,
++            "{} ({}{}): {} — {}",
++            self.rule,
++            self.target,
++            if self.line > 0 {
++                format!(" line {}", self.line)
++            } else {
++                String::new()
++            },
++            self.field,
++            self.detail
++        )
++    }
++}
++
++fn violation(
++    rule: &'static str,
++    target: Agent,
++    line: usize,
++    field: impl Into<String>,
++    detail: impl Into<String>,
++) -> Violation {
++    Violation {
++        rule,
++        target: target.name().to_owned(),
++        line,
++        field: field.into(),
++        detail: detail.into(),
++    }
++}
++
++/// The contracts a projection for `target` must hold. `text` is the
++/// projection as `path p export <target> -o` writes it (the raw form, before
++/// any canonicalisation for pinning).
++pub fn check_projection(target: Agent, text: &str) -> Vec<Violation> {
++    let mut out = Vec::new();
++    let jsonl = matches!(
++        target,
++        Agent::Claude | Agent::Codex | Agent::Pi | Agent::Copilot
++    );
++    // The harness appends to the file on resume; without a final newline the
++    // first appended entry lands on the projected last line (2026-07-30).
++    if jsonl && !text.is_empty() && !text.ends_with('\n') {
++        let line = text.lines().count();
++        out.push(violation(
++            "trailing-newline",
++            target,
++            line,
++            "<end of file>",
++            "a JSONL projection must end with a newline, or the harness's first append corrupts the last line",
++        ));
++    }
++    match target {
++        Agent::Claude => claude(text, &mut out),
++        Agent::Pi => parent_chain(target, text, "id", "parentId", true, &mut out),
++        Agent::Opencode => opencode(text, &mut out),
++        _ => {}
++    }
++    out
++}
++
++fn lines(text: &str) -> impl Iterator<Item = (usize, Value)> + '_ {
++    text.lines()
++        .enumerate()
++        .filter(|(_, l)| !l.trim().is_empty())
++        .filter_map(|(i, l)| serde_json::from_str(l).ok().map(|v| (i + 1, v)))
++}
++
++fn claude(text: &str, out: &mut Vec<Violation>) {
++    for (n, line) in lines(text) {
++        let Some(blocks) = line.pointer("/message/content").and_then(Value::as_array) else {
++            continue;
++        };
++        for b in blocks {
++            match b.get("type").and_then(Value::as_str) {
++                // The API rejects `"signature": null` (400 …thinking.signature.str);
++                // an absent signature is the writer contract (2026-07-30).
++                Some("thinking") if b.get("signature").is_some_and(Value::is_null) => {
++                    out.push(violation(
++                        "claude-null-signature",
++                        Agent::Claude,
++                        n,
++                        "message.content[].signature",
++                        "a thinking block's signature is null; write it absent instead",
++                    ));
++                }
++                // The API rejects an errored tool_result with empty content
++                // (400 …content cannot be empty if is_error is true; copilot → claude).
++                Some("tool_result")
++                    if b.get("is_error").and_then(Value::as_bool) == Some(true)
++                        && empty_content(b.get("content")) =>
++                {
++                    out.push(violation(
++                        "claude-empty-error-result",
++                        Agent::Claude,
++                        n,
++                        "message.content[].content",
++                        "an errored tool_result has empty content",
++                    ));
++                }
++                _ => {}
++            }
++        }
++    }
++    parent_chain(Agent::Claude, text, "uuid", "parentUuid", false, out);
++}
++
++fn empty_content(c: Option<&Value>) -> bool {
++    match c {
++        None | Some(Value::Null) => true,
++        Some(Value::String(s)) => s.trim().is_empty(),
++        Some(Value::Array(a)) => a.iter().all(|p| {
++            p.get("text")
++                .and_then(Value::as_str)
++                .is_none_or(|t| t.trim().is_empty())
++        }),
++        _ => false,
++    }
++}
++
++/// Every parent names an entry written before it: the harness walks the
++/// chain from the leaf, and a dangling or missing link cuts the history off
++/// there (pi → claude, pi → pi). With `one_root`, only the first chained
++/// entry may have no parent (pi's main thread).
++fn parent_chain(
++    target: Agent,
++    text: &str,
++    id_key: &str,
++    parent_key: &str,
++    one_root: bool,
++    out: &mut Vec<Violation>,
++) {
++    let mut seen: BTreeSet<String> = BTreeSet::new();
++    let mut roots = 0usize;
++    for (n, line) in lines(text) {
++        let Some(id) = line.get(id_key).and_then(Value::as_str) else {
++            continue;
++        };
++        match line.get(parent_key) {
++            Some(Value::String(p)) if !seen.contains(p) => out.push(violation(
++                "parent-chain",
++                target,
++                n,
++                parent_key,
++                format!("{parent_key} {p} names no earlier entry"),
++            )),
++            Some(Value::String(_)) => {}
++            Some(Value::Null) | None
++                if line.as_object().is_some_and(|o| o.contains_key(parent_key)) =>
++            {
++                roots += 1;
++                if one_root && roots > 1 {
++                    out.push(violation(
++                        "parent-chain",
++                        target,
++                        n,
++                        parent_key,
++                        "a second entry with no parent: the chain is cut here",
++                    ));
++                }
++            }
++            _ => {}
++        }
++        seen.insert(id.to_owned());
++    }
++}
++
++/// opencode's Zen free tier admits only sessions whose id has opencode's own
++/// shape: `ses_`, 12 hex digits, 14 base62 characters (403 FreeTierError
++/// otherwise).
++fn opencode(text: &str, out: &mut Vec<Violation>) {
++    let Ok(v) = serde_json::from_str::<Value>(text) else {
++        return;
++    };
++    if let Some(id) = v.get("id").and_then(Value::as_str) {
++        let ok = id.len() == 4 + 12 + 14
++            && id.starts_with("ses_")
++            && id[4..16].bytes().all(|b| b.is_ascii_hexdigit())
++            && id[16..].bytes().all(|b| b.is_ascii_alphanumeric());
++        if !ok {
++            out.push(violation(
++                "opencode-session-id",
++                Agent::Opencode,
++                0,
++                "id",
++                format!("{id} is not ses_ + 12 hex + 14 base62"),
++            ));
++        }
++    }
++}
++
++/// The contracts a derived document must hold beyond its schema: step ids
++/// unique within each path (RFC "ID Uniqueness"; derive 2026-07-01).
++pub fn check_document(document: &Value) -> Vec<Violation> {
++    let mut out = Vec::new();
++    let paths = document
++        .get("paths")
++        .and_then(Value::as_array)
++        .cloned()
++        .unwrap_or_default();
++    for (pi, path) in paths.iter().enumerate() {
++        let mut seen = BTreeSet::new();
++        for step in path
++            .get("steps")
++            .and_then(Value::as_array)
++            .into_iter()
++            .flatten()
++        {
++            if let Some(id) = step.pointer("/step/id").and_then(Value::as_str)
++                && !seen.insert(id.to_owned())
++            {
++                out.push(Violation {
++                    rule: "unique-step-ids",
++                    target: "document".into(),
++                    line: 0,
++                    field: format!("paths[{pi}].steps[].step.id"),
++                    detail: format!("step id {id} appears twice in one path"),
++                });
++            }
++        }
++    }
++    out
++}
+diff --git a/crates/toolpath-goldens/src/lib.rs b/crates/toolpath-goldens/src/lib.rs
+index 5bac9539..f28f29fc 100644
+--- a/crates/toolpath-goldens/src/lib.rs
++++ b/crates/toolpath-goldens/src/lib.rs
+@@ -31,6 +31,7 @@
+ 
+ pub mod accounting;
+ pub mod canonical;
++pub mod contracts;
+ pub mod defects;
+ pub mod keypaths;
+ pub mod leaks;
+diff --git a/crates/toolpath-goldens/src/model.rs b/crates/toolpath-goldens/src/model.rs
+index 5c752643..2749f037 100644
+--- a/crates/toolpath-goldens/src/model.rs
++++ b/crates/toolpath-goldens/src/model.rs
+@@ -199,6 +199,11 @@ pub struct Stages {
+     pub shed: Shed,
+     /// The defects pinned as expected current behaviour for this set.
+     pub known_defects: Vec<KnownDefect>,
++    /// Broken writer and document contracts ([`crate::contracts`]), each
++    /// rendered with its rule, target, line and field. Asserted empty by the
++    /// goldens test, not pinned.
++    #[serde(skip)]
++    pub contracts: Vec<String>,
+ }
+ 
+ /// The stages in the order they run.
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index b91f519c..c5646adc 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -21,6 +21,7 @@ use toolpath::v1::{Base, Graph, Path as Document};
+ use toolpath_convo::{ConversationProjector, ConversationView, extract_conversation};
+ 
+ use crate::canonical::{canonicalize, canonicalize_document};
++use crate::contracts::{check_document, check_projection};
+ use crate::defects::{Evidence, known_defects};
+ use crate::keypaths::json_values;
+ use crate::losses::compare;
+@@ -72,12 +73,29 @@ pub fn run(set: &Set, scratch: &Path) -> Result<Stages, StageError> {
+         document: validate(&document),
+         round_trips: round_trip_validations,
+     };
++    // The contracts are checked on the raw form, as the harness would read it.
++    let mut contracts: Vec<String> = check_document(&document)
++        .iter()
++        .map(ToString::to_string)
++        .collect();
++    for (target, text) in &raw {
++        contracts.extend(
++            check_projection(*target, text)
++                .iter()
++                .map(ToString::to_string),
++        );
++    }
+     let projections: BTreeMap<Agent, String> = raw
+         .into_iter()
+         .map(|(target, text)| (target, settle(target, text)))
+         .collect();
+ 
+     let same_format = project(&path, set.agent).map_err(fail(Stage::SameFormat))?;
++    contracts.extend(
++        check_projection(set.agent, &same_format)
++            .iter()
++            .map(ToString::to_string),
++    );
+     let shed = report(
+         &source,
+         &document_json,
+@@ -100,6 +118,7 @@ pub fn run(set: &Set, scratch: &Path) -> Result<Stages, StageError> {
+         validate,
+         shed,
+         known_defects,
++        contracts,
+     })
+ }
+ 
+diff --git a/crates/toolpath-goldens/tests/.qual b/crates/toolpath-goldens/tests/.qual
+index c0728444..2e1e4665 100644
+--- a/crates/toolpath-goldens/tests/.qual
++++ b/crates/toolpath-goldens/tests/.qual
+@@ -1,2 +1,6 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-15T15:31:12.876830Z","id":"90dc27fe91be1e899722d2c632c25e2ad63fd31e69ff09b5a00af5dc4cd8d8ee","body":{"detail":"If a second #[test] is added to this file, the env writes race its threads. Keep one test per binary, or move the stores into an argument the pipeline threads through.","kind":"concern","span":{"start":{"line":104},"end":{"line":104},"content_hash":"dc4bcb594f6f16fdb896fb1931054d14025b7294123b4247ecb340edf0ca1c27"},"summary":"The test sets HOME and every agent store with std::env::set_var (unsafe in edition 2024) before the glob; sound only while this binary has one test","tags":["goldens","test-hygiene","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-15T19:49:41.756028Z","id":"53729a2d268d88790984d31c1c9017be54c263551aa3989a2a7efd40eaf4cd36","body":{"detail":"If a second #[test] is added to this file, the env writes race its threads. Keep one test per binary, or move the stores into an argument the pipeline threads through (the opencode store already is: pipeline::opencode_store roots it in scratch).","kind":"concern","span":{"start":{"line":163},"end":{"line":163},"content_hash":"dc4bcb594f6f16fdb896fb1931054d14025b7294123b4247ecb340edf0ca1c27"},"summary":"The test sets HOME and every agent store with std::env::set_var (unsafe in edition 2024) before the globs; sound only while this binary has one test","supersedes":"90dc27fe91be1e899722d2c632c25e2ad63fd31e69ff09b5a00af5dc4cd8d8ee","tags":["goldens","test-hygiene","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/regressions.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:48:36.341578Z","id":"8ec243bc084316d15cdabca05935ff299392d9407c999671fd2e5efce7634f12","body":{"detail":"Each set is one transcript file; session chains and rotation artifacts are never read by the pipeline, so dropping a whole segment cannot fail here. Covered only by crates/toolpath-claude/src/chain.rs test_orphaned_stem_is_not_a_successor. To close: a chained set (goldens/claude-chain/: predecessor + successor + .orphaned-* stem) read through read_conversation.","kind":"concern","span":{"start":{"line":1},"end":{"line":10},"content_hash":"2ebe9a6d6abb316b782bf9945125221b250cc637d2b1fd9ddb7069efa0eebc5f"},"summary":"The goldens do not reach Claude .orphaned-* rotation (#236, toolpath-claude 0.13.1)","tags":["regression-corpus","gap","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/regressions.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:48:36.362824Z","id":"c226e4b928a439c169dda92f74dd2c38a769157b1a95cd2a2d1a3999f133f558","body":{"detail":"It is path-cli export/resume behaviour against an existing session file, not a pipeline stage. Covered by crates/path-cli/src/cmd_export.rs export_claude_refuses_existing_session_without_force. To close: a golden that exports a set over its own source in a temp project and requires the refusal (and the resume-picks-local rule).","kind":"concern","span":{"start":{"line":1},"end":{"line":10},"content_hash":"2ebe9a6d6abb316b782bf9945125221b250cc637d2b1fd9ddb7069efa0eebc5f"},"summary":"The goldens do not reach the export clobber of a richer local original (2026-07-30)","tags":["regression-corpus","gap","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/regressions.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:48:36.382585Z","id":"d66327a3cb41fead5f47cc470bcee4f0d705a452ec43c6ae855b7aba09ace04b","body":{"detail":"The cursor set is a JSON dump of a CursorSession, not a database, so a reader regression on the 3.24 table cannot fail here. Covered by crates/toolpath-cursor/src/reader.rs reads_heads_from_the_3_24_table. To close: a database-shaped cursor set (as opencode_db.rs does for opencode).","kind":"concern","span":{"start":{"line":1},"end":{"line":10},"content_hash":"2ebe9a6d6abb316b782bf9945125221b250cc637d2b1fd9ddb7069efa0eebc5f"},"summary":"The goldens do not reach Cursor's state.vscdb (3.24 composerHeaders)","tags":["regression-corpus","gap","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.846503Z","id":"2414bd5b143e09fc2a229f820da7bdd55324ff23099f0e3c018c5394c6420657","body":{"detail":"If a second #[test] is added to this file, the env writes race its threads. Keep one test per binary, or move the stores into an argument the pipeline threads through (the opencode store already is: pipeline::opencode_store roots it in scratch).","kind":"concern","span":{"start":{"line":173},"end":{"line":173},"content_hash":"dc4bcb594f6f16fdb896fb1931054d14025b7294123b4247ecb340edf0ca1c27"},"summary":"The test sets HOME and every agent store with std::env::set_var (unsafe in edition 2024) before the globs; sound only while this binary has one test","supersedes":"53729a2d268d88790984d31c1c9017be54c263551aa3989a2a7efd40eaf4cd36","tags":["goldens","test-hygiene","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/tests/goldens.rs b/crates/toolpath-goldens/tests/goldens.rs
+index be310e66..9f01ed4d 100644
+--- a/crates/toolpath-goldens/tests/goldens.rs
++++ b/crates/toolpath-goldens/tests/goldens.rs
+@@ -91,6 +91,16 @@ fn check_set(input: &Path, real_home: &str, home: &Path) {
+     let found = leaks(&bytes, &needles);
+     assert!(found.is_empty(), "{}: output mentions {found:?}", set.name);
+ 
++    // The contracts (toolpath_goldens::contracts): what the harness or the
++    // schema would reject, learned from bugs that shipped. Not pinned:
++    // accepting a snapshot never accepts one of these.
++    assert!(
++        stages.contracts.is_empty(),
++        "{}: broken contracts:\n  {}",
++        set.name,
++        stages.contracts.join("\n  ")
++    );
++
+     // `<stage>@<set>.snap`, with the input's identity in the header.
+     let mut per_set = insta::Settings::clone_current();
+     per_set.set_snapshot_suffix(&set.name);
+diff --git a/crates/toolpath-goldens/tests/regressions.rs b/crates/toolpath-goldens/tests/regressions.rs
+new file mode 100644
+index 00000000..268402c2
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/regressions.rs
+@@ -0,0 +1,316 @@
++//! The regression corpus: every fidelity bug CHANGELOG.md (and the resume
++//! matrix) records, re-introduced as a fault in one stage's output of a real
++//! set, and the check that must name it: the field and the stage. Production
++//! code is not touched; each case mutates what the pipeline produced and runs
++//! the goldens' own checks over the result.
++//!
++//! A case here that stops failing means the goldens stopped catching a bug
++//! that already shipped once. Bugs the goldens cannot reach are listed in
++//! `docs/GOLDENS.md` ("What the regression corpus does not reach") with the
++//! test that does.
++
++use std::path::Path;
++
++use serde_json::Value;
++use toolpath_goldens::accounting;
++use toolpath_goldens::contracts::{Violation, check_document, check_projection};
++use toolpath_goldens::model::{Agent, Set, Stages, Validation};
++use toolpath_goldens::pipeline::run;
++use toolpath_goldens::validate::validate;
++
++const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-fixtures");
++const GOLDENS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../goldens");
++const SNAPSHOTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/snapshots");
++
++/// One set through the pipeline, every store under a temp HOME.
++fn stages(input: &str) -> Stages {
++    let home = tempfile::tempdir().expect("temp HOME");
++    let set = Set::from_input_file(Path::new(input)).expect("readable input");
++    run(&set, home.path()).unwrap_or_else(|e| panic!("{}: {e}", set.name))
++}
++
++fn fixture(agent: &str) -> String {
++    let dir = Path::new(FIXTURES).join(agent);
++    let f = std::fs::read_dir(&dir)
++        .expect("fixture dir")
++        .filter_map(Result::ok)
++        .map(|e| e.path())
++        .find(|p| p.file_stem().and_then(|s| s.to_str()) == Some("convo"))
++        .expect("convo.*");
++    f.display().to_string()
++}
++
++fn golden(name: &str) -> String {
++    let dir = Path::new(GOLDENS).join(name);
++    let f = std::fs::read_dir(&dir)
++        .expect("golden dir")
++        .filter_map(Result::ok)
++        .map(|e| e.path())
++        .find(|p| p.file_stem().and_then(|s| s.to_str()) == Some("input"))
++        .expect("input.*");
++    f.display().to_string()
++}
++
++/// The committed snapshot's body, as insta compares it.
++fn snapshot_body(name: &str) -> String {
++    let text = std::fs::read_to_string(Path::new(SNAPSHOTS).join(format!("{name}.snap")))
++        .unwrap_or_else(|e| panic!("{name}: {e}"));
++    let mut parts = text.splitn(3, "---\n");
++    parts.next();
++    parts.next();
++    parts.next().unwrap_or_default().to_owned()
++}
++
++/// The first line on which `mutated` differs from snapshot `name`: what the
++/// goldens test would report for the stage it pins.
++fn snapshot_diff(name: &str, mutated: &str) -> Option<usize> {
++    let pinned = snapshot_body(name);
++    let a: Vec<&str> = pinned.trim_end().lines().collect();
++    let b: Vec<&str> = mutated.trim_end().lines().collect();
++    (0..a.len().max(b.len()))
++        .find(|&i| a.get(i) != b.get(i))
++        .map(|i| i + 1)
++}
++
++fn rules(v: &[Violation]) -> Vec<&'static str> {
++    v.iter().map(|v| v.rule).collect()
++}
++
++fn edit_lines(text: &str, mut f: impl FnMut(usize, &mut Value) -> bool) -> String {
++    let mut done = false;
++    let mut out = String::new();
++    for (i, line) in text.lines().enumerate() {
++        let mut v: Value = match serde_json::from_str(line) {
++            Ok(v) => v,
++            Err(_) => {
++                out += line;
++                out.push('\n');
++                continue;
++            }
++        };
++        if !done && f(i, &mut v) {
++            done = true;
++        }
++        out += &serde_json::to_string(&v).unwrap();
++        out.push('\n');
++    }
++    assert!(done, "the fault found nothing to change");
++    out
++}
++
++/// 2026-07-30, toolpath-claude 0.12.2: a thinking block written with
++/// `"signature": null`; the API answers 400 on the first message after
++/// resume. Stage: project (→ claude).
++#[test]
++fn claude_thinking_signature_null() {
++    let s = stages(&fixture("copilot"));
++    let projected = &s.projections[&Agent::Claude];
++    let broken = edit_lines(projected, |_, v| {
++        let Some(blocks) = v
++            .pointer_mut("/message/content")
++            .and_then(Value::as_array_mut)
++        else {
++            return false;
++        };
++        for b in blocks {
++            if b["type"] == "thinking" {
++                b["signature"] = Value::Null;
++                return true;
++            }
++        }
++        false
++    });
++    let v = check_projection(Agent::Claude, &broken);
++    assert_eq!(rules(&v), ["claude-null-signature"], "{v:?}");
++    assert_eq!(v[0].field, "message.content[].signature");
++    assert!(snapshot_diff("projection@copilot@claude", &broken).is_some());
++}
++
++/// 2026-07-30, path-cli 0.16.1: a JSONL export without a final newline;
++/// Claude Code's first append lands on the projected last line. Stage:
++/// project. insta trims trailing whitespace, so only the contract sees it.
++#[test]
++fn jsonl_export_without_trailing_newline() {
++    let s = stages(&fixture("codex"));
++    let projected = &s.projections[&Agent::Claude];
++    let broken = projected.trim_end_matches('\n').to_owned();
++    assert_eq!(
++        snapshot_diff("projection@codex@claude", &broken),
++        None,
++        "the snapshot cannot see a missing final newline"
++    );
++    let v = check_projection(Agent::Claude, &broken);
++    assert_eq!(rules(&v), ["trailing-newline"], "{v:?}");
++}
++
++/// 2026-06-17 (kind v1.1.0): Claude Code repeats the message's usage on every
++/// content-block line; one step per line carrying the full usage over-counts
++/// output tokens by the block count. Stage: derive. The accounting contract
++/// names the field.
++#[test]
++fn claude_usage_repeated_on_every_block() {
++    let s = stages(&golden("claude-session"));
++    let mut doc = s.document.clone();
++    let mut usage_by_group = std::collections::BTreeMap::new();
++    for step in doc["paths"][0]["steps"].as_array().unwrap() {
++        for c in step["change"].as_object().unwrap().values() {
++            let st = &c["structural"];
++            if let (Some(g), Some(u)) = (st["group_id"].as_str(), st.get("token_usage"))
++                && !u.is_null()
++            {
++                usage_by_group.insert(g.to_owned(), u.clone());
++            }
++        }
++    }
++    let mut repeated = 0;
++    for step in doc["paths"][0]["steps"].as_array_mut().unwrap() {
++        for c in step["change"].as_object_mut().unwrap().values_mut() {
++            let st = &mut c["structural"];
++            if let Some(u) = st["group_id"]
++                .as_str()
++                .and_then(|g| usage_by_group.get(g))
++                .cloned()
++                && st.get("token_usage").is_none_or(Value::is_null)
++            {
++                st["token_usage"] = u;
++                repeated += 1;
++            }
++        }
++    }
++    assert!(repeated > 0, "the set has no multi-block message");
++    let gaps = accounting::check(&doc, &s.ir).expect("single path");
++    let fields: Vec<&str> = gaps.iter().map(|g| g.field.as_str()).collect();
++    assert!(fields.contains(&"output_tokens"), "{gaps:?}");
++}
++
++/// 2026-06-17: toolpath-codex stamped the cumulative session counter
++/// (`total_token_usage`) on each assistant turn; per-step sums grew
++/// quadratically. Stage: derive.
++#[test]
++fn codex_cumulative_usage_per_turn() {
++    // The fixture's session carries its usage once; the bug stamped the
++    // session's running total on every assistant turn. Stamp it so.
++    let s = stages(&fixture("codex"));
++    let mut doc = s.document.clone();
++    let total = doc["paths"][0]["steps"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .flat_map(|st| st["change"].as_object().unwrap().values())
++        .find_map(|c| {
++            c["structural"]
++                .get("token_usage")
++                .filter(|u| !u.is_null())
++                .cloned()
++        })
++        .expect("a usage step");
++    let mut stamped = 0;
++    for step in doc["paths"][0]["steps"].as_array_mut().unwrap() {
++        for c in step["change"].as_object_mut().unwrap().values_mut() {
++            let st = &mut c["structural"];
++            if st["role"] == "assistant" && st.get("token_usage").is_none_or(Value::is_null) {
++                st["token_usage"] = total.clone();
++                stamped += 1;
++            }
++        }
++    }
++    assert!(stamped > 0, "no assistant turn to stamp");
++    let gaps = accounting::check(&doc, &s.ir).expect("single path");
++    assert!(gaps.iter().any(|g| g.field == "output_tokens"), "{gaps:?}");
++}
++
++/// 2026-07-01, toolpath-convo 0.11.1: Claude Code reuses `uuid` on
++/// attachment lines; a duplicate step id broke every consumer keyed on it.
++/// Stage: derive. RFC "ID Uniqueness".
++#[test]
++fn duplicate_step_ids() {
++    let s = stages(&golden("claude-session"));
++    let mut doc = s.document.clone();
++    let steps = doc["paths"][0]["steps"].as_array_mut().unwrap();
++    let first = steps[0]["step"]["id"].clone();
++    steps[1]["step"]["id"] = first;
++    let v = check_document(&doc);
++    assert_eq!(rules(&v), ["unique-step-ids"], "{v:?}");
++    assert!(
++        snapshot_diff(
++            "document@claude-session",
++            &serde_json::to_string_pretty(&doc).unwrap()
++        )
++        .is_some()
++    );
++}
++
++/// "Actor validation fixes — derived paths conform to the base schema": an
++/// actor string outside `human|agent|tool|ci:<name>`. Stage: validate.
++#[test]
++fn actor_outside_the_base_schema() {
++    let s = stages(&golden("claude-session"));
++    let mut doc = s.document.clone();
++    doc["paths"][0]["steps"][1]["step"]["actor"] = "claude code".into();
++    match validate(&doc) {
++        Validation::Invalid { errors } => {
++            assert!(errors.iter().any(|e| e.contains("actor")), "{errors:?}")
++        }
++        other => panic!("validate accepted it: {other:?}"),
++    }
++}
++
++/// Resume matrix 2026-10-15, fixed in #361: pi's parent chain cut after the
++/// first tool call; Claude Code and pi resumed with only the newest message.
++/// Stage: project (→ pi).
++#[test]
++fn pi_parent_chain_cut() {
++    let s = stages(&fixture("codex"));
++    let projected = &s.projections[&Agent::Pi];
++    let broken = edit_lines(projected, |i, v| {
++        if i > 3 && v["type"] == "message" && v["parentId"].is_string() {
++            v["parentId"] = Value::Null;
++            return true;
++        }
++        false
++    });
++    let v = check_projection(Agent::Pi, &broken);
++    assert_eq!(rules(&v), ["parent-chain"], "{v:?}");
++    assert_eq!(v[0].field, "parentId");
++}
++
++/// Resume matrix 2026-10-15, fixed in #361: copilot → claude wrote a failed
++/// tool call as an errored tool_result with empty content; the API answers
++/// 400. Stage: project (→ claude).
++#[test]
++fn copilot_empty_errored_tool_result() {
++    let s = stages(&fixture("copilot"));
++    let projected = &s.projections[&Agent::Claude];
++    let broken = edit_lines(projected, |_, v| {
++        let Some(blocks) = v
++            .pointer_mut("/message/content")
++            .and_then(Value::as_array_mut)
++        else {
++            return false;
++        };
++        for b in blocks {
++            if b["type"] == "tool_result" {
++                b["is_error"] = true.into();
++                b["content"] = "".into();
++                return true;
++            }
++        }
++        false
++    });
++    let v = check_projection(Agent::Claude, &broken);
++    assert_eq!(rules(&v), ["claude-empty-error-result"], "{v:?}");
++}
++
++/// 2026-10-15, fixed in #365: projected opencode session ids in toolpath's
++/// shape (`ses_` + 24 hex); Zen's free tier answered 403 FreeTierError.
++/// Stage: project (→ opencode).
++#[test]
++fn opencode_session_id_shape() {
++    let s = stages(&fixture("codex"));
++    let projected = &s.projections[&Agent::Opencode];
++    let mut v: Value = serde_json::from_str(projected).unwrap();
++    v["id"] = "ses_0123456789abcdef01234567".into();
++    let broken = serde_json::to_string_pretty(&v).unwrap();
++    let found = check_projection(Agent::Opencode, &broken);
++    assert_eq!(rules(&found), ["opencode-session-id"], "{found:?}");
++}
+diff --git a/pr/35-regression-corpus.md b/pr/35-regression-corpus.md
+new file mode 100644
+index 00000000..17ea502b
+--- /dev/null
++++ b/pr/35-regression-corpus.md
+@@ -0,0 +1,69 @@
++# test(goldens): contracts and a regression corpus from the bugs that shipped
++
++Status: planned (asked 2026-10-19: make the goldens drive development; every fidelity bug in CHANGELOG.md becomes
++a golden that fails when the bug comes back) · Base: the goldens stack once merged · Independent of pr/19–34
++
++## Why
++CHANGELOG.md records the silent losses that shipped before the goldens existed. Each was found late: by a live
++resume against the real API, by a store's UNIQUE constraint, or by reading a token report. The goldens claim "a
++red test the same day, naming the field"; until now nothing showed that claim holds for the bugs we actually had.
++Running each one against the goldens also showed that several would NOT have failed: insta trims trailing
++whitespace (a missing final newline passes), the schema does not require unique step ids, and the projection
++snapshots pin bytes, not meaning, so a recapture would accept an output the harness rejects.
++
++## What changes
++- `crates/toolpath-goldens/src/contracts.rs` (new): what the harness or the schema rejects, as checks over a
++  projection or a document, each naming rule, target, line and field. `trailing-newline` (JSONL projections end
++  with `\n`; 2026-07-30), `claude-null-signature` (a thinking block's signature is absent, never `null`;
++  2026-07-30, API 400), `claude-empty-error-result` (an errored `tool_result` has content; copilot -> claude, API
++  400), `parent-chain` (every `parentUuid`/`parentId` names an earlier entry; pi's main thread has one root;
++  pi -> claude, pi -> pi), `opencode-session-id` (`ses_` + 12 hex + 14 base62; Zen 403), `unique-step-ids` (RFC
++  "ID Uniqueness"; derive 2026-07-01).
++- `crates/toolpath-goldens/src/pipeline.rs`, `model.rs`, `lib.rs`: the pipeline runs the contracts over the
++  document, every projection and the same-format output, on the raw form (before the copilot/cursor
++  canonicalisation), into `Stages::contracts` (not serialised, not pinned).
++- `crates/toolpath-goldens/tests/goldens.rs`: every set must have no broken contract. Accepting a snapshot never
++  accepts one.
++- `crates/toolpath-goldens/tests/regressions.rs` (new): nine shipped bugs re-introduced as a fault in one stage's
++  real output (no production code changed), each required to fail with its field and stage:
++
++| bug (source) | stage | caught by |
++|---|---|---|
++| Claude thinking `"signature": null` (2026-07-30) | project -> claude | `claude-null-signature` + the projection snapshot |
++| JSONL export without a final newline (2026-07-30) | project | `trailing-newline` only (insta trims trailing whitespace; the test asserts the snapshot cannot see it) |
++| usage repeated on every content block, ~3x output (2026-06-17) | derive | accounting contract, `output_tokens` |
++| Codex cumulative `total_token_usage` per turn (2026-06-17) | derive | accounting contract, `output_tokens` |
++| duplicate step ids (2026-07-01) | derive | `unique-step-ids` only (the schema does not require uniqueness) |
++| actor outside the base schema (actor validation fixes) | validate | the base schema |
++| pi parent chain cut (#361) | project -> pi | `parent-chain` (before: only the projection's bytes) |
++| copilot -> claude empty errored tool_result (#361) | project -> claude | `claude-empty-error-result` only |
++| opencode session-id shape (#365) | project -> opencode | `opencode-session-id` only |
++
++- Not reached by the goldens, recorded as qualifier concerns on `tests/regressions.rs` with the test that does
++  cover each: `.orphaned-*` rotation dropping a segment (#236; `toolpath-claude` `chain.rs`
++  `test_orphaned_stem_is_not_a_successor`; sets are single files), the export clobber of a richer local original
++  (path-cli behaviour; `cmd_export.rs` `export_claude_refuses_existing_session_without_force`), Cursor's
++  `state.vscdb` 3.24 table (the cursor set is a JSON dump; `toolpath-cursor` `reads_heads_from_the_3_24_table`).
++  Gemini 0.47 `.jsonl` is caught by construction (the gemini set is a 0.47 stream read through the adapter) and by
++  `toolpath-gemini/tests/jsonl_sessions.rs`; the opencode database read by `tests/opencode_db.rs`.
++- Qualifier: the five records on `pipeline.rs` and `tests/goldens.rs` whose lines moved are re-anchored with
++  `--supersedes` (content unchanged). The round-trip concern had been re-anchored twice from the same parent by two
++  pieces landing together; one chain is kept, the other resolved `duplicate`. `qualifier review`: 57 fresh, 0 drifted.
++
++## Verification
++- `cargo test -p toolpath-goldens` (goldens, regressions 9/9, writers, opencode_db, qualifier): ok; no current set
++  breaks a contract.
++- Gates as `scripts/quality_gates.sh` with `--features path-cli/goldens`.
++
++## Paths
++```
++crates/toolpath-goldens/src/contracts.rs
++crates/toolpath-goldens/src/lib.rs
++crates/toolpath-goldens/src/model.rs
++crates/toolpath-goldens/src/pipeline.rs
++crates/toolpath-goldens/tests/goldens.rs
++crates/toolpath-goldens/tests/regressions.rs
++crates/toolpath-goldens/src/.qual
++crates/toolpath-goldens/tests/.qual
++pr/35-regression-corpus.md
++```
+-- 
+2.55.0
+
+From 76d1da2c663f639cafb455fe82954fdc88987655 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:31:06 -0400
+Subject: [PATCH] chore(goldens): repin after the actor-provider change;
+ pr/35-pi-provider
+
+---
+ .../tests/real_fixture_roundtrip.rs           |   4 +-
+ goldens/manifest.json                         | 132 +++++++++---------
+ .../roundtrip/claude-compacted-copilot.json   |   3 +-
+ goldens/roundtrip/claude-copilot.json         |   3 +-
+ goldens/roundtrip/claude-session-copilot.json |   3 +-
+ goldens/roundtrip/pi-copilot.json             |   3 +-
+ goldens/shed/claude-compacted.json            |   4 +-
+ goldens/shed/claude-session.json              |   4 +-
+ goldens/shed/claude.json                      |   4 +-
+ goldens/shed/codex.json                       |   4 +-
+ goldens/shed/copilot.json                     |   4 +-
+ goldens/shed/pi.json                          |   6 +-
+ pr/35-pi-provider.md                          |  53 +++++++
+ 13 files changed, 143 insertions(+), 84 deletions(-)
+ create mode 100644 pr/35-pi-provider.md
+
+diff --git a/crates/toolpath-pi/tests/real_fixture_roundtrip.rs b/crates/toolpath-pi/tests/real_fixture_roundtrip.rs
+index 769e6bbc..8bed94d6 100644
+--- a/crates/toolpath-pi/tests/real_fixture_roundtrip.rs
++++ b/crates/toolpath-pi/tests/real_fixture_roundtrip.rs
+@@ -269,7 +269,9 @@ fn provider_survives_round_trip() {
+         .collect();
+     assert!(!assistant.is_empty());
+     assert!(
+-        assistant.iter().all(|t| t.provider.as_deref() == Some("ollama")),
++        assistant
++            .iter()
++            .all(|t| t.provider.as_deref() == Some("ollama")),
+         "the pi reader keeps the provider"
+     );
+ 
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index fe21adab..9178fc9c 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -2,7 +2,7 @@
+   "goldens": [
+     {
+       "environment": {
+-        "cargo_lock_sha256": "416238c15bd93c251054c1883a8e9807df97340deab5685fa6847d4e867ff37b",
++        "cargo_lock_sha256": "6b50a0a859a421e09d33ba1c90fcffee6d32e30c50da49f397003d4e803fde9b",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+           "crates/path-cli/src/goldens.rs": "49712683d21e3008554dfd5324cce5f4d1f9879bc89f3d84f967120397ef3e80",
+@@ -30,10 +30,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++          "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++          "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+         }
+       },
+       "project": null,
+@@ -66,7 +66,7 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "416238c15bd93c251054c1883a8e9807df97340deab5685fa6847d4e867ff37b",
++        "cargo_lock_sha256": "6b50a0a859a421e09d33ba1c90fcffee6d32e30c50da49f397003d4e803fde9b",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+           "crates/path-cli/src/goldens.rs": "49712683d21e3008554dfd5324cce5f4d1f9879bc89f3d84f967120397ef3e80",
+@@ -94,10 +94,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++          "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++          "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+         }
+       },
+       "project": null,
+@@ -130,7 +130,7 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "416238c15bd93c251054c1883a8e9807df97340deab5685fa6847d4e867ff37b",
++        "cargo_lock_sha256": "6b50a0a859a421e09d33ba1c90fcffee6d32e30c50da49f397003d4e803fde9b",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+           "crates/path-cli/src/goldens.rs": "49712683d21e3008554dfd5324cce5f4d1f9879bc89f3d84f967120397ef3e80",
+@@ -171,10 +171,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++          "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++          "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+         }
+       },
+       "project": null,
+@@ -207,7 +207,7 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "416238c15bd93c251054c1883a8e9807df97340deab5685fa6847d4e867ff37b",
++        "cargo_lock_sha256": "6b50a0a859a421e09d33ba1c90fcffee6d32e30c50da49f397003d4e803fde9b",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+           "crates/path-cli/src/goldens.rs": "49712683d21e3008554dfd5324cce5f4d1f9879bc89f3d84f967120397ef3e80",
+@@ -235,10 +235,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++          "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++          "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+         }
+       },
+       "project": null,
+@@ -271,7 +271,7 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "416238c15bd93c251054c1883a8e9807df97340deab5685fa6847d4e867ff37b",
++        "cargo_lock_sha256": "6b50a0a859a421e09d33ba1c90fcffee6d32e30c50da49f397003d4e803fde9b",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+           "crates/path-cli/src/goldens.rs": "49712683d21e3008554dfd5324cce5f4d1f9879bc89f3d84f967120397ef3e80",
+@@ -299,10 +299,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++          "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++          "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+         }
+       },
+       "project": null,
+@@ -335,7 +335,7 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "416238c15bd93c251054c1883a8e9807df97340deab5685fa6847d4e867ff37b",
++        "cargo_lock_sha256": "6b50a0a859a421e09d33ba1c90fcffee6d32e30c50da49f397003d4e803fde9b",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+           "crates/path-cli/src/goldens.rs": "49712683d21e3008554dfd5324cce5f4d1f9879bc89f3d84f967120397ef3e80",
+@@ -363,10 +363,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++          "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++          "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+         }
+       },
+       "project": null,
+@@ -400,216 +400,216 @@
+   ],
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+-    "toolpath_dirty": true,
+-    "toolpath_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++    "toolpath_dirty": false,
++    "toolpath_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "7e6ea9e6d866e4bee9885c3f2fe836981e8228dc33dd07015da013cbba65ef89"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+-      "sha256": "29be8cb8c53fa3d9a49ec74c4f3c373adc973f8f03a9113a7accaaa74692d6f0"
++      "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+-      "sha256": "9c72e3e059c6ba73c3e75e8be9f28242cfbd8d23ce6112daf0310c5880f5d7b8"
++      "sha256": "28f87eeca796f69cb7529c4cea55ec5ecf3f80651cec9dfba1f941207c6b3534"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "1a7c14aa1d5521511d710acaa9aa43f8c6b91ce1433fffe91a911fbe75c3c0ec"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "d5fee6928c95df428b1688f48949b4280b92022abe2e2254640e55dcb5f01273"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+-      "sha256": "90b16b3f49f9b48e546d0f9c55b8109b0a076b65fa0baf4fb44bf7a70de34e80"
++      "sha256": "6116cbebdaad01b8f20fd906965550a0116b129b0ff22bb8e338aac5e3fd192d"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "bc8ae191b9776da0470eefacb6dd084fc7eb733505b6dc1612aa582a3fca8eec"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "7df3f81e3dd637aabee9ee606c3b2387541a6d62b86c333b6048936c2a5d573f"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "13d9de1a095eb91b8f06e75217bab79b6f6aee07478df543e14e02776825ea6e"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "17c9c64453d90a3f543d972419122374aeaa13a39928f22e233e80a1f1dfeffd"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "3ed2b5ed209be2dc71160d6e0efc506ee3e3ddfecee77426516a3cea12cbedde",
++        "binary_sha256": "c7f79cfce64a827799d408daeb99fe64149c83a68cde81ed8975797303ecfad8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "04afa5363dfad7e8e3270cbf34689f7533f80601"
++        "repo_rev": "371b5259ceffb3a2c46406ffe25928c1d214b2f5"
+       },
+-      "sha256": "cfdc5a9e5091fa29e5b2fa4e276c4c4b65a04cb931206f6fc536730010af901a"
++      "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+   ],
+   "shed": [
+     {
+       "file": "goldens/shed/claude-compacted.json",
+-      "sha256": "1d922687f8b733f4187a64291a3267b586172ec49241612cd3e483a642caa881"
++      "sha256": "6df6764b892bcfdd8f35801383d725fa99f4673ec29d1fc2546811ec52b9ff39"
+     },
+     {
+       "file": "goldens/shed/claude-session.json",
+-      "sha256": "c6490d29e9d40322899209c802bc9de4da77d96b473c28c91ef4db8c7e0a5bcd"
++      "sha256": "962e2aa59d24e5f7b5ed13a6fbbafafadf575685fa3a20bd604d18f465409b83"
+     },
+     {
+       "file": "goldens/shed/claude.json",
+-      "sha256": "8d2cc85c6f497e35b183ab6a62927ebf4fe30a91c93ad075bc804fd26eeaeb60"
++      "sha256": "2095275066bfab1458c3c84944c31c5e7c5e5f8f70ea617ab01d0f29595f5bf3"
+     },
+     {
+       "file": "goldens/shed/codex.json",
+-      "sha256": "86ac183e13dce24dd18456f1d10e4e8d09682b0627450bbb5a0dfb6dd0db308b"
++      "sha256": "1866da5af750e10f29514d1fdab8e5c082f948a2ca7f8002125129ab3c1fa2d3"
+     },
+     {
+       "file": "goldens/shed/copilot.json",
+-      "sha256": "8ded4043d23f36fbf7bf681ffae4b7c60d8119d982541f5449cdccf36b487260"
++      "sha256": "fedd01cbc36a6fd6b539315b2bfbd49c80a50035a1727d050754a00b2d992896"
+     },
+     {
+       "file": "goldens/shed/pi.json",
+-      "sha256": "499985e8261f938cb6494d0ddcccd9e98cbac8f4fd6f5c1f6441b460bfe679ca"
++      "sha256": "041f72a6e5d20199ce13e306d1c08f4e1155fed6fc42581100c91078266f9c0a"
+     }
+   ]
+ }
+diff --git a/goldens/roundtrip/claude-compacted-copilot.json b/goldens/roundtrip/claude-compacted-copilot.json
+index e9bb9668..c1ed2a1f 100644
+--- a/goldens/roundtrip/claude-compacted-copilot.json
++++ b/goldens/roundtrip/claude-compacted-copilot.json
+@@ -15,12 +15,13 @@
+     "tool_uses": 2
+   },
+   "ir2": {
+-    "key_paths": 37,
++    "key_paths": 36,
+     "steps": 6,
+     "text_chars": 317,
+     "tool_uses": 2
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+diff --git a/goldens/roundtrip/claude-copilot.json b/goldens/roundtrip/claude-copilot.json
+index e46a77be..f70eb4c0 100644
+--- a/goldens/roundtrip/claude-copilot.json
++++ b/goldens/roundtrip/claude-copilot.json
+@@ -11,12 +11,13 @@
+     "tool_uses": 19
+   },
+   "ir2": {
+-    "key_paths": 64,
++    "key_paths": 63,
+     "steps": 34,
+     "text_chars": 4563,
+     "tool_uses": 19
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+diff --git a/goldens/roundtrip/claude-session-copilot.json b/goldens/roundtrip/claude-session-copilot.json
+index 9fdb8608..52358504 100644
+--- a/goldens/roundtrip/claude-session-copilot.json
++++ b/goldens/roundtrip/claude-session-copilot.json
+@@ -10,12 +10,13 @@
+     "tool_uses": 2
+   },
+   "ir2": {
+-    "key_paths": 32,
++    "key_paths": 31,
+     "steps": 4,
+     "text_chars": 292,
+     "tool_uses": 2
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+diff --git a/goldens/roundtrip/pi-copilot.json b/goldens/roundtrip/pi-copilot.json
+index 596d13b3..a22c26c0 100644
+--- a/goldens/roundtrip/pi-copilot.json
++++ b/goldens/roundtrip/pi-copilot.json
+@@ -14,12 +14,13 @@
+     "tool_uses": 10
+   },
+   "ir2": {
+-    "key_paths": 45,
++    "key_paths": 44,
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+diff --git a/goldens/shed/claude-compacted.json b/goldens/shed/claude-compacted.json
+index c1b87d2d..25d90723 100644
+--- a/goldens/shed/claude-compacted.json
++++ b/goldens/shed/claude-compacted.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "claude",
+   "ir": {
+-    "bytes": 3610,
++    "bytes": 3585,
+     "steps": 7,
+-    "string_chars": 1563,
++    "string_chars": 1552,
+     "text_chars": 317,
+     "tool_uses": 2
+   },
+diff --git a/goldens/shed/claude-session.json b/goldens/shed/claude-session.json
+index c6f0b7e2..418e57ce 100644
+--- a/goldens/shed/claude-session.json
++++ b/goldens/shed/claude-session.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "claude",
+   "ir": {
+-    "bytes": 175869,
++    "bytes": 175844,
+     "steps": 27,
+-    "string_chars": 157989,
++    "string_chars": 157978,
+     "text_chars": 292,
+     "tool_uses": 2
+   },
+diff --git a/goldens/shed/claude.json b/goldens/shed/claude.json
+index be6d5001..88e73e6c 100644
+--- a/goldens/shed/claude.json
++++ b/goldens/shed/claude.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "claude",
+   "ir": {
+-    "bytes": 58319,
++    "bytes": 58294,
+     "steps": 61,
+-    "string_chars": 36223,
++    "string_chars": 36212,
+     "text_chars": 4563,
+     "tool_uses": 19
+   },
+diff --git a/goldens/shed/codex.json b/goldens/shed/codex.json
+index 58d0d96f..0f1eab4c 100644
+--- a/goldens/shed/codex.json
++++ b/goldens/shed/codex.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "codex",
+   "ir": {
+-    "bytes": 89939,
++    "bytes": 89920,
+     "steps": 42,
+-    "string_chars": 69898,
++    "string_chars": 69893,
+     "text_chars": 13445,
+     "tool_uses": 1
+   },
+diff --git a/goldens/shed/copilot.json b/goldens/shed/copilot.json
+index d636f18e..8b5522b8 100644
+--- a/goldens/shed/copilot.json
++++ b/goldens/shed/copilot.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "copilot",
+   "ir": {
+-    "bytes": 47943,
++    "bytes": 47922,
+     "steps": 14,
+-    "string_chars": 41738,
++    "string_chars": 41731,
+     "text_chars": 4594,
+     "tool_uses": 11
+   },
+diff --git a/goldens/shed/pi.json b/goldens/shed/pi.json
+index f949401e..82ca82a7 100644
+--- a/goldens/shed/pi.json
++++ b/goldens/shed/pi.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "pi",
+   "ir": {
+-    "bytes": 16361,
++    "bytes": 16365,
+     "steps": 12,
+-    "string_chars": 11243,
++    "string_chars": 11247,
+     "text_chars": 5296,
+     "tool_uses": 10
+   },
+@@ -54,7 +54,7 @@
+     }
+   ],
+   "same_format": {
+-    "bytes": 17007,
++    "bytes": 16974,
+     "dropped": [
+       {
+         "example": "<withheld>",
+diff --git a/pr/35-pi-provider.md b/pr/35-pi-provider.md
+new file mode 100644
+index 00000000..b243f647
+--- /dev/null
++++ b/pr/35-pi-provider.md
+@@ -0,0 +1,53 @@
++# feat(convo,pi): who served the model rides the RFC's actor slot; pi keeps its provider across a round trip
++
++Status: planned (ruling 2026-10-19, design consultant: "Pi provider via the RFC's existing slot; do it now") · Base: the goldens stack once merged
++
++## Why
++A pi session run on `ollama` came back as `anthropic` after any round trip: the conversation view had no field for
++who served the model, the pi reader dropped `provider`, and the pi writer filled in `"anthropic"`. The format already
++has the slot — RFC.md and the agent-coding-session kind put `provider` and `model` on `meta.actors["agent:…"]` — but
++derive filled it with the harness name (`pi`, `claude-code`), which duplicates `meta.source` and inverts the RFC's own
++example (`"agent:claude-code": {provider: "anthropic", …}`).
++
++## What changes
++- `toolpath-convo`: `Turn.provider: Option<String>` (serde default, skipped when absent). `derive` writes it to
++  `meta.actors["agent:<model>"].provider` (a later turn can fill it if the first had none) and no longer writes the
++  harness there; `extract` reads it back, ignoring legacy values equal to the harness id. Non-agent actors unchanged.
++- `toolpath-pi`: the reader keeps `AgentMessage::Assistant.provider`; the writer prefers `Turn.provider` over its
++  `"anthropic"` default.
++- Stale header docs in `toolpath-pi`/`toolpath-codex` `project.rs` that described a `Turn.extra` field (it does not
++  exist) are replaced with what the code does; codex's encrypted reasoning and per-call tool extras are not round-tripped.
++- Every other `Turn { … }` literal in the workspace gains `provider: None` (mechanical).
++- Qualifier: f898c8ff (pi provider defaults to anthropic) resolved as fixed; 39565202 (path-02 jsonl twin) resolved
++  as fixed by 8813140.
++
++## Snapshot review
++- `document@*`: the agent actor's `provider` is no longer the harness (pi: `"ollama"`, others: absent until their
++  readers fill it — follow-ups: codex `session_meta.model_provider`, opencode `providerID`, claude `"anthropic"`).
++- `ir@pi`: each assistant turn carries `provider: "ollama"`.
++- 32 cross-harness `round_trip@*` list `paths[].meta.actors.<actor>.provider` as lost: the key path now exists in the
++  source only on non-agent actors (tool:/ci:), which the targets don't recreate. Not a content loss.
++- `shed@*` / `goldens/shed/*.json`: IR `string_chars` drops by the harness name's length (11 for `claude-code`,
++  5 `codex`, 7 `copilot`) — the removed duplicate, not conversation text. Recaptured with `path goldens shed --json`.
++
++## Verification
++- `cargo test -p toolpath-pi --test real_fixture_roundtrip provider_survives_round_trip`: the real pi fixture rewritten
++  to `ollama`/`gemma4` reads, derives (`meta.actors["agent:gemma4"].provider == "ollama"`), round-trips and projects
++  back with `provider: "ollama"`, `model: "gemma4"` on every assistant entry.
++- `toolpath-convo` derive tests: `test_actors_in_meta` (provider = the turn's, not the harness),
++  `test_agent_actor_without_provider_names_none`.
++- `path goldens check`: 43 ok, 0 problems. Full gates with `--features path-cli/goldens,toolpath/verify`.
++
++## Paths
++```
++crates/toolpath-convo/src/lib.rs
++crates/toolpath-convo/src/derive.rs
++crates/toolpath-convo/src/extract.rs
++crates/toolpath-pi/src/provider.rs
++crates/toolpath-pi/src/project.rs
++crates/toolpath-pi/tests/real_fixture_roundtrip.rs
++crates/toolpath-codex/src/project.rs
++crates/*/src/**/*.rs (provider: None)
++crates/toolpath-goldens/snapshots/
++goldens/
++```
+-- 
+2.55.0
+

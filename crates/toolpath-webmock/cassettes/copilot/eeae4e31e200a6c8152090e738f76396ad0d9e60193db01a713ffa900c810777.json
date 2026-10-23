@@ -1,0 +1,56 @@
+{
+ "agent": "copilot",
+ "recorded_at": "2026-10-15T19:38:47.615Z",
+ "key": "eeae4e31e200a6c8152090e738f76396ad0d9e60193db01a713ffa900c810777",
+ "loose_key": "b6d4f05a12e2cc49afb621fbf0f69d3096d6cbd8f8f438b389281e1f533da480",
+ "model": "",
+ "request": {
+  "method": "GET",
+  "url": "/mcp/readonly",
+  "upstream": "https://api.githubcopilot.com",
+  "headers": {
+   "accept": "text/event-stream",
+   "authorization": "<redacted>",
+   "mcp-protocol-version": "2025-11-25",
+   "mcp-session-id": "c195c503-97aa-4761-9ad1-2d9a0e446a15",
+   "user-agent": "copilot/1.0.61 (darwin v24.19.0) term/unknown",
+   "x-mcp-host": "copilot-cli",
+   "x-mcp-tools": "get_file_contents,search_code,get_copilot_space,list_copilot_spaces,web_search,search_users"
+  },
+  "body": "",
+  "body_encoding": "identity",
+  "normalized": ""
+ },
+ "response": {
+  "status": 405,
+  "headers": {
+   "access-control-allow-headers": "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Mcp-Method, Mcp-Name, Last-Event-ID, Authorization, X-MCP-Readonly, X-MCP-Toolsets, X-MCP-Tools, X-MCP-Exclude-Tools, X-MCP-Features, X-MCP-Lockdown, X-MCP-Insiders, Mcp-Param-owner, Mcp-Param-repo",
+   "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "Mcp-Session-Id, WWW-Authenticate",
+   "access-control-max-age": "86400",
+   "allow": "POST",
+   "content-security-policy": "default-src 'none'; sandbox",
+   "content-type": "text/plain; charset=utf-8",
+   "date": "Thu, 15 Oct 2026 19:38:47 GMT",
+   "server": "github.com",
+   "strict-transport-security": "max-age=31536000",
+   "vary": "X-MCP-Features",
+   "x-content-type-options": "nosniff",
+   "x-copilot-service-request-id": "79108b68-aa3a-459b-9817-73eb3a69a8e0",
+   "x-github-backend": "Kubernetes",
+   "x-github-edge-region": "iad",
+   "x-github-request-id": "D574:21A1CB:2D19275:2F51F0A:6AD12BC7"
+  },
+  "chunks": [
+   {
+    "t_ms": 47,
+    "b64": "TWV0aG9kIE5vdCBBbGxvd2VkCg=="
+   }
+  ],
+  "bytes": 19,
+  "duration_ms": 47,
+  "sse": false,
+  "text_preview": "Method Not Allowed\n"
+ }
+}

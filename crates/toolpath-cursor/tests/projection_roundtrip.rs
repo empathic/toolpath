@@ -231,6 +231,7 @@ fn projector_accepts_foreign_view_shape() {
         }),
         turns: vec![
             Turn {
+                provider: None,
                 id: "uA".into(),
                 parent_id: None,
                 group_id: None,
@@ -238,6 +239,7 @@ fn projector_accepts_foreign_view_shape() {
                 timestamp: "2026-06-01T00:00:00Z".into(),
                 text: "rename main".into(),
                 thinking: None,
+                thinking_signature: None,
                 tool_uses: vec![],
                 model: None,
                 stop_reason: None,
@@ -251,6 +253,7 @@ fn projector_accepts_foreign_view_shape() {
                 file_mutations: vec![],
             },
             Turn {
+                provider: None,
                 id: "aA".into(),
                 parent_id: Some("uA".into()),
                 group_id: None,
@@ -258,6 +261,7 @@ fn projector_accepts_foreign_view_shape() {
                 timestamp: "2026-06-01T00:00:01Z".into(),
                 text: "done".into(),
                 thinking: Some("planning...".into()),
+                thinking_signature: None,
                 tool_uses: vec![ToolInvocation {
                     id: "claude_edit".into(),
                     name: "Edit".into(),
@@ -305,4 +309,71 @@ fn projector_accepts_foreign_view_shape() {
     assert_eq!(tf.tool_call_id, "claude_edit");
     // Both content blobs registered.
     assert_eq!(rebuilt.content_blobs.len(), 2);
+}
+
+// ── Thinking text ────────────────────────────────────────────────────
+
+/// A real Cursor bubble carries its thinking as `thinking: {text, signature}` (and a
+/// `thinkingDurationMs`), with `allThinkingBlocks` empty.
+const THINKING_SQL: &str = r#"
+    CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+    CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+
+    INSERT INTO ItemTable (key, value) VALUES
+      ('composer.composerHeaders',
+       '{"allComposers":[{"type":"head","composerId":"824686cd-875e-47da-a90b-dbc3e523efb8","name":"Think","createdAt":1000,"lastUpdatedAt":2500,"unifiedMode":"agent","workspaceIdentifier":{"id":"ws-hash","uri":{"$mid":1,"fsPath":"/proj","external":"file:///proj","path":"/proj","scheme":"file"}}}]}');
+
+    INSERT INTO cursorDiskKV (key, value) VALUES
+      ('composerData:824686cd-875e-47da-a90b-dbc3e523efb8',
+       '{"_v":16,"composerId":"824686cd-875e-47da-a90b-dbc3e523efb8","name":"Think","createdAt":1000,"lastUpdatedAt":2500,"isAgentic":true,"unifiedMode":"agent","agentBackend":"cursor-agent","modelConfig":{"modelName":"default","maxMode":false,"selectedModels":[{"modelId":"default","parameters":[]}]},"fullConversationHeadersOnly":[{"bubbleId":"11111111-1111-4111-a111-111111111111","type":1},{"bubbleId":"22222222-2222-4222-a222-222222222222","type":2}]}'),
+      ('bubbleId:824686cd-875e-47da-a90b-dbc3e523efb8:11111111-1111-4111-a111-111111111111',
+       '{"_v":3,"type":1,"bubbleId":"11111111-1111-4111-a111-111111111111","createdAt":"2026-06-01T00:00:00.000Z","text":"what is 2+2","conversationState":"~"}'),
+      ('bubbleId:824686cd-875e-47da-a90b-dbc3e523efb8:22222222-2222-4222-a222-222222222222',
+       '{"_v":3,"type":2,"bubbleId":"22222222-2222-4222-a222-222222222222","createdAt":"2026-06-01T00:00:01.000Z","text":"4","modelInfo":{"modelName":"claude-opus-4-7"},"allThinkingBlocks":[],"thinking":{"signature":"sig-from-cursor","text":"Two plus two is four."},"thinkingDurationMs":1200}')
+      ;
+"#;
+
+fn load_thinking_source() -> CursorSession {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("state.vscdb");
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(THINKING_SQL).unwrap();
+    drop(conn);
+    let session = DbReader::open(&db_path)
+        .unwrap()
+        .load_session("824686cd-875e-47da-a90b-dbc3e523efb8")
+        .unwrap();
+    std::mem::forget(dir);
+    session
+}
+
+/// The thinking text lives in `bubble.thinking.text`; the reader must lift it into the turn.
+#[test]
+fn a_bubbles_thinking_object_is_the_turns_thinking() {
+    let source = load_thinking_source();
+    let view = session_to_view(&source);
+    let t = view.turns.iter().find(|t| t.text == "4").expect("answer");
+    assert_eq!(t.thinking.as_deref(), Some("Two plus two is four."));
+}
+
+/// cursor -> cursor keeps the thinking text, and the signature Cursor issued for it.
+#[test]
+fn cursor_to_cursor_keeps_the_thinking_text_and_signature() {
+    let source = load_thinking_source();
+    let (view_back, rebuilt, _) = roundtrip(&source);
+    let t = view_back.turns.iter().find(|t| t.text == "4").unwrap();
+    assert_eq!(t.thinking.as_deref(), Some("Two plus two is four."));
+    let b = rebuilt
+        .bubbles
+        .iter()
+        .find(|b| b.text == "4")
+        .expect("rebuilt answer bubble");
+    assert_eq!(
+        b.thinking.as_ref().map(|t| t.text.as_str()),
+        Some("Two plus two is four.")
+    );
+    assert_eq!(
+        b.thinking.as_ref().and_then(|t| t.signature.as_deref()),
+        Some("sig-from-cursor")
+    );
 }

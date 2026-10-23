@@ -1,0 +1,49 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: c521172607075bff33beea2d03530829bcc301a344caa66de59cf8061a0443df
+input_file: test-fixtures/opencode/convo-compacted.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 14,
+    "text_chars": 5740,
+    "tool_uses": 10,
+    "key_paths": 54
+  },
+  "after": {
+    "steps": 15,
+    "text_chars": 5740,
+    "tool_uses": 10,
+    "key_paths": 59
+  },
+  "lost": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].path.base.ref",
+    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.workdir"
+  ],
+  "gained": [
+    "paths[].meta.actors.<actor>.provider",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+    "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+    "paths[].steps[].change.<artifact>.structural.raw.type",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string",
+    "paths[].steps[].change.count.sh.raw",
+    "paths[].steps[].change.count.sh.structural.after",
+    "paths[].steps[].change.notes.md.raw",
+    "paths[].steps[].change.notes.md.structural.after"
+  ]
+}

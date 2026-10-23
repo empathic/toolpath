@@ -1,0 +1,15 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.twice_around[agent]"
+info:
+  adapter: toolpath_pi
+  agent: pi
+  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
+input_file: test-fixtures/pi/convo.jsonl
+---
+{
+  "outcome": "compared",
+  "lost": [],
+  "gained": [],
+  "changed": []
+}

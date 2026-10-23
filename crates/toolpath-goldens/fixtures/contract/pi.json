@@ -1,0 +1,139 @@
+{
+  "writer": "pi",
+  "ops": [
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.provider", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.value", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {
+      "op": "drop",
+      "path": "paths[].meta.producer.name",
+      "why": "toolpath's own producer stamp; the target format has no place for it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.producer.version",
+      "why": "toolpath's own producer stamp; the target format has no place for it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.vcs_remote",
+      "why": "pi's session records no vcs remote"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.branch",
+      "why": "pi's session records no branch"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.ref",
+      "why": "pi's session records no ref"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+      "why": "pi reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+      "why": "pi reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+      "why": "pi's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+      "why": "pi's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
+      "why": "pi's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
+      "why": "pi's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+      "why": "pi records no VCS branch per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+      "why": "pi records no VCS revision per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.group_id",
+      "why": "an accounting grouping key the target format does not store"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+      "why": "pi reports no reasoning-token breakdown"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.before",
+      "why": "a write in pi's format carries the new content only, not the prior file"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.operation",
+      "why": "pi's format does not name the file operation"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].meta.actors.<actor>.provider",
+      "value": "anthropic",
+      "why": "pi needs a provider on every assistant message; with none in the view the writer writes anthropic, which reads back as the provider"
+    }
+  ]
+}

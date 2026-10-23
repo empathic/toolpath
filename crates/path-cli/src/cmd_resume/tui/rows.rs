@@ -113,6 +113,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(n, (role, text, timestamp))| Turn {
+                    provider: None,
                     id: format!("t{n}"),
                     parent_id: n.checked_sub(1).map(|p| format!("t{p}")),
                     group_id: None,
@@ -120,6 +121,7 @@ mod tests {
                     timestamp: timestamp.to_string(),
                     text: text.to_string(),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,

@@ -1,0 +1,1488 @@
+{
+  "about": "The claims the site (home, format, FAQ, kind pages), FAQ.md, the RFC, README.md and the crate READMEs docs.rs renders make, quoted from their source in this repo. The status of each is its qualifier record (tag claim:<id>, on the claim's own lines): pass, concern, or blocker. The generator checks each quote is still in the file and that a live record carries it; the snapshot reading is kept beside the record as snapshot_status.",
+  "claims": [
+    {
+      "id": "open-versioned-format",
+      "file": "site/index.md",
+      "quote": "Toolpath is an open, versioned format for coding-agent sessions.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "parse-in-project-out",
+      "file": "site/index.md",
+      "quote": "project it out to any supported harness",
+      "operations": [
+        "parse",
+        "project"
+      ],
+      "evidence_kinds": [
+        "ir",
+        "document",
+        "validate",
+        "projection",
+        "round_trip"
+      ]
+    },
+    {
+      "id": "build-tools-once",
+      "file": "site/index.md",
+      "quote": "and build your tools once for all of them.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "where-sessions-live",
+      "file": "site/index.md",
+      "quote": "None of these are documented, and any of them can change in the next release.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "ir"
+      ]
+    },
+    {
+      "id": "three-moves",
+      "file": "site/index.md",
+      "quote": "everything it does is one of three moves across them.",
+      "operations": [
+        "parse",
+        "project"
+      ],
+      "evidence_kinds": [
+        "ir",
+        "projection"
+      ]
+    },
+    {
+      "id": "fig2-intent",
+      "file": "site/index.md",
+      "quote": "meta.intent</b> why",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "parse-in-stable",
+      "file": "site/index.md",
+      "quote": "A session crosses the boundary once and becomes a stable document you can keep, query, and share.",
+      "operations": [
+        "parse",
+        "share"
+      ],
+      "evidence_kinds": [
+        "document",
+        "validate"
+      ]
+    },
+    {
+      "id": "project-out-any-writable",
+      "file": "site/index.md",
+      "quote": "Any writable harness, not just the one the session started in.",
+      "operations": [
+        "project"
+      ],
+      "evidence_kinds": [
+        "projection",
+        "round_trip"
+      ]
+    },
+    {
+      "id": "resume-handoff",
+      "file": "site/index.md",
+      "quote": "start in one agent, continue in another, with the conversation and its tool calls.",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": [],
+      "note": "Resume is shown by the scratch resume matrix (agents answering from their history), not by a committed snapshot."
+    },
+    {
+      "id": "drops-are-reported",
+      "file": "site/index.md",
+      "quote": "What a harness cannot hold is dropped, and the goldens' shed reports say what.",
+      "operations": [
+        "project"
+      ],
+      "evidence_kinds": [
+        "shed",
+        "round_trip"
+      ]
+    },
+    {
+      "id": "one-schema",
+      "file": "site/index.md",
+      "quote": "Build against the format and it works with sessions from every supported harness.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "next-agent-one-parser",
+      "file": "site/index.md",
+      "quote": "When the next agent ships, one new parser brings it into every tool you already have.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "query-every-session",
+      "file": "site/index.md",
+      "quote": "runs one jq filter across every session",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "resume-anywhere",
+      "file": "site/index.md",
+      "quote": "moves a Claude Code session into Codex: the conversation and its tool calls, so Codex starts from what Claude Code was told and tried.",
+      "operations": [
+        "project",
+        "resume"
+      ],
+      "evidence_kinds": [
+        "projection"
+      ]
+    },
+    {
+      "id": "archive-search",
+      "file": "site/index.md",
+      "quote": "keeps every session on the machine, incrementally, in one format",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "pathbase-stores-shares-resumes",
+      "file": "site/index.md",
+      "quote": "stores, shares, and resumes sessions in Toolpath.",
+      "operations": [
+        "share",
+        "resume"
+      ],
+      "evidence_kinds": [
+        "stored",
+        "stats",
+        "ir_back",
+        "losses"
+      ],
+      "note": "Share is pinned by pathbase-goldens; resuming from Pathbase is not."
+    },
+    {
+      "id": "pr-reviewers-see",
+      "file": "site/index.md",
+      "quote": "Link one from a PR and reviewers see what was asked, tried, and rejected.",
+      "operations": [
+        "share"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "apache-2",
+      "file": "site/index.md",
+      "quote": "The format, the <code>path</code> CLI, and every crate.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "versioned-kinds",
+      "file": "site/index.md",
+      "quote": "A revision ships at a new URI, and documents written against an old one stay valid.",
+      "operations": [],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "open-to-contributions",
+      "file": "site/index.md",
+      "quote": "Parser crates for new agents and proposals for the schema are welcome from anyone, not just Empathic.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "published-spec",
+      "file": "site/index.md",
+      "quote": "Implement it in any language.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "supported-agents",
+      "file": "site/index.md",
+      "quote": "Copilot CLI <em>(preview)</em>",
+      "operations": [
+        "parse",
+        "project"
+      ],
+      "evidence_kinds": [
+        "ir",
+        "projection"
+      ]
+    },
+    {
+      "id": "parsing-captures",
+      "file": "site/index.md",
+      "quote": "Parsing captures the conversation: prompts, tool calls, reasoning, file changes, sub-agent work, token usage.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "ir",
+        "document",
+        "validate"
+      ]
+    },
+    {
+      "id": "projecting-own-layout",
+      "file": "site/index.md",
+      "quote": "Projecting writes a session in the harness’s own layout.",
+      "operations": [
+        "project"
+      ],
+      "evidence_kinds": [
+        "projection",
+        "round_trip"
+      ]
+    },
+    {
+      "id": "resume-observed-2026-10-15",
+      "file": "site/index.md",
+      "quote": "resumed projected sessions and answered from their history",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "support-table-format-notes",
+      "file": "site/index.md",
+      "quote": "says what each harness is verified against",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "git-github-same-schema",
+      "file": "site/index.md",
+      "quote": "Git history and GitHub pull requests parse into the same schema",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "quick-install",
+      "file": "site/index.md",
+      "quote": "https://toolpath.net/install.sh | bash</code>",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "cargo-install",
+      "file": "site/index.md",
+      "quote": "</span>cargo install path-cli</code>",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "quickstart-flow",
+      "file": "site/index.md",
+      "quote": "path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/4e865c65-7bb0-460e-9e86-6c76d31949ce --harness codex",
+      "operations": [
+        "share",
+        "resume"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "library-calls",
+      "file": "site/index.md",
+      "quote": "Everything the CLI does is a library call",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "claude-plugin",
+      "file": "site/index.md",
+      "quote": "as slash commands and installs the CLI on first use.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "graph-paths-steps",
+      "file": "site/pages/format.md",
+      "quote": "Every document is a **Graph**. A Graph holds **Paths**. A Path holds **Steps**.",
+      "operations": [],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "inner-types-not-root",
+      "file": "site/pages/format.md",
+      "quote": "never as the JSON root on their own",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "minimal-fixture",
+      "file": "site/pages/format.md",
+      "quote": "Every Toolpath document looks like this.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "dag-dead-ends",
+      "file": "site/pages/format.md",
+      "quote": "Dead ends are implicit: steps not in the ancestry of `path.head`.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "exploration-fork-merge",
+      "file": "site/pages/format.md",
+      "quote": "that's a **merge** of two parallel branches.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "typed-actors",
+      "file": "site/pages/format.md",
+      "quote": "Typed actors: `human:`, `agent:`, `tool:`, `ci:`",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "scoped-signatures",
+      "file": "site/pages/format.md",
+      "quote": "Scoped signatures: author, reviewer",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "jsonl-one-path",
+      "file": "site/pages/format.md",
+      "quote": "stream encodes exactly one inline Path and seals to a single-path Graph at the file boundary.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "examples-tested-in-ci",
+      "file": "site/pages/format.md",
+      "quote": "the fixtures used throughout these docs and tested in CI.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-root-is-graph",
+      "file": "RFC.md",
+      "quote": "They are not valid document roots.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-ref-must-be-sealed",
+      "file": "RFC.md",
+      "quote": "entries MUST point to sealed `.path.json` files",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-id-uniqueness",
+      "file": "RFC.md",
+      "quote": "All `step.id` values must be unique within the path",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-actor-prefix",
+      "file": "RFC.md",
+      "quote": "The prefix is one of `human`, `agent`, `tool`, or `ci`",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-dead-ends-query",
+      "file": "RFC.md",
+      "quote": "Returns steps that have no descendants leading to head.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-jcs-signatures",
+      "file": "RFC.md",
+      "quote": "Toolpath uses **JCS (RFC",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-schema-enforces",
+      "file": "RFC.md",
+      "quote": "The schema validates `Graph` documents (the single root type) and enforces:",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-kinds-immutable",
+      "file": "RFC.md",
+      "quote": "Kind URIs are",
+      "operations": [],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "rfc-vcs-agnostic",
+      "file": "RFC.md",
+      "quote": "Toolpath is VCS-agnostic.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-beyond-vcs-granularity",
+      "file": "RFC.md",
+      "quote": "Multiple steps can occur between VCS commits",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "rfc-beyond-vcs-abandoned-paths",
+      "file": "RFC.md",
+      "quote": "VCS tools lose deleted branches; Toolpath preserves dead ends for reflection",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-beyond-vcs-multi-perspective",
+      "file": "RFC.md",
+      "quote": "Raw diff + structural AST ops + semantic intent",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-beyond-vcs-actor-provenance",
+      "file": "RFC.md",
+      "quote": "Link actors to external identities (GitHub, email, etc.)",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-beyond-vcs-signatures",
+      "file": "RFC.md",
+      "quote": "Author and reviewer signatures on the same artifact",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "rfc-beyond-vcs-tool-agnostic",
+      "file": "RFC.md",
+      "quote": "Capture changes from AI agents, formatters, linters that may not create VCS commits",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "kind-index-immutable",
+      "file": "site/kinds/index.md",
+      "quote": "Kind URIs are immutable: revisions ship at a new version URI, and old URIs keep meaning what they always meant.",
+      "operations": [],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "kind-index-current",
+      "file": "site/kinds/index.md",
+      "quote": "**current** — the only version producers write",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-one-derivation",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "Every such path comes from one place: the shared `ConversationView → Path` derivation in `toolpath-convo` (`derive_path`)",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-changed-group-id",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "the turn payload gains an optional `group_id`, and group-level token accounting is now specified",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-only-version-written",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "v1.1.0 is the only version producers write",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-turn-payload",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "Its `structural` object always carries:",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "kind-v110-group-last-step",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "the run's **last step carries the group's total `token_usage`, verbatim from the source**",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "kind-v110-session-totals",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "summing `token_usage` over a v1.1.0 path's steps yields the session totals.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document",
+        "known_defects"
+      ]
+    },
+    {
+      "id": "kind-v110-attributed",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "Among current producers, **Codex does**",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-tool-uses",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "`id`, `name`, `input`, and `category` are always present",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "kind-v110-token-usage-fields",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "| `input_tokens`       | integer \\| null | always present",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "validate"
+      ]
+    },
+    {
+      "id": "kind-v110-file-write",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "each with `structural.type` of `\"file.write\"`",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-non-turn",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "become steps with `structural.type` of `\"conversation.event\"`",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-actors",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "`step.actor` follows the `type:name` convention, assigned by role:",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-meta-source",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "the producing harness: `claude-code`, `gemini-cli`, `codex`, `copilot`, `opencode`, `cursor`, or `pi`",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "kind-v110-meta-flattened",
+      "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+      "quote": "sit directly under `meta` (they ride `PathMeta`'s flattened `extra`), not under a nested `meta.extra`.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "format-no-neutral-format",
+      "file": "site/pages/format.md",
+      "quote": "There's no neutral format for **saving** what actually happened",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-one-root",
+      "file": "site/pages/format.md",
+      "quote": "One root type, one parser path.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-change-perspectives",
+      "file": "site/pages/format.md",
+      "quote": "A step's `change` maps artifact URLs to perspectives",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-meta-optional",
+      "file": "site/pages/format.md",
+      "quote": "minimal documents need only `step` and `change`.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-dag-parents",
+      "file": "site/pages/format.md",
+      "quote": "Steps form a DAG via parent references.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-exploration-base",
+      "file": "site/pages/format.md",
+      "quote": "anchors the document to a starting commit. Bare paths in `change` (`src/main.rs`) are relative to that base.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-exploration-head",
+      "file": "site/pages/format.md",
+      "quote": "Walking back from the head gives the active history; everything else is exploration.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-exploration-fork",
+      "file": "site/pages/format.md",
+      "quote": "both branch from `step-001` — that's a **fork**.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-exploration-dead-end",
+      "file": "site/pages/format.md",
+      "quote": "nothing on its descendant chain reaches `path.head`.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-git-intent",
+      "file": "site/pages/format.md",
+      "quote": "`meta.intent` + linked refs",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-git-dead-ends",
+      "file": "site/pages/format.md",
+      "quote": "Dead ends preserved in the DAG",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-git-actor-per-step",
+      "file": "site/pages/format.md",
+      "quote": "Each actor gets their own step",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "format-git-granularity",
+      "file": "site/pages/format.md",
+      "quote": "Sub-commit: multiple steps between commits",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "format-ext-json",
+      "file": "site/pages/format.md",
+      "quote": "Sealed documents — PRs, releases, archived sessions",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-ext-jsonl",
+      "file": "site/pages/format.md",
+      "quote": "Live capture — one Path appended line-by-line as work happens",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-jsonl-no-multi-or-ref",
+      "file": "site/pages/format.md",
+      "quote": "Multi-path graphs and `$ref`-only entries can't be represented in JSONL",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "format-validate-schema",
+      "file": "site/pages/format.md",
+      "quote": "what `path p validate` checks against",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-what-verify",
+      "file": "site/pages/faq.md",
+      "quote": "what they tried that didn't work, and how to verify all of it.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-use-multi-actor",
+      "file": "site/pages/faq.md",
+      "quote": "Record the full provenance of a code change across multiple actors (humans, AI agents, formatters, linters)",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-use-abandoned",
+      "file": "site/pages/faq.md",
+      "quote": "Preserve abandoned approaches alongside the successful path",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-use-intent-refs-sigs",
+      "file": "site/pages/faq.md",
+      "quote": "Attach structured intent, external references, and signatures to changes",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-use-granularity",
+      "file": "site/pages/faq.md",
+      "quote": "Track changes at finer granularity than VCS commits",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "faq-not-realtime",
+      "file": "site/pages/faq.md",
+      "quote": "Toolpath is for provenance, not live editing",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-not-vcs",
+      "file": "site/pages/faq.md",
+      "quote": "Toolpath complements git/jj/hg, it doesn't replace them",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-not-binary",
+      "file": "site/pages/faq.md",
+      "quote": "The diff-based change model assumes text-like content",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-toolpath-base-uri",
+      "file": "site/pages/faq.md",
+      "quote": "A path's `base` can use a `toolpath:` URI to branch from another path's step",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-file-base",
+      "file": "site/pages/faq.md",
+      "quote": "You can also use `file:///` URIs for local-only provenance.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-vs-prov",
+      "file": "site/pages/faq.md",
+      "quote": "with built-in support for diffs, actor types, DAG structure, dead ends, and signatures",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-vs-sigstore",
+      "file": "site/pages/faq.md",
+      "quote": "then use Sigstore to attest that the release was built from that provenance chain.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-unified-diff",
+      "file": "site/pages/faq.md",
+      "quote": "Unified Diff (the format produced by `diff -u` and used by git) is widely understood",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "faq-dead-end-definition",
+      "file": "site/pages/faq.md",
+      "quote": "A step is a dead end if it's not an ancestor of `path.head`",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "faq-meta-optional",
+      "file": "site/pages/faq.md",
+      "quote": "A minimal document needs only `step` + `change`.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-merges",
+      "file": "site/pages/faq.md",
+      "quote": "Multiple parents represent a merge from parallel work.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-open-step-ids",
+      "file": "site/pages/faq.md",
+      "quote": "The examples use sequential IDs for readability. No formal requirement yet.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-open-structural-types",
+      "file": "site/pages/faq.md",
+      "quote": "Current leaning: namespaced with a `core` namespace for universal ops.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-open-privacy",
+      "file": "site/pages/faq.md",
+      "quote": "Current leaning: reference by default, with optional redaction markers.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faq-open-evolution",
+      "file": "site/pages/faq.md",
+      "quote": "Kind URIs are immutable and semver-versioned: a revision ships at a new version URI, and a superseded URI stays valid with the meaning it always had",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faqmd-artifact-urls",
+      "file": "FAQ.md",
+      "quote": "Artifacts are identified by URL.  The keys in the `change` object are URLs,",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faqmd-flat-list",
+      "file": "FAQ.md",
+      "quote": "Flat list** — tree structure implicit via `parent` refs (current approach)",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "faqmd-beyond-vcs",
+      "file": "FAQ.md",
+      "quote": "What Toolpath adds beyond any VCS:",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-toolpath-doctests",
+      "file": "crates/toolpath/README.md",
+      "quote": "```rust",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-convo-doctests",
+      "file": "crates/toolpath-convo/README.md",
+      "quote": "```rust,ignore",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-git-doctests",
+      "file": "crates/toolpath-git/README.md",
+      "quote": "```rust,no_run",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-github-doctests",
+      "file": "crates/toolpath-github/README.md",
+      "quote": "```rust,no_run",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-dot-doctests",
+      "file": "crates/toolpath-dot/README.md",
+      "quote": "```rust",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-md-doctests",
+      "file": "crates/toolpath-md/README.md",
+      "quote": "```rust",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-pathbase-client-doctests",
+      "file": "crates/pathbase-client/README.md",
+      "quote": "```rust",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-claude-doctests",
+      "file": "crates/toolpath-claude/README.md",
+      "quote": "```rust,ignore",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-codex-doctests",
+      "file": "crates/toolpath-codex/README.md",
+      "quote": "```rust,no_run",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-copilot-doctests",
+      "file": "crates/toolpath-copilot/README.md",
+      "quote": "```rust,no_run",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-cursor-doctests",
+      "file": "crates/toolpath-cursor/README.md",
+      "quote": "```rust,no_run",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-gemini-doctests",
+      "file": "crates/toolpath-gemini/README.md",
+      "quote": "```rust,ignore",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-opencode-doctests",
+      "file": "crates/toolpath-opencode/README.md",
+      "quote": "```rust,no_run",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-pi-doctests",
+      "file": "crates/toolpath-pi/README.md",
+      "quote": "```rust,no_run",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-toolpath-verify",
+      "file": "crates/toolpath/README.md",
+      "quote": "didn't work, and how to verify all of it.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-toolpath-serde",
+      "file": "crates/toolpath/README.md",
+      "quote": "Full serialization/deserialization",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-toolpath-deps",
+      "file": "crates/toolpath/README.md",
+      "quote": "it depends on nothing except `serde` and `serde_json`.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-git-every-commit",
+      "file": "crates/toolpath-git/README.md",
+      "quote": "where every commit becomes a step with typed actors, intent, and full diff provenance.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-github-every-event",
+      "file": "crates/toolpath-github/README.md",
+      "quote": "maps the full PR lifecycle into a single Toolpath Path where every event becomes a Step in the provenance DAG.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-dot-dead-ends",
+      "file": "crates/toolpath-dot/README.md",
+      "quote": "Steps are colored by actor type, dead ends are highlighted",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-claude-traceable",
+      "file": "crates/toolpath-claude/README.md",
+      "quote": "so every AI-assisted change has a traceable origin.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-claude-total-usage",
+      "file": "crates/toolpath-claude/README.md",
+      "quote": "`ConversationView.total_usage` sums all per-turn token counts",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-codex-no-fidelity-loss",
+      "file": "crates/toolpath-codex/README.md",
+      "quote": "the real unified diff as the `raw` perspective — no fidelity loss.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-copilot-resume-verified",
+      "file": "crates/toolpath-copilot/README.md",
+      "quote": "Verified against copilot CLI 1.0.61 on 2026-10-15",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-gemini-lossless",
+      "file": "crates/toolpath-gemini/README.md",
+      "quote": "**Yes** — verified by `tests/roundtrip.rs` on live fixtures",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-opencode-auth",
+      "file": "crates/toolpath-opencode/README.md",
+      "quote": "never read to avoid leaking secrets into derived documents.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-pathbase-client-surface",
+      "file": "crates/pathbase-client/README.md",
+      "quote": "The full surface mirrors the OpenAPI document.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-pi-tree",
+      "file": "crates/toolpath-pi/README.md",
+      "quote": "entry forms a tree via `id`/`parentId` fields, enabling in-place branching.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-open-format",
+      "file": "README.md",
+      "quote": "one schema that records what an agent did, why, what it tried that didn't work, and what it cost, independent of which agent did it.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-reads-all-writes-back",
+      "file": "README.md",
+      "quote": "Toolpath reads them all into one format and writes them back.",
+      "operations": [
+        "parse",
+        "project"
+      ],
+      "evidence_kinds": [
+        "ir",
+        "projection"
+      ]
+    },
+    {
+      "id": "readme-portability",
+      "file": "README.md",
+      "quote": "A session started in Claude Code can be picked up in Codex.",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-archive",
+      "file": "README.md",
+      "quote": "incrementally ingests every session on the machine into plain JSON under `~/.toolpath/`.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-unified-tooling",
+      "file": "README.md",
+      "quote": "it searches and aggregates across every session on the machine, whoever wrote them, using jq filters.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-token-accounting-bullet",
+      "file": "README.md",
+      "quote": "Real session totals, per-step attribution where the source reports it, and reasoning breakdowns",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-provenance-bullet",
+      "file": "README.md",
+      "quote": "Who changed what, why, and what was tried and abandoned.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-table-claude",
+      "file": "README.md",
+      "quote": "Resume: claude 2.1.285 answered from a projected session's history.",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": [
+        "projection"
+      ]
+    },
+    {
+      "id": "readme-table-codex",
+      "file": "README.md",
+      "quote": "Resume: codex-cli 0.162.1 answered from the projected history.",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-table-pi",
+      "file": "README.md",
+      "quote": "Resume: pi 0.84.3 answered from the projected history.",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-table-copilot",
+      "file": "README.md",
+      "quote": "Resume: copilot CLI 1.0.61 answered from the projected history.",
+      "operations": [
+        "resume"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-table-gemini",
+      "file": "README.md",
+      "quote": "Reads the `.json` chat files of gemini-cli ≤ 0.46 and the `chats/session-*.jsonl` record stream 0.47 writes",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "ir"
+      ]
+    },
+    {
+      "id": "readme-table-opencode",
+      "file": "README.md",
+      "quote": "Reads `opencode-stable.db` (1.18) and the older `opencode.db`.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "ir"
+      ]
+    },
+    {
+      "id": "readme-table-cursor",
+      "file": "README.md",
+      "quote": "Reads both header layouts: the ≤ 3.6 ItemTable key and Cursor 3.24's `composerHeaders` table.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "ir"
+      ]
+    },
+    {
+      "id": "readme-any-readable-to-any-writable",
+      "file": "README.md",
+      "quote": "Any readable session can be projected into any writable harness.",
+      "operations": [
+        "project"
+      ],
+      "evidence_kinds": [
+        "projection"
+      ]
+    },
+    {
+      "id": "readme-goldens-four",
+      "file": "README.md",
+      "quote": "pins read, write and round trip for recordings of all seven harnesses (nine sets) against each of the other six as a target",
+      "operations": [],
+      "evidence_kinds": [
+        "projection"
+      ]
+    },
+    {
+      "id": "readme-matrix-ci",
+      "file": "README.md",
+      "quote": "both run in `just ci`, which GitHub Actions runs on every pull request",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-round-trips-not-lossless",
+      "file": "README.md",
+      "quote": "Round trips are not lossless: the goldens' `shed` and `round_trip` snapshots list what each harness drops",
+      "operations": [
+        "project"
+      ],
+      "evidence_kinds": [
+        "shed",
+        "round_trip"
+      ]
+    },
+    {
+      "id": "readme-beyond-sessions",
+      "file": "README.md",
+      "quote": "from GitHub pull requests, review threads, CI runs and comments included (both are unit-tested; neither has a golden yet)",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-install",
+      "file": "README.md",
+      "quote": "# Prebuilt binary (macOS arm64, Linux x86_64/arm64)",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-plugin",
+      "file": "README.md",
+      "quote": "bundles the CLI (downloaded and installed globally on first use) and adds `/path:share` and `/path:query` slash commands:",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-quickstart-dead-end",
+      "file": "README.md",
+      "quote": "path query 'map(select(.dead_end)) | length'",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-quickstart-source",
+      "file": "README.md",
+      "quote": "path query --source claude",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-token-usage-semantics",
+      "file": "README.md",
+      "quote": "It appears once per message group, so summing it over a path gives the true session total.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-attributed-semantics",
+      "file": "README.md",
+      "quote": "It is populated only when the source genuinely reports per-step numbers (Codex does)",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-breakdowns-never-added",
+      "file": "README.md",
+      "quote": "These are never added into the token counters.",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-same-shape",
+      "file": "README.md",
+      "quote": "Every provider crate follows the same shape",
+      "operations": [
+        "parse"
+      ],
+      "evidence_kinds": [
+        "document"
+      ]
+    },
+    {
+      "id": "readme-watchers",
+      "file": "README.md",
+      "quote": "`toolpath-claude` and `toolpath-gemini` also ship filesystem watchers",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-examples-12",
+      "file": "README.md",
+      "quote": "holds 12 documents covering steps, paths, and graphs.",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-cli-reference",
+      "file": "README.md",
+      "quote": "# project a doc into a coding agent and exec --resume",
+      "operations": [],
+      "evidence_kinds": []
+    },
+    {
+      "id": "readme-rust-185",
+      "file": "README.md",
+      "quote": "Rust 1.94+ (edition 2024).",
+      "operations": [],
+      "evidence_kinds": []
+    }
+  ]
+}

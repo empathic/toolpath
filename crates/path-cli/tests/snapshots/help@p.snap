@@ -1,0 +1,40 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path p
+Plumbing: lower-level operations on documents and sources (import, export, cache, list, render, merge, validate, derive, project, incept, track, query)
+
+Usage: path p [OPTIONS] <COMMAND>
+
+Commands:
+  list      List available sources (branches, projects, sessions)
+  import    Import from external formats into the toolpath cache
+  export    Export toolpath documents into external formats
+  cache     Manage the on-disk document cache (~/.toolpath/documents/)
+  render    Render Toolpath documents to other formats
+  merge     Merge multiple Toolpath documents into a single Graph
+  validate  Validate a Toolpath document
+  derive    Derive a Toolpath document from a source and stream it to stdout (the stdout-only sibling of `import`; equivalent to `import … --no-cache`)
+  project   Project a Toolpath document into a harness's session format (file or stdout — the narrower, file-shaped sibling of `export`)
+  incept    Incept a Toolpath document into a harness's on-disk session layout (file/stdin-shaped sibling of `export <provider>`)
+  track     Incrementally build a Toolpath Path document
+  query     Low-level graph traversal on a single document (ancestors)
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

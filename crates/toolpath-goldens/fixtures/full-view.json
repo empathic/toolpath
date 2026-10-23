@@ -1,0 +1,67 @@
+{
+  "id": "0b5d3c1e-7a2f-4c9e-9d41-5f6a7b8c9d0e",
+  "started_at": "2026-10-19T12:00:00Z",
+  "last_activity": "2026-10-19T12:00:09Z",
+  "provider_id": "generated",
+  "producer": { "name": "toolpath-goldens", "version": "writers-fixture-1" },
+  "base": { "working_dir": "/", "vcs_revision": "0123456789abcdef0123456789abcdef01234567", "vcs_branch": "main", "vcs_remote": "https://example.com/repo.git" },
+  "files_changed": ["notes.md"],
+  "total_usage": {
+    "input_tokens": 120, "output_tokens": 45, "cache_read_tokens": 30, "cache_write_tokens": 10,
+    "breakdowns": { "output": { "reasoning": 12 } }
+  },
+  "turns": [
+    {
+      "id": "t1", "parent_id": null, "role": "User", "timestamp": "2026-10-19T12:00:00Z",
+      "text": "List the files, write notes.md, then read a file that does not exist.",
+      "thinking": null, "tool_uses": [], "model": null, "stop_reason": null, "token_usage": null,
+      "environment": { "working_dir": "/", "vcs_branch": "main", "vcs_revision": "0123456789abcdef0123456789abcdef01234567" }
+    },
+    {
+      "id": "t2", "parent_id": "t1", "group_id": "msg-1", "role": "Assistant", "timestamp": "2026-10-19T12:00:02Z",
+      "text": "Listing the directory first.",
+      "thinking": "The user wants three steps; start with ls.",
+      "thinking_signature": { "provider": "anthropic", "value": "generated-signature-1", "text_sha256": "1765434a204a00df04557129b14f8f1502ebaca98ed1e7b3895c96b0bdf7d62f" },
+      "tool_uses": [
+        { "id": "call-ls", "name": "Bash", "input": { "command": "ls" },
+          "result": { "content": "notes.txt\n", "is_error": false }, "category": "shell" }
+      ],
+      "model": "generated-model-1", "stop_reason": "tool_use",
+      "token_usage": { "input_tokens": 60, "output_tokens": 20, "cache_read_tokens": 15, "cache_write_tokens": 5,
+                       "breakdowns": { "output": { "reasoning": 6 } } },
+      "attributed_token_usage": { "input_tokens": 60, "output_tokens": 20 },
+      "environment": { "working_dir": "/" }
+    },
+    {
+      "id": "t3", "parent_id": "t2", "group_id": "msg-2", "role": "Assistant", "timestamp": "2026-10-19T12:00:05Z",
+      "text": "Writing notes.md and checking the missing file.",
+      "thinking": "Write, then a read that fails.",
+      "tool_uses": [
+        { "id": "call-write", "name": "Write", "input": { "file_path": "notes.md", "content": "first line\n" },
+          "result": { "content": "File written", "is_error": false }, "category": "file_write" },
+        { "id": "call-read", "name": "Read", "input": { "file_path": "does-not-exist.txt" },
+          "result": { "content": "No such file", "is_error": true }, "category": "file_read" }
+      ],
+      "model": "generated-model-1", "stop_reason": "tool_use",
+      "token_usage": { "input_tokens": 50, "output_tokens": 15, "cache_read_tokens": 15, "cache_write_tokens": 5,
+                       "breakdowns": { "output": { "reasoning": 4 } } },
+      "file_mutations": [
+        { "path": "notes.md", "tool_id": "call-write", "operation": "write", "before": "", "after": "first line\n",
+          "raw_diff": "--- a/notes.md\n+++ b/notes.md\n@@ -0,0 +1 @@\n+first line\n" }
+      ],
+      "delegations": [
+        { "agent_id": "sub-1", "prompt": "Count the lines in notes.md.", "result": "1",
+          "turns": [
+            { "id": "s1", "parent_id": null, "role": "Assistant", "timestamp": "2026-10-19T12:00:04Z",
+              "text": "1", "thinking": null, "tool_uses": [], "model": "generated-model-1", "stop_reason": "end_turn", "token_usage": null }
+          ] }
+      ]
+    },
+    {
+      "id": "t4", "parent_id": "t3", "group_id": "msg-3", "role": "Assistant", "timestamp": "2026-10-19T12:00:09Z",
+      "text": "Done: notes.md written; does-not-exist.txt is missing.",
+      "thinking": null, "tool_uses": [], "model": "generated-model-1", "stop_reason": "end_turn",
+      "token_usage": { "input_tokens": 10, "output_tokens": 10, "breakdowns": { "output": { "reasoning": 2 } } }
+    }
+  ]
+}

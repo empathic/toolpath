@@ -1,0 +1,17 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.twice_around[agent]"
+info:
+  adapter: toolpath_gemini
+  agent: gemini
+  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
+input_file: test-fixtures/gemini/convo.jsonl
+---
+{
+  "outcome": "compared",
+  "lost": [],
+  "gained": [],
+  "changed": [
+    "paths[].steps[].change.<artifact>.structural.turn_id"
+  ]
+}

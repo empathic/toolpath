@@ -1,0 +1,123 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: out
+---
+===== claude
+$ path p list claude --json --project <project>
+exit: 0
+lists the session: true
+$ path p derive claude --project <project> --all
+exit: 0
+paths: 1
+  kind: https://toolpath.net/kinds/agent-coding-session/v1.1.0
+  steps: 61
+  actors: agent:claude-opus-4-7, human:user, tool:claude-code
+  head is a step: true
+$ path p import claude --project <project> --session <session> --no-cache
+exit: 0
+same document as derive: true
+$ path show claude --project <project> --session <session>
+exit: 0
+--- first lines
+# Claude session: 89f4d66a
+
+**Source:** `claude-code`
+**Base:** `file:///private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude` (`HEAD`)
+
+**User:** You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.
+
+1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).
+2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:
+       scratch — feature elicitation
+       this file will be edited and searched.
+3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.
+
+===== codex
+$ path p list codex --json
+exit: 0
+lists the session: true
+$ path p derive codex --all
+exit: 0
+paths: 1
+  kind: https://toolpath.net/kinds/agent-coding-session/v1.1.0
+  steps: 42
+  actors: agent:gpt-5.5, human:user, tool:codex
+  head is a step: true
+$ path p import codex --session <session> --no-cache
+exit: 0
+same document as derive: true
+$ path show codex --session <session>
+exit: 0
+--- first lines
+# Codex session: 019e03b2
+
+**Source:** `codex`
+**Base:** `file:///var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/codex`
+
+**System:** <permissions instructions> Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `wri...
+
+**User:** <environment_context>
+  <cwd>/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/codex</cwd>
+  <shell>bash</shell>
+  <current_date>2026-05-07</current_date>
+  <timezone>America/New_York</timezone>
+
+===== copilot
+$ path p list copilot --json
+exit: 0
+lists the session: true
+$ path p derive copilot --all
+exit: 0
+paths: 1
+  kind: https://toolpath.net/kinds/agent-coding-session/v1.1.0
+  steps: 14
+  actors: agent:claude-haiku-4.5, human:user, tool:copilot
+  head is a step: true
+$ path p import copilot --session <session> --no-cache
+exit: 0
+same document as derive: true
+$ path show copilot --session <session>
+exit: 0
+--- first lines
+# Copilot session: 7a80f0ee
+
+**Source:** `copilot`
+**Base:** `file:///tmp/elicit-scratch`
+
+**System:** You are the GitHub Copilot CLI, a terminal assistant built by GitHub. You are running in non-interactive mode and have no way to communicate with the user. You must work on the task until it is comple...
+
+**User:** You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.
+
+1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).
+2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:
+       scratch — feature elicitation
+
+===== pi
+$ path p list pi --json
+exit: 0
+lists the session: true
+$ path p derive pi --project <project> --all
+exit: 0
+paths: 1
+  kind: https://toolpath.net/kinds/agent-coding-session/v1.1.0
+  steps: 12
+  actors: agent:gemma4, human:user
+  head is a step: true
+$ path p import pi --project <project> --session <session> --no-cache
+exit: 0
+same document as derive: true
+$ path show pi --project <project> --session <session>
+exit: 0
+--- first lines
+# pi session: 019e03b9
+
+**Source:** `pi`
+**Base:** `file:///private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi`
+
+**User:** You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.
+
+1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).
+2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:
+       scratch — feature elicitation
+       this file will be edited and searched.
+3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.

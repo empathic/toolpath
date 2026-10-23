@@ -1,0 +1,130 @@
+{
+  "writer": "opencode",
+  "ops": [
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.provider", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.value", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {
+      "op": "rename",
+      "from": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+      "to": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.vcs_remote",
+      "why": "opencode's session records no vcs remote"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.branch",
+      "why": "opencode's session records no branch"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+      "why": "opencode reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+      "why": "opencode reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+      "why": "opencode's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+      "why": "opencode's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
+      "why": "opencode's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
+      "why": "opencode's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+      "why": "opencode records no VCS branch per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+      "why": "opencode records no VCS revision per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.group_id",
+      "why": "an accounting grouping key the target format does not store"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+      "why": "opencode reports no reasoning-token breakdown",
+      "defect": "opencode stores tokens.reasoning per message; the writer does not fill it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.raw",
+      "why": "opencode keeps file diffs outside the session (snapshot store) and the writer does not write them",
+      "defect": "the writer does not write opencode's snapshot repo, so a projected session's file diffs are gone"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.after",
+      "why": "opencode keeps file diffs outside the session (snapshot store) and the writer does not write them"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.before",
+      "why": "a write in opencode's format carries the new content only, not the prior file"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_cursor
+  agent: cursor
+  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
+input_file: test-fixtures/cursor/convo.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 74
+  },
+  "after": {
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10,
+    "key_paths": 68
+  },
+  "lost": [
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string",
+    "paths[].steps[].change.count.sh.structural.before",
+    "paths[].steps[].change.notes.md.structural.before"
+  ],
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str"
+  ]
+}

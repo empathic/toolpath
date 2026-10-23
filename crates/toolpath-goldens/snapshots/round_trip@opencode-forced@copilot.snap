@@ -1,0 +1,37 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: c521172607075bff33beea2d03530829bcc301a344caa66de59cf8061a0443df
+input_file: test-fixtures/opencode/convo-compacted.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 14,
+    "text_chars": 5740,
+    "tool_uses": 10,
+    "key_paths": 54
+  },
+  "after": {
+    "steps": 14,
+    "text_chars": 5740,
+    "tool_uses": 10,
+    "key_paths": 55
+  },
+  "lost": [
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content"
+  ],
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+    "paths[].steps[].change.count.sh.raw",
+    "paths[].steps[].change.count.sh.structural.after",
+    "paths[].steps[].change.notes.md.raw",
+    "paths[].steps[].change.notes.md.structural.after"
+  ]
+}

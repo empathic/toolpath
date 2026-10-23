@@ -1,0 +1,413 @@
+From 616868ed17889533483615c693edbc0db8998b29 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:51:18 -0400
+Subject: [PATCH] docs(claims): the six wip blockers are true now (copilot in
+ meta.source; README harness rows, baseline coverage, CI); crates exclude
+ .qual; the piece is pr/45
+
+---
+ .qual                                         |  6 ++
+ README.md                                     | 20 +++---
+ crates/path-cli/Cargo.toml                    |  1 +
+ crates/pathbase-client/Cargo.toml             |  1 +
+ crates/toolpath-claude/Cargo.toml             |  1 +
+ crates/toolpath-codex/Cargo.toml              |  1 +
+ crates/toolpath-convo/Cargo.toml              |  1 +
+ crates/toolpath-copilot/Cargo.toml            |  1 +
+ crates/toolpath-cursor/Cargo.toml             |  1 +
+ crates/toolpath-dot/Cargo.toml                |  1 +
+ crates/toolpath-gemini/Cargo.toml             |  1 +
+ crates/toolpath-git/Cargo.toml                |  1 +
+ crates/toolpath-github/Cargo.toml             |  1 +
+ crates/toolpath-md/Cargo.toml                 |  1 +
+ crates/toolpath-opencode/Cargo.toml           |  1 +
+ crates/toolpath-pi/Cargo.toml                 |  1 +
+ crates/toolpath/Cargo.toml                    |  1 +
+ docs/model/claims.json                        |  8 +--
+ pr/45-claims-blockers-true.md                 | 64 +++++++++++++++++++
+ site/kinds/agent-coding-session/v1.1.0/.qual  |  1 +
+ .../agent-coding-session/v1.1.0/index.md      | 18 +++---
+ 21 files changed, 109 insertions(+), 23 deletions(-)
+ create mode 100644 pr/45-claims-blockers-true.md
+
+diff --git a/.qual b/.qual
+index 71d9ca1d..d56fe93d 100644
+--- a/.qual
++++ b/.qual
+@@ -88,3 +88,9 @@
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.654600Z","id":"34962083b54ff39d8faeba80aa9dee226a685e4f7640662c0712417a7ed8ece8","body":{"detail":"scripts/test-plugin.sh and scripts/test-quickstart.sh, a quality gate (0464020).","kind":"pass","ref":"git:0464020","span":{"start":{"line":84},"end":{"line":85},"content_hash":"30bcf0e27cdb32dd3de75f746b77fa775cb48a4caa30e7ff5b571eb26611d14c"},"summary":"README: the plugin installs the CLI on first use and adds two slash commands — backed offline","supersedes":"8937db0c630aab995a6bec4d327a6bd908ac5e4050fbe3aa9203acda323fd895","tags":["claim:readme-plugin","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:16:18.705185Z","id":"8f9f59a73cb55d131aec204af10dfec98a82bf26aef2dc390176e099993fbf37","body":{"detail":"Seen 2026-10-19 in Cursor 3.24.12 (copilot -> cursor, composer 7a80f0ee, 12 bubbles): the Agents window listed the chat but opened the empty new-chat view, and Cursor's agent answered a follow-up as a new conversation. Cause: the projector wrote composerData + bubbles only (_v:16, agentBackend cursor-agent, no hasLoaded); Cursor 3.24 sends the model the history listed in composerData.conversationState (protobuf field 1 = sha256 refs to agentKv:blob:<sha256> AI SDK ModelMessage JSON). The fix writes those, _v:18, hasLoaded:true and no agentBackend, matching a native 3.24 chat. Unverified until the live check: whether Cursor also needs the other conversationState fields, providerOptions, or the agent-transcripts JSONL.","kind":"concern","span":{"start":{"line":41},"end":{"line":41},"content_hash":"83ab4ba28b04e1d6f4a601f6f8e5be9c7fc29044bd9978a0922a35941a19c023"},"summary":"Cursor resume: a projected composer is listed but its transcript is not loaded; fix writes conversationState + agentKv:blob history, live check pending","tags":["cursor","resume","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:41:58.013034Z","id":"4bc3f1a9681360dacdcb427ddb7e93cc6a4d77281726479f79bb4b4fe86adf53","body":{"detail":"crates/toolpath-cursor reader tests for both layouts (e0415cd); ir@cursor/document@cursor goldens.","kind":"blocker","span":{"start":{"line":41},"end":{"line":41},"content_hash":"83ab4ba28b04e1d6f4a601f6f8e5be9c7fc29044bd9978a0922a35941a19c023"},"summary":"README table, Cursor: 'no golden yet' — false (ir@cursor exists); both header layouts read — backed (pr/20); transcript never read back","supersedes":"626b26219312b79c1433ba57a6fbc9bcac48cf1ed1145188aa43e21b6e33c841","tags":["claim:readme-table-cursor","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:47:48.871873Z","id":"cc581f1025e4c7a0183e4e1c57b139e344380b46366641007e914eaa046787c8","body":{"detail":"The gemini set reads test-fixtures/gemini/convo.jsonl (a gemini-cli 0.47 session-*.jsonl): ir@gemini, document@gemini, writer@gemini, projection@gemini@<6 targets> and projection@<8 sets>@gemini, round_trip@<8 sets>@gemini in crates/toolpath-goldens/snapshots. crates/toolpath-gemini/tests/jsonl_sessions.rs lists, resolves, reads and derives the 0.47 record stream (pr/19). Resume sentence unchanged: no model turn was run.","kind":"pass","span":{"start":{"line":39},"end":{"line":39},"content_hash":"5dba0e30ca9773b35864ec3dfc73b559113c0033a2cb7b96729902035a8b7eb9"},"summary":"README table, Gemini: baseline on a 0.47 recording; reads .json (≤ 0.46) and 0.47 .jsonl — backed","supersedes":"67300e659f73413d11f0718cba25c4b51916dfc912d13fc22606e27232a6bc70","tags":["claim:readme-table-gemini","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:47:48.872184Z","id":"de5ad53cd3e625e5864cba05af1ce5e94c0ab7dc9850163acb93f07ab8ec7afc","body":{"detail":"The opencode set reads test-fixtures/opencode/convo.json: ir@opencode, document@opencode, writer@opencode, projection@opencode@<6 targets>, projection/round_trip@<8 sets>@opencode. crates/toolpath-goldens/tests/opencode_db.rs stores the same session in opencode-stable.db (test-fixtures/opencode/schema-1.18.18.sql) and pins the database read in opencode_db@opencode.snap. Headless resume on Zen's free tier: pr/10 (codex -> opencode, the probe answered). Snapshot-repo file diffs: still untested, as the row says.","kind":"pass","span":{"start":{"line":40},"end":{"line":40},"content_hash":"8c77ff13bcbe54ff66fd7c61428001bb6c63989417e9e27a7141dde1b60e9bf5"},"summary":"README table, opencode: baseline on an opencode export recording plus the opencode-stable.db read — backed","supersedes":"a7dc71f2406af32276767bdef5cb5aa8a0f67ab73ff0ef33d2fbad421d7f460a","tags":["claim:readme-table-opencode","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:47:48.872422Z","id":"007633534027f09ce51b03d789c5f06131b8f3f59adad1c198dd1990262f20d0","body":{"detail":"The cursor set reads test-fixtures/cursor/convo.json: ir@cursor, document@cursor, writer@cursor, projection@cursor@<6 targets>, projection/round_trip@<8 sets>@cursor. Header layouts: crates/toolpath-cursor/src/reader.rs tests reads_heads_from_the_3_24_table and table_heads_come_first_and_the_legacy_blob_fills_in (pr/20). The resume sentences (history fix, live check pending) are the cursor-resume concern's on this line.","kind":"pass","span":{"start":{"line":41},"end":{"line":41},"content_hash":"8f669529cef86023526352307b9f172b21e7d104b8bfc32227d9e112f706c83d"},"summary":"README table, Cursor: baseline on a recording of one composer's rows; both header layouts read — backed","supersedes":"4bc3f1a9681360dacdcb427ddb7e93cc6a4d77281726479f79bb4b4fe86adf53","tags":["claim:readme-table-cursor","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:47:48.872648Z","id":"2847154b7f92942dbde38409ac5fd50dede345449fb6344a2ac5157df75e7a20","body":{"detail":"crates/toolpath-goldens/snapshots: ir and document for 9 sets (claude, claude-compacted, claude-session, codex, copilot, cursor, gemini, opencode, pi), projection@ and round_trip@ for 54 set/target pairs (each set into the six other harnesses), writer@ for each of the seven. Checked by cargo test -p toolpath-goldens (tests/goldens.rs).","kind":"pass","span":{"start":{"line":48},"end":{"line":50},"content_hash":"86ddf4ba1cf1ba3e40a497cfa9742a1d758837781330a082cfe4bbd1d3a68479"},"summary":"README: the baseline pins read, write and round trip for all seven harnesses (nine sets) against the other six — backed","supersedes":"8a0988b25842a4fa80d2f07c24c3f6aa86ab5226edb202867959548a0fff5c7a","tags":["claim:readme-goldens-four","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:47:48.872872Z","id":"be262c3c6b5746e3afba285e0b6d3f4bdd4b0eb1678c2d6f70c4f60378507b86","body":{"detail":"justfile `ci` runs scripts/quality_gates.sh; .github/workflows/deploy-site.yml (on: pull_request, and push to main) runs scripts/quality_gates.sh --verbose, whose test gate is cargo test --workspace (toolpath-goldens and path-cli's cross_harness_matrix included), with qualifier installed (pr/25).","kind":"pass","span":{"start":{"line":52},"end":{"line":53},"content_hash":"88b7b053ed5d548f6de7595932f536db2a7b4ef626a865a3e7696baa1bc86376"},"summary":"README: the baseline and the matrix run in just ci, which GitHub Actions runs on every pull request — backed","supersedes":"975ad43920bac449d3ebea5c0787941f55161586569a48c5220092f9051a8cf4","tags":["claim:readme-matrix-ci","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:47:48.873097Z","id":"8e38f2d286d35379ae637c0e031fc410429bf48328cd3b8f30f5bce77b7e51f6","body":{"detail":"Seen 2026-10-19 in Cursor 3.24.12 (copilot -> cursor, composer 7a80f0ee, 12 bubbles): the Agents window listed the chat but opened the empty new-chat view, and Cursor's agent answered a follow-up as a new conversation. Cause: the projector wrote composerData + bubbles only (_v:16, agentBackend cursor-agent, no hasLoaded); Cursor 3.24 sends the model the history listed in composerData.conversationState (protobuf field 1 = sha256 refs to agentKv:blob:<sha256> AI SDK ModelMessage JSON). The fix writes those, _v:18, hasLoaded:true and no agentBackend, matching a native 3.24 chat. Unverified until the live check: whether Cursor also needs the other conversationState fields, providerOptions, or the agent-transcripts JSONL.","kind":"concern","span":{"start":{"line":41},"end":{"line":41},"content_hash":"8f669529cef86023526352307b9f172b21e7d104b8bfc32227d9e112f706c83d"},"summary":"Cursor resume: a projected composer is listed but its transcript is not loaded; fix writes conversationState + agentKv:blob history, live check pending","supersedes":"8f9f59a73cb55d131aec204af10dfec98a82bf26aef2dc390176e099993fbf37","tags":["cursor","resume","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/README.md b/README.md
+index b959b443..ad1b91b5 100644
+--- a/README.md
++++ b/README.md
+@@ -36,22 +36,22 @@ one format and writes them back. With everything in one format you can:
+ | Codex CLI | ✓ | ✓ | ✓ `codex resume` | Goldens for read and write, including per-step token attribution. Resume: codex-cli 0.162.1 answered from the projected history. `patch_apply_end` diffs are kept verbatim (crate fixture; the codex golden has no file change). |
+ | Pi | ✓ | ✓ | ✓ `pi --session` | Goldens for read and write. Resume: pi 0.84.3 answered from the projected history. In-file `id`/`parentId` trees are read as DAGs (unit-tested; the captured sessions are linear). |
+ | Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` | Preview. Goldens for read and write. Resume: copilot CLI 1.0.61 answered from the projected history. |
+-| Gemini CLI | ✓ | ✓ | `gemini --resume` | Crate tests, no golden yet. Reads the `.json` chat files of gemini-cli ≤ 0.46; 0.47 writes `.jsonl`, which the reader does not see yet. Resume: gemini-cli 0.47.0 rendered the projected history; no model turn was run. Sub-agent chat files are folded in (unit-tested); reasoning-token counts survive a round trip (crate test). |
+-| opencode | ✓ | ✓ | `opencode --session` | Crate tests, no golden yet. Reads `opencode-stable.db` (1.18) and the older `opencode.db`. Resume: opencode 1.18.18 opened the projected session in its TUI; no model turn was run. Snapshot-repo file diffs are implemented but not exercised by any test. |
+-| Cursor (IDE) | ✓ | ✓ | opens workspace | Crate tests, no golden yet. Reads both header layouts: the ≤ 3.6 ItemTable key and Cursor 3.24's `composerHeaders` table. A projected composer is adopted and listed by title in Cursor.app 3.24.12, but before this fix it opened empty and its agent did not see the history (seen 2026-10-19). The projection now writes the model history Cursor 3.24 reads (`conversationState` and `agentKv:blob:` rows); a live check of that is pending. |
++| Gemini CLI | ✓ | ✓ | `gemini --resume` | Baseline: a gemini-cli 0.47 recording, with snapshots for read, write and the round trip from and into each other harness. Reads the `.json` chat files of gemini-cli ≤ 0.46 and the `chats/session-*.jsonl` record stream 0.47 writes (crate test on the recording). Resume: gemini-cli 0.47.0 rendered the projected history; no model turn was run. Sub-agent chat files are folded in (unit-tested); reasoning-token counts survive a round trip (crate test). |
++| opencode | ✓ | ✓ | `opencode --session` | Baseline: an `opencode export` recording, with snapshots for read, write and the round trip from and into each other harness, plus the same session read from an `opencode-stable.db` built with 1.18.18's schema. Reads `opencode-stable.db` (1.18) and the older `opencode.db`. Resume: opencode 1.18.18 opened the projected session in its TUI; headless on OpenCode Zen's free tier, it answered from a projected Codex session. Snapshot-repo file diffs are implemented but not exercised by any test. |
++| Cursor (IDE) | ✓ | ✓ | opens workspace | Baseline: a recording of one composer's rows, with snapshots for read, write and the round trip from and into each other harness. Reads both header layouts: the ≤ 3.6 ItemTable key and Cursor 3.24's `composerHeaders` table. A projected composer is adopted and listed by title in Cursor.app 3.24.12, but before this fix it opened empty and its agent did not see the history (seen 2026-10-19). The projection now writes the model history Cursor 3.24 reads (`conversationState` and `agentKv:blob:` rows); a live check of that is pending. |
+ 
+ Read means `path p import`, `path p list`, and `path show`. Write means
+ `path p export`. Resume means `path resume`, which projects the session
+ into the harness's on-disk layout and execs its resume command. Any
+ readable session can be projected into any writable harness.
+ 
+-How the column is verified: `crates/toolpath-goldens` pins read, write
+-and round trip for the claude, codex, copilot and pi sets against each
+-of those four as a target; `cargo test -p path-cli --test
+-cross_harness_matrix` round-trips every pair of the seven harnesses
+-in-process on captured fixtures (it launches no agent and runs under
+-`just ci`; the repository has no test workflow on GitHub Actions); the
+-resume verdicts come from projecting the goldens and asking each
++How the column is verified: the baseline in `crates/toolpath-goldens`
++pins read, write and round trip for recordings of all seven harnesses
++(nine sets) against each of the other six as a target; `cargo test -p
++path-cli --test cross_harness_matrix` round-trips every pair of the
++seven in-process on captured fixtures (it launches no agent); both run
++in `just ci`, which GitHub Actions runs on every pull request; the
++resume verdicts come from projecting the recordings and asking each
+ installed agent to quote the first message back. Round trips are not
+ lossless: the goldens' `shed` and `round_trip` snapshots list what each
+ harness drops (reasoning bullets, tool-call argument bodies, session
+diff --git a/crates/path-cli/Cargo.toml b/crates/path-cli/Cargo.toml
+index d0a82558..de0f1c76 100644
+--- a/crates/path-cli/Cargo.toml
++++ b/crates/path-cli/Cargo.toml
+@@ -8,6 +8,7 @@ description = "CLI for deriving, querying, and visualizing Toolpath provenance (
+ keywords = ["provenance", "toolpath", "cli", "audit", "traceability"]
+ categories = ["command-line-utilities", "development-tools"]
+ default-run = "path"
++exclude = ["**/.qual"]
+ 
+ [lib]
+ name = "path_cli"
+diff --git a/crates/pathbase-client/Cargo.toml b/crates/pathbase-client/Cargo.toml
+index d16cbde2..57535fc8 100644
+--- a/crates/pathbase-client/Cargo.toml
++++ b/crates/pathbase-client/Cargo.toml
+@@ -6,6 +6,7 @@ license = { workspace = true }
+ repository = "https://github.com/empathic/toolpath"
+ documentation = "https://docs.rs/pathbase-client"
+ description = "Auto-generated typed client for the Pathbase HTTP API (derived from openapi.json via progenitor)."
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ progenitor-client = "0.14"
+diff --git a/crates/toolpath-claude/Cargo.toml b/crates/toolpath-claude/Cargo.toml
+index b5fe6f5d..19813661 100644
+--- a/crates/toolpath-claude/Cargo.toml
++++ b/crates/toolpath-claude/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Claude conversation logs"
+ keywords = ["claude", "provenance", "toolpath", "audit", "ai"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [features]
+ default = ["watcher"]
+diff --git a/crates/toolpath-codex/Cargo.toml b/crates/toolpath-codex/Cargo.toml
+index 693636e3..993527ae 100644
+--- a/crates/toolpath-codex/Cargo.toml
++++ b/crates/toolpath-codex/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Codex CLI session logs"
+ keywords = ["codex", "provenance", "toolpath", "audit", "ai"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-convo/Cargo.toml b/crates/toolpath-convo/Cargo.toml
+index 43652540..d24f535f 100644
+--- a/crates/toolpath-convo/Cargo.toml
++++ b/crates/toolpath-convo/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Provider-agnostic conversation types, traits, and Toolpath-Path derivation"
+ keywords = ["conversation", "ai", "provider", "toolpath", "abstraction"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-copilot/Cargo.toml b/crates/toolpath-copilot/Cargo.toml
+index cd58626d..e9628c43 100644
+--- a/crates/toolpath-copilot/Cargo.toml
++++ b/crates/toolpath-copilot/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from GitHub Copilot CLI session logs (preview; schema reverse-engineered)"
+ keywords = ["copilot", "provenance", "toolpath", "audit", "ai"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-cursor/Cargo.toml b/crates/toolpath-cursor/Cargo.toml
+index ca09aa92..d722a890 100644
+--- a/crates/toolpath-cursor/Cargo.toml
++++ b/crates/toolpath-cursor/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Cursor's bubble store and agent transcripts"
+ keywords = ["cursor", "provenance", "toolpath", "audit", "ai"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-dot/Cargo.toml b/crates/toolpath-dot/Cargo.toml
+index 22d6ffff..075f7424 100644
+--- a/crates/toolpath-dot/Cargo.toml
++++ b/crates/toolpath-dot/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Generate Graphviz DOT visualizations from Toolpath documents"
+ keywords = ["graphviz", "dot", "provenance", "toolpath", "visualization"]
+ categories = ["development-tools", "visualization"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-gemini/Cargo.toml b/crates/toolpath-gemini/Cargo.toml
+index b5b09f3e..1b2840a5 100644
+--- a/crates/toolpath-gemini/Cargo.toml
++++ b/crates/toolpath-gemini/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Gemini CLI conversation logs"
+ keywords = ["gemini", "provenance", "toolpath", "audit", "ai"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [features]
+ default = ["watcher"]
+diff --git a/crates/toolpath-git/Cargo.toml b/crates/toolpath-git/Cargo.toml
+index e24e50cb..b7ac0fe4 100644
+--- a/crates/toolpath-git/Cargo.toml
++++ b/crates/toolpath-git/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from git repository history"
+ keywords = ["git", "provenance", "toolpath", "audit", "traceability"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-github/Cargo.toml b/crates/toolpath-github/Cargo.toml
+index 08dd7f5d..73fda3cd 100644
+--- a/crates/toolpath-github/Cargo.toml
++++ b/crates/toolpath-github/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from GitHub pull requests"
+ keywords = ["github", "provenance", "toolpath", "audit", "traceability"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-md/Cargo.toml b/crates/toolpath-md/Cargo.toml
+index 07efdae3..d69ca01e 100644
+--- a/crates/toolpath-md/Cargo.toml
++++ b/crates/toolpath-md/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Render Toolpath documents as Markdown for LLM consumption"
+ keywords = ["markdown", "provenance", "toolpath", "llm", "rendering"]
+ categories = ["development-tools", "text-processing"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ serde_json = { workspace = true }
+diff --git a/crates/toolpath-opencode/Cargo.toml b/crates/toolpath-opencode/Cargo.toml
+index 82e90bd4..3187a733 100644
+--- a/crates/toolpath-opencode/Cargo.toml
++++ b/crates/toolpath-opencode/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from opencode session databases"
+ keywords = ["opencode", "provenance", "toolpath", "audit", "ai"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath-pi/Cargo.toml b/crates/toolpath-pi/Cargo.toml
+index 72b1e236..331a2837 100644
+--- a/crates/toolpath-pi/Cargo.toml
++++ b/crates/toolpath-pi/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Derive Toolpath provenance documents from Pi (pi.dev) coding-agent session logs"
+ keywords = ["pi", "provenance", "toolpath", "audit", "ai"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ toolpath = { workspace = true }
+diff --git a/crates/toolpath/Cargo.toml b/crates/toolpath/Cargo.toml
+index 53df5570..f9c783bc 100644
+--- a/crates/toolpath/Cargo.toml
++++ b/crates/toolpath/Cargo.toml
+@@ -7,6 +7,7 @@ repository = "https://github.com/empathic/toolpath"
+ description = "Types, builders, and query operations for Toolpath provenance documents"
+ keywords = ["provenance", "toolpath", "audit", "traceability", "supply-chain"]
+ categories = ["development-tools"]
++exclude = ["**/.qual"]
+ 
+ [dependencies]
+ serde = { workspace = true }
+diff --git a/docs/model/claims.json b/docs/model/claims.json
+index 17c27572..8867548d 100644
+--- a/docs/model/claims.json
++++ b/docs/model/claims.json
+@@ -659,7 +659,7 @@
+     {
+       "id": "kind-v110-meta-source",
+       "file": "site/kinds/agent-coding-session/v1.1.0/index.md",
+-      "quote": "the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, `cursor`, or `pi`",
++      "quote": "the producing harness: `claude-code`, `gemini-cli`, `codex`, `copilot`, `opencode`, `cursor`, or `pi`",
+       "operations": [
+         "parse"
+       ],
+@@ -1315,7 +1315,7 @@
+     {
+       "id": "readme-table-gemini",
+       "file": "README.md",
+-      "quote": "0.47 writes `.jsonl`, which the reader does not see yet.",
++      "quote": "Reads the `.json` chat files of gemini-cli ≤ 0.46 and the `chats/session-*.jsonl` record stream 0.47 writes",
+       "operations": [
+         "parse"
+       ],
+@@ -1359,7 +1359,7 @@
+     {
+       "id": "readme-goldens-four",
+       "file": "README.md",
+-      "quote": "pins read, write and round trip for the claude, codex, copilot and pi sets against each of those four as a target",
++      "quote": "pins read, write and round trip for recordings of all seven harnesses (nine sets) against each of the other six as a target",
+       "operations": [],
+       "evidence_kinds": [
+         "projection"
+@@ -1368,7 +1368,7 @@
+     {
+       "id": "readme-matrix-ci",
+       "file": "README.md",
+-      "quote": "the repository has no test workflow on GitHub Actions",
++      "quote": "both run in `just ci`, which GitHub Actions runs on every pull request",
+       "operations": [],
+       "evidence_kinds": []
+     },
+diff --git a/pr/45-claims-blockers-true.md b/pr/45-claims-blockers-true.md
+new file mode 100644
+index 00000000..085d88da
+--- /dev/null
++++ b/pr/45-claims-blockers-true.md
+@@ -0,0 +1,64 @@
++# docs(claims): the six statements recorded false on wip are true now; crates stop shipping .qual
++
++Status: draft (2026-10-19, after pr/37: "fix the text so each becomes true, then resolve each blocker record to pass") · Base: pr/37 (claims as records) · Siblings: pr/14 / #369 owns RFC.md:303 (left as a blocker until #369 merges)
++
++## Why
++pr/37 left six claims recorded `blocker` (false on wip): the v1.1.0 kind page's `meta.source` list
++missed copilot, and the README said gemini, opencode and cursor have no golden, that the gemini
++reader misses 0.47 `.jsonl`, that the goldens cover four harnesses, and that no GitHub Actions
++workflow runs the tests. The text was stale, not the code. Separately, the `.qual` files pr/37 and
++earlier pieces placed inside published crate directories went into `cargo package`.
++
++## What changes
++- `site/kinds/agent-coding-session/v1.1.0/index.md`: `meta.source` lists `copilot` (what
++  `toolpath-copilot` writes: `PROVIDER_ID`, provider.rs:19/:393, through toolpath-convo
++  derive.rs:439; `document@copilot.snap` pins it). Table realigned by prettier.
++- `README.md` harness table: gemini, opencode and cursor rows say what the baseline covers (a
++  recording per harness, snapshots for read, write and round trip from and into each other
++  harness; opencode also the `opencode-stable.db` read); gemini reads 0.47's
++  `chats/session-*.jsonl` (pr/19); opencode's resume adds the headless Zen free-tier answer (pr/10).
++  The paragraph under the table: recordings of all seven harnesses (nine sets) against the other
++  six, and both checks run in `just ci`, which deploy-site.yml runs on every pull request. Line
++  count unchanged, so no other README record moves.
++- `docs/model/claims.json`: the four quotes that changed.
++- `.qual`, `site/kinds/agent-coding-session/v1.1.0/.qual`: six `pass` records superseding the six
++  blockers, each citing the test or snapshot; the cursor-resume concern on README.md:41 (from the
++  Cursor history fix) re-anchored unchanged, since its line's text moved.
++- 15 published crates' `Cargo.toml` (`path-cli`, `pathbase-client`, `toolpath`, and the
++  claude, codex, convo, copilot, cursor, dot, gemini, git, github, md, opencode and pi crates):
++  `exclude = ["**/.qual"]`.
++
++## Verification
++- `cargo test -p toolpath-model`: claims.rs `every_claim_has_a_live_record_at_its_text` ok,
++  `committed_model_keeps_its_rules` ok.
++- `qualifier review`: 230 annotations, 230 fresh, 0 drifted, 0 missing.
++- `cargo test -p toolpath-goldens --test qualifier` ok; `prettier --check` over `site/` clean.
++- `cargo package --list -p toolpath-claude`: `.qual` and `src/.qual` listed before, absent after.
++
++## Status after
++172 claims: 108 pinned, 64 partly, 0 false on wip. Still open: the `RFC.md:303` blocker on
++main's text (resolves when #369 merges) and the `RFC.md:719` JCS key-order blocker (not a claim).
++
++## Paths
++```
++README.md
++site/kinds/agent-coding-session/v1.1.0/index.md
++site/kinds/agent-coding-session/v1.1.0/.qual
++.qual
++docs/model/claims.json
++crates/path-cli/Cargo.toml
++crates/pathbase-client/Cargo.toml
++crates/toolpath/Cargo.toml
++crates/toolpath-claude/Cargo.toml
++crates/toolpath-codex/Cargo.toml
++crates/toolpath-convo/Cargo.toml
++crates/toolpath-copilot/Cargo.toml
++crates/toolpath-cursor/Cargo.toml
++crates/toolpath-dot/Cargo.toml
++crates/toolpath-gemini/Cargo.toml
++crates/toolpath-git/Cargo.toml
++crates/toolpath-github/Cargo.toml
++crates/toolpath-md/Cargo.toml
++crates/toolpath-opencode/Cargo.toml
++crates/toolpath-pi/Cargo.toml
++```
+diff --git a/site/kinds/agent-coding-session/v1.1.0/.qual b/site/kinds/agent-coding-session/v1.1.0/.qual
+index 4a3f5d16..681d2dea 100644
+--- a/site/kinds/agent-coding-session/v1.1.0/.qual
++++ b/site/kinds/agent-coding-session/v1.1.0/.qual
+@@ -13,3 +13,4 @@
+ {"metabox":"1","type":"annotation","subject":"site/kinds/agent-coding-session/v1.1.0/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:25:18.495486Z","id":"ac9f3a41119e3a615495d9979f3c4905c530eb6ddb4b6956a0d4297e6d18c2d2","body":{"detail":"document@copilot.snap has meta.source \"copilot\" under this kind URI; the list (and any consumer that trusts it) leaves Copilot out. The schema does not enumerate meta.source, so validate@copilot stays valid. Add copilot to the list.","kind":"blocker","ref":"git:86c325b","span":{"start":{"line":150},"end":{"line":150},"content_hash":"dfdd5582f20dbb38493b6b85da68897c06cd610d7b2b850edb5f0834017654d2"},"summary":"v1.1.0: meta.source is one of six harness names — false: copilot documents carry \"copilot\"","tags":["claim:kind-v110-meta-source","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/kinds/agent-coding-session/v1.1.0/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:25:18.495614Z","id":"6e4235ad43453476983fd97ea0e91c08cb1212ed112e9ea203398e55b131213a","body":{"detail":"document@claude-session.snap path meta keys: actors, kind, producer, source, title (no meta.extra).","kind":"pass","ref":"git:86c325b","span":{"start":{"line":157},"end":{"line":157},"content_hash":"43b89579824307380a41d4a5eb679ac5cb362f29138682a5dd75bd46f505a4c9"},"summary":"v1.1.0: files_changed, vcs_remote, producer sit directly under meta — backed","tags":["claim:kind-v110-meta-flattened","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/kinds/agent-coding-session/v1.1.0/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:54.095975Z","id":"484aecadbd4977b1453ee322531c72dcf76c8cc9c297f33aa7f90c45d8c52a16","body":{"detail":"crates/toolpath-goldens/tests/goldens.rs asserts accounting::check (Σ conversation.append token_usage == provider total_usage == extract_conversation total_usage) with no known-defect exception left: gemini 7637753 and opencode 80e8a16 add the turns' breakdowns, copilot 9eec499 settles session.shutdown's totals on the last assistant turn (pr/27). The once-per-run placement inside a group is a separate claim (kind-v110-group-last-step).","kind":"pass","ref":"git:04afa53","span":{"start":{"line":63},"end":{"line":63},"content_hash":"dfa39b8d008f9c3b2e227fb6b6cf6c134c4b7057ec582237ee3cd07394dcff44"},"summary":"v1.1.0: Σ token_usage over steps = session totals — backed for all 9 sets","supersedes":"f1ff2082a8122eca2a3ec1ee600fd8986dceccbc4b37b49fc8e72f7d14d67a38","tags":["claim:kind-v110-session-totals","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/kinds/agent-coding-session/v1.1.0/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:39:54.860898Z","id":"e080dfc755da972583696b54fd46d6bfcd8d32da1369a5722d1833bfb68be0eb","body":{"detail":"toolpath-copilot sets provider_id to PROVIDER_ID = \"copilot\" (crates/toolpath-copilot/src/provider.rs:19, :393; asserted at :966), and toolpath-convo derive writes provider_id as meta.source (crates/toolpath-convo/src/derive.rs:439). crates/toolpath-goldens/snapshots/document@copilot.snap pins \"source\": \"copilot\"; the other document@<set>.snap pin claude-code, gemini-cli, codex, opencode, cursor and pi.","kind":"pass","span":{"start":{"line":150},"end":{"line":150},"content_hash":"937842490d1130ba4b99ee515385dc27853b6acc934d2ea95ccc048b807d46f1"},"summary":"v1.1.0: meta.source lists the seven producing harnesses, copilot included — backed","supersedes":"ac9f3a41119e3a615495d9979f3c4905c530eb6ddb4b6956a0d4297e6d18c2d2","tags":["claim:kind-v110-meta-source","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/site/kinds/agent-coding-session/v1.1.0/index.md b/site/kinds/agent-coding-session/v1.1.0/index.md
+index eb6de3c9..fc3c753e 100644
+--- a/site/kinds/agent-coding-session/v1.1.0/index.md
++++ b/site/kinds/agent-coding-session/v1.1.0/index.md
+@@ -144,14 +144,14 @@ Entries that aren't turns (attachments, preamble lines, snapshots, hook results)
+ 
+ ## Path metadata
+ 
+-| Field                | Meaning                                                                                    |
+-| -------------------- | ------------------------------------------------------------------------------------------ |
+-| `meta.kind`          | this URI                                                                                   |
+-| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `opencode`, `cursor`, or `pi` |
+-| `meta.title`         | session title                                                                              |
+-| `meta.actors`        | the actor definitions the steps reference                                                  |
+-| `meta.files_changed` | file paths touched across the session                                                      |
+-| `meta.vcs_remote`    | repository URL, when known                                                                 |
+-| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session           |
++| Field                | Meaning                                                                                               |
++| -------------------- | ----------------------------------------------------------------------------------------------------- |
++| `meta.kind`          | this URI                                                                                              |
++| `meta.source`        | the producing harness: `claude-code`, `gemini-cli`, `codex`, `copilot`, `opencode`, `cursor`, or `pi` |
++| `meta.title`         | session title                                                                                         |
++| `meta.actors`        | the actor definitions the steps reference                                                             |
++| `meta.files_changed` | file paths touched across the session                                                                 |
++| `meta.vcs_remote`    | repository URL, when known                                                                            |
++| `meta.producer`      | `{ "name": string, "version"?: string }`, the software that produced the session                      |
+ 
+ `files_changed`, `vcs_remote`, and `producer` sit directly under `meta` (they ride `PathMeta`'s flattened `extra`), not under a nested `meta.extra`.
+-- 
+2.55.0
+

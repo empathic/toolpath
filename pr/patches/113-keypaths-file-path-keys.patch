@@ -1,0 +1,746 @@
+From 1ea7873048eab22ffc132bd0323856273b6fbee2 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 12:59:48 -0400
+Subject: [PATCH] fix(goldens): file-path keys under changes collapse to <path>
+ (pr/105)
+
+---
+ .../round_trip@codex-forced@claude.snap       | 12 ++--
+ .../round_trip@codex-forced@copilot.snap      | 12 ++--
+ .../round_trip@codex-forced@cursor-agent.snap | 12 ++--
+ .../round_trip@codex-forced@cursor.snap       | 12 ++--
+ .../round_trip@codex-forced@gemini.snap       | 12 ++--
+ .../round_trip@codex-forced@opencode.snap     | 12 ++--
+ .../snapshots/round_trip@codex-forced@pi.snap | 12 ++--
+ .../snapshots/shed@codex-forced.snap          | 20 ++----
+ crates/toolpath-goldens/src/keypaths.rs       | 44 +++++++++++-
+ docs/baseline/classification.md               | 16 ++---
+ docs/baseline/unexplained.md                  | 70 ++++++++-----------
+ goldens/manifest.json                         | 50 ++++++-------
+ 12 files changed, 143 insertions(+), 141 deletions(-)
+
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@claude.snap
+index bbaca379..7ccd08a8 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@claude.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "steps": 69,
+     "text_chars": 17497,
+     "tool_uses": 12,
+-    "key_paths": 202
++    "key_paths": 200
+   },
+   "after": {
+     "steps": 23,
+@@ -34,12 +34,10 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.base_instructions.text",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.content",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.move_path",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.type",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.mode",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.settings.developer_instructions",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@copilot.snap
+index 206d9241..cbee9a48 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@copilot.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "steps": 69,
+     "text_chars": 17497,
+     "tool_uses": 12,
+-    "key_paths": 202
++    "key_paths": 200
+   },
+   "after": {
+     "steps": 22,
+@@ -32,12 +32,10 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.base_instructions.text",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.content",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.move_path",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.type",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.mode",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.settings.developer_instructions",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor-agent.snap
+index 7f9ae5c0..13e336bc 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor-agent.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "steps": 69,
+     "text_chars": 17497,
+     "tool_uses": 12,
+-    "key_paths": 202
++    "key_paths": 200
+   },
+   "after": {
+     "steps": 22,
+@@ -34,12 +34,10 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.base_instructions.text",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.content",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.move_path",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.type",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.mode",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.settings.developer_instructions",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor.snap
+index 678096c1..217b8b19 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@cursor.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "steps": 69,
+     "text_chars": 17497,
+     "tool_uses": 12,
+-    "key_paths": 202
++    "key_paths": 200
+   },
+   "after": {
+     "steps": 22,
+@@ -33,12 +33,10 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.base_instructions.text",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.content",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.move_path",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.type",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.mode",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.settings.developer_instructions",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@gemini.snap
+index b1e7a822..e868a0cf 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@gemini.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "steps": 69,
+     "text_chars": 17497,
+     "tool_uses": 12,
+-    "key_paths": 202
++    "key_paths": 200
+   },
+   "after": {
+     "steps": 22,
+@@ -33,12 +33,10 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.base_instructions.text",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.content",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.move_path",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.type",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.mode",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.settings.developer_instructions",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@opencode.snap
+index 31a880e2..11f8caa2 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@opencode.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "steps": 69,
+     "text_chars": 17497,
+     "tool_uses": 12,
+-    "key_paths": 202
++    "key_paths": 200
+   },
+   "after": {
+     "steps": 22,
+@@ -32,12 +32,10 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.base_instructions.text",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.content",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.move_path",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.type",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.mode",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.settings.developer_instructions",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@pi.snap
+index d9fb6f06..da253297 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex-forced@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex-forced@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "steps": 69,
+     "text_chars": 17497,
+     "tool_uses": 12,
+-    "key_paths": 202
++    "key_paths": 200
+   },
+   "after": {
+     "steps": 22,
+@@ -34,12 +34,10 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.base_instructions.text",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
+-    "paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.content",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.move_path",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.type",
++    "paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.mode",
+     "paths[].steps[].change.<artifact>.structural.collaboration_mode.settings.developer_instructions",
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index ba458c92..efe930cd 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -128,35 +128,27 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+       }
+     },
+     "key_paths": {
+-      "source": 152,
++      "source": 150,
+       "after": 129,
+-      "lost": 31,
++      "lost": 29,
+       "gained": 8
+     },
+     "renamed": [],
+     "dropped": [
+       {
+-        "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+-        "example": "echo 1 echo 2 echo 3 echo 4 echo 5 "
+-      },
+-      {
+-        "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type",
+-        "example": "add"
+-      },
+-      {
+-        "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content",
++        "path": "payload.changes.<path>.content",
+         "example": "scratch — feature elicitation this file …"
+       },
+       {
+-        "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path",
++        "path": "payload.changes.<path>.move_path",
+         "example": "null"
+       },
+       {
+-        "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type",
++        "path": "payload.changes.<path>.type",
+         "example": "add"
+       },
+       {
+-        "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
++        "path": "payload.changes.<path>.unified_diff",
+         "example": "@@ -1,2 +1,2 @@ -scratch — feature elici…"
+       },
+       {
+diff --git a/crates/toolpath-goldens/src/keypaths.rs b/crates/toolpath-goldens/src/keypaths.rs
+index d8fb3744..97a725ad 100644
+--- a/crates/toolpath-goldens/src/keypaths.rs
++++ b/crates/toolpath-goldens/src/keypaths.rs
+@@ -28,6 +28,12 @@ impl fmt::Display for KeyPath {
+     }
+ }
+ 
++/// A key that is a file path under a `changes` map (codex keys a patch's files by absolute path,
++/// which names the recording machine) is `<path>`.
++fn is_file_path_key(prefix: &str, k: &str) -> bool {
++    prefix.ends_with("changes") && k.starts_with('/')
++}
++
+ /// Every leaf's generalised path in a toolpath document, once each.
+ pub fn key_paths(doc: &Value) -> BTreeSet<KeyPath> {
+     fn walk(prefix: &str, v: &Value, out: &mut BTreeSet<KeyPath>) {
+@@ -38,6 +44,8 @@ pub fn key_paths(doc: &Value) -> BTreeSet<KeyPath> {
+                         "<artifact>"
+                     } else if prefix.ends_with("actors") {
+                         "<actor>"
++                    } else if is_file_path_key(prefix, k) {
++                        "<path>"
+                     } else {
+                         k.as_str()
+                     };
+@@ -67,6 +75,8 @@ pub fn leaf_values(doc: &Value) -> BTreeMap<KeyPath, Vec<String>> {
+                         "<artifact>"
+                     } else if prefix.ends_with("actors") {
+                         "<actor>"
++                    } else if is_file_path_key(prefix, k) {
++                        "<path>"
+                     } else {
+                         k.as_str()
+                     };
+@@ -97,9 +107,14 @@ pub fn leaf_values(doc: &Value) -> BTreeMap<KeyPath, Vec<String>> {
+ pub fn raw_paths(text: &str) -> BTreeMap<String, String> {
+     fn walk(prefix: &str, v: &Value, out: &mut BTreeMap<String, String>) {
+         match v {
+-            Value::Object(m) => m
+-                .iter()
+-                .for_each(|(k, x)| walk(&format!("{prefix}.{k}"), x, out)),
++            Value::Object(m) => m.iter().for_each(|(k, x)| {
++                let seg = if is_file_path_key(prefix, k) {
++                    "<path>"
++                } else {
++                    k.as_str()
++                };
++                walk(&format!("{prefix}.{seg}"), x, out)
++            }),
+             Value::Array(a) => a.iter().for_each(|x| walk(&format!("{prefix}[]"), x, out)),
+             leaf => {
+                 let s = match leaf {
+@@ -216,6 +231,29 @@ mod tests {
+         );
+     }
+ 
++    /// A key that is a file path (codex's `changes` map is keyed by the absolute path of each
++    /// patched file, which names the recording machine) collapses to `<path>`, in a document and in
++    /// a transcript alike, so a re-recording on another machine does not churn the tables.
++    #[test]
++    fn file_path_keys_under_changes_are_collapsed() {
++        let doc = json!({ "paths": [{ "steps": [{ "change": { "claude-code://s": {
++            "structural": { "changes": {
++                "/var/folders/xx/T/run.A1/codex/a.md": { "type": "add" },
++                "/var/folders/xx/T/run.A1/codex/b.sh": { "type": "add" }
++            } } } } }] }] });
++        assert_eq!(
++            paths(&doc),
++            vec!["paths[].steps[].change.<artifact>.structural.changes.<path>.type"]
++        );
++        let raw = raw_paths(
++            "{\"payload\":{\"changes\":{\"/var/folders/xx/a.md\":{\"type\":\"add\"}}}}\n",
++        );
++        assert_eq!(
++            raw.keys().map(String::as_str).collect::<Vec<_>>(),
++            vec!["payload.changes.<path>.type"]
++        );
++    }
++
+     #[test]
+     fn raw_paths_keep_the_first_example_per_path() {
+         let text = "{\"a\":{\"b\":[1,2]},\"t\":\"x\"}\n{\"a\":{\"b\":[3]},\"t\":\"y\"}\nnot json\n";
+diff --git a/docs/baseline/classification.md b/docs/baseline/classification.md
+index 2ea355a3..d975d613 100644
+--- a/docs/baseline/classification.md
++++ b/docs/baseline/classification.md
+@@ -41,13 +41,13 @@ Generated by `tests/classification.rs` from the committed `round_trip@*` snapsho
+ | codex | gemini | 4 | 0 | 55 | 32 | 0 | 0 | 0 |
+ | codex | opencode | 4 | 0 | 55 | 32 | 0 | 0 | 2 |
+ | codex | pi | 6 | 0 | 55 | 32 | 0 | 0 | 1 |
+-| codex-forced | claude | 5 | 0 | 46 | 114 | 3 | 0 | 1 |
+-| codex-forced | copilot | 5 | 0 | 46 | 112 | 0 | 0 | 0 |
+-| codex-forced | cursor | 6 | 0 | 46 | 120 | 0 | 0 | 0 |
+-| codex-forced | cursor-agent | 15 | 0 | 46 | 110 | 0 | 0 | 0 |
+-| codex-forced | gemini | 4 | 0 | 46 | 112 | 0 | 0 | 0 |
+-| codex-forced | opencode | 6 | 0 | 46 | 110 | 0 | 0 | 2 |
+-| codex-forced | pi | 7 | 0 | 46 | 111 | 0 | 0 | 1 |
++| codex-forced | claude | 5 | 0 | 46 | 112 | 3 | 0 | 1 |
++| codex-forced | copilot | 5 | 0 | 46 | 110 | 0 | 0 | 0 |
++| codex-forced | cursor | 6 | 0 | 46 | 118 | 0 | 0 | 0 |
++| codex-forced | cursor-agent | 15 | 0 | 46 | 108 | 0 | 0 | 0 |
++| codex-forced | gemini | 4 | 0 | 46 | 110 | 0 | 0 | 0 |
++| codex-forced | opencode | 6 | 0 | 46 | 108 | 0 | 0 | 2 |
++| codex-forced | pi | 7 | 0 | 46 | 109 | 0 | 0 | 1 |
+ | copilot | claude | 12 | 0 | 0 | 20 | 3 | 0 | 10 |
+ | copilot | codex | 13 | 0 | 0 | 8 | 30 | 0 | 5 |
+ | copilot | cursor | 13 | 0 | 0 | 10 | 3 | 0 | 8 |
+@@ -97,4 +97,4 @@ Generated by `tests/classification.rs` from the committed `round_trip@*` snapsho
+ | pi-forced | cursor-agent | 5 | 0 | 0 | 0 | 1 | 0 | 0 |
+ | pi-forced | gemini | 1 | 0 | 0 | 0 | 1 | 0 | 0 |
+ | pi-forced | opencode | 0 | 0 | 0 | 0 | 2 | 0 | 1 |
+-| **91 pairs** | | **560** | **19** | **2576** | **1479** | **409** | **18** | **178** |
++| **91 pairs** | | **560** | **19** | **2576** | **1465** | **409** | **18** | **178** |
+diff --git a/docs/baseline/unexplained.md b/docs/baseline/unexplained.md
+index 1d0e840f..04528262 100644
+--- a/docs/baseline/unexplained.md
++++ b/docs/baseline/unexplained.md
+@@ -558,12 +558,10 @@ Generated with `classification.md`. For each recording and target, the lost and
+ - lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
+ - lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
+ - lost `paths[].steps[].change.<artifact>.structural.call_id`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.content`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.move_path`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.type`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff`
+ - lost `paths[].steps[].change.<artifact>.structural.cli_version`
+ - lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
+ - lost `paths[].steps[].change.<artifact>.structural.completed_at`
+@@ -675,12 +673,10 @@ Generated with `classification.md`. For each recording and target, the lost and
+ - lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
+ - lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
+ - lost `paths[].steps[].change.<artifact>.structural.call_id`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.content`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.move_path`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.type`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff`
+ - lost `paths[].steps[].change.<artifact>.structural.cli_version`
+ - lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
+ - lost `paths[].steps[].change.<artifact>.structural.completed_at`
+@@ -789,12 +785,10 @@ Generated with `classification.md`. For each recording and target, the lost and
+ - lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
+ - lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
+ - lost `paths[].steps[].change.<artifact>.structural.call_id`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.content`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.move_path`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.type`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff`
+ - lost `paths[].steps[].change.<artifact>.structural.cli_version`
+ - lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
+ - lost `paths[].steps[].change.<artifact>.structural.completed_at`
+@@ -910,12 +904,10 @@ Generated with `classification.md`. For each recording and target, the lost and
+ - lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
+ - lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
+ - lost `paths[].steps[].change.<artifact>.structural.call_id`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.content`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.move_path`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.type`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff`
+ - lost `paths[].steps[].change.<artifact>.structural.cli_version`
+ - lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
+ - lost `paths[].steps[].change.<artifact>.structural.completed_at`
+@@ -1023,12 +1015,10 @@ Generated with `classification.md`. For each recording and target, the lost and
+ - lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
+ - lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
+ - lost `paths[].steps[].change.<artifact>.structural.call_id`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.content`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.move_path`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.type`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff`
+ - lost `paths[].steps[].change.<artifact>.structural.cli_version`
+ - lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
+ - lost `paths[].steps[].change.<artifact>.structural.completed_at`
+@@ -1137,12 +1127,10 @@ Generated with `classification.md`. For each recording and target, the lost and
+ - lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
+ - lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
+ - lost `paths[].steps[].change.<artifact>.structural.call_id`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.content`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.move_path`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.type`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff`
+ - lost `paths[].steps[].change.<artifact>.structural.cli_version`
+ - lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
+ - lost `paths[].steps[].change.<artifact>.structural.completed_at`
+@@ -1251,12 +1239,10 @@ Generated with `classification.md`. For each recording and target, the lost and
+ - lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
+ - lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
+ - lost `paths[].steps[].change.<artifact>.structural.call_id`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.content`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.move_path`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.type`
+-- lost `paths[].steps[].change.<artifact>.structural.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.content`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.move_path`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.type`
++- lost `paths[].steps[].change.<artifact>.structural.changes.<path>.unified_diff`
+ - lost `paths[].steps[].change.<artifact>.structural.cli_version`
+ - lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
+ - lost `paths[].steps[].change.<artifact>.structural.completed_at`
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index d711661d..9dd9cd66 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -30,7 +30,7 @@
+           "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+         }
+       },
+       "project": null,
+@@ -91,7 +91,7 @@
+           "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+         }
+       },
+       "project": null,
+@@ -165,7 +165,7 @@
+           "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+         }
+       },
+       "project": null,
+@@ -226,7 +226,7 @@
+           "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+         }
+       },
+       "project": null,
+@@ -287,7 +287,7 @@
+           "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+         }
+       },
+       "project": null,
+@@ -348,7 +348,7 @@
+           "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+         }
+       },
+       "project": null,
+@@ -383,7 +383,7 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++    "toolpath_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+   },
+   "known_defects": [],
+   "roundtrip": [
+@@ -393,7 +393,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+@@ -403,7 +403,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+@@ -413,7 +413,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+@@ -423,7 +423,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+@@ -433,7 +433,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+@@ -443,7 +443,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+@@ -453,7 +453,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+@@ -463,7 +463,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+@@ -473,7 +473,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+@@ -483,7 +483,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+@@ -493,7 +493,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+@@ -503,7 +503,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+@@ -513,7 +513,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+@@ -523,7 +523,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+@@ -533,7 +533,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+@@ -543,7 +543,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+@@ -553,7 +553,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+@@ -563,7 +563,7 @@
+         "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
++        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+-- 
+2.55.0
+

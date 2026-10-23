@@ -2,6 +2,125 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## cursor-agent resume target — unreleased
+
+`path resume --harness cursor-agent` writes the Cursor CLI's chat store for
+`-C` and execs `cursor-agent --resume <id>`.
+
+- **`toolpath-cursor`**: `agent_store` writes and reads the CLI's
+  `<config>/chats/<md5(cwd)>/<agentId>/store.db` (`<config>`:
+  `$CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor`, else `~/.cursor`):
+  `blobs` keyed by SHA-256, `meta['0']` as hex JSON, and a root
+  `ConversationStateStructure` whose field 1 lists the AI SDK `ModelMessage`
+  blobs (the same encoding the IDE's `conversationState` uses, now shared
+  through `model_messages` and the new `proto` module) and whose field 8
+  lists the rendered turns. `AgentStore::to_view` reads one back.
+- **`path-cli`**: `Harness::CursorAgent` (`--harness cursor-agent`), a resume
+  target only: `share --harness cursor-agent` errors. The test `ScopedHome`
+  now also pins `$XDG_CONFIG_HOME` and clears `$CURSOR_CONFIG_DIR`.
+- **`toolpath-goldens`**: `cursor-agent` is a projection target
+  (`Agent::TARGETS`; `Agent::ALL` stays the seven recorded harnesses), with
+  `projection@<set>@cursor-agent`, `round_trip@<set>@cursor-agent` and
+  `writer@cursor-agent` snapshots, and a declared writer contract
+  (`fixtures/contract/cursor-agent.json`: 33 drops, two marked defects).
+
+`cursor-agent ls` lists a written chat (checked with no login in a temp
+HOME). Whether the resumed chat's model sees the history is not yet checked
+against a live account.
+
+## The baseline: every recording through every stage — unreleased
+
+Development now starts from what the harnesses actually wrote. Every
+committed recording (the real sessions in `test-fixtures/` that #81
+and 7a51195 introduced, plus live captures) runs through every stage,
+each stage's output is a saved snapshot, the accepted losses are data,
+and what a harness or the schema would reject is a contract checked on
+every output. See DEVELOPMENT.md for the loop.
+
+- **`toolpath-goldens`** (new, unpublished): the baseline as insta
+  snapshots, one per stage per recording: `ir`, `document`,
+  `projection@<target>`, `round_trip@<target>`, `validate`,
+  `validate_transforms` (the kind schema on every document a transform
+  produces), `shed`, `known_defects`, `writer@<harness>` (each writer on
+  its own, over one generated document), `formats` and `opencode_db`.
+  Covers all seven harnesses, pins schema validation and asserts the
+  token-accounting contract. `contracts.rs` checks every projection and
+  document for what the harness rejects (a JSONL file without a final
+  newline, a null thinking signature, an empty errored tool result, a
+  broken parent chain, an opencode session id of the wrong shape,
+  duplicate step ids); `tests/regressions.rs` re-introduces nine bugs
+  this changelog records and requires each to fail by field and stage.
+- **`path-cli`**: a `path d` group for development, built only with the
+  `develop` cargo feature (never in a release): `path d baseline
+  check|capture|diff|list|shed|capture-live`, `path d webmock run
+  <agent>` (replay one harness's cell from the committed cassettes) and
+  `path d model`, with `just baseline`, `just webmock` and `just model`.
+  Breaking for anyone who built the earlier `goldens` feature:
+  `path goldens …` is now `path d baseline …` (`goldens` stays an alias
+  of `baseline`).
+- **Fixes the baseline found**: Gemini CLI 0.47 `session-*.jsonl`
+  record streams are read (the old copies counted every assistant turn
+  twice); Cursor 3.24's `composerHeaders` table is read and written;
+  the Gemini and opencode session totals add the turns' reasoning
+  breakdowns and Copilot's `session.shutdown` totals land on the last
+  assistant turn; the Claude writer writes only Claude Code entry types
+  and `message.stop_reason` (not `stopReason`); `path.head` keeps the
+  conversation in its ancestry, so a Claude Code session's turns are no
+  longer a dead end; pi parent chains, Copilot's empty errored tool
+  results and Claude's empty errors are fixed so projected sessions
+  resume with their history; opencode resumes from the database it
+  reads, with session ids in its own shape; who served the model rides
+  the RFC's `meta.actors` `provider` slot, so a pi session run on
+  `ollama` keeps its provider across a round trip; the Cursor writer
+  writes the model history Cursor 3.24 reads, so a resumed chat carries
+  its transcript.
+- **`toolpath-webmock`** (new, unpublished): record once, replay with
+  no network and fake credentials, for every harness's model API and
+  for `path` ↔ Pathbase; JSON-RPC answers carry the live request id, so
+  Copilot's MCP calls replay. A `no_secrets` test runs the repo's
+  gitleaks rules over every committed fixture.
+- **`toolpath-harness-mock`** (new, unpublished): what Claude Code
+  would send the model when it resumes a projected session, without the
+  binary, checked against a recorded request.
+- **`toolpath`**: the RFC's signature algorithm as code behind a
+  `verify` feature: JCS canonical inputs for step author, path author
+  and reviewer signatures, SHA-256 digests, and ssh (Ed25519)
+  verification, proven against RFC 8785's test vectors and the RFC's own
+  example.
+- **Tests of what the docs promise**: `path query` across every
+  harness's sessions with the site's example filter; the core types,
+  dead ends, forks and merges, and `.path.json` ≡ `.path.jsonl`; the
+  RFC's version-control table through `path p import git`; the CLI
+  page against the binary (every command's help pinned); the
+  toolpath.net quick start step by step, offline.
+- **CI**: the pinned qualifier binary is installed and its review fails
+  closed when missing. Every public statement on the site, the format
+  and kind pages and the RFC carries a qualifier record at its text.
+- **`toolpath-model`** (new, unpublished): the work as one generated
+  JSON object model (harnesses, stages, snapshots, findings, claims,
+  pieces, qualifier records, review threads) with a test that fails
+  when the model and the repository disagree.
+- Kind: producers write `agent-coding-session` v1.1.0 only; v1.0.0 is
+  read-only legacy.
+
+## path-cli 0.30.0 — 2026-09-30
+
+- **`path-cli`** (0.30.0): one Pathbase login per server.
+  `~/.toolpath/credentials.json` keeps a login for each server it has
+  seen, so logging in to `http://pathbase.localhost` no longer signs you
+  out of `https://pathbase.dev`. Switch between them with `--url` or
+  `$PATHBASE_URL`; with neither, commands use the most recent login.
+  `path auth logout`, `status` and `whoami` take `--url`; `status` with
+  no `--url` lists every login and marks the default. A command only
+  ever sends the token stored for the server it is talking to —
+  previously `p import pathbase` sent the stored token to whatever host
+  the URL named. `$PATHBASE_URL` now also outranks the stored login for
+  uploads, as the docs already said. The file stays readable by older
+  binaries: its top level is still the most recent login, with the
+  others under a new `sessions` key. Every write now forces the file to
+  `0600`, not only the first.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
@@ -905,8 +1024,11 @@ blobs, and the `composer.composerHeaders` index. Implements
 `CursorProjector` with full `TOOL_TABLE` coverage (53 entries, ids 0–63)
 extracted from the workbench bundle for round-trip-correct numeric tool
 ids. The cursor-agent CLI uses a different protobuf store at
-`~/.cursor/chats/<wsHash>/<chatId>/store.db` and is deferred to a future
-`toolpath-cursor-cli` companion.
+`<config>/chats/<md5(cwd)>/<agentId>/store.db`, where `<config>` is
+`$CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor`, else `~/.cursor`
+(corrected: this entry said `~/.cursor/chats` always). It was deferred
+here; `toolpath_cursor::agent_store` now writes it (see "cursor-agent
+resume target").
 
 `path-cli` 0.12.0. Wires cursor into every plumbing surface: `p import
 cursor`, `p export cursor`, `p list cursor`, `show cursor`, `share`,

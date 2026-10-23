@@ -1,0 +1,2370 @@
+From 09fadd0cb71c6cfc4eef528cdf229ae294bc592b Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 20:39:45 -0400
+Subject: [PATCH] feat(goldens): the coverage map in report mode, lost and
+ gained paths classified against the target contract (pr/84)
+
+---
+ crates/toolpath-goldens/src/classify.rs       | 110 +++++++++++++++
+ crates/toolpath-goldens/src/lib.rs            |   1 +
+ .../toolpath-goldens/tests/classification.rs  | 131 ++++++++++++++++++
+ docs/baseline/classification.md               |  72 ++++++++++
+ pr/84-classification-report.md                |  19 +++
+ 5 files changed, 333 insertions(+)
+ create mode 100644 crates/toolpath-goldens/src/classify.rs
+ create mode 100644 crates/toolpath-goldens/tests/classification.rs
+ create mode 100644 docs/baseline/classification.md
+ create mode 100644 pr/84-classification-report.md
+
+diff --git a/crates/toolpath-goldens/src/classify.rs b/crates/toolpath-goldens/src/classify.rs
+new file mode 100644
+index 00000000..516920c4
+--- /dev/null
++++ b/crates/toolpath-goldens/src/classify.rs
+@@ -0,0 +1,110 @@
++//! Classify a round trip's lost and gained key paths against the target writer's declared
++//! contract (`fixtures/contract/<agent>.json`). Step 1 of `pr/78`, in report mode: it counts, it
++//! does not fail.
++//!
++//! A path is **declared** when an op of the target's contract covers it (the path itself or
++//! anything under it); every other path is **unexplained**. The classes `source-bookkeeping`,
++//! `minted` and `renamed` of the design are reserved for the next step: until their declarations
++//! exist those paths are counted as unexplained, so the table shows the whole job.
++
++use std::collections::BTreeSet;
++
++use crate::transform::{Contract, Op};
++
++/// Whether `path` is `declared` itself or lies under it (`a.b` covers `a.b.c` and `a.b[]`).
++pub fn covers(declared: &str, path: &str) -> bool {
++    path == declared
++        || path
++            .strip_prefix(declared)
++            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with('['))
++}
++
++/// Counts for one round trip.
++#[derive(Debug, Default, PartialEq, Eq, Clone)]
++pub struct Classified {
++    pub lost_declared: usize,
++    pub lost_unexplained: usize,
++    pub gained_declared: usize,
++    pub gained_unexplained: usize,
++}
++
++/// The paths a contract says are lost, and the paths it says are gained.
++fn declared_sets(contract: &Contract) -> (Vec<&str>, Vec<&str>) {
++    let (mut lost, mut gained) = (Vec::new(), Vec::new());
++    for op in &contract.ops {
++        match op {
++            Op::Drop { path, .. } => lost.push(path.as_str()),
++            Op::Rename { from, to } | Op::Move { from, to } => {
++                lost.push(from.as_str());
++                gained.push(to.as_str());
++            }
++            Op::Synthesize { path, .. } => gained.push(path.as_str()),
++            Op::Keep { .. } | Op::Convert { .. } => {}
++        }
++    }
++    (lost, gained)
++}
++
++/// Classify `lost` and `gained` for a target whose contract is `contract`.
++pub fn classify(
++    contract: &Contract,
++    lost: &BTreeSet<String>,
++    gained: &BTreeSet<String>,
++) -> Classified {
++    let (dl, dg) = declared_sets(contract);
++    let count = |paths: &BTreeSet<String>, declared: &[&str]| {
++        let d = paths
++            .iter()
++            .filter(|p| declared.iter().any(|d| covers(d, p)))
++            .count();
++        (d, paths.len() - d)
++    };
++    let (lost_declared, lost_unexplained) = count(lost, &dl);
++    let (gained_declared, gained_unexplained) = count(gained, &dg);
++    Classified {
++        lost_declared,
++        lost_unexplained,
++        gained_declared,
++        gained_unexplained,
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn contract() -> Contract {
++        serde_json::from_str(
++            r#"{"writer":"x","ops":[
++              {"op":"drop","path":"a.b","why":"w"},
++              {"op":"rename","from":"c","to":"d"},
++              {"op":"synthesize","path":"e","why":"w"}]}"#,
++        )
++        .unwrap()
++    }
++
++    #[test]
++    fn a_declared_path_covers_what_lies_under_it_and_nothing_beside_it() {
++        assert!(covers("a.b", "a.b"));
++        assert!(covers("a.b", "a.b.c"));
++        assert!(covers("a.b", "a.b[]"));
++        assert!(!covers("a.b", "a.bc"));
++        assert!(!covers("a.b", "a"));
++    }
++
++    #[test]
++    fn declared_and_unexplained_paths_are_counted_apart() {
++        let lost: BTreeSet<String> = ["a.b.x", "c", "z"].map(String::from).into();
++        let gained: BTreeSet<String> = ["d", "e", "q"].map(String::from).into();
++        let c = classify(&contract(), &lost, &gained);
++        assert_eq!(
++            c,
++            Classified {
++                lost_declared: 2,
++                lost_unexplained: 1,
++                gained_declared: 2,
++                gained_unexplained: 1
++            }
++        );
++    }
++}
+diff --git a/crates/toolpath-goldens/src/lib.rs b/crates/toolpath-goldens/src/lib.rs
+index 149698e7..5114da54 100644
+--- a/crates/toolpath-goldens/src/lib.rs
++++ b/crates/toolpath-goldens/src/lib.rs
+@@ -33,6 +33,7 @@
+ 
+ pub mod accounting;
+ pub mod canonical;
++pub mod classify;
+ pub mod contracts;
+ pub mod defects;
+ pub mod keypaths;
+diff --git a/crates/toolpath-goldens/tests/classification.rs b/crates/toolpath-goldens/tests/classification.rs
+new file mode 100644
+index 00000000..c6b1a583
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/classification.rs
+@@ -0,0 +1,131 @@
++//! The coverage map (pr/78 step 1): for every recording x target round trip, how many lost and
++//! gained key paths the TARGET writer's contract declares and how many nothing explains. Read
++//! from the committed `round_trip@<set>@<target>.snap` files; the table is committed as
++//! `docs/baseline/classification.md` and this test fails when it is stale.
++//! Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p toolpath-goldens --test classification`.
++//! Report mode: unexplained paths are counted, they do not fail the test (a later step does).
++
++use std::collections::{BTreeMap, BTreeSet};
++use std::path::PathBuf;
++
++use serde_json::Value;
++use toolpath_goldens::classify::{Classified, classify};
++use toolpath_goldens::transform::Contract;
++
++fn crate_dir() -> PathBuf {
++    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
++}
++
++fn contract(target: &str) -> Contract {
++    let p = crate_dir().join(format!("fixtures/contract/{target}.json"));
++    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
++    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
++}
++
++fn set(v: &Value) -> BTreeSet<String> {
++    v.as_array()
++        .into_iter()
++        .flatten()
++        .map(|p| p.as_str().expect("a key path").to_owned())
++        .collect()
++}
++
++/// `(recording set, target) -> classified`, plus the pairs whose round trip was unreadable.
++fn measure() -> (BTreeMap<(String, String), Classified>, Vec<String>) {
++    let mut out = BTreeMap::new();
++    let mut unreadable = Vec::new();
++    let mut contracts: BTreeMap<String, Contract> = BTreeMap::new();
++    for entry in std::fs::read_dir(crate_dir().join("snapshots")).expect("snapshots") {
++        let name = entry
++            .expect("entry")
++            .file_name()
++            .to_string_lossy()
++            .into_owned();
++        let Some(rest) = name
++            .strip_prefix("round_trip@")
++            .and_then(|r| r.strip_suffix(".snap"))
++        else {
++            continue;
++        };
++        let (set_name, target) = rest.split_once('@').expect("round_trip@<set>@<target>");
++        let text = std::fs::read_to_string(crate_dir().join("snapshots").join(&name)).unwrap();
++        let body = text.splitn(3, "---\n").nth(2).expect("snapshot body");
++        let v: Value = serde_json::from_str(body).unwrap_or_else(|e| panic!("{name}: {e}"));
++        if v["outcome"] != "compared" {
++            unreadable.push(format!("{set_name} -> {target}"));
++            continue;
++        }
++        let c = contracts
++            .entry(target.to_owned())
++            .or_insert_with(|| contract(target));
++        out.insert(
++            (set_name.to_owned(), target.to_owned()),
++            classify(c, &set(&v["lost"]), &set(&v["gained"])),
++        );
++    }
++    (out, unreadable)
++}
++
++fn render() -> String {
++    let (rows, unreadable) = measure();
++    let mut s = String::new();
++    s.push_str(
++        "# Classification of lost and gained key paths on the real round trips\n\n\
++         Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots and \
++         `fixtures/contract/<target>.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p \
++         toolpath-goldens --test classification`.\n\n\
++         **Report mode (pr/78 step 1).** A path is *declared* when the target writer's contract \
++         covers it; everything else is *unexplained*. The design's other classes (source \
++         bookkeeping, minted, renamed) have no declarations yet, so those paths are counted as \
++         unexplained here: the table is the size of the job, not a list of defects.\n\n\
++         | recording | target | lost declared | lost unexplained | gained declared | gained unexplained |\n\
++         |---|---|---:|---:|---:|---:|\n",
++    );
++    let mut total = Classified::default();
++    for ((set, target), c) in &rows {
++        s.push_str(&format!(
++            "| {set} | {target} | {} | {} | {} | {} |\n",
++            c.lost_declared, c.lost_unexplained, c.gained_declared, c.gained_unexplained
++        ));
++        total.lost_declared += c.lost_declared;
++        total.lost_unexplained += c.lost_unexplained;
++        total.gained_declared += c.gained_declared;
++        total.gained_unexplained += c.gained_unexplained;
++    }
++    s.push_str(&format!(
++        "| **{} pairs** | | **{}** | **{}** | **{}** | **{}** |\n",
++        rows.len(),
++        total.lost_declared,
++        total.lost_unexplained,
++        total.gained_declared,
++        total.gained_unexplained
++    ));
++    if !unreadable.is_empty() {
++        s.push_str(&format!(
++            "\nRound trips the adapter could not read (not classified): {}\n",
++            unreadable.join(", ")
++        ));
++    }
++    s
++}
++
++#[test]
++fn the_committed_classification_table_is_current() {
++    let path = crate_dir().join("../../docs/baseline/classification.md");
++    let now = render();
++    if std::env::var_os("UPDATE_CLASSIFICATION").is_some() {
++        std::fs::write(&path, &now).expect("write the table");
++        return;
++    }
++    let committed = std::fs::read_to_string(&path).unwrap_or_default();
++    assert_eq!(
++        committed, now,
++        "docs/baseline/classification.md is stale; regenerate it with UPDATE_CLASSIFICATION=1"
++    );
++}
++
++#[test]
++fn every_recording_and_target_is_classified() {
++    let (rows, unreadable) = measure();
++    assert_eq!(rows.len() + unreadable.len(), 63, "one row per round trip");
++}
+diff --git a/docs/baseline/classification.md b/docs/baseline/classification.md
+new file mode 100644
+index 00000000..51f788e6
+--- /dev/null
++++ b/docs/baseline/classification.md
+@@ -0,0 +1,72 @@
++# Classification of lost and gained key paths on the real round trips
++
++Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots and `fixtures/contract/<target>.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p toolpath-goldens --test classification`.
++
++**Report mode (pr/78 step 1).** A path is *declared* when the target writer's contract covers it; everything else is *unexplained*. The design's other classes (source bookkeeping, minted, renamed) have no declarations yet, so those paths are counted as unexplained here: the table is the size of the job, not a list of defects.
++
++| recording | target | lost declared | lost unexplained | gained declared | gained unexplained |
++|---|---|---:|---:|---:|---:|
++| claude | codex | 6 | 20 | 29 | 2 |
++| claude | copilot | 6 | 24 | 2 | 0 |
++| claude | cursor | 7 | 32 | 3 | 3 |
++| claude | cursor-agent | 16 | 24 | 0 | 0 |
++| claude | gemini | 6 | 24 | 0 | 0 |
++| claude | opencode | 6 | 24 | 1 | 1 |
++| claude | pi | 6 | 23 | 0 | 0 |
++| claude-compacted | codex | 4 | 4 | 16 | 7 |
++| claude-compacted | copilot | 4 | 8 | 1 | 5 |
++| claude-compacted | cursor | 3 | 6 | 3 | 3 |
++| claude-compacted | cursor-agent | 8 | 7 | 0 | 3 |
++| claude-compacted | gemini | 3 | 6 | 0 | 1 |
++| claude-compacted | opencode | 3 | 9 | 1 | 5 |
++| claude-compacted | pi | 2 | 6 | 0 | 2 |
++| claude-session | codex | 4 | 208 | 29 | 2 |
++| claude-session | copilot | 5 | 213 | 1 | 0 |
++| claude-session | cursor | 7 | 215 | 1 | 1 |
++| claude-session | cursor-agent | 11 | 212 | 0 | 0 |
++| claude-session | gemini | 6 | 212 | 0 | 0 |
++| claude-session | opencode | 4 | 212 | 1 | 1 |
++| claude-session | pi | 5 | 211 | 0 | 0 |
++| codex | claude | 5 | 89 | 3 | 1 |
++| codex | copilot | 5 | 87 | 0 | 0 |
++| codex | cursor | 6 | 91 | 0 | 0 |
++| codex | cursor-agent | 10 | 87 | 0 | 0 |
++| codex | gemini | 4 | 87 | 0 | 0 |
++| codex | opencode | 4 | 87 | 0 | 2 |
++| codex | pi | 6 | 87 | 0 | 1 |
++| copilot | claude | 2 | 20 | 3 | 10 |
++| copilot | codex | 3 | 8 | 30 | 5 |
++| copilot | cursor | 3 | 10 | 3 | 8 |
++| copilot | cursor-agent | 10 | 13 | 0 | 0 |
++| copilot | gemini | 2 | 9 | 0 | 2 |
++| copilot | opencode | 2 | 15 | 0 | 12 |
++| copilot | pi | 3 | 10 | 0 | 3 |
++| cursor | claude | 3 | 15 | 6 | 0 |
++| cursor | codex | 2 | 2 | 28 | 1 |
++| cursor | copilot | 4 | 5 | 1 | 2 |
++| cursor | cursor-agent | 8 | 2 | 0 | 0 |
++| cursor | gemini | 2 | 1 | 0 | 0 |
++| cursor | opencode | 4 | 5 | 1 | 4 |
++| cursor | pi | 3 | 2 | 1 | 1 |
++| gemini | claude | 2 | 2 | 6 | 0 |
++| gemini | codex | 3 | 1 | 33 | 7 |
++| gemini | copilot | 3 | 3 | 2 | 4 |
++| gemini | cursor | 2 | 6 | 2 | 4 |
++| gemini | cursor-agent | 10 | 11 | 0 | 0 |
++| gemini | opencode | 4 | 4 | 1 | 7 |
++| gemini | pi | 3 | 1 | 1 | 4 |
++| opencode | claude | 4 | 4 | 6 | 7 |
++| opencode | codex | 5 | 7 | 33 | 3 |
++| opencode | copilot | 4 | 0 | 1 | 4 |
++| opencode | cursor | 5 | 7 | 3 | 4 |
++| opencode | cursor-agent | 14 | 7 | 0 | 0 |
++| opencode | gemini | 3 | 9 | 0 | 0 |
++| opencode | pi | 5 | 8 | 1 | 0 |
++| pi | claude | 0 | 5 | 5 | 3 |
++| pi | codex | 2 | 0 | 30 | 5 |
++| pi | copilot | 3 | 3 | 1 | 4 |
++| pi | cursor | 1 | 6 | 3 | 6 |
++| pi | cursor-agent | 6 | 7 | 0 | 1 |
++| pi | gemini | 1 | 3 | 0 | 3 |
++| pi | opencode | 2 | 5 | 0 | 5 |
++| **63 pairs** | | **295** | **2531** | **292** | **159** |
+diff --git a/pr/84-classification-report.md b/pr/84-classification-report.md
+new file mode 100644
+index 00000000..dc9644cc
+--- /dev/null
++++ b/pr/84-classification-report.md
+@@ -0,0 +1,19 @@
++# feat(goldens): the coverage map, report mode (pr/78 step 1)
++
++Status: draft · Base: fdc3da4 · Code: `classify.rs` (+2 unit tests), `tests/classification.rs`, generated `docs/baseline/classification.md`
++
++## What
++For each of the 63 recording x target round trips, count the lost and gained key paths that the TARGET writer's contract
++(`fixtures/contract/<target>.json`) covers (declared) and those nothing explains (unexplained). Read from the committed `round_trip@*` snapshots;
++the table is committed and a test fails when it is stale (`UPDATE_CLASSIFICATION=1` regenerates). Report mode: nothing fails on unexplained.
++
++## Result (c. fdc3da4)
++63 pairs: lost 295 declared / 2,531 unexplained; gained 292 declared / 159 unexplained. This agrees with the measurement (2,540 of 2,854 lost; 175 of
++472 gained, taken at c1e8cd9, before pr/76-77 and 81-83). Source-bookkeeping, minted and renamed have no declarations yet, so they are inside "unexplained".
++
++## Next (pr/78 steps 2-4)
++Declare source-bookkeeping once per source agent and reuse fixtures/twice-around.json for minted values; pair renames by leaf value; then fail on unexplained.
++Defaults taken with controller-core: source-bookkeeping is an acceptable declared class; the table lives in docs/baseline/.
++
++## Not run
++Pinned 1.94, gitleaks, nix-develop recapture.
+-- 
+2.55.0
+
+From a6dc10bd7f8fbafb182213b1a831ecbfcff5f41b Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 20:43:09 -0400
+Subject: [PATCH] feat(goldens): source bookkeeping declared per source agent,
+ a class in the coverage map (pr/84)
+
+---
+ .../fixtures/source-bookkeeping.json          |  13 ++
+ crates/toolpath-goldens/src/classify.rs       |  62 ++++++--
+ .../toolpath-goldens/tests/classification.rs  |  49 +++++--
+ docs/baseline/classification.md               | 134 +++++++++---------
+ pr/84-classification-report.md                |   7 +
+ 5 files changed, 175 insertions(+), 90 deletions(-)
+ create mode 100644 crates/toolpath-goldens/fixtures/source-bookkeeping.json
+
+diff --git a/crates/toolpath-goldens/fixtures/source-bookkeeping.json b/crates/toolpath-goldens/fixtures/source-bookkeeping.json
+new file mode 100644
+index 00000000..d3c3e623
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/source-bookkeeping.json
+@@ -0,0 +1,13 @@
++[
++  {"source":"claude","path":"paths[].steps[].change.<artifact>.structural.entry_extra","why":"Claude Code's own transcript-entry fields (uuid chains, attachment payloads, hook output, tool-use result envelopes) kept verbatim under entry_extra; no other agent's format has a place for them."},
++  {"source":"claude","path":"paths[].steps[].change.<artifact>.structural.raw","why":"The Claude transcript entry as it was read, kept for a claude-to-claude round trip; other formats carry their own entry shape."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.info","why":"Codex token_count event bookkeeping (running totals, context window); not part of any other agent's conversation."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.rate_limits","why":"Codex's account rate-limit snapshot attached to token_count events."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.permission_profile","why":"Codex turn_context sandbox and approval settings for the session."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.file_system_sandbox_policy","why":"Codex turn_context sandbox settings."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.sandbox_policy","why":"Codex turn_context sandbox settings."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.collaboration_mode","why":"Codex turn_context collaboration settings (mode, model, effort)."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.truncation_policy","why":"Codex turn_context context-truncation settings."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.source","why":"Codex session_meta origin marker (cli, exec, or sub-agent source)."},
++  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.timezone","why":"Codex turn_context timezone setting."}
++]
+diff --git a/crates/toolpath-goldens/src/classify.rs b/crates/toolpath-goldens/src/classify.rs
+index 516920c4..64685600 100644
+--- a/crates/toolpath-goldens/src/classify.rs
++++ b/crates/toolpath-goldens/src/classify.rs
+@@ -23,6 +23,8 @@ pub fn covers(declared: &str, path: &str) -> bool {
+ #[derive(Debug, Default, PartialEq, Eq, Clone)]
+ pub struct Classified {
+     pub lost_declared: usize,
++    /// Lost paths that belong to the SOURCE agent's own envelope (`fixtures/source-bookkeeping.json`).
++    pub lost_source: usize,
+     pub lost_unexplained: usize,
+     pub gained_declared: usize,
+     pub gained_unexplained: usize,
+@@ -45,24 +47,49 @@ fn declared_sets(contract: &Contract) -> (Vec<&str>, Vec<&str>) {
+     (lost, gained)
+ }
+ 
+-/// Classify `lost` and `gained` for a target whose contract is `contract`.
++/// One source agent's declared bookkeeping prefix (`fixtures/source-bookkeeping.json`).
++#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct SourceBookkeeping {
++    pub source: String,
++    pub path: String,
++    pub why: String,
++}
++
++/// Classify `lost` and `gained` for a target whose contract is `contract`, from a recording of
++/// `source` (an agent name) whose declared bookkeeping is `bookkeeping`. A lost path the target's
++/// contract covers is *declared*; else one under the source's bookkeeping is *source*; else
++/// *unexplained*.
+ pub fn classify(
+     contract: &Contract,
++    source: &str,
++    bookkeeping: &[SourceBookkeeping],
+     lost: &BTreeSet<String>,
+     gained: &BTreeSet<String>,
+ ) -> Classified {
+     let (dl, dg) = declared_sets(contract);
+-    let count = |paths: &BTreeSet<String>, declared: &[&str]| {
+-        let d = paths
+-            .iter()
+-            .filter(|p| declared.iter().any(|d| covers(d, p)))
+-            .count();
+-        (d, paths.len() - d)
+-    };
+-    let (lost_declared, lost_unexplained) = count(lost, &dl);
+-    let (gained_declared, gained_unexplained) = count(gained, &dg);
++    let mine: Vec<&str> = bookkeeping
++        .iter()
++        .filter(|b| b.source == source)
++        .map(|b| b.path.as_str())
++        .collect();
++    let (mut lost_declared, mut lost_source) = (0, 0);
++    for p in lost {
++        if dl.iter().any(|d| covers(d, p)) {
++            lost_declared += 1;
++        } else if mine.iter().any(|d| covers(d, p)) {
++            lost_source += 1;
++        }
++    }
++    let lost_unexplained = lost.len() - lost_declared - lost_source;
++    let gained_declared = gained
++        .iter()
++        .filter(|p| dg.iter().any(|d| covers(d, p)))
++        .count();
++    let gained_unexplained = gained.len() - gained_declared;
+     Classified {
+         lost_declared,
++        lost_source,
+         lost_unexplained,
+         gained_declared,
+         gained_unexplained,
+@@ -94,13 +121,24 @@ mod tests {
+ 
+     #[test]
+     fn declared_and_unexplained_paths_are_counted_apart() {
+-        let lost: BTreeSet<String> = ["a.b.x", "c", "z"].map(String::from).into();
++        let lost: BTreeSet<String> = ["a.b.x", "c", "env.k", "z"].map(String::from).into();
+         let gained: BTreeSet<String> = ["d", "e", "q"].map(String::from).into();
+-        let c = classify(&contract(), &lost, &gained);
++        let book = vec![SourceBookkeeping {
++            source: "s".into(),
++            path: "env".into(),
++            why: "w".into(),
++        }];
++        // another source's bookkeeping does not excuse this source's loss
++        assert_eq!(
++            classify(&contract(), "t", &book, &lost, &gained).lost_source,
++            0
++        );
++        let c = classify(&contract(), "s", &book, &lost, &gained);
+         assert_eq!(
+             c,
+             Classified {
+                 lost_declared: 2,
++                lost_source: 1,
+                 lost_unexplained: 1,
+                 gained_declared: 2,
+                 gained_unexplained: 1
+diff --git a/crates/toolpath-goldens/tests/classification.rs b/crates/toolpath-goldens/tests/classification.rs
+index c6b1a583..369bd746 100644
+--- a/crates/toolpath-goldens/tests/classification.rs
++++ b/crates/toolpath-goldens/tests/classification.rs
+@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
+ use std::path::PathBuf;
+ 
+ use serde_json::Value;
+-use toolpath_goldens::classify::{Classified, classify};
++use toolpath_goldens::classify::{Classified, SourceBookkeeping, classify};
+ use toolpath_goldens::transform::Contract;
+ 
+ fn crate_dir() -> PathBuf {
+@@ -22,6 +22,18 @@ fn contract(target: &str) -> Contract {
+     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+ }
+ 
++fn bookkeeping() -> Vec<SourceBookkeeping> {
++    let p = crate_dir().join("fixtures/source-bookkeeping.json");
++    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
++    let b: Vec<SourceBookkeeping> =
++        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
++    assert!(
++        b.iter().all(|d| d.why.len() >= 20),
++        "every source-bookkeeping declaration gives a reason"
++    );
++    b
++}
++
+ fn set(v: &Value) -> BTreeSet<String> {
+     v.as_array()
+         .into_iter()
+@@ -35,6 +47,7 @@ fn measure() -> (BTreeMap<(String, String), Classified>, Vec<String>) {
+     let mut out = BTreeMap::new();
+     let mut unreadable = Vec::new();
+     let mut contracts: BTreeMap<String, Contract> = BTreeMap::new();
++    let book = bookkeeping();
+     for entry in std::fs::read_dir(crate_dir().join("snapshots")).expect("snapshots") {
+         let name = entry
+             .expect("entry")
+@@ -58,9 +71,15 @@ fn measure() -> (BTreeMap<(String, String), Classified>, Vec<String>) {
+         let c = contracts
+             .entry(target.to_owned())
+             .or_insert_with(|| contract(target));
++        // claude-session and claude-compacted are recordings of the claude agent
++        let source = if set_name.starts_with("claude") {
++            "claude"
++        } else {
++            set_name
++        };
+         out.insert(
+             (set_name.to_owned(), target.to_owned()),
+-            classify(c, &set(&v["lost"]), &set(&v["gained"])),
++            classify(c, source, &book, &set(&v["lost"]), &set(&v["gained"])),
+         );
+     }
+     (out, unreadable)
+@@ -74,28 +93,36 @@ fn render() -> String {
+          Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots and \
+          `fixtures/contract/<target>.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p \
+          toolpath-goldens --test classification`.\n\n\
+-         **Report mode (pr/78 step 1).** A path is *declared* when the target writer's contract \
+-         covers it; everything else is *unexplained*. The design's other classes (source \
+-         bookkeeping, minted, renamed) have no declarations yet, so those paths are counted as \
+-         unexplained here: the table is the size of the job, not a list of defects.\n\n\
+-         | recording | target | lost declared | lost unexplained | gained declared | gained unexplained |\n\
+-         |---|---|---:|---:|---:|---:|\n",
++         **Report mode (pr/78).** A lost path is *declared* when the target writer's contract \
++         covers it, *source* when it lies under the recording agent's own envelope \
++         (`fixtures/source-bookkeeping.json`, one reason each), else *unexplained*. A gained \
++         path is *declared* when the contract covers it, else *unexplained*. Minted and renamed \
++         paths have no declarations yet and are inside *unexplained*. Unexplained does not fail \
++         anything until Bobby says so.\n\n\
++         | recording | target | lost declared | lost source | lost unexplained | gained declared | gained unexplained |\n\
++         |---|---|---:|---:|---:|---:|---:|\n",
+     );
+     let mut total = Classified::default();
+     for ((set, target), c) in &rows {
+         s.push_str(&format!(
+-            "| {set} | {target} | {} | {} | {} | {} |\n",
+-            c.lost_declared, c.lost_unexplained, c.gained_declared, c.gained_unexplained
++            "| {set} | {target} | {} | {} | {} | {} | {} |\n",
++            c.lost_declared,
++            c.lost_source,
++            c.lost_unexplained,
++            c.gained_declared,
++            c.gained_unexplained
+         ));
++        total.lost_source += c.lost_source;
+         total.lost_declared += c.lost_declared;
+         total.lost_unexplained += c.lost_unexplained;
+         total.gained_declared += c.gained_declared;
+         total.gained_unexplained += c.gained_unexplained;
+     }
+     s.push_str(&format!(
+-        "| **{} pairs** | | **{}** | **{}** | **{}** | **{}** |\n",
++        "| **{} pairs** | | **{}** | **{}** | **{}** | **{}** | **{}** |\n",
+         rows.len(),
+         total.lost_declared,
++        total.lost_source,
+         total.lost_unexplained,
+         total.gained_declared,
+         total.gained_unexplained
+diff --git a/docs/baseline/classification.md b/docs/baseline/classification.md
+index 51f788e6..aff6f515 100644
+--- a/docs/baseline/classification.md
++++ b/docs/baseline/classification.md
+@@ -2,71 +2,71 @@
+ 
+ Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots and `fixtures/contract/<target>.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p toolpath-goldens --test classification`.
+ 
+-**Report mode (pr/78 step 1).** A path is *declared* when the target writer's contract covers it; everything else is *unexplained*. The design's other classes (source bookkeeping, minted, renamed) have no declarations yet, so those paths are counted as unexplained here: the table is the size of the job, not a list of defects.
++**Report mode (pr/78).** A lost path is *declared* when the target writer's contract covers it, *source* when it lies under the recording agent's own envelope (`fixtures/source-bookkeeping.json`, one reason each), else *unexplained*. A gained path is *declared* when the contract covers it, else *unexplained*. Minted and renamed paths have no declarations yet and are inside *unexplained*. Unexplained does not fail anything until Bobby says so.
+ 
+-| recording | target | lost declared | lost unexplained | gained declared | gained unexplained |
+-|---|---|---:|---:|---:|---:|
+-| claude | codex | 6 | 20 | 29 | 2 |
+-| claude | copilot | 6 | 24 | 2 | 0 |
+-| claude | cursor | 7 | 32 | 3 | 3 |
+-| claude | cursor-agent | 16 | 24 | 0 | 0 |
+-| claude | gemini | 6 | 24 | 0 | 0 |
+-| claude | opencode | 6 | 24 | 1 | 1 |
+-| claude | pi | 6 | 23 | 0 | 0 |
+-| claude-compacted | codex | 4 | 4 | 16 | 7 |
+-| claude-compacted | copilot | 4 | 8 | 1 | 5 |
+-| claude-compacted | cursor | 3 | 6 | 3 | 3 |
+-| claude-compacted | cursor-agent | 8 | 7 | 0 | 3 |
+-| claude-compacted | gemini | 3 | 6 | 0 | 1 |
+-| claude-compacted | opencode | 3 | 9 | 1 | 5 |
+-| claude-compacted | pi | 2 | 6 | 0 | 2 |
+-| claude-session | codex | 4 | 208 | 29 | 2 |
+-| claude-session | copilot | 5 | 213 | 1 | 0 |
+-| claude-session | cursor | 7 | 215 | 1 | 1 |
+-| claude-session | cursor-agent | 11 | 212 | 0 | 0 |
+-| claude-session | gemini | 6 | 212 | 0 | 0 |
+-| claude-session | opencode | 4 | 212 | 1 | 1 |
+-| claude-session | pi | 5 | 211 | 0 | 0 |
+-| codex | claude | 5 | 89 | 3 | 1 |
+-| codex | copilot | 5 | 87 | 0 | 0 |
+-| codex | cursor | 6 | 91 | 0 | 0 |
+-| codex | cursor-agent | 10 | 87 | 0 | 0 |
+-| codex | gemini | 4 | 87 | 0 | 0 |
+-| codex | opencode | 4 | 87 | 0 | 2 |
+-| codex | pi | 6 | 87 | 0 | 1 |
+-| copilot | claude | 2 | 20 | 3 | 10 |
+-| copilot | codex | 3 | 8 | 30 | 5 |
+-| copilot | cursor | 3 | 10 | 3 | 8 |
+-| copilot | cursor-agent | 10 | 13 | 0 | 0 |
+-| copilot | gemini | 2 | 9 | 0 | 2 |
+-| copilot | opencode | 2 | 15 | 0 | 12 |
+-| copilot | pi | 3 | 10 | 0 | 3 |
+-| cursor | claude | 3 | 15 | 6 | 0 |
+-| cursor | codex | 2 | 2 | 28 | 1 |
+-| cursor | copilot | 4 | 5 | 1 | 2 |
+-| cursor | cursor-agent | 8 | 2 | 0 | 0 |
+-| cursor | gemini | 2 | 1 | 0 | 0 |
+-| cursor | opencode | 4 | 5 | 1 | 4 |
+-| cursor | pi | 3 | 2 | 1 | 1 |
+-| gemini | claude | 2 | 2 | 6 | 0 |
+-| gemini | codex | 3 | 1 | 33 | 7 |
+-| gemini | copilot | 3 | 3 | 2 | 4 |
+-| gemini | cursor | 2 | 6 | 2 | 4 |
+-| gemini | cursor-agent | 10 | 11 | 0 | 0 |
+-| gemini | opencode | 4 | 4 | 1 | 7 |
+-| gemini | pi | 3 | 1 | 1 | 4 |
+-| opencode | claude | 4 | 4 | 6 | 7 |
+-| opencode | codex | 5 | 7 | 33 | 3 |
+-| opencode | copilot | 4 | 0 | 1 | 4 |
+-| opencode | cursor | 5 | 7 | 3 | 4 |
+-| opencode | cursor-agent | 14 | 7 | 0 | 0 |
+-| opencode | gemini | 3 | 9 | 0 | 0 |
+-| opencode | pi | 5 | 8 | 1 | 0 |
+-| pi | claude | 0 | 5 | 5 | 3 |
+-| pi | codex | 2 | 0 | 30 | 5 |
+-| pi | copilot | 3 | 3 | 1 | 4 |
+-| pi | cursor | 1 | 6 | 3 | 6 |
+-| pi | cursor-agent | 6 | 7 | 0 | 1 |
+-| pi | gemini | 1 | 3 | 0 | 3 |
+-| pi | opencode | 2 | 5 | 0 | 5 |
+-| **63 pairs** | | **295** | **2531** | **292** | **159** |
++| recording | target | lost declared | lost source | lost unexplained | gained declared | gained unexplained |
++|---|---|---:|---:|---:|---:|---:|
++| claude | codex | 6 | 16 | 4 | 29 | 2 |
++| claude | copilot | 6 | 16 | 8 | 2 | 0 |
++| claude | cursor | 7 | 16 | 16 | 3 | 3 |
++| claude | cursor-agent | 16 | 16 | 8 | 0 | 0 |
++| claude | gemini | 6 | 16 | 8 | 0 | 0 |
++| claude | opencode | 6 | 16 | 8 | 1 | 1 |
++| claude | pi | 6 | 16 | 7 | 0 | 0 |
++| claude-compacted | codex | 4 | 3 | 1 | 16 | 7 |
++| claude-compacted | copilot | 4 | 3 | 5 | 1 | 5 |
++| claude-compacted | cursor | 3 | 3 | 3 | 3 | 3 |
++| claude-compacted | cursor-agent | 8 | 3 | 4 | 0 | 3 |
++| claude-compacted | gemini | 3 | 3 | 3 | 0 | 1 |
++| claude-compacted | opencode | 3 | 3 | 6 | 1 | 5 |
++| claude-compacted | pi | 2 | 3 | 3 | 0 | 2 |
++| claude-session | codex | 4 | 204 | 4 | 29 | 2 |
++| claude-session | copilot | 5 | 204 | 9 | 1 | 0 |
++| claude-session | cursor | 7 | 204 | 11 | 1 | 1 |
++| claude-session | cursor-agent | 11 | 204 | 8 | 0 | 0 |
++| claude-session | gemini | 6 | 204 | 8 | 0 | 0 |
++| claude-session | opencode | 4 | 204 | 8 | 1 | 1 |
++| claude-session | pi | 5 | 204 | 7 | 0 | 0 |
++| codex | claude | 5 | 55 | 34 | 3 | 1 |
++| codex | copilot | 5 | 55 | 32 | 0 | 0 |
++| codex | cursor | 6 | 55 | 36 | 0 | 0 |
++| codex | cursor-agent | 10 | 55 | 32 | 0 | 0 |
++| codex | gemini | 4 | 55 | 32 | 0 | 0 |
++| codex | opencode | 4 | 55 | 32 | 0 | 2 |
++| codex | pi | 6 | 55 | 32 | 0 | 1 |
++| copilot | claude | 2 | 0 | 20 | 3 | 10 |
++| copilot | codex | 3 | 0 | 8 | 30 | 5 |
++| copilot | cursor | 3 | 0 | 10 | 3 | 8 |
++| copilot | cursor-agent | 10 | 0 | 13 | 0 | 0 |
++| copilot | gemini | 2 | 0 | 9 | 0 | 2 |
++| copilot | opencode | 2 | 0 | 15 | 0 | 12 |
++| copilot | pi | 3 | 0 | 10 | 0 | 3 |
++| cursor | claude | 3 | 0 | 15 | 6 | 0 |
++| cursor | codex | 2 | 0 | 2 | 28 | 1 |
++| cursor | copilot | 4 | 0 | 5 | 1 | 2 |
++| cursor | cursor-agent | 8 | 0 | 2 | 0 | 0 |
++| cursor | gemini | 2 | 0 | 1 | 0 | 0 |
++| cursor | opencode | 4 | 0 | 5 | 1 | 4 |
++| cursor | pi | 3 | 0 | 2 | 1 | 1 |
++| gemini | claude | 2 | 0 | 2 | 6 | 0 |
++| gemini | codex | 3 | 0 | 1 | 33 | 7 |
++| gemini | copilot | 3 | 0 | 3 | 2 | 4 |
++| gemini | cursor | 2 | 0 | 6 | 2 | 4 |
++| gemini | cursor-agent | 10 | 0 | 11 | 0 | 0 |
++| gemini | opencode | 4 | 0 | 4 | 1 | 7 |
++| gemini | pi | 3 | 0 | 1 | 1 | 4 |
++| opencode | claude | 4 | 0 | 4 | 6 | 7 |
++| opencode | codex | 5 | 0 | 7 | 33 | 3 |
++| opencode | copilot | 4 | 0 | 0 | 1 | 4 |
++| opencode | cursor | 5 | 0 | 7 | 3 | 4 |
++| opencode | cursor-agent | 14 | 0 | 7 | 0 | 0 |
++| opencode | gemini | 3 | 0 | 9 | 0 | 0 |
++| opencode | pi | 5 | 0 | 8 | 1 | 0 |
++| pi | claude | 0 | 0 | 5 | 5 | 3 |
++| pi | codex | 2 | 0 | 0 | 30 | 5 |
++| pi | copilot | 3 | 0 | 3 | 1 | 4 |
++| pi | cursor | 1 | 0 | 6 | 3 | 6 |
++| pi | cursor-agent | 6 | 0 | 7 | 0 | 1 |
++| pi | gemini | 1 | 0 | 3 | 0 | 3 |
++| pi | opencode | 2 | 0 | 5 | 0 | 5 |
++| **63 pairs** | | **295** | **1946** | **585** | **292** | **159** |
+diff --git a/pr/84-classification-report.md b/pr/84-classification-report.md
+index dc9644cc..b7d36229 100644
+--- a/pr/84-classification-report.md
++++ b/pr/84-classification-report.md
+@@ -17,3 +17,10 @@ Defaults taken with controller-core: source-bookkeeping is an acceptable declare
+ 
+ ## Not run
+ Pinned 1.94, gitleaks, nix-develop recapture.
++
++## Step 2a (source-bookkeeping), a second commit
++`fixtures/source-bookkeeping.json`: per source agent, the prefixes of its own envelope with one reason each (claude `entry_extra`, `raw`; codex
++`info`, `rate_limits`, `permission_profile`, `file_system_sandbox_policy`, `sandbox_policy`, `collaboration_mode`, `truncation_policy`, `source`,
++`timezone`). The table gains a "lost source" column. Lost: 295 declared / 585 source / 1,946 unexplained (was 2,531 unexplained). The remaining 1,946
++are mostly NOT bookkeeping: tool_uses, token_usage, stop_reason, delegations, file-change `before`/`after`/`operation` and similar content,
++to be looked at one by one (real defects or declarable). Not done yet: minted and renamed classes (leaf-value pairing); unexplained still does not fail.
+-- 
+2.55.0
+
+From 73b6f105d2763dbec80469475a3a84a730303b8e Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 10:32:20 -0400
+Subject: [PATCH] feat(goldens): renamed and synthesized classes, the
+ unexplained paths listed; fix the swapped figures in the pr/84 record
+
+---
+ .../fixtures/target-synthesized.json          |  18 +
+ crates/toolpath-goldens/src/classify.rs       | 200 ++--
+ .../toolpath-goldens/tests/classification.rs  | 173 ++--
+ docs/baseline/classification.md               | 136 +--
+ docs/baseline/unexplained.md                  | 852 ++++++++++++++++++
+ pr/84-classification-report.md                |  18 +-
+ 6 files changed, 1189 insertions(+), 208 deletions(-)
+ create mode 100644 crates/toolpath-goldens/fixtures/target-synthesized.json
+ create mode 100644 docs/baseline/unexplained.md
+
+diff --git a/crates/toolpath-goldens/fixtures/target-synthesized.json b/crates/toolpath-goldens/fixtures/target-synthesized.json
+new file mode 100644
+index 00000000..fd62eecf
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/target-synthesized.json
+@@ -0,0 +1,18 @@
++[
++  {"target":"claude","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"claude","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
++  {"target":"codex","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"codex","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
++  {"target":"copilot","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"copilot","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
++  {"target":"cursor","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"cursor","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
++  {"target":"cursor-agent","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"cursor-agent","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
++  {"target":"gemini","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"gemini","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
++  {"target":"opencode","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"opencode","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
++  {"target":"pi","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
++  {"target":"pi","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."}
++]
+diff --git a/crates/toolpath-goldens/src/classify.rs b/crates/toolpath-goldens/src/classify.rs
+index 64685600..c8567115 100644
+--- a/crates/toolpath-goldens/src/classify.rs
++++ b/crates/toolpath-goldens/src/classify.rs
+@@ -1,11 +1,22 @@
+-//! Classify a round trip's lost and gained key paths against the target writer's declared
+-//! contract (`fixtures/contract/<agent>.json`). Step 1 of `pr/78`, in report mode: it counts, it
+-//! does not fail.
++//! Classify a round trip's lost and gained key paths (pr/78), in report mode: it counts, it does
++//! not fail.
+ //!
+-//! A path is **declared** when an op of the target's contract covers it (the path itself or
+-//! anything under it); every other path is **unexplained**. The classes `source-bookkeeping`,
+-//! `minted` and `renamed` of the design are reserved for the next step: until their declarations
+-//! exist those paths are counted as unexplained, so the table shows the whole job.
++//! A **lost** path is
++//! * *dropped*: the target writer's contract (`fixtures/contract/<target>.json`) has a `drop` op
++//!   covering it;
++//! * *renamed*: a `rename` or `move` op names it as the `from` side (its value comes back under
++//!   another key);
++//! * *source* bookkeeping: it lies under the recording agent's own envelope
++//!   (`fixtures/source-bookkeeping.json`);
++//! * else *unexplained*.
++//!
++//! A **gained** path is
++//! * *synthesized*: a `synthesize` op covers it, or it lies under the envelope the TARGET writer
++//!   mints for every session (`fixtures/target-synthesized.json`);
++//! * *renamed*: the `to` side of a `rename` or `move` op;
++//! * else *unexplained*.
++//!
++//! "Covers" means the path itself or anything under it.
+ 
+ use std::collections::BTreeSet;
+ 
+@@ -22,32 +33,16 @@ pub fn covers(declared: &str, path: &str) -> bool {
+ /// Counts for one round trip.
+ #[derive(Debug, Default, PartialEq, Eq, Clone)]
+ pub struct Classified {
+-    pub lost_declared: usize,
+-    /// Lost paths that belong to the SOURCE agent's own envelope (`fixtures/source-bookkeeping.json`).
++    pub lost_dropped: usize,
++    pub lost_renamed: usize,
+     pub lost_source: usize,
+     pub lost_unexplained: usize,
+-    pub gained_declared: usize,
++    pub gained_synthesized: usize,
++    pub gained_renamed: usize,
+     pub gained_unexplained: usize,
+ }
+ 
+-/// The paths a contract says are lost, and the paths it says are gained.
+-fn declared_sets(contract: &Contract) -> (Vec<&str>, Vec<&str>) {
+-    let (mut lost, mut gained) = (Vec::new(), Vec::new());
+-    for op in &contract.ops {
+-        match op {
+-            Op::Drop { path, .. } => lost.push(path.as_str()),
+-            Op::Rename { from, to } | Op::Move { from, to } => {
+-                lost.push(from.as_str());
+-                gained.push(to.as_str());
+-            }
+-            Op::Synthesize { path, .. } => gained.push(path.as_str()),
+-            Op::Keep { .. } | Op::Convert { .. } => {}
+-        }
+-    }
+-    (lost, gained)
+-}
+-
+-/// One source agent's declared bookkeeping prefix (`fixtures/source-bookkeeping.json`).
++/// One source agent's own envelope prefix (`fixtures/source-bookkeeping.json`).
+ #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+ #[serde(deny_unknown_fields)]
+ pub struct SourceBookkeeping {
+@@ -56,44 +51,96 @@ pub struct SourceBookkeeping {
+     pub why: String,
+ }
+ 
+-/// Classify `lost` and `gained` for a target whose contract is `contract`, from a recording of
+-/// `source` (an agent name) whose declared bookkeeping is `bookkeeping`. A lost path the target's
+-/// contract covers is *declared*; else one under the source's bookkeeping is *source*; else
+-/// *unexplained*.
+-pub fn classify(
+-    contract: &Contract,
+-    source: &str,
+-    bookkeeping: &[SourceBookkeeping],
++/// One target writer's minted envelope prefix (`fixtures/target-synthesized.json`): paths the
++/// writer creates for every session, which no source had.
++#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct TargetSynthesized {
++    pub target: String,
++    pub path: String,
++    pub why: String,
++}
++
++/// What a round trip is classified against.
++pub struct Declared<'a> {
++    pub contract: &'a Contract,
++    pub source: &'a str,
++    pub source_bookkeeping: &'a [SourceBookkeeping],
++    pub target_synthesized: &'a [TargetSynthesized],
++}
++
++/// The paths left with no explanation.
++#[derive(Debug, Default, PartialEq, Eq, Clone)]
++pub struct Unexplained {
++    pub lost: Vec<String>,
++    pub gained: Vec<String>,
++}
++
++fn any_covers<'a>(declared: impl IntoIterator<Item = &'a str>, path: &str) -> bool {
++    declared.into_iter().any(|d| covers(d, path))
++}
++
++/// Classify `lost` and `gained`; also the paths nothing explains.
++pub fn classify_paths(
++    d: &Declared,
+     lost: &BTreeSet<String>,
+     gained: &BTreeSet<String>,
+-) -> Classified {
+-    let (dl, dg) = declared_sets(contract);
+-    let mine: Vec<&str> = bookkeeping
+-        .iter()
+-        .filter(|b| b.source == source)
+-        .map(|b| b.path.as_str())
+-        .collect();
+-    let (mut lost_declared, mut lost_source) = (0, 0);
++) -> (Classified, Unexplained) {
++    let (mut dropped, mut renamed_from, mut renamed_to, mut synth) =
++        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
++    for op in &d.contract.ops {
++        match op {
++            Op::Drop { path, .. } => dropped.push(path.as_str()),
++            Op::Rename { from, to } | Op::Move { from, to } => {
++                renamed_from.push(from.as_str());
++                renamed_to.push(to.as_str());
++            }
++            Op::Synthesize { path, .. } => synth.push(path.as_str()),
++            Op::Keep { .. } | Op::Convert { .. } => {}
++        }
++    }
++    let source = || {
++        d.source_bookkeeping
++            .iter()
++            .filter(|b| b.source == d.source)
++            .map(|b| b.path.as_str())
++    };
++    let minted = || {
++        d.target_synthesized
++            .iter()
++            .filter(|b| b.target == d.contract.writer)
++            .map(|b| b.path.as_str())
++    };
++    let mut c = Classified::default();
++    let mut u = Unexplained::default();
+     for p in lost {
+-        if dl.iter().any(|d| covers(d, p)) {
+-            lost_declared += 1;
+-        } else if mine.iter().any(|d| covers(d, p)) {
+-            lost_source += 1;
++        if any_covers(dropped.iter().copied(), p) {
++            c.lost_dropped += 1;
++        } else if any_covers(renamed_from.iter().copied(), p) {
++            c.lost_renamed += 1;
++        } else if any_covers(source(), p) {
++            c.lost_source += 1;
++        } else {
++            c.lost_unexplained += 1;
++            u.lost.push(p.clone());
+         }
+     }
+-    let lost_unexplained = lost.len() - lost_declared - lost_source;
+-    let gained_declared = gained
+-        .iter()
+-        .filter(|p| dg.iter().any(|d| covers(d, p)))
+-        .count();
+-    let gained_unexplained = gained.len() - gained_declared;
+-    Classified {
+-        lost_declared,
+-        lost_source,
+-        lost_unexplained,
+-        gained_declared,
+-        gained_unexplained,
++    for p in gained {
++        if any_covers(synth.iter().copied(), p) || any_covers(minted(), p) {
++            c.gained_synthesized += 1;
++        } else if any_covers(renamed_to.iter().copied(), p) {
++            c.gained_renamed += 1;
++        } else {
++            c.gained_unexplained += 1;
++            u.gained.push(p.clone());
++        }
+     }
++    (c, u)
++}
++
++/// [`classify_paths`], counts only.
++pub fn classify(d: &Declared, lost: &BTreeSet<String>, gained: &BTreeSet<String>) -> Classified {
++    classify_paths(d, lost, gained).0
+ }
+ 
+ #[cfg(test)]
+@@ -120,29 +167,42 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn declared_and_unexplained_paths_are_counted_apart() {
++    fn every_class_is_counted_apart_and_only_unexplained_paths_are_listed() {
+         let lost: BTreeSet<String> = ["a.b.x", "c", "env.k", "z"].map(String::from).into();
+-        let gained: BTreeSet<String> = ["d", "e", "q"].map(String::from).into();
++        let gained: BTreeSet<String> = ["d", "e", "m.k", "q"].map(String::from).into();
+         let book = vec![SourceBookkeeping {
+             source: "s".into(),
+             path: "env".into(),
+             why: "w".into(),
+         }];
++        let synth = vec![TargetSynthesized {
++            target: "x".into(),
++            path: "m".into(),
++            why: "w".into(),
++        }];
++        let c = contract();
++        let d = |source| Declared {
++            contract: &c,
++            source,
++            source_bookkeeping: &book,
++            target_synthesized: &synth,
++        };
+         // another source's bookkeeping does not excuse this source's loss
++        assert_eq!(classify(&d("t"), &lost, &gained).lost_source, 0);
++        let (counts, unexplained) = classify_paths(&d("s"), &lost, &gained);
+         assert_eq!(
+-            classify(&contract(), "t", &book, &lost, &gained).lost_source,
+-            0
+-        );
+-        let c = classify(&contract(), "s", &book, &lost, &gained);
+-        assert_eq!(
+-            c,
++            counts,
+             Classified {
+-                lost_declared: 2,
++                lost_dropped: 1,
++                lost_renamed: 1,
+                 lost_source: 1,
+                 lost_unexplained: 1,
+-                gained_declared: 2,
++                gained_synthesized: 2,
++                gained_renamed: 1,
+                 gained_unexplained: 1
+             }
+         );
++        assert_eq!(unexplained.lost, vec!["z".to_string()]);
++        assert_eq!(unexplained.gained, vec!["q".to_string()]);
+     }
+ }
+diff --git a/crates/toolpath-goldens/tests/classification.rs b/crates/toolpath-goldens/tests/classification.rs
+index 369bd746..8873c494 100644
+--- a/crates/toolpath-goldens/tests/classification.rs
++++ b/crates/toolpath-goldens/tests/classification.rs
+@@ -1,39 +1,33 @@
+-//! The coverage map (pr/78 step 1): for every recording x target round trip, how many lost and
+-//! gained key paths the TARGET writer's contract declares and how many nothing explains. Read
+-//! from the committed `round_trip@<set>@<target>.snap` files; the table is committed as
+-//! `docs/baseline/classification.md` and this test fails when it is stale.
++//! The coverage map (pr/78): for every recording x target round trip, how the lost and gained
++//! key paths are explained (see `toolpath_goldens::classify`) and how many nothing explains. Read
++//! from the committed `round_trip@<set>@<target>.snap` files. Two generated files are committed
++//! and this test fails when either is stale:
++//! * `docs/baseline/classification.md`, the counts per pair;
++//! * `docs/baseline/unexplained.md`, the unexplained paths themselves (the defect candidates).
++//!
+ //! Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p toolpath-goldens --test classification`.
+ //! Report mode: unexplained paths are counted, they do not fail the test (a later step does).
+ 
+ use std::collections::{BTreeMap, BTreeSet};
+ use std::path::PathBuf;
+ 
++use serde::de::DeserializeOwned;
+ use serde_json::Value;
+-use toolpath_goldens::classify::{Classified, SourceBookkeeping, classify};
++use toolpath_goldens::classify::{
++    Classified, Declared, SourceBookkeeping, TargetSynthesized, Unexplained, classify_paths,
++};
+ use toolpath_goldens::transform::Contract;
+ 
+ fn crate_dir() -> PathBuf {
+     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+ }
+ 
+-fn contract(target: &str) -> Contract {
+-    let p = crate_dir().join(format!("fixtures/contract/{target}.json"));
++fn load<T: DeserializeOwned>(rel: &str) -> T {
++    let p = crate_dir().join(rel);
+     let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+ }
+ 
+-fn bookkeeping() -> Vec<SourceBookkeeping> {
+-    let p = crate_dir().join("fixtures/source-bookkeeping.json");
+-    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+-    let b: Vec<SourceBookkeeping> =
+-        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+-    assert!(
+-        b.iter().all(|d| d.why.len() >= 20),
+-        "every source-bookkeeping declaration gives a reason"
+-    );
+-    b
+-}
+-
+ fn set(v: &Value) -> BTreeSet<String> {
+     v.as_array()
+         .into_iter()
+@@ -42,12 +36,19 @@ fn set(v: &Value) -> BTreeSet<String> {
+         .collect()
+ }
+ 
++type Rows = BTreeMap<(String, String), (Classified, Unexplained)>;
++
+ /// `(recording set, target) -> classified`, plus the pairs whose round trip was unreadable.
+-fn measure() -> (BTreeMap<(String, String), Classified>, Vec<String>) {
++fn measure() -> (Rows, Vec<String>) {
++    let book: Vec<SourceBookkeeping> = load("fixtures/source-bookkeeping.json");
++    let synth: Vec<TargetSynthesized> = load("fixtures/target-synthesized.json");
++    assert!(
++        book.iter().all(|d| d.why.len() >= 20) && synth.iter().all(|d| d.why.len() >= 20),
++        "every declaration gives a reason"
++    );
+     let mut out = BTreeMap::new();
+     let mut unreadable = Vec::new();
+     let mut contracts: BTreeMap<String, Contract> = BTreeMap::new();
+-    let book = bookkeeping();
+     for entry in std::fs::read_dir(crate_dir().join("snapshots")).expect("snapshots") {
+         let name = entry
+             .expect("entry")
+@@ -68,64 +69,76 @@ fn measure() -> (BTreeMap<(String, String), Classified>, Vec<String>) {
+             unreadable.push(format!("{set_name} -> {target}"));
+             continue;
+         }
+-        let c = contracts
++        let contract = contracts
+             .entry(target.to_owned())
+-            .or_insert_with(|| contract(target));
++            .or_insert_with(|| load(&format!("fixtures/contract/{target}.json")));
+         // claude-session and claude-compacted are recordings of the claude agent
+         let source = if set_name.starts_with("claude") {
+             "claude"
+         } else {
+             set_name
+         };
++        let d = Declared {
++            contract,
++            source,
++            source_bookkeeping: &book,
++            target_synthesized: &synth,
++        };
+         out.insert(
+             (set_name.to_owned(), target.to_owned()),
+-            classify(c, source, &book, &set(&v["lost"]), &set(&v["gained"])),
++            classify_paths(&d, &set(&v["lost"]), &set(&v["gained"])),
+         );
+     }
+     (out, unreadable)
+ }
+ 
+-fn render() -> String {
+-    let (rows, unreadable) = measure();
+-    let mut s = String::new();
+-    s.push_str(
++fn render(rows: &Rows, unreadable: &[String]) -> String {
++    let mut s = String::from(
+         "# Classification of lost and gained key paths on the real round trips\n\n\
+-         Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots and \
+-         `fixtures/contract/<target>.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p \
+-         toolpath-goldens --test classification`.\n\n\
+-         **Report mode (pr/78).** A lost path is *declared* when the target writer's contract \
+-         covers it, *source* when it lies under the recording agent's own envelope \
+-         (`fixtures/source-bookkeeping.json`, one reason each), else *unexplained*. A gained \
+-         path is *declared* when the contract covers it, else *unexplained*. Minted and renamed \
+-         paths have no declarations yet and are inside *unexplained*. Unexplained does not fail \
+-         anything until Bobby says so.\n\n\
+-         | recording | target | lost declared | lost source | lost unexplained | gained declared | gained unexplained |\n\
+-         |---|---|---:|---:|---:|---:|---:|\n",
++         Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots, \
++         `fixtures/contract/<target>.json`, `fixtures/source-bookkeeping.json` and \
++         `fixtures/target-synthesized.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p \
++         toolpath-goldens --test classification`. The unexplained paths themselves are in \
++         `unexplained.md`.\n\n\
++         **Report mode (pr/78).** A *lost* path is *dropped* (the target's contract has a drop op \
++         for it), *renamed* (a rename/move op names it), *source* (it lies under the recording \
++         agent's own envelope), else *unexplained*. A *gained* path is *synthesized* (a synthesize \
++         op, or the envelope the target writer mints for every session), *renamed* (the other \
++         side of a rename/move op), else *unexplained*. Unexplained does not fail anything until \
++         Bobby says so.\n\n\
++         | recording | target | lost dropped | lost renamed | lost source | lost unexplained | gained synthesized | gained renamed | gained unexplained |\n\
++         |---|---|---:|---:|---:|---:|---:|---:|---:|\n",
+     );
+-    let mut total = Classified::default();
+-    for ((set, target), c) in &rows {
++    let mut t = Classified::default();
++    for ((set, target), (c, _)) in rows {
+         s.push_str(&format!(
+-            "| {set} | {target} | {} | {} | {} | {} | {} |\n",
+-            c.lost_declared,
++            "| {set} | {target} | {} | {} | {} | {} | {} | {} | {} |\n",
++            c.lost_dropped,
++            c.lost_renamed,
+             c.lost_source,
+             c.lost_unexplained,
+-            c.gained_declared,
++            c.gained_synthesized,
++            c.gained_renamed,
+             c.gained_unexplained
+         ));
+-        total.lost_source += c.lost_source;
+-        total.lost_declared += c.lost_declared;
+-        total.lost_unexplained += c.lost_unexplained;
+-        total.gained_declared += c.gained_declared;
+-        total.gained_unexplained += c.gained_unexplained;
++        t.lost_dropped += c.lost_dropped;
++        t.lost_renamed += c.lost_renamed;
++        t.lost_source += c.lost_source;
++        t.lost_unexplained += c.lost_unexplained;
++        t.gained_synthesized += c.gained_synthesized;
++        t.gained_renamed += c.gained_renamed;
++        t.gained_unexplained += c.gained_unexplained;
+     }
+     s.push_str(&format!(
+-        "| **{} pairs** | | **{}** | **{}** | **{}** | **{}** | **{}** |\n",
++        "| **{} pairs** | | **{}** | **{}** | **{}** | **{}** | **{}** | **{}** | **{}** |\n",
+         rows.len(),
+-        total.lost_declared,
+-        total.lost_source,
+-        total.lost_unexplained,
+-        total.gained_declared,
+-        total.gained_unexplained
++        t.lost_dropped,
++        t.lost_renamed,
++        t.lost_source,
++        t.lost_unexplained,
++        t.gained_synthesized,
++        t.gained_renamed,
++        t.gained_unexplained
+     ));
+     if !unreadable.is_empty() {
+         s.push_str(&format!(
+@@ -136,19 +149,47 @@ fn render() -> String {
+     s
+ }
+ 
++fn render_unexplained(rows: &Rows) -> String {
++    let mut s = String::from(
++        "# Unexplained key paths (the defect candidates)\n\n\
++         Generated with `classification.md`. For each recording and target, the lost and gained \
++         paths no declaration explains. A value the target format can hold is a reader or writer \
++         bug; a value it cannot hold gets a declaration with a reason.\n",
++    );
++    for ((set, target), (_, u)) in rows {
++        if u.lost.is_empty() && u.gained.is_empty() {
++            continue;
++        }
++        s.push_str(&format!("\n## {set} -> {target}\n"));
++        for p in &u.lost {
++            s.push_str(&format!("- lost `{p}`\n"));
++        }
++        for p in &u.gained {
++            s.push_str(&format!("- gained `{p}`\n"));
++        }
++    }
++    s
++}
++
+ #[test]
+-fn the_committed_classification_table_is_current() {
+-    let path = crate_dir().join("../../docs/baseline/classification.md");
+-    let now = render();
+-    if std::env::var_os("UPDATE_CLASSIFICATION").is_some() {
+-        std::fs::write(&path, &now).expect("write the table");
+-        return;
++fn the_committed_classification_tables_are_current() {
++    let (rows, unreadable) = measure();
++    let files = [
++        ("classification.md", render(&rows, &unreadable)),
++        ("unexplained.md", render_unexplained(&rows)),
++    ];
++    for (name, now) in files {
++        let path = crate_dir().join("../../docs/baseline").join(name);
++        if std::env::var_os("UPDATE_CLASSIFICATION").is_some() {
++            std::fs::write(&path, &now).expect("write the table");
++            continue;
++        }
++        let committed = std::fs::read_to_string(&path).unwrap_or_default();
++        assert_eq!(
++            committed, now,
++            "docs/baseline/{name} is stale; regenerate it with UPDATE_CLASSIFICATION=1"
++        );
+     }
+-    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+-    assert_eq!(
+-        committed, now,
+-        "docs/baseline/classification.md is stale; regenerate it with UPDATE_CLASSIFICATION=1"
+-    );
+ }
+ 
+ #[test]
+diff --git a/docs/baseline/classification.md b/docs/baseline/classification.md
+index aff6f515..3be1f811 100644
+--- a/docs/baseline/classification.md
++++ b/docs/baseline/classification.md
+@@ -1,72 +1,72 @@
+ # Classification of lost and gained key paths on the real round trips
+ 
+-Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots and `fixtures/contract/<target>.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p toolpath-goldens --test classification`.
++Generated by `tests/classification.rs` from the committed `round_trip@*` snapshots, `fixtures/contract/<target>.json`, `fixtures/source-bookkeeping.json` and `fixtures/target-synthesized.json`. Regenerate with `UPDATE_CLASSIFICATION=1 cargo test -p toolpath-goldens --test classification`. The unexplained paths themselves are in `unexplained.md`.
+ 
+-**Report mode (pr/78).** A lost path is *declared* when the target writer's contract covers it, *source* when it lies under the recording agent's own envelope (`fixtures/source-bookkeeping.json`, one reason each), else *unexplained*. A gained path is *declared* when the contract covers it, else *unexplained*. Minted and renamed paths have no declarations yet and are inside *unexplained*. Unexplained does not fail anything until Bobby says so.
++**Report mode (pr/78).** A *lost* path is *dropped* (the target's contract has a drop op for it), *renamed* (a rename/move op names it), *source* (it lies under the recording agent's own envelope), else *unexplained*. A *gained* path is *synthesized* (a synthesize op, or the envelope the target writer mints for every session), *renamed* (the other side of a rename/move op), else *unexplained*. Unexplained does not fail anything until Bobby says so.
+ 
+-| recording | target | lost declared | lost source | lost unexplained | gained declared | gained unexplained |
+-|---|---|---:|---:|---:|---:|---:|
+-| claude | codex | 6 | 16 | 4 | 29 | 2 |
+-| claude | copilot | 6 | 16 | 8 | 2 | 0 |
+-| claude | cursor | 7 | 16 | 16 | 3 | 3 |
+-| claude | cursor-agent | 16 | 16 | 8 | 0 | 0 |
+-| claude | gemini | 6 | 16 | 8 | 0 | 0 |
+-| claude | opencode | 6 | 16 | 8 | 1 | 1 |
+-| claude | pi | 6 | 16 | 7 | 0 | 0 |
+-| claude-compacted | codex | 4 | 3 | 1 | 16 | 7 |
+-| claude-compacted | copilot | 4 | 3 | 5 | 1 | 5 |
+-| claude-compacted | cursor | 3 | 3 | 3 | 3 | 3 |
+-| claude-compacted | cursor-agent | 8 | 3 | 4 | 0 | 3 |
+-| claude-compacted | gemini | 3 | 3 | 3 | 0 | 1 |
+-| claude-compacted | opencode | 3 | 3 | 6 | 1 | 5 |
+-| claude-compacted | pi | 2 | 3 | 3 | 0 | 2 |
+-| claude-session | codex | 4 | 204 | 4 | 29 | 2 |
+-| claude-session | copilot | 5 | 204 | 9 | 1 | 0 |
+-| claude-session | cursor | 7 | 204 | 11 | 1 | 1 |
+-| claude-session | cursor-agent | 11 | 204 | 8 | 0 | 0 |
+-| claude-session | gemini | 6 | 204 | 8 | 0 | 0 |
+-| claude-session | opencode | 4 | 204 | 8 | 1 | 1 |
+-| claude-session | pi | 5 | 204 | 7 | 0 | 0 |
+-| codex | claude | 5 | 55 | 34 | 3 | 1 |
+-| codex | copilot | 5 | 55 | 32 | 0 | 0 |
+-| codex | cursor | 6 | 55 | 36 | 0 | 0 |
+-| codex | cursor-agent | 10 | 55 | 32 | 0 | 0 |
+-| codex | gemini | 4 | 55 | 32 | 0 | 0 |
+-| codex | opencode | 4 | 55 | 32 | 0 | 2 |
+-| codex | pi | 6 | 55 | 32 | 0 | 1 |
+-| copilot | claude | 2 | 0 | 20 | 3 | 10 |
+-| copilot | codex | 3 | 0 | 8 | 30 | 5 |
+-| copilot | cursor | 3 | 0 | 10 | 3 | 8 |
+-| copilot | cursor-agent | 10 | 0 | 13 | 0 | 0 |
+-| copilot | gemini | 2 | 0 | 9 | 0 | 2 |
+-| copilot | opencode | 2 | 0 | 15 | 0 | 12 |
+-| copilot | pi | 3 | 0 | 10 | 0 | 3 |
+-| cursor | claude | 3 | 0 | 15 | 6 | 0 |
+-| cursor | codex | 2 | 0 | 2 | 28 | 1 |
+-| cursor | copilot | 4 | 0 | 5 | 1 | 2 |
+-| cursor | cursor-agent | 8 | 0 | 2 | 0 | 0 |
+-| cursor | gemini | 2 | 0 | 1 | 0 | 0 |
+-| cursor | opencode | 4 | 0 | 5 | 1 | 4 |
+-| cursor | pi | 3 | 0 | 2 | 1 | 1 |
+-| gemini | claude | 2 | 0 | 2 | 6 | 0 |
+-| gemini | codex | 3 | 0 | 1 | 33 | 7 |
+-| gemini | copilot | 3 | 0 | 3 | 2 | 4 |
+-| gemini | cursor | 2 | 0 | 6 | 2 | 4 |
+-| gemini | cursor-agent | 10 | 0 | 11 | 0 | 0 |
+-| gemini | opencode | 4 | 0 | 4 | 1 | 7 |
+-| gemini | pi | 3 | 0 | 1 | 1 | 4 |
+-| opencode | claude | 4 | 0 | 4 | 6 | 7 |
+-| opencode | codex | 5 | 0 | 7 | 33 | 3 |
+-| opencode | copilot | 4 | 0 | 0 | 1 | 4 |
+-| opencode | cursor | 5 | 0 | 7 | 3 | 4 |
+-| opencode | cursor-agent | 14 | 0 | 7 | 0 | 0 |
+-| opencode | gemini | 3 | 0 | 9 | 0 | 0 |
+-| opencode | pi | 5 | 0 | 8 | 1 | 0 |
+-| pi | claude | 0 | 0 | 5 | 5 | 3 |
+-| pi | codex | 2 | 0 | 0 | 30 | 5 |
+-| pi | copilot | 3 | 0 | 3 | 1 | 4 |
+-| pi | cursor | 1 | 0 | 6 | 3 | 6 |
+-| pi | cursor-agent | 6 | 0 | 7 | 0 | 1 |
+-| pi | gemini | 1 | 0 | 3 | 0 | 3 |
+-| pi | opencode | 2 | 0 | 5 | 0 | 5 |
+-| **63 pairs** | | **295** | **1946** | **585** | **292** | **159** |
++| recording | target | lost dropped | lost renamed | lost source | lost unexplained | gained synthesized | gained renamed | gained unexplained |
++|---|---|---:|---:|---:|---:|---:|---:|---:|
++| claude | codex | 6 | 0 | 16 | 4 | 29 | 0 | 2 |
++| claude | copilot | 4 | 2 | 16 | 8 | 0 | 2 | 0 |
++| claude | cursor | 7 | 0 | 16 | 16 | 3 | 0 | 3 |
++| claude | cursor-agent | 16 | 0 | 16 | 8 | 0 | 0 | 0 |
++| claude | gemini | 6 | 0 | 16 | 8 | 0 | 0 | 0 |
++| claude | opencode | 5 | 1 | 16 | 8 | 0 | 1 | 1 |
++| claude | pi | 6 | 0 | 16 | 7 | 0 | 0 | 0 |
++| claude-compacted | codex | 4 | 0 | 3 | 1 | 18 | 0 | 5 |
++| claude-compacted | copilot | 3 | 1 | 3 | 5 | 2 | 1 | 3 |
++| claude-compacted | cursor | 3 | 0 | 3 | 3 | 4 | 0 | 2 |
++| claude-compacted | cursor-agent | 8 | 0 | 3 | 4 | 1 | 0 | 2 |
++| claude-compacted | gemini | 3 | 0 | 3 | 3 | 1 | 0 | 0 |
++| claude-compacted | opencode | 2 | 1 | 3 | 6 | 2 | 1 | 3 |
++| claude-compacted | pi | 2 | 0 | 3 | 3 | 0 | 0 | 2 |
++| claude-session | codex | 4 | 0 | 204 | 4 | 29 | 0 | 2 |
++| claude-session | copilot | 4 | 1 | 204 | 9 | 0 | 1 | 0 |
++| claude-session | cursor | 7 | 0 | 204 | 11 | 1 | 0 | 1 |
++| claude-session | cursor-agent | 11 | 0 | 204 | 8 | 0 | 0 | 0 |
++| claude-session | gemini | 6 | 0 | 204 | 8 | 0 | 0 | 0 |
++| claude-session | opencode | 3 | 1 | 204 | 8 | 0 | 1 | 1 |
++| claude-session | pi | 5 | 0 | 204 | 7 | 0 | 0 | 0 |
++| codex | claude | 5 | 0 | 55 | 34 | 3 | 0 | 1 |
++| codex | copilot | 5 | 0 | 55 | 32 | 0 | 0 | 0 |
++| codex | cursor | 6 | 0 | 55 | 36 | 0 | 0 | 0 |
++| codex | cursor-agent | 10 | 0 | 55 | 32 | 0 | 0 | 0 |
++| codex | gemini | 4 | 0 | 55 | 32 | 0 | 0 | 0 |
++| codex | opencode | 4 | 0 | 55 | 32 | 0 | 0 | 2 |
++| codex | pi | 6 | 0 | 55 | 32 | 0 | 0 | 1 |
++| copilot | claude | 2 | 0 | 0 | 20 | 3 | 0 | 10 |
++| copilot | codex | 3 | 0 | 0 | 8 | 30 | 0 | 5 |
++| copilot | cursor | 3 | 0 | 0 | 10 | 3 | 0 | 8 |
++| copilot | cursor-agent | 10 | 0 | 0 | 13 | 0 | 0 | 0 |
++| copilot | gemini | 2 | 0 | 0 | 9 | 0 | 0 | 2 |
++| copilot | opencode | 2 | 0 | 0 | 15 | 0 | 0 | 12 |
++| copilot | pi | 3 | 0 | 0 | 10 | 0 | 0 | 3 |
++| cursor | claude | 3 | 0 | 0 | 15 | 6 | 0 | 0 |
++| cursor | codex | 2 | 0 | 0 | 2 | 28 | 0 | 1 |
++| cursor | copilot | 2 | 2 | 0 | 5 | 0 | 1 | 2 |
++| cursor | cursor-agent | 8 | 0 | 0 | 2 | 0 | 0 | 0 |
++| cursor | gemini | 2 | 0 | 0 | 1 | 0 | 0 | 0 |
++| cursor | opencode | 3 | 1 | 0 | 5 | 0 | 1 | 4 |
++| cursor | pi | 3 | 0 | 0 | 2 | 1 | 0 | 1 |
++| gemini | claude | 2 | 0 | 0 | 2 | 6 | 0 | 0 |
++| gemini | codex | 3 | 0 | 0 | 1 | 34 | 0 | 6 |
++| gemini | copilot | 1 | 2 | 0 | 3 | 1 | 2 | 3 |
++| gemini | cursor | 2 | 0 | 0 | 6 | 2 | 0 | 4 |
++| gemini | cursor-agent | 10 | 0 | 0 | 11 | 0 | 0 | 0 |
++| gemini | opencode | 3 | 1 | 0 | 4 | 1 | 1 | 6 |
++| gemini | pi | 3 | 0 | 0 | 1 | 1 | 0 | 4 |
++| opencode | claude | 4 | 0 | 0 | 4 | 6 | 0 | 7 |
++| opencode | codex | 5 | 0 | 0 | 7 | 33 | 0 | 3 |
++| opencode | copilot | 3 | 1 | 0 | 0 | 0 | 1 | 4 |
++| opencode | cursor | 5 | 0 | 0 | 7 | 3 | 0 | 4 |
++| opencode | cursor-agent | 14 | 0 | 0 | 7 | 0 | 0 | 0 |
++| opencode | gemini | 3 | 0 | 0 | 9 | 0 | 0 | 0 |
++| opencode | pi | 5 | 0 | 0 | 8 | 1 | 0 | 0 |
++| pi | claude | 0 | 0 | 0 | 5 | 5 | 0 | 3 |
++| pi | codex | 2 | 0 | 0 | 0 | 32 | 0 | 3 |
++| pi | copilot | 2 | 1 | 0 | 3 | 2 | 1 | 2 |
++| pi | cursor | 1 | 0 | 0 | 6 | 4 | 0 | 5 |
++| pi | cursor-agent | 6 | 0 | 0 | 7 | 1 | 0 | 0 |
++| pi | gemini | 1 | 0 | 0 | 3 | 1 | 0 | 2 |
++| pi | opencode | 2 | 0 | 0 | 5 | 2 | 0 | 3 |
++| **63 pairs** | | **280** | **15** | **1946** | **585** | **299** | **14** | **138** |
+diff --git a/docs/baseline/unexplained.md b/docs/baseline/unexplained.md
+new file mode 100644
+index 00000000..2c4ae586
+--- /dev/null
++++ b/docs/baseline/unexplained.md
+@@ -0,0 +1,852 @@
++# Unexplained key paths (the defect candidates)
++
++Generated with `classification.md`. For each recording and target, the lost and gained paths no declaration explains. A value the target format can hold is a reader or writer bug; a value it cannot hold gets a declaration with a reason.
++
++## claude -> codex
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens`
++
++## claude -> copilot
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## claude -> cursor
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].meta.files_changed[]`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.content`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.output_mode`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.pattern`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.subagent_type`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++- lost `paths[].steps[].change.notes.md.raw`
++- lost `paths[].steps[].change.notes.md.structural.after`
++- lost `paths[].steps[].change.notes.md.structural.operation`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.globPattern`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.subagentType`
++
++## claude -> cursor-agent
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## claude -> gemini
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## claude -> opencode
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++- gained `paths[].path.base.ref`
++
++## claude -> pi
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## claude-compacted -> codex
++- lost `paths[].steps[].change.src/auth.rs.structural.operation`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.group_id`
++- gained `paths[].steps[].change.src/auth.rs.structural.after`
++- gained `paths[].steps[].change.src/auth.rs.structural.before`
++
++## claude-compacted -> copilot
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str`
++- gained `paths[].steps[].change.src/auth.rs.structural.after`
++
++## claude-compacted -> cursor
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- gained `paths[].steps[].change.src/auth.rs.structural.after`
++- gained `paths[].steps[].change.src/auth.rs.structural.before`
++
++## claude-compacted -> cursor-agent
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.src/auth.rs.structural.operation`
++- gained `paths[].steps[].change.src/auth.rs.structural.after`
++- gained `paths[].steps[].change.src/auth.rs.structural.before`
++
++## claude-compacted -> gemini
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++
++## claude-compacted -> opencode
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string`
++- lost `paths[].steps[].change.src/auth.rs.raw`
++- gained `paths[].path.base.ref`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString`
++
++## claude-compacted -> pi
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.src/auth.rs.structural.operation`
++- gained `paths[].steps[].change.src/auth.rs.structural.after`
++- gained `paths[].steps[].change.src/auth.rs.structural.before`
++
++## claude-session -> codex
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens`
++
++## claude-session -> copilot
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.limit`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## claude-session -> cursor
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.description`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.limit`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription`
++
++## claude-session -> cursor-agent
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## claude-session -> gemini
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## claude-session -> opencode
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++- gained `paths[].path.base.ref`
++
++## claude-session -> pi
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.git_branch`
++- lost `paths[].steps[].change.<artifact>.structural.thinking`
++- lost `paths[].steps[].change.<artifact>.structural.user_type`
++- lost `paths[].steps[].change.<artifact>.structural.version`
++
++## codex -> claude
++- lost `paths[].steps[].change.<artifact>.structural.agent_nickname`
++- lost `paths[].steps[].change.<artifact>.structural.approval_policy`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
++- lost `paths[].steps[].change.<artifact>.structural.cli_version`
++- lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
++- lost `paths[].steps[].change.<artifact>.structural.completed_at`
++- lost `paths[].steps[].change.<artifact>.structural.current_date`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.duration_ms`
++- lost `paths[].steps[].change.<artifact>.structural.effort`
++- lost `paths[].steps[].change.<artifact>.structural.event_data_type`
++- lost `paths[].steps[].change.<artifact>.structural.forked_from_id`
++- lost `paths[].steps[].change.<artifact>.structural.id`
++- lost `paths[].steps[].change.<artifact>.structural.last_agent_message`
++- lost `paths[].steps[].change.<artifact>.structural.memory_citation`
++- lost `paths[].steps[].change.<artifact>.structural.message`
++- lost `paths[].steps[].change.<artifact>.structural.model`
++- lost `paths[].steps[].change.<artifact>.structural.model_context_window`
++- lost `paths[].steps[].change.<artifact>.structural.model_provider`
++- lost `paths[].steps[].change.<artifact>.structural.originator`
++- lost `paths[].steps[].change.<artifact>.structural.personality`
++- lost `paths[].steps[].change.<artifact>.structural.phase`
++- lost `paths[].steps[].change.<artifact>.structural.realtime_active`
++- lost `paths[].steps[].change.<artifact>.structural.started_at`
++- lost `paths[].steps[].change.<artifact>.structural.summary`
++- lost `paths[].steps[].change.<artifact>.structural.time_to_first_token_ms`
++- lost `paths[].steps[].change.<artifact>.structural.timestamp`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.cmd`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.max_output_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.workdir`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.yield_time_ms`
++- lost `paths[].steps[].change.<artifact>.structural.turn_id`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.command`
++
++## codex -> copilot
++- lost `paths[].steps[].change.<artifact>.structural.agent_nickname`
++- lost `paths[].steps[].change.<artifact>.structural.approval_policy`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
++- lost `paths[].steps[].change.<artifact>.structural.cli_version`
++- lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
++- lost `paths[].steps[].change.<artifact>.structural.completed_at`
++- lost `paths[].steps[].change.<artifact>.structural.current_date`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.duration_ms`
++- lost `paths[].steps[].change.<artifact>.structural.effort`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_data_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.forked_from_id`
++- lost `paths[].steps[].change.<artifact>.structural.id`
++- lost `paths[].steps[].change.<artifact>.structural.last_agent_message`
++- lost `paths[].steps[].change.<artifact>.structural.memory_citation`
++- lost `paths[].steps[].change.<artifact>.structural.message`
++- lost `paths[].steps[].change.<artifact>.structural.model`
++- lost `paths[].steps[].change.<artifact>.structural.model_context_window`
++- lost `paths[].steps[].change.<artifact>.structural.model_provider`
++- lost `paths[].steps[].change.<artifact>.structural.originator`
++- lost `paths[].steps[].change.<artifact>.structural.personality`
++- lost `paths[].steps[].change.<artifact>.structural.phase`
++- lost `paths[].steps[].change.<artifact>.structural.realtime_active`
++- lost `paths[].steps[].change.<artifact>.structural.started_at`
++- lost `paths[].steps[].change.<artifact>.structural.summary`
++- lost `paths[].steps[].change.<artifact>.structural.time_to_first_token_ms`
++- lost `paths[].steps[].change.<artifact>.structural.timestamp`
++- lost `paths[].steps[].change.<artifact>.structural.turn_id`
++
++## codex -> cursor
++- lost `paths[].steps[].change.<artifact>.structural.agent_nickname`
++- lost `paths[].steps[].change.<artifact>.structural.approval_policy`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
++- lost `paths[].steps[].change.<artifact>.structural.cli_version`
++- lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
++- lost `paths[].steps[].change.<artifact>.structural.completed_at`
++- lost `paths[].steps[].change.<artifact>.structural.current_date`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.duration_ms`
++- lost `paths[].steps[].change.<artifact>.structural.effort`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_data_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.forked_from_id`
++- lost `paths[].steps[].change.<artifact>.structural.id`
++- lost `paths[].steps[].change.<artifact>.structural.last_agent_message`
++- lost `paths[].steps[].change.<artifact>.structural.memory_citation`
++- lost `paths[].steps[].change.<artifact>.structural.message`
++- lost `paths[].steps[].change.<artifact>.structural.model`
++- lost `paths[].steps[].change.<artifact>.structural.model_context_window`
++- lost `paths[].steps[].change.<artifact>.structural.model_provider`
++- lost `paths[].steps[].change.<artifact>.structural.originator`
++- lost `paths[].steps[].change.<artifact>.structural.personality`
++- lost `paths[].steps[].change.<artifact>.structural.phase`
++- lost `paths[].steps[].change.<artifact>.structural.realtime_active`
++- lost `paths[].steps[].change.<artifact>.structural.started_at`
++- lost `paths[].steps[].change.<artifact>.structural.summary`
++- lost `paths[].steps[].change.<artifact>.structural.time_to_first_token_ms`
++- lost `paths[].steps[].change.<artifact>.structural.timestamp`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.cmd`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.max_output_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.workdir`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.yield_time_ms`
++- lost `paths[].steps[].change.<artifact>.structural.turn_id`
++
++## codex -> cursor-agent
++- lost `paths[].steps[].change.<artifact>.structural.agent_nickname`
++- lost `paths[].steps[].change.<artifact>.structural.approval_policy`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
++- lost `paths[].steps[].change.<artifact>.structural.cli_version`
++- lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
++- lost `paths[].steps[].change.<artifact>.structural.completed_at`
++- lost `paths[].steps[].change.<artifact>.structural.current_date`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.duration_ms`
++- lost `paths[].steps[].change.<artifact>.structural.effort`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_data_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.forked_from_id`
++- lost `paths[].steps[].change.<artifact>.structural.id`
++- lost `paths[].steps[].change.<artifact>.structural.last_agent_message`
++- lost `paths[].steps[].change.<artifact>.structural.memory_citation`
++- lost `paths[].steps[].change.<artifact>.structural.message`
++- lost `paths[].steps[].change.<artifact>.structural.model`
++- lost `paths[].steps[].change.<artifact>.structural.model_context_window`
++- lost `paths[].steps[].change.<artifact>.structural.model_provider`
++- lost `paths[].steps[].change.<artifact>.structural.originator`
++- lost `paths[].steps[].change.<artifact>.structural.personality`
++- lost `paths[].steps[].change.<artifact>.structural.phase`
++- lost `paths[].steps[].change.<artifact>.structural.realtime_active`
++- lost `paths[].steps[].change.<artifact>.structural.started_at`
++- lost `paths[].steps[].change.<artifact>.structural.summary`
++- lost `paths[].steps[].change.<artifact>.structural.time_to_first_token_ms`
++- lost `paths[].steps[].change.<artifact>.structural.timestamp`
++- lost `paths[].steps[].change.<artifact>.structural.turn_id`
++
++## codex -> gemini
++- lost `paths[].steps[].change.<artifact>.structural.agent_nickname`
++- lost `paths[].steps[].change.<artifact>.structural.approval_policy`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
++- lost `paths[].steps[].change.<artifact>.structural.cli_version`
++- lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
++- lost `paths[].steps[].change.<artifact>.structural.completed_at`
++- lost `paths[].steps[].change.<artifact>.structural.current_date`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.duration_ms`
++- lost `paths[].steps[].change.<artifact>.structural.effort`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_data_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.forked_from_id`
++- lost `paths[].steps[].change.<artifact>.structural.id`
++- lost `paths[].steps[].change.<artifact>.structural.last_agent_message`
++- lost `paths[].steps[].change.<artifact>.structural.memory_citation`
++- lost `paths[].steps[].change.<artifact>.structural.message`
++- lost `paths[].steps[].change.<artifact>.structural.model`
++- lost `paths[].steps[].change.<artifact>.structural.model_context_window`
++- lost `paths[].steps[].change.<artifact>.structural.model_provider`
++- lost `paths[].steps[].change.<artifact>.structural.originator`
++- lost `paths[].steps[].change.<artifact>.structural.personality`
++- lost `paths[].steps[].change.<artifact>.structural.phase`
++- lost `paths[].steps[].change.<artifact>.structural.realtime_active`
++- lost `paths[].steps[].change.<artifact>.structural.started_at`
++- lost `paths[].steps[].change.<artifact>.structural.summary`
++- lost `paths[].steps[].change.<artifact>.structural.time_to_first_token_ms`
++- lost `paths[].steps[].change.<artifact>.structural.timestamp`
++- lost `paths[].steps[].change.<artifact>.structural.turn_id`
++
++## codex -> opencode
++- lost `paths[].steps[].change.<artifact>.structural.agent_nickname`
++- lost `paths[].steps[].change.<artifact>.structural.approval_policy`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
++- lost `paths[].steps[].change.<artifact>.structural.cli_version`
++- lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
++- lost `paths[].steps[].change.<artifact>.structural.completed_at`
++- lost `paths[].steps[].change.<artifact>.structural.current_date`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.duration_ms`
++- lost `paths[].steps[].change.<artifact>.structural.effort`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_data_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.forked_from_id`
++- lost `paths[].steps[].change.<artifact>.structural.id`
++- lost `paths[].steps[].change.<artifact>.structural.last_agent_message`
++- lost `paths[].steps[].change.<artifact>.structural.memory_citation`
++- lost `paths[].steps[].change.<artifact>.structural.message`
++- lost `paths[].steps[].change.<artifact>.structural.model`
++- lost `paths[].steps[].change.<artifact>.structural.model_context_window`
++- lost `paths[].steps[].change.<artifact>.structural.model_provider`
++- lost `paths[].steps[].change.<artifact>.structural.originator`
++- lost `paths[].steps[].change.<artifact>.structural.personality`
++- lost `paths[].steps[].change.<artifact>.structural.phase`
++- lost `paths[].steps[].change.<artifact>.structural.realtime_active`
++- lost `paths[].steps[].change.<artifact>.structural.started_at`
++- lost `paths[].steps[].change.<artifact>.structural.summary`
++- lost `paths[].steps[].change.<artifact>.structural.time_to_first_token_ms`
++- lost `paths[].steps[].change.<artifact>.structural.timestamp`
++- lost `paths[].steps[].change.<artifact>.structural.turn_id`
++- gained `paths[].path.base.ref`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++
++## codex -> pi
++- lost `paths[].steps[].change.<artifact>.structural.agent_nickname`
++- lost `paths[].steps[].change.<artifact>.structural.approval_policy`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning`
++- lost `paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens`
++- lost `paths[].steps[].change.<artifact>.structural.base_instructions.text`
++- lost `paths[].steps[].change.<artifact>.structural.cli_version`
++- lost `paths[].steps[].change.<artifact>.structural.collaboration_mode_kind`
++- lost `paths[].steps[].change.<artifact>.structural.completed_at`
++- lost `paths[].steps[].change.<artifact>.structural.current_date`
++- lost `paths[].steps[].change.<artifact>.structural.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.duration_ms`
++- lost `paths[].steps[].change.<artifact>.structural.effort`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_data_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.forked_from_id`
++- lost `paths[].steps[].change.<artifact>.structural.id`
++- lost `paths[].steps[].change.<artifact>.structural.last_agent_message`
++- lost `paths[].steps[].change.<artifact>.structural.memory_citation`
++- lost `paths[].steps[].change.<artifact>.structural.message`
++- lost `paths[].steps[].change.<artifact>.structural.model`
++- lost `paths[].steps[].change.<artifact>.structural.model_context_window`
++- lost `paths[].steps[].change.<artifact>.structural.model_provider`
++- lost `paths[].steps[].change.<artifact>.structural.originator`
++- lost `paths[].steps[].change.<artifact>.structural.personality`
++- lost `paths[].steps[].change.<artifact>.structural.phase`
++- lost `paths[].steps[].change.<artifact>.structural.realtime_active`
++- lost `paths[].steps[].change.<artifact>.structural.started_at`
++- lost `paths[].steps[].change.<artifact>.structural.summary`
++- lost `paths[].steps[].change.<artifact>.structural.time_to_first_token_ms`
++- lost `paths[].steps[].change.<artifact>.structural.timestamp`
++- lost `paths[].steps[].change.<artifact>.structural.turn_id`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++
++## copilot -> claude
++- lost `paths[].path.base.uri`
++- lost `paths[].steps[].change.<artifact>.structural.contextTier`
++- lost `paths[].steps[].change.<artifact>.structural.newModel`
++- lost `paths[].steps[].change.<artifact>.structural.reasoningEffort`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.path`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.raw`
++- lost `paths[].steps[].change.notes.md.structural.after`
++- lost `paths[].steps[].change.notes.md.structural.operation`
++- lost `paths[].steps[].change.notes.md.structural.tool`
++- lost `paths[].steps[].change.notes.md.structural.tool_id`
++- lost `paths[].steps[].change.notes.md.structural.type`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type`
++- gained `paths[].steps[].change.<artifact>.structural.delegations[].result`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path`
++
++## copilot -> codex
++- lost `paths[].steps[].change.<artifact>.structural.contextTier`
++- lost `paths[].steps[].change.<artifact>.structural.newModel`
++- lost `paths[].steps[].change.<artifact>.structural.reasoningEffort`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.notes.md.raw`
++- lost `paths[].steps[].change.notes.md.structural.after`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.delegations[].result`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++- gained `paths[].steps[].change.<artifact>.structural.group_id`
++
++## copilot -> cursor
++- lost `paths[].steps[].change.<artifact>.structural.contextTier`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.newModel`
++- lost `paths[].steps[].change.<artifact>.structural.reasoningEffort`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.path`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.pattern`
++- gained `paths[].steps[].change.<artifact>.structural.delegations[].result`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.content`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.globPattern`
++- gained `paths[].steps[].change.count.sh.structural.before`
++- gained `paths[].steps[].change.notes.md.structural.before`
++
++## copilot -> cursor-agent
++- lost `paths[].steps[].change.<artifact>.structural.contextTier`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.newModel`
++- lost `paths[].steps[].change.<artifact>.structural.reasoningEffort`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.raw`
++- lost `paths[].steps[].change.notes.md.structural.after`
++
++## copilot -> gemini
++- lost `paths[].steps[].change.<artifact>.structural.contextTier`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.newModel`
++- lost `paths[].steps[].change.<artifact>.structural.reasoningEffort`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.notes.md.raw`
++- lost `paths[].steps[].change.notes.md.structural.after`
++- gained `paths[].steps[].change.<artifact>.structural.delegations[].result`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++
++## copilot -> opencode
++- lost `paths[].steps[].change.<artifact>.structural.contextTier`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.newModel`
++- lost `paths[].steps[].change.<artifact>.structural.reasoningEffort`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.structural.operation`
++- lost `paths[].steps[].change.notes.md.structural.tool`
++- lost `paths[].steps[].change.notes.md.structural.tool_id`
++- lost `paths[].steps[].change.notes.md.structural.type`
++- gained `paths[].path.base.ref`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id`
++- gained `paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id`
++- gained `paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type`
++- gained `paths[].steps[].change.<artifact>.structural.delegations[].result`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++
++## copilot -> pi
++- lost `paths[].steps[].change.<artifact>.structural.contextTier`
++- lost `paths[].steps[].change.<artifact>.structural.entry_type`
++- lost `paths[].steps[].change.<artifact>.structural.event_source_id`
++- lost `paths[].steps[].change.<artifact>.structural.newModel`
++- lost `paths[].steps[].change.<artifact>.structural.reasoningEffort`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.notes.md.raw`
++- lost `paths[].steps[].change.notes.md.structural.after`
++- gained `paths[].steps[].change.<artifact>.structural.delegations[].result`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++
++## cursor -> claude
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.caseInsensitive`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.cwd`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.options.timeout`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.parsingResult.executableCommands[].args[].type`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.parsingResult.executableCommands[].args[].value`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.parsingResult.executableCommands[].fullText`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.parsingResult.executableCommands[].name`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.additionalReadwritePaths[]`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.enableSharedBuildCache`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.networkAccess`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.type`
++- lost `paths[].steps[].change.count.sh.structural.before`
++
++## cursor -> codex
++- lost `paths[].steps[].change.count.sh.structural.before`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].steps[].change.<artifact>.structural.group_id`
++
++## cursor -> copilot
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string`
++- lost `paths[].steps[].change.count.sh.structural.before`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str`
++
++## cursor -> cursor-agent
++- lost `paths[].steps[].change.count.sh.structural.before`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++
++## cursor -> gemini
++- lost `paths[].steps[].change.count.sh.structural.before`
++
++## cursor -> opencode
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.before`
++- gained `paths[].path.base.ref`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString`
++
++## cursor -> pi
++- lost `paths[].steps[].change.count.sh.structural.before`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++
++## gemini -> claude
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.context`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.instruction`
++
++## gemini -> codex
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].path.base.uri`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++- gained `paths[].steps[].change.<artifact>.structural.group_id`
++- gained `paths[].steps[].change.notes.md.structural.before`
++
++## gemini -> copilot
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.instruction`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string`
++- gained `paths[].path.base.uri`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str`
++
++## gemini -> cursor
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.agent_name`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.context`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.description`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.dir_path`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.instruction`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.pattern`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.globPattern`
++- gained `paths[].steps[].change.count.sh.structural.before`
++- gained `paths[].steps[].change.notes.md.structural.before`
++
++## gemini -> cursor-agent
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.raw`
++- lost `paths[].steps[].change.notes.md.structural.after`
++- lost `paths[].steps[].change.notes.md.structural.tool`
++- lost `paths[].steps[].change.notes.md.structural.tool_id`
++- lost `paths[].steps[].change.notes.md.structural.type`
++
++## gemini -> opencode
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- gained `paths[].path.base.ref`
++- gained `paths[].path.base.uri`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString`
++
++## gemini -> pi
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].path.base.uri`
++- gained `paths[].steps[].change.<artifact>.structural.environment.working_dir`
++- gained `paths[].steps[].change.<artifact>.structural.stop_reason`
++- gained `paths[].steps[].change.notes.md.structural.before`
++
++## opencode -> claude
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.workdir`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_string`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_string`
++- gained `paths[].steps[].change.count.sh.raw`
++- gained `paths[].steps[].change.count.sh.structural.after`
++- gained `paths[].steps[].change.notes.md.raw`
++- gained `paths[].steps[].change.notes.md.structural.after`
++
++## opencode -> codex
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.structural.tool`
++- lost `paths[].steps[].change.notes.md.structural.tool_id`
++- lost `paths[].steps[].change.notes.md.structural.type`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.group_id`
++
++## opencode -> copilot
++- gained `paths[].steps[].change.count.sh.raw`
++- gained `paths[].steps[].change.count.sh.structural.after`
++- gained `paths[].steps[].change.notes.md.raw`
++- gained `paths[].steps[].change.notes.md.structural.after`
++
++## opencode -> cursor
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.content`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.path`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.pattern`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.workdir`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.globPattern`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.targetDirectory`
++
++## opencode -> cursor-agent
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.structural.tool`
++- lost `paths[].steps[].change.notes.md.structural.tool_id`
++- lost `paths[].steps[].change.notes.md.structural.type`
++
++## opencode -> gemini
++- lost `paths[].meta.files_changed[]`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.structural.operation`
++- lost `paths[].steps[].change.notes.md.structural.tool`
++- lost `paths[].steps[].change.notes.md.structural.tool_id`
++- lost `paths[].steps[].change.notes.md.structural.type`
++
++## opencode -> pi
++- lost `paths[].meta.files_changed[]`
++- lost `paths[].steps[].change.count.sh.structural.operation`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.structural.tool`
++- lost `paths[].steps[].change.notes.md.structural.tool_id`
++- lost `paths[].steps[].change.notes.md.structural.type`
++
++## pi -> claude
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.edits[].newText`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.edits[].oldText`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.path`
++- lost `paths[].steps[].change.notes.md.structural.edits[].newText`
++- lost `paths[].steps[].change.notes.md.structural.edits[].oldText`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path`
++- gained `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].steps[].change.notes.md.structural.operation`
++
++## pi -> codex
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens`
++- gained `paths[].steps[].change.<artifact>.structural.group_id`
++
++## pi -> copilot
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.notes.md.structural.edits[].newText`
++- lost `paths[].steps[].change.notes.md.structural.edits[].oldText`
++- gained `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].steps[].change.notes.md.structural.operation`
++
++## pi -> cursor
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.edits[].newText`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.edits[].oldText`
++- lost `paths[].steps[].change.<artifact>.structural.tool_uses[].input.path`
++- lost `paths[].steps[].change.notes.md.structural.edits[].newText`
++- lost `paths[].steps[].change.notes.md.structural.edits[].oldText`
++- gained `paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path`
++- gained `paths[].steps[].change.count.sh.structural.before`
++- gained `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].steps[].change.notes.md.structural.before`
++- gained `paths[].steps[].change.notes.md.structural.operation`
++
++## pi -> cursor-agent
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.count.sh.structural.tool`
++- lost `paths[].steps[].change.count.sh.structural.tool_id`
++- lost `paths[].steps[].change.count.sh.structural.type`
++- lost `paths[].steps[].change.notes.md.structural.after`
++
++## pi -> gemini
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.notes.md.structural.edits[].newText`
++- lost `paths[].steps[].change.notes.md.structural.edits[].oldText`
++- gained `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].steps[].change.notes.md.structural.operation`
++
++## pi -> opencode
++- lost `paths[].meta.actors.<actor>.provider`
++- lost `paths[].steps[].change.count.sh.raw`
++- lost `paths[].steps[].change.count.sh.structural.after`
++- lost `paths[].steps[].change.notes.md.structural.edits[].newText`
++- lost `paths[].steps[].change.notes.md.structural.edits[].oldText`
++- gained `paths[].path.base.ref`
++- gained `paths[].steps[].change.count.sh.structural.operation`
++- gained `paths[].steps[].change.notes.md.structural.operation`
+diff --git a/pr/84-classification-report.md b/pr/84-classification-report.md
+index b7d36229..25895d87 100644
+--- a/pr/84-classification-report.md
++++ b/pr/84-classification-report.md
+@@ -8,7 +8,7 @@ For each of the 63 recording x target round trips, count the lost and gained key
+ the table is committed and a test fails when it is stale (`UPDATE_CLASSIFICATION=1` regenerates). Report mode: nothing fails on unexplained.
+ 
+ ## Result (c. fdc3da4)
+-63 pairs: lost 295 declared / 2,531 unexplained; gained 292 declared / 159 unexplained. This agrees with the measurement (2,540 of 2,854 lost; 175 of
++63 pairs (step 1, before source bookkeeping): lost 295 declared / 2,531 unexplained; gained 292 declared / 159 unexplained. This agrees with the measurement (2,540 of 2,854 lost; 175 of
+ 472 gained, taken at c1e8cd9, before pr/76-77 and 81-83). Source-bookkeeping, minted and renamed have no declarations yet, so they are inside "unexplained".
+ 
+ ## Next (pr/78 steps 2-4)
+@@ -21,6 +21,16 @@ Pinned 1.94, gitleaks, nix-develop recapture.
+ ## Step 2a (source-bookkeeping), a second commit
+ `fixtures/source-bookkeeping.json`: per source agent, the prefixes of its own envelope with one reason each (claude `entry_extra`, `raw`; codex
+ `info`, `rate_limits`, `permission_profile`, `file_system_sandbox_policy`, `sandbox_policy`, `collaboration_mode`, `truncation_policy`, `source`,
+-`timezone`). The table gains a "lost source" column. Lost: 295 declared / 585 source / 1,946 unexplained (was 2,531 unexplained). The remaining 1,946
+-are mostly NOT bookkeeping: tool_uses, token_usage, stop_reason, delegations, file-change `before`/`after`/`operation` and similar content,
+-to be looked at one by one (real defects or declarable). Not done yet: minted and renamed classes (leaf-value pairing); unexplained still does not fail.
++`timezone`). The table gains a "lost source" column. Lost (2,826): 295 declared / 1,946 source bookkeeping / 585 unexplained (was 2,531 unexplained
++before the declarations). CORRECTION: an earlier version of this paragraph swapped the last two figures (585 source / 1,946 unexplained) and drew
++the wrong conclusion from it; the table, the code and the test always said 1,946 source and 585 unexplained. The 585 unexplained are the real
++defect candidates: tool_uses, token_usage, stop_reason, delegations, file-change `before`/`after`/`operation` and similar content, codex -> * (32-36
++per pair) first, then copilot -> * (8-20 per pair), each a reader/writer bug when the target format can hold the value. Not done in this step: minted and
++renamed classes (leaf-value pairing); unexplained still does not fail.
++
++## Step 2b: renamed and synthesized classes (a third commit)
++`classify.rs` now separates: lost *dropped* (contract drop op), *renamed* (contract rename/move `from`), *source* (recording agent's envelope), *unexplained*; gained
++*synthesized* (contract synthesize op, or `fixtures/target-synthesized.json`: the producer name and version every target's reader stamps), *renamed* (`to` side),
++*unexplained*. `docs/baseline/unexplained.md` lists the unexplained paths per pair (the defect candidates). 63 pairs: lost 280 dropped / 15 renamed / 1,946 source /
++585 unexplained; gained 299 synthesized / 14 renamed / 138 unexplained. Renaming here is what the contracts already declare; pairing undeclared renames by leaf value
++needs values the snapshots do not hold and is not done. Unexplained does not fail.
+-- 
+2.55.0
+

@@ -1,0 +1,604 @@
+From 803a015b85d98a4fdf6a98ec16680d077fed2bc9 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 10:29:16 -0400
+Subject: [PATCH] fix(codex): a codex -> codex round trip keeps the compaction
+ and base instructions (pr/102)
+
+---
+ crates/toolpath-codex/src/project.rs          |  81 +++++++++++++-
+ .../snapshots/shed@codex-forced.snap          |  36 +------
+ .../snapshots/shed@codex.snap                 |  10 +-
+ goldens/manifest.json                         | 100 +++++++++---------
+ goldens/shed/codex.json                       |  10 +-
+ ...-codex-compaction-and-base-instructions.md |  21 ++++
+ 6 files changed, 160 insertions(+), 98 deletions(-)
+ create mode 100644 pr/102-codex-compaction-and-base-instructions.md
+
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index 1ab8f989..af0d305b 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -253,8 +253,17 @@ fn codex_passthrough(view: &ConversationView) -> Vec<RolloutLine> {
+     view.events
+         .iter()
+         .filter_map(|e| {
+-            let kind = e.event_type.strip_prefix("response_item.")?;
+             let payload = Value::Object(e.data.clone().into_iter().collect());
++            if e.event_type == "compacted" {
++                // The compaction Codex wrote, with its replacement history.
++                return Some(RolloutLine {
++                    timestamp: e.timestamp.clone(),
++                    kind: "compacted".to_string(),
++                    payload,
++                    extra: HashMap::new(),
++                });
++            }
++            let kind = e.event_type.strip_prefix("response_item.")?;
+             Some(response_item_line(&e.timestamp, kind, payload))
+         })
+         .collect()
+@@ -291,7 +300,12 @@ fn make_session_meta_line(
+                 .find_map(|t| t.provider.clone().filter(|p| !p.is_empty()))
+                 .unwrap_or_else(|| DEFAULT_MODEL_PROVIDER.to_string()),
+         ),
+-        base_instructions: None,
++        // The session's own system prompt, when a Codex view carries it.
++        base_instructions: (view.provider_id.as_deref() == Some("codex"))
++            .then(|| view.events.iter().find(|e| e.event_type == "session_meta"))
++            .flatten()
++            .and_then(|e| e.data.get("base_instructions").cloned())
++            .and_then(|v| serde_json::from_value(v).ok()),
+         dynamic_tools: None,
+         memory_mode: None,
+         git: None,
+@@ -1059,6 +1073,69 @@ mod tests {
+         assert_eq!(line.payload["call_id"], "c1");
+     }
+ 
++    fn compacted_and_meta_events(mut view: ConversationView) -> ConversationView {
++        let mut ev = |ts: &str, kind: &str, payload: Value| {
++            view.events.push(toolpath_convo::ConversationEvent {
++                id: format!("{kind}-{ts}"),
++                timestamp: ts.into(),
++                parent_id: None,
++                event_type: kind.into(),
++                data: payload
++                    .as_object()
++                    .unwrap()
++                    .iter()
++                    .map(|(k, v)| (k.clone(), v.clone()))
++                    .collect(),
++            });
++        };
++        ev(
++            "2026-04-20T16:00:00.000Z",
++            "session_meta",
++            json!({"id": "s", "base_instructions": {"text": "You are Codex."}}),
++        );
++        ev(
++            "2026-04-20T16:00:01.000Z",
++            "compacted",
++            json!({"message": "", "replacement_history": [
++                {"type": "message", "role": "user",
++                 "content": [{"type": "input_text", "text": "kept"}]}]}),
++        );
++        view
++    }
++
++    /// The compaction Codex wrote (`compacted`, with its replacement history) and the session's
++    /// base instructions go back for a Codex view.
++    #[test]
++    fn codex_compaction_and_base_instructions_are_written_back() {
++        let mut u = user_turn("u1", "hi");
++        u.timestamp = "2026-04-20T16:00:00.000Z".into();
++        let mut a = assistant_turn("a1", "hello");
++        a.timestamp = "2026-04-20T16:00:02.000Z".into();
++        let view = compacted_and_meta_events(view_with(vec![u, a]));
++        let s = CodexProjector::default().project(&view).unwrap();
++        let c = s
++            .lines
++            .iter()
++            .find(|l| l.kind == "compacted")
++            .expect("compacted line");
++        assert_eq!(
++            c.payload["replacement_history"][0]["content"][0]["text"],
++            "kept"
++        );
++        let meta = &s.lines[0];
++        assert_eq!(meta.kind, "session_meta");
++        assert_eq!(meta.payload["base_instructions"]["text"], "You are Codex.");
++    }
++
++    #[test]
++    fn other_harness_compaction_and_base_instructions_are_not_copied() {
++        let mut view = compacted_and_meta_events(view_with(vec![assistant_turn("a1", "hi")]));
++        view.provider_id = Some("claude".into());
++        let s = CodexProjector::default().project(&view).unwrap();
++        assert!(s.lines.iter().all(|l| l.kind != "compacted"));
++        assert!(s.lines[0].payload.get("base_instructions").is_none());
++    }
++
+     #[test]
+     fn other_harness_tool_search_items_are_not_copied() {
+         let mut view = tool_search_events(view_with(vec![assistant_turn("a1", "hello")]));
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index 3caf7235..f00e6e35 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -111,13 +111,9 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     }
+   },
+   "same_format": {
+-    "lines": 92,
+-    "bytes": 62701,
++    "lines": 93,
++    "bytes": 90513,
+     "event_types_shed": {
+-      "compacted": {
+-        "source": 1,
+-        "after": 0
+-      },
+       "event_msg/context_compacted": {
+         "source": 1,
+         "after": 0
+@@ -141,16 +137,12 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     },
+     "key_paths": {
+       "source": 152,
+-      "after": 112,
+-      "lost": 48,
++      "after": 118,
++      "lost": 42,
+       "gained": 8
+     },
+     "renamed": [],
+     "dropped": [
+-      {
+-        "path": "payload.base_instructions.text",
+-        "example": "You are Codex, a coding agent based on G…"
+-      },
+       {
+         "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/count.sh.content",
+         "example": "echo 1 echo 2 echo 3 echo 4 echo 5 "
+@@ -295,26 +287,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.realtime_active",
+         "example": "false"
+       },
+-      {
+-        "path": "payload.replacement_history[].content[].text",
+-        "example": "You're going to walk through a small set…"
+-      },
+-      {
+-        "path": "payload.replacement_history[].content[].type",
+-        "example": "input_text"
+-      },
+-      {
+-        "path": "payload.replacement_history[].encrypted_content",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "payload.replacement_history[].role",
+-        "example": "user"
+-      },
+-      {
+-        "path": "payload.replacement_history[].type",
+-        "example": "message"
+-      },
+       {
+         "path": "payload.started_at",
+         "example": "1781116970"
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index 598a3257..7fc9902b 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -103,7 +103,7 @@ input_file: test-fixtures/codex/convo.jsonl
+   },
+   "same_format": {
+     "lines": 19,
+-    "bytes": 22202,
++    "bytes": 43756,
+     "event_types_shed": {
+       "event_msg/agent_message": {
+         "source": 13,
+@@ -132,8 +132,8 @@ input_file: test-fixtures/codex/convo.jsonl
+     },
+     "key_paths": {
+       "source": 94,
+-      "after": 62,
+-      "lost": 44,
++      "after": 63,
++      "lost": 43,
+       "gained": 12
+     },
+     "renamed": [],
+@@ -142,10 +142,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.agent_nickname",
+         "example": "Confucius"
+       },
+-      {
+-        "path": "payload.base_instructions.text",
+-        "example": "You are Codex, a coding agent based on G…"
+-      },
+       {
+         "path": "payload.collaboration_mode_kind",
+         "example": "default"
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 72de28b1..896ed680 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++    "toolpath_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
++        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
++        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+@@ -583,7 +583,7 @@
+     },
+     {
+       "file": "goldens/shed/codex.json",
+-      "sha256": "93b0f7126312f11d1038b6e08d07831e9245c0a15b1a6ccfb4cc52e3d5385546"
++      "sha256": "915f052b74d35dc3c013df9a8ca69a43c8e81ff2387d66ee9ab3d1557ee889ab"
+     },
+     {
+       "file": "goldens/shed/copilot.json",
+diff --git a/goldens/shed/codex.json b/goldens/shed/codex.json
+index a71a5ff0..a7bbe26c 100644
+--- a/goldens/shed/codex.json
++++ b/goldens/shed/codex.json
+@@ -47,16 +47,12 @@
+     }
+   ],
+   "same_format": {
+-    "bytes": 21974,
++    "bytes": 43528,
+     "dropped": [
+       {
+         "example": "Confucius",
+         "path": "payload.agent_nickname"
+       },
+-      {
+-        "example": "You are Codex, a coding agent based on G…",
+-        "path": "payload.base_instructions.text"
+-      },
+       {
+         "example": "default",
+         "path": "payload.collaboration_mode_kind"
+@@ -303,9 +299,9 @@
+       }
+     ],
+     "key_paths": {
+-      "after": 62,
++      "after": 63,
+       "gained": 12,
+-      "lost": 44,
++      "lost": 43,
+       "source": 94
+     },
+     "lines": 19,
+diff --git a/pr/102-codex-compaction-and-base-instructions.md b/pr/102-codex-compaction-and-base-instructions.md
+new file mode 100644
+index 00000000..3432c212
+--- /dev/null
++++ b/pr/102-codex-compaction-and-base-instructions.md
+@@ -0,0 +1,21 @@
++# fix(codex): a codex -> codex round trip keeps the compaction (replacement_history) and the base instructions
++
++Status: draft · Base: pr/101 · Source: pr/99 recommendation 1, group 2; controller-core's order
++
++## Why
++After pr/100 codex-forced still lost 48 paths on codex -> codex. Group 2 is the compaction Codex wrote (`compacted` line: `message`, `replacement_history[]` with role, content, encrypted_content) and
++the session's own system prompt (`session_meta.base_instructions.text`). The reader keeps both as events (`compacted`, `session_meta`); the writer ignored them. Codex holds both: a writer bug.
++
++## What changes (toolpath-codex/src/project.rs, Codex-recorded views only)
++- `codex_passthrough` also returns the `compacted` events as `compacted` lines, payload verbatim, in event order (same placement rule as pr/100).
++- `make_session_meta_line` takes `base_instructions` from the view's `session_meta` event.
++- Other harnesses' views get neither (tested). The shared compaction shape of #108 is not touched: this writes back what Codex itself wrote.
++
++## Verification (sandbox, cargo 1.97.1, offline)
++- Test first: `codex_compaction_and_base_instructions_are_written_back` failed (no `compacted` line), passes; `other_harness_compaction_and_base_instructions_are_not_copied` guards the other direction.
++- shed@codex-forced: lost 48 -> 42 key paths; shed@codex and goldens/shed/codex.json: the same paths gone; no cross-agent snapshot or table changed.
++- Per-crate slices, fmt, clippy -D warnings (workspace, all targets, nix clippy 1.97.1), qualifier, `path-cli --features develop --test goldens`: see the report.
++- NOT run: full workspace tests in one go (killed at the 30 min limit last time; run in slices instead), pinned 1.94, gitleaks, nix, live codex resume.
++
++## For the next PR
++Groups 3-4: current_date, timezone, workspace_roots (turn_context); rate_limits, token info, timings (event steps).
+-- 
+2.55.0
+

@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "validate_transforms snapshot",
+  "description": "The base schema plus the agent-coding-session v1.1.0 kind over every document a transform produces for one recording (validate_transforms@<set>: the derived document, the sealed JSONL, every round trip), or over each writer's output on its own (validate_transforms@writers). Hand-written: the body is built with json! in tests/transforms_schema.rs.",
+  "definitions": {
+    "outcome": {
+      "type": "object",
+      "required": ["outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "outcome": { "enum": ["valid", "invalid", "not_derived"] },
+        "kinds": { "type": "array", "items": { "type": "string", "format": "uri" } },
+        "errors": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "by_harness": { "type": "object", "additionalProperties": { "$ref": "#/definitions/outcome" } }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["document", "jsonl_sealed", "round_trips"],
+      "additionalProperties": false,
+      "properties": {
+        "document": { "$ref": "#/definitions/outcome" },
+        "jsonl_sealed": { "$ref": "#/definitions/outcome" },
+        "round_trips": { "$ref": "#/definitions/by_harness" }
+      }
+    },
+    { "$ref": "#/definitions/by_harness" }
+  ]
+}

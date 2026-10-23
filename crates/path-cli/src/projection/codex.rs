@@ -242,4 +242,90 @@ mod tests {
         let codex_sessions = fake_home.join(".codex/sessions");
         assert!(codex_sessions.exists(), "codex sessions dir missing");
     }
+
+    /// The rollout is placed where it will be resumed: every `cwd` codex reads
+    /// (`session_meta.payload.cwd`, `turn_context.payload.cwd`) is the `-C`
+    /// project directory, not the source session's own cwd. `codex resume`
+    /// lists only sessions whose cwd is the directory it runs in, so the
+    /// source cwd would hide the session from the picker launched in `-C`.
+    #[test]
+    fn project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_home = temp.path().join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let cwd = temp.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let want = std::fs::canonicalize(&cwd)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let source_cwd = "/source/session/project";
+        let mut path = make_convo_path("codex://019dabc6-cccc-dddd-eeee-000000000001");
+        for change in path.steps[0].change.values_mut() {
+            let s = change.structural.as_mut().unwrap();
+            s.extra
+                .insert("cwd".to_string(), serde_json::json!(source_cwd));
+        }
+        let view = toolpath_convo::extract_conversation(&path);
+        assert_eq!(
+            view.turns[0]
+                .environment
+                .as_ref()
+                .and_then(|e| e.working_dir.as_deref()),
+            Some(source_cwd),
+            "the source carries its own cwd"
+        );
+
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_home = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        let result = project_codex(&path, &cwd);
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        result.expect("project_codex should succeed");
+
+        let rollout = walkdir_jsonl(&fake_home.join(".codex/sessions"));
+        let text = std::fs::read_to_string(&rollout).unwrap();
+        let written: Vec<(String, String)> = text
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter_map(|v| {
+                let cwd = v["payload"]["cwd"].as_str()?.to_string();
+                Some((v["type"].as_str().unwrap_or("").to_string(), cwd))
+            })
+            .collect();
+        let kinds: Vec<&str> = written.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(kinds.contains(&"session_meta"), "{kinds:?}");
+        assert!(kinds.contains(&"turn_context"), "{kinds:?}");
+        for (kind, written_cwd) in &written {
+            assert_eq!(written_cwd, &want, "{kind} cwd");
+        }
+    }
+
+    /// The one `*.jsonl` file under `dir` (codex's `YYYY/MM/DD` layout).
+    fn walkdir_jsonl(dir: &std::path::Path) -> std::path::PathBuf {
+        let mut found = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "jsonl") {
+                    found.push(p);
+                }
+            }
+        }
+        assert_eq!(found.len(), 1, "{found:?}");
+        found.remove(0)
+    }
 }

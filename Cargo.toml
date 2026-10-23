@@ -15,6 +15,12 @@ members = [
     "crates/toolpath-pi",
     "crates/pathbase-client",
     "crates/path-cli",
+    "crates/toolpath-golden",
+    "crates/toolpath-goldens",
+    "crates/toolpath-webmock",
+    "crates/toolpath-model",
+    "crates/toolpath-harness-mock",
+    "crates/xtask",
 ]
 exclude = ["crates/toolpath-cli"]
 resolver = "2"
@@ -22,6 +28,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
+rust-version = "1.94"
 
 [workspace.dependencies]
 toolpath = { version = "0.7.1", path = "crates/toolpath" }
@@ -37,12 +44,18 @@ toolpath-github = { version = "0.6.0", path = "crates/toolpath-github" }
 toolpath-dot = { version = "0.5.0", path = "crates/toolpath-dot" }
 toolpath-md = { version = "0.7.0", path = "crates/toolpath-md" }
 toolpath-pi = { version = "0.6.1", path = "crates/toolpath-pi" }
-path-cli = { version = "0.29.0", path = "crates/path-cli" }
+path-cli = { version = "0.30.0", path = "crates/path-cli" }
+# test-only (publish = false): the golden stub factory
+toolpath-golden = { path = "crates/toolpath-golden" }
 pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
 
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# float_roundtrip: parse every JSON number to the nearest double, as RFC 8785
+# (and so every signature) assumes. Without it serde_json's fast path can land
+# one ULP off: Claude Code's "costUSD": 0.020428699999999998 read back as
+# 0.0204287, and RFC 8785's own vector 333333333.33333329 canonicalized wrong.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 thiserror = "1.0"

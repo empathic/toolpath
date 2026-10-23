@@ -1,0 +1,392 @@
+From b59ac9fe0643d84395eb9f45f06075f9af3e6d61 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:53:04 -0400
+Subject: [PATCH] =?UTF-8?q?test(goldens):=20one=20test=20per=20recording?=
+ =?UTF-8?q?=20and=20per=20writer=20=E2=80=94=20a=20break=20names=20its=20r?=
+ =?UTF-8?q?ecording,=20the=20rest=20stay=20green;=20the=20piece=20is=20pr/?=
+ =?UTF-8?q?50?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ crates/toolpath-goldens/tests/.qual      |   1 +
+ crates/toolpath-goldens/tests/goldens.rs | 138 ++++++++++++++++++-----
+ crates/toolpath-goldens/tests/writers.rs |  75 ++++++++----
+ pr/50-one-test-per-recording.md          |  72 ++++++++++++
+ 4 files changed, 237 insertions(+), 49 deletions(-)
+ create mode 100644 pr/50-one-test-per-recording.md
+
+diff --git a/crates/toolpath-goldens/tests/.qual b/crates/toolpath-goldens/tests/.qual
+index cb295932..b4856a2f 100644
+--- a/crates/toolpath-goldens/tests/.qual
++++ b/crates/toolpath-goldens/tests/.qual
+@@ -5,3 +5,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/regressions.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:48:36.382585Z","id":"d66327a3cb41fead5f47cc470bcee4f0d705a452ec43c6ae855b7aba09ace04b","body":{"detail":"The cursor set is a JSON dump of a CursorSession, not a database, so a reader regression on the 3.24 table cannot fail here. Covered by crates/toolpath-cursor/src/reader.rs reads_heads_from_the_3_24_table. To close: a database-shaped cursor set (as opencode_db.rs does for opencode).","kind":"concern","span":{"start":{"line":1},"end":{"line":10},"content_hash":"2ebe9a6d6abb316b782bf9945125221b250cc637d2b1fd9ddb7069efa0eebc5f"},"summary":"The goldens do not reach Cursor's state.vscdb (3.24 composerHeaders)","tags":["regression-corpus","gap","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.846503Z","id":"2414bd5b143e09fc2a229f820da7bdd55324ff23099f0e3c018c5394c6420657","body":{"detail":"If a second #[test] is added to this file, the env writes race its threads. Keep one test per binary, or move the stores into an argument the pipeline threads through (the opencode store already is: pipeline::opencode_store roots it in scratch).","kind":"concern","span":{"start":{"line":173},"end":{"line":173},"content_hash":"dc4bcb594f6f16fdb896fb1931054d14025b7294123b4247ecb340edf0ca1c27"},"summary":"The test sets HOME and every agent store with std::env::set_var (unsafe in edition 2024) before the globs; sound only while this binary has one test","supersedes":"53729a2d268d88790984d31c1c9017be54c263551aa3989a2a7efd40eaf4cd36","tags":["goldens","test-hygiene","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/schemas.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:26:03.116248Z","id":"baa7a7b57845cd6b98a0bffae8b2644a7cef2a5ad35e53ae6a13d4a196099eb1","body":{"detail":"The ir@<recording> snapshot body is a toolpath-convo ConversationView. toolpath-convo derives no JsonSchema and the kind spec describes the document, not the view, so every_snapshot_matches_its_kind skips ir@. A schemars derive on ConversationView (and Turn, Usage, the event and tool types) would close it; it touches the shared crate every harness uses, so it is its own piece.","kind":"concern","span":{"start":{"line":34},"end":{"line":37},"content_hash":"723633ea717167f8d0561071a2bf59dc8afb561bb4f69b8a190be3d254a542e4"},"summary":"ir@ snapshots have no JSON Schema: ConversationView has none","tags":["baseline","schema","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:53:04.541651Z","id":"94f2a9e173a3187b208be640fe44bc59765a7d529c084c4cc20404eb3f102c8f","body":{"kind":"resolve","summary":"The binary now has one test per recording. HOME and every agent store are set once inside a OnceLock (homes()) that every test enters before reading the environment, so the env writes happen before any other test reads it (pr/50).","supersedes":"2414bd5b143e09fc2a229f820da7bdd55324ff23099f0e3c018c5394c6420657","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/tests/goldens.rs b/crates/toolpath-goldens/tests/goldens.rs
+index 9f01ed4d..3acea67f 100644
+--- a/crates/toolpath-goldens/tests/goldens.rs
++++ b/crates/toolpath-goldens/tests/goldens.rs
+@@ -9,11 +9,16 @@
+ //! a `goldens/<agent>/` directory is the old tool's copy of the fixture and
+ //! is not read here.
+ //!
+-//! `cargo test -p toolpath-goldens` checks the snapshots; a change fails on
+-//! the first stage that differs, named by its snapshot, with insta's diff
+-//! naming the line. `cargo insta review` (or `INSTA_UPDATE=always`) accepts
+-//! a change you meant; `git diff crates/toolpath-goldens/snapshots/` is the
+-//! review. `INSTA_GLOB_FILTER='codex/*'` runs one set.
++//! `cargo test -p toolpath-goldens` checks the snapshots. Each recording is
++//! its own test (`set_claude`, `set_codex`, … `set_claude_session`), so a
++//! break names the recording that broke and the others stay green; inside a
++//! test, a change fails on the first stage that differs, named by its
++//! snapshot, with insta's diff naming the line. `cargo insta review` (or
++//! `INSTA_UPDATE=always`) accepts a change you meant; `git diff
++//! crates/toolpath-goldens/snapshots/` is the review. `cargo test -p
++//! toolpath-goldens --test goldens set_codex` runs one recording.
++//! `every_recording_has_a_test` fails when a recording is added on disk
++//! without a test here.
+ //!
+ //! Stages, in pipeline order: `ir` (the adapter's conversation view),
+ //! `document` (the toolpath graph), `projection@<set>@<agent>` (what `path p
+@@ -34,6 +39,7 @@
+ //! regression on top of the defect, do not accept.
+ 
+ use std::path::Path;
++use std::sync::OnceLock;
+ 
+ use serde_json::json;
+ use toolpath_goldens::accounting;
+@@ -47,36 +53,107 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-fixtures
+ /// root.
+ const GOLDENS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../goldens");
+ 
++/// One test per recording. The path is relative to the repo root.
++macro_rules! recording {
++    ($test:ident, $path:literal) => {
++        #[test]
++        fn $test() {
++            check_recording($path);
++        }
++    };
++}
++
++recording!(set_claude, "test-fixtures/claude/convo.jsonl");
++recording!(set_codex, "test-fixtures/codex/convo.jsonl");
++recording!(set_copilot, "test-fixtures/copilot/convo.jsonl");
++recording!(set_cursor, "test-fixtures/cursor/convo.json");
++recording!(set_gemini, "test-fixtures/gemini/convo.jsonl");
++recording!(set_opencode, "test-fixtures/opencode/convo.json");
++recording!(set_pi, "test-fixtures/pi/convo.jsonl");
++recording!(set_claude_session, "goldens/claude-session/input.jsonl");
++recording!(set_claude_compacted, "goldens/claude-compacted/input.jsonl");
++
++/// Every test above, by path, for [`every_recording_has_a_test`].
++const RECORDINGS: &[&str] = &[
++    "test-fixtures/claude/convo.jsonl",
++    "test-fixtures/codex/convo.jsonl",
++    "test-fixtures/copilot/convo.jsonl",
++    "test-fixtures/cursor/convo.json",
++    "test-fixtures/gemini/convo.jsonl",
++    "test-fixtures/opencode/convo.json",
++    "test-fixtures/pi/convo.jsonl",
++    "goldens/claude-session/input.jsonl",
++    "goldens/claude-compacted/input.jsonl",
++];
++
++/// A recording on disk without a test above would never be checked.
++/// `goldens/<agent>/` is the old tool's copy of `test-fixtures/<agent>/` and
++/// is not a recording.
+ #[test]
+-fn every_set_matches_its_snapshots() {
+-    let real_home = std::env::var("HOME").expect("HOME is set");
+-    // The test owns HOME: every store an adapter might resolve points into a
+-    // directory that is empty, deleted afterwards, and a leak needle below.
+-    let home = tempfile::tempdir().expect("temp HOME");
+-    point_every_store_at(home.path());
++fn every_recording_has_a_test() {
++    let mut on_disk = Vec::new();
++    for (root, rel, file) in [
++        (FIXTURES, "test-fixtures", "convo."),
++        (GOLDENS, "goldens", "input."),
++    ] {
++        for dir in std::fs::read_dir(root).expect("recordings directory") {
++            let dir = dir.expect("entry").path();
++            let Some(name) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
++                continue;
++            };
++            if rel == "goldens" && Agent::ALL.iter().any(|a| a.name() == name) {
++                continue;
++            }
++            let Ok(entries) = std::fs::read_dir(&dir) else {
++                continue;
++            };
++            for f in entries.flatten() {
++                let fname = f.file_name().to_string_lossy().into_owned();
++                if fname.starts_with(file) {
++                    on_disk.push(format!("{rel}/{name}/{fname}"));
++                }
++            }
++        }
++    }
++    let missing: Vec<_> = on_disk
++        .iter()
++        .filter(|p| !RECORDINGS.contains(&p.as_str()))
++        .collect();
++    assert!(
++        missing.is_empty(),
++        "recordings with no test in tests/goldens.rs: {missing:?}"
++    );
++}
+ 
++/// The real HOME (a leak needle) and the temp HOME every adapter store points
++/// into. Set once, by whichever recording test runs first; every test calls
++/// this before anything reads the environment, and the others wait in
++/// `get_or_init` while it runs.
++fn homes() -> &'static (String, tempfile::TempDir) {
++    static HOMES: OnceLock<(String, tempfile::TempDir)> = OnceLock::new();
++    HOMES.get_or_init(|| {
++        let real_home = std::env::var("HOME").expect("HOME is set");
++        // The tests own HOME: every store an adapter might resolve points into
++        // a directory that is empty and a leak needle below.
++        let home = tempfile::tempdir().expect("temp HOME");
++        point_every_store_at(home.path());
++        (real_home, home)
++    })
++}
++
++fn check_recording(rel: &str) {
++    let (real_home, home) = homes();
++    let input = Path::new(env!("CARGO_MANIFEST_DIR"))
++        .join("../..")
++        .join(rel);
+     let mut settings = insta::Settings::clone_current();
+     settings.set_snapshot_path("../snapshots");
+     settings.set_prepend_module_to_snapshot(false);
+     // The IR carries hash maps; without this their key order changes per
+     // process and `ir` would never be stable.
+     settings.set_sort_maps(true);
+-    settings.bind(|| {
+-        insta::glob!(FIXTURES, "*/convo.*", |input| {
+-            check_set(input, &real_home, home.path());
+-        });
+-        insta::glob!(GOLDENS, "*/input.*", |input| {
+-            let name = input
+-                .parent()
+-                .and_then(Path::file_name)
+-                .and_then(|n| n.to_str());
+-            if name.is_some_and(|n| Agent::ALL.iter().any(|a| a.name() == n)) {
+-                // The old tool's copy of test-fixtures/<agent>/convo.*.
+-                return;
+-            }
+-            check_set(input, &real_home, home.path());
+-        });
+-    });
++    settings.set_input_file(&input);
++    settings.bind(|| check_set(&input, real_home, home.path()));
+ }
+ 
+ /// One set through the pipeline, its snapshots, and its invariants.
+@@ -153,7 +230,7 @@ fn check_set(input: &Path, real_home: &str, home: &Path) {
+ }
+ 
+ /// HOME and every per-agent store the adapters resolve, inside `home`. Set
+-/// once, before any adapter runs, in a test binary with this one test.
++/// once, from [`homes`], before any adapter runs.
+ fn point_every_store_at(home: &Path) {
+     let vars = [
+         ("HOME", home.to_path_buf()),
+@@ -168,8 +245,9 @@ fn point_every_store_at(home: &Path) {
+         ("TOOLPATH_CONFIG_DIR", home.join(".toolpath")),
+     ];
+     for (k, v) in vars {
+-        // SAFETY: the test binary has one test and no other thread is
+-        // running yet; the pipeline itself never reads the environment.
++        // SAFETY: called once, inside `homes`' OnceLock, before any test reads
++        // the environment (every test calls `homes()` first and the others
++        // block in get_or_init); the pipeline itself never reads it.
+         unsafe { std::env::set_var(k, v) };
+     }
+ }
+diff --git a/crates/toolpath-goldens/tests/writers.rs b/crates/toolpath-goldens/tests/writers.rs
+index dbe2aa5a..b6bfe5fd 100644
+--- a/crates/toolpath-goldens/tests/writers.rs
++++ b/crates/toolpath-goldens/tests/writers.rs
+@@ -6,7 +6,11 @@
+ //! token usage with cache and breakdowns, file mutations, a delegation,
+ //! environment, base and producer). One snapshot per writer,
+ //! `writer@<agent>`: what that writer, read back by its own adapter, drops,
+-//! renames or invents from an input that is identical for all seven.
++//! renames or invents from an input that is identical for all seven. One
++//! test per writer (`writer_claude`, … `writer_cursor`), so a broken writer
++//! is named on its own and the other six stay green.
++
++use std::sync::OnceLock;
+ 
+ use toolpath::v1::Graph;
+ use toolpath_convo::{ConversationView, DeriveConfig, derive_path};
+@@ -15,29 +19,62 @@ use toolpath_goldens::pipeline::writer;
+ 
+ const VIEW: &str = include_str!("../fixtures/full-view.json");
+ 
+-#[test]
+-fn each_writer_on_the_same_generated_document() {
+-    let home = tempfile::tempdir().expect("temp HOME");
+-    let view: ConversationView =
+-        serde_json::from_str(VIEW).expect("fixtures/full-view.json is a ConversationView");
+-    let cfg = DeriveConfig {
+-        include_thinking: true,
+-        include_tool_uses: true,
+-        ..DeriveConfig::default()
+-    };
+-    let document_json = Graph::from_path(derive_path(&view, &cfg))
+-        .to_json()
+-        .expect("document serializes");
++/// The generated document, built once and shared by every writer's test.
++fn document_json() -> &'static str {
++    static DOCUMENT: OnceLock<String> = OnceLock::new();
++    DOCUMENT.get_or_init(|| {
++        let view: ConversationView =
++            serde_json::from_str(VIEW).expect("fixtures/full-view.json is a ConversationView");
++        let cfg = DeriveConfig {
++            include_thinking: true,
++            include_tool_uses: true,
++            ..DeriveConfig::default()
++        };
++        Graph::from_path(derive_path(&view, &cfg))
++            .to_json()
++            .expect("document serializes")
++    })
++}
+ 
++fn check_writer(agent: Agent) {
++    let home = tempfile::tempdir().expect("temp HOME");
+     let mut settings = insta::Settings::clone_current();
+     settings.set_snapshot_path("../snapshots");
+     settings.set_prepend_module_to_snapshot(false);
+     settings.set_sort_maps(true);
+     settings.bind(|| {
+-        for agent in Agent::ALL {
+-            let trip = writer(&document_json, agent, home.path())
+-                .unwrap_or_else(|e| panic!("writer {}: {e}", agent.name()));
+-            insta::assert_json_snapshot!(format!("writer@{}", agent.name()), trip);
+-        }
++        let trip = writer(document_json(), agent, home.path())
++            .unwrap_or_else(|e| panic!("writer {}: {e}", agent.name()));
++        insta::assert_json_snapshot!(format!("writer@{}", agent.name()), trip);
+     });
+ }
++
++/// One test per writer; a match on [`Agent`] so a new agent without a test
++/// here does not compile.
++macro_rules! writers {
++    ($($test:ident => $agent:ident),* $(,)?) => {
++        $(
++            #[test]
++            fn $test() {
++                check_writer(Agent::$agent);
++            }
++        )*
++
++        #[allow(dead_code)]
++        fn every_agent_has_a_writer_test(agent: Agent) {
++            match agent {
++                $(Agent::$agent => {})*
++            }
++        }
++    };
++}
++
++writers! {
++    writer_claude => Claude,
++    writer_codex => Codex,
++    writer_pi => Pi,
++    writer_copilot => Copilot,
++    writer_gemini => Gemini,
++    writer_opencode => Opencode,
++    writer_cursor => Cursor,
++}
+diff --git a/pr/50-one-test-per-recording.md b/pr/50-one-test-per-recording.md
+new file mode 100644
+index 00000000..b9da5dc3
+--- /dev/null
++++ b/pr/50-one-test-per-recording.md
+@@ -0,0 +1,72 @@
++# test(goldens): one test per recording and per writer
++
++Status: planned (2026-10-19, rehearsal feedback, Alex: "One test function that loops over everything? Then I get one
++red test, not 37.") · Base: the goldens stack once merged (pr/07 adds the loop, pr/26 the writer loop) · Independent
++code; touches only the two test files
++
++## Why
++The baseline ran as two `#[test]` functions. `every_set_matches_its_snapshots` looped over every recording with
++`insta::glob!`, and `each_writer_on_the_same_generated_document` looped over the seven writers. A break showed as one
++red test; the recording or writer was only in insta's summary, and the loop stopped at the first failing recording,
++so whether the others were fine was unknown until that one was fixed.
++
++## What changes
++- `crates/toolpath-goldens/tests/goldens.rs`: one test per recording, generated by a `recording!` macro: `set_claude`,
++  `set_codex`, `set_copilot`, `set_cursor`, `set_gemini`, `set_opencode`, `set_pi` (the
++  `test-fixtures/<agent>/convo.*` sessions) and `set_claude_session`, `set_claude_compacted` (`goldens/<name>/input.*`).
++  The temp `HOME` and every adapter store are set once, in a `OnceLock` every test enters before reading the
++  environment (edition 2024's `set_var` is unsafe once threads run; tests now run in parallel). Each test sets
++  insta's input file to its recording, so the failure summary names the file. New guard
++  `every_recording_has_a_test`: a `convo.*` under `test-fixtures/` or an `input.*` under a non-agent `goldens/<name>/`
++  without a test fails, naming the file (the glob picked new recordings up by itself; this keeps that).
++- `crates/toolpath-goldens/tests/writers.rs`: one test per writer (`writer_claude` … `writer_cursor`) from a
++  `writers!` macro over a shared, once-built document; the macro also emits an exhaustive `match` on `Agent`, so a new
++  agent without a writer test does not compile.
++- `crates/toolpath-goldens/tests/.qual`: resolves concern 2414bd5b (re-anchored from 53729a2d by pr/35; "sound only while this binary has one test"),
++  reason fixed: the env writes now happen once, inside the `OnceLock`.
++- Snapshot names, contents and headers unchanged (no `.snap` file in the diff). Running one recording:
++  `cargo test -p toolpath-goldens --test goldens set_codex` (was `INSTA_GLOB_FILTER='codex/*'`).
++
++Not changed: the stages inside a recording still stop at the first differing snapshot (insta's default); that one
++failure names its snapshot (`ir@codex`) and line. `cargo insta test` still runs every stage.
++
++## Verification
++- `cargo test -p toolpath-goldens --test goldens --test writers`: 10 + 7 tests, all pass, no `.snap.new`.
++- `INSTA_FORCE_UPDATE=1 INSTA_UPDATE=always` over both binaries: the snapshot bodies are byte-identical; the only
++  rewrite is the `input_file:` header of 22 snapshots, which named the old `goldens/<agent>/input.jsonl` copy and now
++  would name `test-fixtures/<agent>/convo.jsonl`. Reverted, not committed: metadata only (insta does not compare it),
++  and several in-flight pieces touch these snapshots. Whoever next re-records them takes the corrected header.
++- The break, on purpose and reverted (not committed): `"cwd"` in `test-fixtures/codex/convo.jsonl` set to
++  `/broken-on-purpose`, then `cargo test -p toolpath-goldens --test goldens`:
++  ```
++  test every_recording_has_a_test ... ok
++  test set_claude_compacted ... ok
++  test set_gemini ... ok
++  test set_pi ... ok
++  test set_opencode ... ok
++  test set_copilot ... ok
++  test set_cursor ... ok
++  test set_codex ... FAILED
++  test set_claude_session ... ok
++  test set_claude ... ok
++
++  Snapshot: ir@codex
++  Input file: test-fixtures/codex/convo.jsonl
++  191       │-        "cwd": "/var/folders/…/toolpath-elicit.nu6ZWB/codex",
++        191 │+        "cwd": "/broken-on-purpose",
++
++  failures:
++      set_codex
++
++  test result: FAILED. 9 passed; 1 failed
++  ```
++- The guard, on purpose and reverted: an empty `test-fixtures/newagent/convo.jsonl` →
++  `recordings with no test in tests/goldens.rs: ["test-fixtures/newagent/convo.jsonl"]`, 1 failed.
++- Gates as `scripts/quality_gates.sh` with `--features path-cli/goldens,toolpath/verify`.
++
++## Paths
++```
++crates/toolpath-goldens/tests/goldens.rs
++crates/toolpath-goldens/tests/writers.rs
++crates/toolpath-goldens/tests/.qual
++```
+-- 
+2.55.0
+

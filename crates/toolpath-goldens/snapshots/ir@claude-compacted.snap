@@ -1,0 +1,165 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.ir
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "id": "sess-compact",
+  "started_at": "2024-06-01T10:00:00Z",
+  "last_activity": "2024-06-01T10:31:03Z",
+  "turns": [
+    {
+      "id": "uuid-pre-1",
+      "parent_id": null,
+      "role": "User",
+      "timestamp": "2024-06-01T10:00:00Z",
+      "text": "Help me refactor the auth module.",
+      "thinking": null,
+      "tool_uses": [],
+      "model": null,
+      "stop_reason": null,
+      "token_usage": null,
+      "environment": {
+        "working_dir": "/work",
+        "vcs_branch": "main"
+      }
+    },
+    {
+      "id": "uuid-pre-2",
+      "parent_id": "uuid-pre-1",
+      "role": "Assistant",
+      "timestamp": "2024-06-01T10:00:01Z",
+      "text": "I'll start by reading the current auth code.",
+      "thinking": null,
+      "tool_uses": [
+        {
+          "id": "t-pre-1",
+          "name": "Read",
+          "input": {
+            "file_path": "src/auth.rs"
+          },
+          "result": {
+            "content": "pub fn login() { ... }",
+            "is_error": false
+          },
+          "category": "file_read"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "stop_reason": "tool_use",
+      "token_usage": {
+        "input_tokens": 300,
+        "output_tokens": 40
+      }
+    },
+    {
+      "id": "uuid-summary",
+      "parent_id": "uuid-pre-2",
+      "role": "User",
+      "timestamp": "2024-06-01T10:30:01Z",
+      "text": "[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation.",
+      "thinking": null,
+      "tool_uses": [],
+      "model": null,
+      "stop_reason": null,
+      "token_usage": null
+    },
+    {
+      "id": "uuid-post-1",
+      "parent_id": "uuid-summary",
+      "role": "User",
+      "timestamp": "2024-06-01T10:31:00Z",
+      "text": "Now add the session validation.",
+      "thinking": null,
+      "tool_uses": [],
+      "model": null,
+      "stop_reason": null,
+      "token_usage": null
+    },
+    {
+      "id": "uuid-post-2",
+      "parent_id": "uuid-post-1",
+      "role": "Assistant",
+      "timestamp": "2024-06-01T10:31:01Z",
+      "text": "Adding session validation to login().",
+      "thinking": null,
+      "tool_uses": [
+        {
+          "id": "t-post-1",
+          "name": "Edit",
+          "input": {
+            "file_path": "src/auth.rs",
+            "new_string": "pub fn login() { validate_session();",
+            "old_string": "pub fn login() {"
+          },
+          "result": {
+            "content": "File written successfully",
+            "is_error": false
+          },
+          "category": "file_write"
+        }
+      ],
+      "model": "claude-opus-4-6",
+      "stop_reason": "tool_use",
+      "token_usage": {
+        "input_tokens": 600,
+        "output_tokens": 80
+      },
+      "file_mutations": [
+        {
+          "path": "src/auth.rs",
+          "tool_id": "t-post-1",
+          "operation": "update",
+          "raw_diff": "--- a/src/auth.rs\n+++ b/src/auth.rs\n--- \n+++ \n@@ -1 +1 @@\n-pub fn login() {\n\\ No newline at end of file\n+pub fn login() { validate_session();\n\\ No newline at end of file\n"
+        }
+      ]
+    },
+    {
+      "id": "uuid-post-4",
+      "parent_id": "uuid-post-2",
+      "role": "Assistant",
+      "timestamp": "2024-06-01T10:31:03Z",
+      "text": "Done. The auth module now validates sessions on login.",
+      "thinking": null,
+      "tool_uses": [],
+      "model": "claude-opus-4-6",
+      "stop_reason": "end_turn",
+      "token_usage": {
+        "input_tokens": 700,
+        "output_tokens": 20
+      }
+    }
+  ],
+  "total_usage": {
+    "input_tokens": 1600,
+    "output_tokens": 140
+  },
+  "provider_id": "claude-code",
+  "files_changed": [
+    "src/auth.rs"
+  ],
+  "events": [
+    {
+      "id": "uuid-boundary",
+      "timestamp": "2024-06-01T10:30:00Z",
+      "event_type": "compact_boundary",
+      "data": {
+        "entry_extra": {
+          "compactMetadata": {
+            "preTokens": 180000,
+            "trigger": "auto"
+          },
+          "logicalParentUuid": "uuid-pre-3"
+        }
+      }
+    }
+  ],
+  "base": {
+    "working_dir": "/work",
+    "vcs_branch": "main"
+  }
+}

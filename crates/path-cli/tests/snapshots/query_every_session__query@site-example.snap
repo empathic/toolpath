@@ -1,0 +1,66 @@
+---
+source: crates/path-cli/tests/query_every_session.rs
+expression: pretty(&result)
+---
+[
+  {
+    "actor": "agent:big-pickle",
+    "output_tokens": 4261
+  },
+  {
+    "actor": "agent:claude-haiku-4-5-20251001",
+    "output_tokens": 332
+  },
+  {
+    "actor": "agent:claude-haiku-4.5",
+    "output_tokens": 3141
+  },
+  {
+    "actor": "agent:claude-opus-4-6",
+    "output_tokens": 140
+  },
+  {
+    "actor": "agent:claude-opus-4-7",
+    "output_tokens": 5275
+  },
+  {
+    "actor": "agent:claude-opus-4-8",
+    "output_tokens": 3276
+  },
+  {
+    "actor": "agent:default",
+    "output_tokens": 0
+  },
+  {
+    "actor": "agent:gemini-3-flash-preview",
+    "output_tokens": 1080
+  },
+  {
+    "actor": "agent:gemma4",
+    "output_tokens": 2635
+  },
+  {
+    "actor": "agent:gpt-5.5",
+    "output_tokens": 4487
+  },
+  {
+    "actor": "human:user",
+    "output_tokens": 0
+  },
+  {
+    "actor": "tool:claude-code",
+    "output_tokens": 0
+  },
+  {
+    "actor": "tool:codex",
+    "output_tokens": 0
+  },
+  {
+    "actor": "tool:copilot",
+    "output_tokens": 0
+  },
+  {
+    "actor": "tool:pi",
+    "output_tokens": 0
+  }
+]

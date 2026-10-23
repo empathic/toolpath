@@ -15,7 +15,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use toolpath_convo::TokenUsage;
 
@@ -30,6 +30,7 @@ pub const EV_SESSION_PLAN_CHANGED: &str = "session.plan_changed";
 pub const EV_SESSION_COMPACTION_START: &str = "session.compaction_start";
 pub const EV_SESSION_COMPACTION_COMPLETE: &str = "session.compaction_complete";
 pub const EV_USER_MESSAGE: &str = "user.message";
+pub const EV_SYSTEM_MESSAGE: &str = "system.message";
 pub const EV_ASSISTANT_TURN_START: &str = "assistant.turn_start";
 pub const EV_ASSISTANT_MESSAGE: &str = "assistant.message";
 pub const EV_ASSISTANT_TURN_END: &str = "assistant.turn_end";
@@ -66,8 +67,10 @@ pub struct EventLine {
 
     /// Anything else on the line (e.g. an inline payload whose keys sit
     /// directly on the envelope, or fields we don't model yet).
-    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
-    pub extra: HashMap<String, Value>,
+    ///
+    /// A `BTreeMap`, so the same event always serializes its keys in the same order.
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl EventLine {
@@ -113,6 +116,7 @@ impl EventLine {
                 payload: p,
             },
             EV_USER_MESSAGE => CopilotEvent::UserMessage(MessageEvent::from_payload(&p)),
+            EV_SYSTEM_MESSAGE => CopilotEvent::SystemMessage(MessageEvent::from_payload(&p)),
             EV_ASSISTANT_TURN_START => CopilotEvent::AssistantTurnStart,
             EV_ASSISTANT_MESSAGE => CopilotEvent::AssistantMessage(MessageEvent::from_payload(&p)),
             EV_ASSISTANT_TURN_END => CopilotEvent::AssistantTurnEnd,
@@ -150,6 +154,8 @@ pub enum CopilotEvent {
         payload: Value,
     },
     UserMessage(MessageEvent),
+    /// A `system.message`: developer or system text the writer emits for a `Role::System` turn.
+    SystemMessage(MessageEvent),
     AssistantTurnStart,
     AssistantMessage(MessageEvent),
     AssistantTurnEnd,
@@ -276,11 +282,14 @@ pub struct MessageEvent {
     pub input_tokens: Option<u32>,
     pub cache_read_tokens: Option<u32>,
     pub cache_write_tokens: Option<u32>,
+    /// `parentToolCallId`: set on a sub-agent's own message; the `task` call it belongs to.
+    pub parent_tool_call_id: Option<String>,
 }
 
 impl MessageEvent {
     fn from_payload(p: &Value) -> Self {
         Self {
+            parent_tool_call_id: str_field(p, &["parentToolCallId"]),
             text: payload_text(p).unwrap_or_default(),
             model: str_field(p, &["model", "modelId", "model_id"]),
             id: str_field(p, &["messageId", "message_id", "id"]),
@@ -321,6 +330,10 @@ pub struct ToolExecution {
     pub success: Option<bool>,
     /// Result/output text, when carried inline on `..._complete`.
     pub output: Option<String>,
+    /// `error.message` (or a plain-string `error`) on a failed
+    /// `..._complete` `[observed, 1.0.68]`: a failed call carries no
+    /// `result`, only this. It is the only text the model saw for the call.
+    pub error: Option<String>,
     /// `result.detailedContent` — for `edit`/`create` this is the git-style
     /// diff of the actual file state `[observed, 1.0.67+]`, i.e. real
     /// file-change fidelity (not an arg reconstruction).
@@ -354,6 +367,14 @@ impl ToolExecution {
                 })
             }),
             output: tool_output(p),
+            error: match p.get("error") {
+                Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+                Some(e @ Value::Object(_)) => {
+                    str_field(e, &["message", "text", "code"]).filter(|s| !s.trim().is_empty())
+                }
+                _ => str_field(p, &["errorMessage", "error_message"])
+                    .filter(|s| !s.trim().is_empty()),
+            },
             detailed: p
                 .get("result")
                 .and_then(|r| r.get("detailedContent"))
@@ -673,7 +694,7 @@ mod tests {
             timestamp: Some("2026-06-30T10:00:00.000Z".to_string()),
             data: Some(data),
             payload: None,
-            extra: HashMap::new(),
+            extra: BTreeMap::new(),
         }
     }
 
@@ -684,7 +705,7 @@ mod tests {
             timestamp: None,
             data: Some(json!({"a": 1})),
             payload: Some(json!({"b": 2})),
-            extra: HashMap::new(),
+            extra: BTreeMap::new(),
         };
         assert_eq!(l.payload(), json!({"a": 1}));
 
@@ -693,11 +714,11 @@ mod tests {
             timestamp: None,
             data: None,
             payload: Some(json!({"b": 2})),
-            extra: HashMap::new(),
+            extra: BTreeMap::new(),
         };
         assert_eq!(l2.payload(), json!({"b": 2}));
 
-        let mut extra = HashMap::new();
+        let mut extra = BTreeMap::new();
         extra.insert("c".to_string(), json!(3));
         let l3 = EventLine {
             kind: "x".into(),
@@ -707,6 +728,18 @@ mod tests {
             extra,
         };
         assert_eq!(l3.payload(), json!({"c": 3}));
+    }
+
+    #[test]
+    fn a_system_message_is_classified_and_keeps_its_text() {
+        let CopilotEvent::SystemMessage(m) = line(
+            EV_SYSTEM_MESSAGE,
+            json!({"role": "system", "content": "be brief"}),
+        )
+        .event() else {
+            panic!("system.message must classify as SystemMessage");
+        };
+        assert_eq!(m.text, "be brief");
     }
 
     #[test]

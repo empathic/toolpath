@@ -1,0 +1,772 @@
+From 60eecafe3f40041efdb801886dfaa50a13f41335 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 13:27:36 -0400
+Subject: [PATCH] fix(opencode): read, list, glob and grep no longer become
+ file changes (pr/63)
+
+The tool-input fallback ran for every tool with a path-shaped input and mapped
+the unknown names to touch. Only FileWrite tools now. Snapshots re-recorded and
+reviewed; the opencode contract and pr/56 drop the wrong failed-read entry.
+---
+ .../fixtures/contract/opencode.json           | 28 -----------
+ .../snapshots/document@opencode.snap          | 42 -----------------
+ .../snapshots/ir@opencode.snap                | 47 ++-----------------
+ .../snapshots/projection@opencode@cursor.snap |  2 +-
+ .../round_trip@claude-session@opencode.snap   |  7 +--
+ .../snapshots/round_trip@claude@opencode.snap |  6 +--
+ .../round_trip@copilot@opencode.snap          | 10 +---
+ .../snapshots/round_trip@cursor@opencode.snap |  6 +--
+ .../snapshots/round_trip@gemini@opencode.snap |  8 +---
+ .../snapshots/round_trip@opencode@claude.snap | 10 +---
+ .../snapshots/round_trip@opencode@codex.snap  | 10 +---
+ .../round_trip@opencode@copilot.snap          | 10 +---
+ .../round_trip@opencode@cursor-agent.snap     | 10 +---
+ .../snapshots/round_trip@opencode@cursor.snap | 10 +---
+ .../snapshots/round_trip@opencode@gemini.snap | 10 +---
+ .../snapshots/round_trip@opencode@pi.snap     | 10 +---
+ .../snapshots/round_trip@pi@opencode.snap     |  6 +--
+ .../snapshots/shed@opencode.snap              |  4 +-
+ .../snapshots/writer@opencode.snap            |  8 +---
+ crates/toolpath-opencode/src/provider.rs      | 32 +++++++++++++
+ pr/56-writer-contracts.md                     |  1 -
+ pr/63-opencode-reads-are-not-writes.md        | 28 +++++++++++
+ 22 files changed, 84 insertions(+), 221 deletions(-)
+ create mode 100644 pr/63-opencode-reads-are-not-writes.md
+
+diff --git a/crates/toolpath-goldens/fixtures/contract/opencode.json b/crates/toolpath-goldens/fixtures/contract/opencode.json
+index 1f22beca..27158c6e 100644
+--- a/crates/toolpath-goldens/fixtures/contract/opencode.json
++++ b/crates/toolpath-goldens/fixtures/contract/opencode.json
+@@ -122,34 +122,6 @@
+       "op": "drop",
+       "path": "paths[].steps[].change.notes.md.structural.before",
+       "why": "a write in opencode's format carries the new content only, not the prior file"
+-    },
+-    {
+-      "op": "synthesize",
+-      "path": "paths[].steps[].change.does-not-exist.txt.structural.operation",
+-      "value": "touch",
+-      "why": "a read of a file that does not exist comes back as a file change",
+-      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
+-    },
+-    {
+-      "op": "synthesize",
+-      "path": "paths[].steps[].change.does-not-exist.txt.structural.tool",
+-      "value": "read",
+-      "why": "a read of a file that does not exist comes back as a file change",
+-      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
+-    },
+-    {
+-      "op": "synthesize",
+-      "path": "paths[].steps[].change.does-not-exist.txt.structural.tool_id",
+-      "value": "call-read",
+-      "why": "a read of a file that does not exist comes back as a file change",
+-      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
+-    },
+-    {
+-      "op": "synthesize",
+-      "path": "paths[].steps[].change.does-not-exist.txt.structural.type",
+-      "value": "file.write",
+-      "why": "a read of a file that does not exist comes back as a file change",
+-      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
+     }
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/document@opencode.snap b/crates/toolpath-goldens/snapshots/document@opencode.snap
+index 91b267c0..aca1425d 100644
+--- a/crates/toolpath-goldens/snapshots/document@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/document@opencode.snap
+@@ -24,9 +24,7 @@ input_file: test-fixtures/opencode/convo.json
+           }
+         },
+         "files_changed": [
+-          "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+           "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+-          "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt",
+           "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh"
+         ],
+         "kind": "https://toolpath.net/kinds/agent-coding-session/v1.1.0",
+@@ -67,14 +65,6 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode": {
+-              "structural": {
+-                "operation": "touch",
+-                "tool": "read",
+-                "tool_id": "call_00_Gwu3s7fu2MvjvECIoIZo9824",
+-                "type": "file.write"
+-              }
+-            },
+             "opencode://ses_1fc4b59e2ffexZeA4VcZH8yV68": {
+               "structural": {
+                 "environment": {
+@@ -179,14 +169,6 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md": {
+-              "structural": {
+-                "operation": "touch",
+-                "tool": "read",
+-                "tool_id": "call_00_vn6RGEmW1iGy5PIPVDQN3168",
+-                "type": "file.write"
+-              }
+-            },
+             "opencode://ses_1fc4b59e2ffexZeA4VcZH8yV68": {
+               "structural": {
+                 "environment": {
+@@ -293,14 +275,6 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode": {
+-              "structural": {
+-                "operation": "touch",
+-                "tool": "glob",
+-                "tool_id": "call_00_VkYJFf0nI9pg4hK7gBuO5047",
+-                "type": "file.write"
+-              }
+-            },
+             "opencode://ses_1fc4b59e2ffexZeA4VcZH8yV68": {
+               "structural": {
+                 "environment": {
+@@ -350,14 +324,6 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode": {
+-              "structural": {
+-                "operation": "touch",
+-                "tool": "grep",
+-                "tool_id": "call_00_CsyZNSqkFOcqn6PNh99L5471",
+-                "type": "file.write"
+-              }
+-            },
+             "opencode://ses_1fc4b59e2ffexZeA4VcZH8yV68": {
+               "structural": {
+                 "environment": {
+@@ -407,14 +373,6 @@ input_file: test-fixtures/opencode/convo.json
+         },
+         {
+           "change": {
+-            "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt": {
+-              "structural": {
+-                "operation": "touch",
+-                "tool": "read",
+-                "tool_id": "call_00_oVcAYB5oEy9A0zZge5dj8881",
+-                "type": "file.write"
+-              }
+-            },
+             "opencode://ses_1fc4b59e2ffexZeA4VcZH8yV68": {
+               "structural": {
+                 "environment": {
+diff --git a/crates/toolpath-goldens/snapshots/ir@opencode.snap b/crates/toolpath-goldens/snapshots/ir@opencode.snap
+index 74d7754a..88b5c8a9 100644
+--- a/crates/toolpath-goldens/snapshots/ir@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/ir@opencode.snap
+@@ -61,14 +61,7 @@ input_file: test-fixtures/opencode/convo.json
+       },
+       "environment": {
+         "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+-      },
+-      "file_mutations": [
+-        {
+-          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+-          "tool_id": "call_00_Gwu3s7fu2MvjvECIoIZo9824",
+-          "operation": "touch"
+-        }
+-      ]
++      }
+     },
+     {
+       "id": "msg_e03b4b61e001oVhXDJ9zK3V08F",
+@@ -150,14 +143,7 @@ input_file: test-fixtures/opencode/convo.json
+       },
+       "environment": {
+         "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+-      },
+-      "file_mutations": [
+-        {
+-          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+-          "tool_id": "call_00_vn6RGEmW1iGy5PIPVDQN3168",
+-          "operation": "touch"
+-        }
+-      ]
++      }
+     },
+     {
+       "id": "msg_e03b4cb55001SUUxnz5ACDFgLr",
+@@ -241,14 +227,7 @@ input_file: test-fixtures/opencode/convo.json
+       },
+       "environment": {
+         "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+-      },
+-      "file_mutations": [
+-        {
+-          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+-          "tool_id": "call_00_VkYJFf0nI9pg4hK7gBuO5047",
+-          "operation": "touch"
+-        }
+-      ]
++      }
+     },
+     {
+       "id": "msg_e03b4e206002ZADA8YifKxG2LI",
+@@ -286,14 +265,7 @@ input_file: test-fixtures/opencode/convo.json
+       },
+       "environment": {
+         "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+-      },
+-      "file_mutations": [
+-        {
+-          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+-          "tool_id": "call_00_CsyZNSqkFOcqn6PNh99L5471",
+-          "operation": "touch"
+-        }
+-      ]
++      }
+     },
+     {
+       "id": "msg_e03b4ec72001tiFVbWrPrX1oBl",
+@@ -330,14 +302,7 @@ input_file: test-fixtures/opencode/convo.json
+       },
+       "environment": {
+         "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+-      },
+-      "file_mutations": [
+-        {
+-          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt",
+-          "tool_id": "call_00_oVcAYB5oEy9A0zZge5dj8881",
+-          "operation": "touch"
+-        }
+-      ]
++      }
+     },
+     {
+       "id": "msg_e03b4f74a002Mj0By9HXoL1vXc",
+@@ -499,9 +464,7 @@ input_file: test-fixtures/opencode/convo.json
+   },
+   "provider_id": "opencode",
+   "files_changed": [
+-    "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+     "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+-    "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt",
+     "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh"
+   ],
+   "session_ids": [
+diff --git a/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap b/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap
+index 38eed28f..5af08dd6 100644
+--- a/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap
+@@ -1374,7 +1374,7 @@ input_file: test-fixtures/opencode/convo.json
+     "composerId": "876f4b5d-1442-4fda-a5e5-fbf1074a3f70",
+     "conversationCheckpointLastUpdatedAt": 1778178667806,
+     "createdAt": 1778178631267,
+-    "filesChangedCount": 4,
++    "filesChangedCount": 2,
+     "forceMode": "edit",
+     "hasUnreadMessages": false,
+     "isArchived": false,
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap
+index 19d737bd..aff1deae 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap
+@@ -19,7 +19,7 @@ input_file: goldens/claude-session/input.jsonl
+     "steps": 6,
+     "text_chars": 292,
+     "tool_uses": 2,
+-    "key_paths": 39
++    "key_paths": 34
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+@@ -240,12 +240,7 @@ input_file: goldens/claude-session/input.jsonl
+     "paths[].steps[].change.<artifact>.structural.version"
+   ],
+   "gained": [
+-    "paths[].meta.files_changed[]",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt.structural.type",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+index 763b16f2..33160d1f 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 60
++    "key_paths": 56
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+@@ -62,10 +62,6 @@ input_file: test-fixtures/claude/convo.jsonl
+   ],
+   "gained": [
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/does-not-exist.txt.structural.type",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+index 32b5af3d..6738e16b 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 12,
+     "text_chars": 4594,
+     "tool_uses": 11,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+@@ -38,14 +38,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+   ],
+   "gained": [
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./tmp/elicit-scratch.structural.operation",
+-    "paths[].steps[].change./tmp/elicit-scratch.structural.tool",
+-    "paths[].steps[].change./tmp/elicit-scratch.structural.tool_id",
+-    "paths[].steps[].change./tmp/elicit-scratch.structural.type",
+-    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./tmp/elicit-scratch/does-not-exist.txt.structural.type",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason"
+   ]
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+index 36b850e3..0a16510b 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 66
+   },
+   "lost": [
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
+@@ -34,10 +34,6 @@ input_file: test-fixtures/cursor/convo.json
+   ],
+   "gained": [
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.operation",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.tool",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.tool_id",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2.structural.type",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
+index 64317780..f76f5ac8 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 55
++    "key_paths": 51
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+@@ -39,10 +39,6 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString",
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString",
+-    "paths[].steps[].change.does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change.does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change.does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change.does-not-exist.txt.structural.type"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+index 58d94a08..a90678d3 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 13,
+@@ -25,14 +25,6 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.type",
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+index de3498f1..7c010cd2 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 38,
+@@ -24,18 +24,10 @@ input_file: test-fixtures/opencode/convo.json
+   "lost": [
+     "paths[].meta.files_changed[]",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+index a2e3f6ef..30c811ce 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+@@ -22,14 +22,6 @@ input_file: test-fixtures/opencode/convo.json
+     "key_paths": 52
+   },
+   "lost": [
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.type",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+index 97b7a4b4..dffb4792 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+@@ -27,18 +27,10 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+     "paths[].path.base.uri",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
+index 95fae852..01efdeef 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+@@ -24,14 +24,6 @@ input_file: test-fixtures/opencode/convo.json
+   "lost": [
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.type",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+     "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+index 47a9ddf9..e8904837 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+@@ -25,18 +25,10 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+index b337d689..06bf7270 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 59
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+@@ -26,18 +26,10 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].meta.producer.name",
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.tool_id",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.type",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt.structural.type",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.operation",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap
+index 9a404d10..5672353e 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/pi/convo.jsonl
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10,
+-    "key_paths": 47
++    "key_paths": 43
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+@@ -35,10 +35,6 @@ input_file: test-fixtures/pi/convo.jsonl
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+     "paths[].steps[].change.count.sh.structural.operation",
+-    "paths[].steps[].change.does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change.does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change.does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change.does-not-exist.txt.structural.type",
+     "paths[].steps[].change.notes.md.structural.operation"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index c5af3053..51c27ae4 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -17,8 +17,8 @@ input_file: test-fixtures/opencode/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 17257,
+-    "string_chars": 10303,
++    "bytes": 15993,
++    "string_chars": 9853,
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10
+diff --git a/crates/toolpath-goldens/snapshots/writer@opencode.snap b/crates/toolpath-goldens/snapshots/writer@opencode.snap
+index 9f331cfe..e5947966 100644
+--- a/crates/toolpath-goldens/snapshots/writer@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/writer@opencode.snap
+@@ -14,7 +14,7 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 43
++    "key_paths": 39
+   },
+   "lost": [
+     "paths[].meta.vcs_remote",
+@@ -43,10 +43,6 @@ expression: trip
+     "paths[].steps[].change.notes.md.structural.before"
+   ],
+   "gained": [
+-    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
+-    "paths[].steps[].change.does-not-exist.txt.structural.operation",
+-    "paths[].steps[].change.does-not-exist.txt.structural.tool",
+-    "paths[].steps[].change.does-not-exist.txt.structural.tool_id",
+-    "paths[].steps[].change.does-not-exist.txt.structural.type"
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath"
+   ]
+ }
+diff --git a/crates/toolpath-opencode/src/provider.rs b/crates/toolpath-opencode/src/provider.rs
+index 0d31aad4..32c929df 100644
+--- a/crates/toolpath-opencode/src/provider.rs
++++ b/crates/toolpath-opencode/src/provider.rs
+@@ -528,6 +528,11 @@ impl<'a> Builder<'a> {
+         // Tool-input fallback for file-write tools whose paths aren't
+         // already covered by a snapshot-diff mutation.
+         for tu in tool_uses {
++            // Only tools that write: read, list, glob and grep also carry a
++            // path-shaped input, but they change nothing (a directory even).
++            if tool_category(&tu.name) != Some(ToolCategory::FileWrite) {
++                continue;
++            }
+             let Some(path) = tool_input_file_path(tu) else {
+                 continue;
+             };
+@@ -1008,6 +1013,33 @@ mod tests {
+         assert_eq!(view.files_changed, vec!["/tmp/proj/main.cpp".to_string()]);
+     }
+ 
++    #[test]
++    fn only_write_tools_become_file_mutations() {
++        // read, list and grep carry a path-shaped input too (a directory even), but change
++        // nothing; only the write tool is a file mutation.
++        let body = r#"
++            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
++              VALUES ('p','/p',1,2,'[]');
++            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
++              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
++            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
++              ('m','s',1,1,'{"parentID":"","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":1}}');
++            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
++              ('p1','m','s',1,1,'{"type":"tool","tool":"read","callID":"c1","state":{"status":"completed","input":{"filePath":"/p/src"},"output":"dir","title":"r","metadata":{},"time":{"start":1,"end":2}}}'),
++              ('p2','m','s',2,2,'{"type":"tool","tool":"grep","callID":"c2","state":{"status":"completed","input":{"path":"/p/lib","pattern":"x"},"output":"","title":"g","metadata":{},"time":{"start":2,"end":3}}}'),
++              ('p3','m','s',3,3,'{"type":"tool","tool":"write","callID":"c3","state":{"status":"completed","input":{"filePath":"/p/out.txt","content":"x"},"output":"ok","title":"w","metadata":{},"time":{"start":3,"end":4}}}'),
++              ('p4','m','s',4,4,'{"type":"step-finish","reason":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}');
++        "#;
++        let (_t, mgr) = setup(body);
++        let view = to_view(&mgr.read_session("s").unwrap());
++        let paths: Vec<_> = view.turns[0]
++            .file_mutations
++            .iter()
++            .map(|m| (m.path.as_str(), m.operation.as_deref()))
++            .collect();
++        assert_eq!(paths, vec![("/p/out.txt", Some("add"))]);
++    }
++
+     #[test]
+     fn step_finish_drives_token_usage() {
+         let (_t, mgr) = setup(BASIC_SQL);
+diff --git a/pr/56-writer-contracts.md b/pr/56-writer-contracts.md
+index f123d90d..44ed3559 100644
+--- a/pr/56-writer-contracts.md
++++ b/pr/56-writer-contracts.md
+@@ -33,7 +33,6 @@ had declared.
+ | codex | `token_usage.breakdowns.output.reasoning` | codex's token_count has `reasoning_output_tokens`; the writer does not fill it |
+ | opencode | `token_usage.breakdowns.output.reasoning` | opencode stores `tokens.reasoning` per message; the writer does not fill it |
+ | opencode | `change.notes.md.raw` | the writer does not write opencode's snapshot repo, so a projected session's file diffs are gone |
+-| opencode | `change.does-not-exist.txt.*` (gained) | opencode's reader turns a failed read into a `file.write` change |
+ | copilot | `environment.working_dir` | Copilot's `session.start` carries the cwd; the writer does not set it |
+ 
+ Everything else lost is inherent to the target format (no stop reason, no cache-write tokens, per-message usage, no
+diff --git a/pr/63-opencode-reads-are-not-writes.md b/pr/63-opencode-reads-are-not-writes.md
+new file mode 100644
+index 00000000..e9e177e1
+--- /dev/null
++++ b/pr/63-opencode-reads-are-not-writes.md
+@@ -0,0 +1,28 @@
++# fix(opencode): read, list, glob and grep no longer become file changes
++
++Status: draft · Base: pr/56-writer-contracts · Code + recorded snapshots (opencode rows and columns) + one contract
++
++## Why
++Asked from the deck's "gains" slide: which code path turns a read into a file change, is it a bug, is it documented.
++- Path: `toolpath-opencode/src/provider.rs`, the tool-input fallback in `compute_turn_mutations`. It ran for every tool
++  whose input has `filePath`, `file_path` or `path`, and `tool_to_operation` maps every name it does not know to `touch`.
++  So `read`, `list`, `glob` and `grep` (all path-shaped, one on a directory) each became a `file.write` change with
++  operation `touch`, and landed in `files_changed`.
++- Bug: not documented anywhere as intended. pr/56 and the opencode contract called it "a failed read", which was wrong:
++  a successful read of an existing file or directory did it too (the recording's `read` of the working directory, and of
++  `notes.md` before it was written).
++
++## What changes
++- `toolpath-opencode`: the fallback only runs for tools whose category is `FileWrite` (`write`, `edit`, `multiedit`,
++  `patch`, `delete`). New unit test: a session with a read, a grep and a write yields one mutation (the write, `add`).
++- `crates/toolpath-goldens/fixtures/contract/opencode.json`: the four `synthesize` entries for `does-not-exist.txt`
++  are gone; there is nothing left to declare.
++- `pr/56-writer-contracts.md`: the defect-table row for it is removed.
++- Snapshots re-recorded (INSTA_UPDATE=always, then reviewed): 19 opencode-touching files. Every diff is the removal of a
++  `touch` mutation for a read/glob/grep (3 on the working directory, 1 on `notes.md` read before it is written, 1 on
++  `does-not-exist.txt`), the matching `files_changed` entries, and the counts derived from them (`key_paths` 59 -> 51,
++  `filesChangedCount` 4 -> 2, shed byte and char totals). No snapshot of another harness's own row changed.
++
++## Not changed
++- The `FileWrite` operation default (`touch` for an unknown name) is now unreachable for opencode; left in place.
++- Nothing run unsandboxed: gitleaks, qualifier gate, `just baseline`, the pinned toolchain.
+-- 
+2.55.0
+

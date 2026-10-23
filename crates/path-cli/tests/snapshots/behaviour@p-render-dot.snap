@@ -1,0 +1,54 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: "transcript(\"the exploration example as DOT\",\n&[\"p\", \"render\", \"dot\", \"--input\", \"examples/path-04-exploration.path.json\"],\n&dot, Some(home.path()))"
+---
+$ path p render dot --input examples/path-04-exploration.path.json
+exit: 0
+--- stdout
+digraph toolpath {
+  rankdir=TB;
+  node [shape=box, style=rounded, fontname="Helvetica"];
+  edge [color="#666666"];
+  splines=ortho;
+
+  labelloc="t";
+  label="Explore CLI argument parsing approaches";
+  fontsize=16;
+  fontname="Helvetica-Bold";
+
+  "__base__" [label=<<b>BASE</b><br/><font point-size="10">github:myorg/myrepo</font><br/><font point-size="9" color="#666666">main</font>>, shape=ellipse, style=filled, fillcolor="#e0e0e0"];
+  "step-001" [label=<<b>step-001</b><br/><font point-size="10">alex</font><br/><font point-size="9"><i>Scaffold CLI entry point with basic a…</i></font>>, fillcolor="#cce5ff", style="rounded,filled", penwidth=1];
+  "step-002a" [label=<<b>step-002a</b><br/><font point-size="10">claude-code/session-exp1</font><br/><font point-size="9"><i>Try clap derive macros (abandoned: to…</i></font>>, fillcolor="#ffcccc", style="rounded,filled,dashed", penwidth=1];
+  "step-002b" [label=<<b>step-002b</b><br/><font point-size="10">claude-code/session-exp1</font><br/><font point-size="9"><i>Try manual arg parsing with match</i></font>>, fillcolor="#d4edda", style="rounded,filled", penwidth=1];
+  "step-003b" [label=<<b>step-003b</b><br/><font point-size="10">clippy/0.1.84</font><br/><font point-size="9"><i>Fix clippy: unused variable prefix</i></font>>, fillcolor="#fff3cd", style="rounded,filled", penwidth=1];
+  "step-002c" [label=<<b>step-002c</b><br/><font point-size="10">claude-code/session-exp1</font><br/><font point-size="9"><i>Try clap builder API (no derive macros)</i></font>>, fillcolor="#d4edda", style="rounded,filled", penwidth=1];
+  "step-003c" [label=<<b>step-003c</b><br/><font point-size="10">rustfmt/1.7.0</font><br/><font point-size="9"><i>Auto-format</i></font>>, fillcolor="#fff3cd", style="rounded,filled", penwidth=1];
+  "step-004" [label=<<b>step-004</b><br/><font point-size="10">alex</font><br/><font point-size="9"><i>Merge builder API with manual match d…</i></font>>, fillcolor="#cce5ff", style="rounded,filled,bold", penwidth=3];
+
+  "__base__" -> "step-001";
+  "step-001" -> "step-002a" [color="#cccccc", style=dashed];
+  "step-001" -> "step-002b" [color="#333333", penwidth=2];
+  "step-002b" -> "step-003b" [color="#333333", penwidth=2];
+  "step-001" -> "step-002c" [color="#333333", penwidth=2];
+  "step-002c" -> "step-003c" [color="#333333", penwidth=2];
+  "step-003b" -> "step-004" [color="#333333", penwidth=2];
+  "step-003c" -> "step-004" [color="#333333", penwidth=2];
+
+  // Legend
+  subgraph cluster_legend {
+    label="Legend";
+    fontname="Helvetica-Bold";
+    style=filled;
+    fillcolor="#f8f8f8";
+    node [shape=box, style="rounded,filled", width=0.9, fontname="Helvetica", fontsize=10];
+    leg_human [label="human", fillcolor="#cce5ff"];
+    leg_agent [label="agent", fillcolor="#d4edda"];
+    leg_tool [label="tool", fillcolor="#fff3cd"];
+    leg_dead [label="dead end", fillcolor="#ffcccc", style="rounded,filled,dashed"];
+    leg_human -> leg_agent -> leg_tool [style=invis];
+    leg_tool -> leg_dead [style=invis];
+  }
+}
+--- stderr
+
+# the exploration example as DOT

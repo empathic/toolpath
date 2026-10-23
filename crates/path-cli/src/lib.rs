@@ -8,6 +8,8 @@ mod cmd_cache;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_config;
 mod cmd_derive;
+#[cfg(all(not(target_os = "emscripten"), feature = "develop"))]
+mod cmd_develop;
 mod cmd_export;
 mod cmd_haiku;
 mod cmd_import;
@@ -34,6 +36,11 @@ mod config;
 mod derive;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
+#[cfg(all(not(target_os = "emscripten"), feature = "develop"))]
+pub mod goldens;
+// After `goldens` on purpose: a line inserted above it would move the qualifier anchor on it.
+#[cfg(all(not(target_os = "emscripten"), feature = "develop"))]
+pub mod agents;
 #[cfg(not(target_os = "emscripten"))]
 pub mod harness;
 mod io;
@@ -135,6 +142,13 @@ enum Commands {
         #[command(subcommand)]
         command: cmd_p::PCommand,
     },
+    /// Develop: goldens, record/replay and other tools for working on toolpath itself (built only with the `develop` feature)
+    #[cfg(all(not(target_os = "emscripten"), feature = "develop"))]
+    #[command(name = "d", visible_alias = "develop")]
+    Develop {
+        #[command(subcommand)]
+        command: cmd_develop::DevelopCommand,
+    },
     /// Print a random Toolpath haiku
     Haiku,
 }
@@ -170,6 +184,37 @@ pub fn run() -> Result<()> {
         Commands::Auth { op } => cmd_auth::run(op),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Config { op } => cmd_config::run(op),
+        #[cfg(all(not(target_os = "emscripten"), feature = "develop"))]
+        Commands::Develop { command } => cmd_develop::run(command),
         Commands::P { command } => cmd_p::run(command, cli.pretty, &config),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn develop_subcommand_only_with_the_develop_feature() {
+        let cli = super::Cli::command();
+        // `path d` (with `develop` as its visible alias), only with the feature.
+        assert_eq!(
+            cli.find_subcommand("d").is_some(),
+            cfg!(feature = "develop")
+        );
+        assert_eq!(
+            cli.find_subcommand("develop").is_some(),
+            cfg!(feature = "develop")
+        );
+        // The development tools never sit at the top level, in any build.
+        assert!(cli.find_subcommand("goldens").is_none());
+        assert!(cli.find_subcommand("webmock").is_none());
+        #[cfg(all(not(target_os = "emscripten"), feature = "develop"))]
+        {
+            let d = cli.find_subcommand("d").unwrap();
+            for name in ["baseline", "goldens", "webmock", "model", "agents"] {
+                assert!(d.find_subcommand(name).is_some(), "path d {name}");
+            }
+        }
     }
 }

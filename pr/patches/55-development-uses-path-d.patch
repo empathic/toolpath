@@ -1,0 +1,144 @@
+From 5b95c2fa74b46f6b589b92843a3fd185000da248 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 19:58:25 -0400
+Subject: [PATCH] docs: DEVELOPMENT.md and the changelog use path d and its
+ just recipes
+
+---
+ CHANGELOG.md                     | 12 ++++++++----
+ DEVELOPMENT.md                   | 29 +++++++++++++++++++----------
+ pr/54-development-uses-path-d.md | 30 ++++++++++++++++++++++++++++++
+ 3 files changed, 57 insertions(+), 14 deletions(-)
+ create mode 100644 pr/54-development-uses-path-d.md
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 3f024b4a..5c40c056 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -24,10 +24,14 @@ every output. See DEVELOPMENT.md for the loop.
+   broken parent chain, an opencode session id of the wrong shape,
+   duplicate step ids); `tests/regressions.rs` re-introduces nine bugs
+   this changelog records and requires each to fail by field and stage.
+-- **`path-cli`**: `path goldens capture|check|diff|list|shed|capture-live`
+-  behind a `goldens` cargo feature, off by default. Breaking for anyone
+-  building with the feature: the group is moving to `path d baseline`
+-  (`goldens` stays an alias).
++- **`path-cli`**: a `path d` group for development, built only with the
++  `develop` cargo feature (never in a release): `path d baseline
++  check|capture|diff|list|shed|capture-live`, `path d webmock run
++  <agent>` (replay one harness's cell from the committed cassettes) and
++  `path d model`, with `just baseline`, `just webmock` and `just model`.
++  Breaking for anyone who built the earlier `goldens` feature:
++  `path goldens …` is now `path d baseline …` (`goldens` stays an alias
++  of `baseline`).
+ - **Fixes the baseline found**: Gemini CLI 0.47 `session-*.jsonl`
+   record streams are read (the old copies counted every assistant turn
+   twice); Cursor 3.24's `composerHeaders` table is read and written;
+diff --git a/DEVELOPMENT.md b/DEVELOPMENT.md
+index 4b8ca5e1..cb3e287e 100644
+--- a/DEVELOPMENT.md
++++ b/DEVELOPMENT.md
+@@ -66,9 +66,15 @@ written down as data rather than left implicit.
+      it fail with the field and stage named.
+ 2. **Run the baseline and read the named diff.**
+    ```bash
+-   cargo test -p toolpath-goldens   # every recording, every stage, the contracts
+-   scripts/goldens.sh check         # the same through the CLI, plus the qualifier review
++   just baseline                    # `path d baseline check`: every recording, the shed
++                                    # reports and the qualifier review, through the CLI
++   cargo test -p toolpath-goldens   # every stage's snapshot and the contracts
+    ```
++   `just baseline diff <recording>`, `shed <recording>` and `list` narrow
++   it; `just baseline capture --all` rewrites the CLI's pinned outputs
++   when you mean the change. `path d` (with `webmock` and `model`) is
++   built only with the `develop` feature, never in a release; `goldens`
++   is accepted as an alias of `baseline`.
+    A failure names the snapshot (stage and recording) and the line; a
+    contract failure names the rule, the target, the line and the field.
+ 3. **Fix the code, or accept the difference on purpose.** Accepting
+@@ -81,11 +87,7 @@ written down as data rather than left implicit.
+    snapshots it changes and what each difference means, the verification.
+    `git diff crates/toolpath-goldens/snapshots/` is the review.
+ 5. **Run CI's gates locally**: `just ci` (or `just check` to format
+-   first). The goldens run with `--features path-cli/goldens`.
+-
+-`path d baseline` and `just baseline` are landing as the short forms of
+-step 2 (the `develop` group of the CLI, off in release builds). Until
+-then, use the commands above.
++   first). The gates build with `--features path-cli/develop,toolpath/verify`.
+ 
+ ## Common changes
+ 
+@@ -96,8 +98,9 @@ the writer (its projector); a `<harness>.md` format note under
+ `docs/agents/formats/` grounded in that recording; a loader model in
+ `crates/toolpath-harness-mock` (what the harness would send the model
+ when it resumes); a recorded model exchange under
+-`crates/toolpath-webmock/cassettes/<harness>/` so resume can be replayed
+-without a model; a contract for anything the harness is known to reject.
++`crates/toolpath-webmock/cassettes/<harness>/` (`just webmock <harness>
++record --cell <dir> -- <harness args>` once, then `replay` with no
++network) so resume can be replayed without a model; a contract for anything the harness is known to reject.
+ 
+ **Changing a reader or writer.** Run the baseline before and after. The
+ diff is the change's description: which stages, which recordings, which
+@@ -111,6 +114,12 @@ only. A new kind version is a new immutable URI: add its schema under
+ stage (and `validate_transforms`) checks every document and every
+ transform against it. The old version stays readable; nothing writes it.
+ 
++**Format notes.** Each harness's fields, as its recordings show them,
++are generated into `docs/agents/formats/observed/<harness>.md`. A new
++recording that changes them fails `cargo test -p toolpath-goldens --test
++observed` until you regenerate (`OBSERVED_UPDATE=1`) and the prose note
++names any new entry type or version (see Format notes below).
++
+ **Examples.** `examples/` is validated by the `examples` gate (`path p
+ validate` over each document) and by the site's visualizer, which loads
+ them. Generating them from real producer runs is in progress; until
+@@ -118,7 +127,7 @@ then they are hand-written and the gate is what keeps them valid.
+ 
+ **The object model.** `docs/model/model.json` is generated from both
+ repositories, the `pr/` records, the qualifier records and the deck's
+-review threads (`cargo run -p toolpath-model`, see
++review threads (`just model`, which runs `path d model`; see
+ `docs/model/README.md`). Its test fails when a piece cites a commit
+ that isn't on the branch, a claim that reads as pinned has no snapshot
+ evidence, or a known defect has no owner. Regenerate it after the code
+diff --git a/pr/54-development-uses-path-d.md b/pr/54-development-uses-path-d.md
+new file mode 100644
+index 00000000..fd99739e
+--- /dev/null
++++ b/pr/54-development-uses-path-d.md
+@@ -0,0 +1,30 @@
++# docs: DEVELOPMENT.md and the changelog use `path d` and its just recipes
++
++Status: planned (follow-up to pr/39, once `path d` landed in e8b4ea7) · Base: the goldens stack once merged · Docs only
++
++## Why
++pr/39 wrote the baseline loop against `cargo test -p toolpath-goldens` and `scripts/goldens.sh`, naming `path d
++baseline` / `just baseline` as landing. They have landed (e8b4ea7, with `just webmock` and `just model`).
++
++## What changes
++- `DEVELOPMENT.md`: step 2 runs `just baseline` (with `diff`/`shed`/`list`/`capture --all`) beside the
++  insta test; adding a harness records its cassette with `just webmock`; the object model regenerates with `just
++  model`; a "Format notes" recipe points at `docs/agents/formats/observed/` and its test; the gate features are
++  `path-cli/develop,toolpath/verify`.
++- `CHANGELOG.md`: the path-cli line describes `path d` (baseline, webmock, model) behind `develop`, and the
++  breaking rename `path goldens` → `path d baseline` (`goldens` an alias).
++
++## Not removed, and why
++- `scripts/goldens.sh` stays: it is in the goldens harness's pinned file set (`crates/path-cli/src/goldens.rs`
++  `HARNESS_FILES` and the code-sha globs, `tests/goldens_producer.rs`), so deleting it changes every manifest
++  entry's pins and needs a recapture; that belongs with the crate rename to "baseline", not in a docs piece.
++
++## Verification
++Docs only; every recipe named is in `justfile` at this tip.
++
++## Paths
++```
++DEVELOPMENT.md
++CHANGELOG.md
++pr/54-development-uses-path-d.md
++```
+-- 
+2.55.0
+

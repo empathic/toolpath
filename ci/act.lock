@@ -1,0 +1,22 @@
+# What `cargo xtask act` may run. Every PENDING is a source or hash Bobby has not approved yet;
+# nothing is downloaded or guessed. `cargo xtask act` refuses to run while any is PENDING.
+
+[act]
+# the `nektos/act` binary, fetched by cargo xtask pins like any pinned tool (same cache by hash)
+version = "PENDING"
+sha256 = "PENDING"
+
+[runner]
+# the workflow's `runs-on` image, by digest only (never a tag)
+image = "PENDING"
+digest = "PENDING"
+
+[secrets]
+# Replay and the key-free tests need none. act gets no secret file and no host environment.
+pass = []
+
+[egress]
+# The squid allowlist (ci/squid.conf) the VM's proxy enforces; everything else is refused.
+# GUESS (UNVERIFIED, not approved by Bobby): the crates.io index and download hosts, to confirm
+# against a real cargo fetch before anyone relies on this list.
+hosts =["index.crates.io", "static.crates.io"]

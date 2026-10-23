@@ -1,0 +1,32 @@
+{
+ "cassettes": "gemini",
+ "recorded_at": "2026-10-15T19:33:03.041Z",
+ "recorded_with": "the Bun prototype of this crate (webmock.ts, the spec it was ported from) driven by the scratch run-cell.sh: `run gemini record`; secret headers never stored, the recording machine's scratch root replaced by <scratch>",
+ "golden": {
+  "set": "codex",
+  "input": "goldens/codex/input.jsonl",
+  "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "same_bytes_as": "test-fixtures/codex/convo.jsonl"
+ },
+ "projection": {
+  "toolpath_rev": "0655ae9",
+  "path_version": "0.30.0",
+  "basis": "tp worktree at 0655ae9, path 0.30.0 built 14:31 EDT 2026-10-15; review/resume-matrix-v4-gemini.md",
+  "derive": "path p derive codex --all",
+  "resume": "path resume --harness gemini",
+  "cell": "resume-matrix/v4-cell-codex-to-gemini",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "session_id_origin": "kept from the golden"
+ },
+ "probe": {
+  "command": "gemini --resume 019e03b2-11a2-7320-9098-5d831813e66c --skip-trust --approval-mode plan -p <prompt>",
+  "prompt": "Reply with exactly the first five words of the very first user message in this conversation (not this one), then the word END. No other text.",
+  "turns": "the golden conversation plus this one headless turn; nothing else was sent"
+ },
+ "files": [
+  "5c4d3c4f3efc531a47607baa05c8ab0c6be16cc0f465bbf628260ae8a5719c1a.json",
+  "fb592df8ba13dde1831cb70023712bb04b804d67e56c690a94b5da06cc81fa6e.json",
+  "index.jsonl"
+ ]
+}

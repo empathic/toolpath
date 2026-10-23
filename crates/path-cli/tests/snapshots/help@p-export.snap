@@ -1,0 +1,298 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path p export
+Export toolpath documents into external formats
+
+Usage: path p export [OPTIONS] <COMMAND>
+
+Commands:
+  claude    Project a toolpath document into a Claude Code session
+  gemini    Project a toolpath document into a Gemini CLI session
+  pi        Project a toolpath document into a Pi (pi.dev) session
+  codex     Project a toolpath document into a Codex CLI session
+  opencode  Project a toolpath document into an opencode session
+  copilot   Project a toolpath document into a GitHub Copilot CLI session
+  cursor    Project a toolpath document into a Cursor (IDE) composer
+  pathbase  Upload a toolpath document to Pathbase
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export claude
+Project a toolpath document into a Claude Code session
+
+Usage: path p export claude [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+
+  -p, --project <PROJECT>
+          Target project directory. With this flag, writes the JSONL into `~/.claude/projects/<sanitized>/<session>.jsonl` so `claude -r <id>` can resume it. Defaults to cwd when no `--output` is given
+
+  -o, --output <OUTPUT>
+          Output JSONL to this file. Mutually exclusive with --project
+
+      --force
+          Overwrite the session file if this session id already exists in the target project. Without it the export refuses rather than clobbering local history
+
+      --session-id <UUID>
+          Rename the session to this ID (a UUID). The document's own session is not touched, so one document can be exported as several sessions. Mutually exclusive with --new-session-id
+
+      --new-session-id
+          Rename the session to a fresh random UUID. Every export mints a different ID; the export prints it. Mutually exclusive with --session-id
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export codex
+Project a toolpath document into a Codex CLI session
+
+Usage: path p export codex [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+
+  -p, --project <PROJECT>
+          Target project directory. With this flag, writes the JSONL into `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (Codex's date-bucketed layout). The session_meta line carries this path as `cwd`, so `codex resume <session-uuid>` invoked from the same directory will resolve it correctly. Defaults to cwd when neither --project nor --output is given
+
+  -o, --output <OUTPUT>
+          Output JSONL to this file. Mutually exclusive with --project
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export copilot
+Project a toolpath document into a GitHub Copilot CLI session
+
+Usage: path p export copilot [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `copilot-abc`) or path to a toolpath JSON file
+
+  -p, --project <PROJECT>
+          Target project directory. With this flag, writes the session into `~/.copilot/session-state/<id>/` (+ a `session-store.db` row) with this directory as the session cwd, so `copilot --resume <id>` can load it. Only ever INSERTs a fresh id — never touches existing sessions
+
+  -o, --output <OUTPUT>
+          Output the projected `events.jsonl` to this file. Mutually exclusive with --project. With neither, prints it to stdout
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export cursor
+Project a toolpath document into a Cursor (IDE) composer
+
+Usage: path p export cursor [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `cursor-abc`) or path to a toolpath JSON file
+
+  -p, --project <PROJECT>
+          Target workspace folder. With this flag, writes `composerData:`, `bubbleId:` and `composer.content.*` rows into `<user-data>/User/globalStorage/state.vscdb` so the composer appears in Cursor.app's chat sidebar when that folder is open. Defaults to cwd when neither --project nor --output is given
+
+  -o, --output <OUTPUT>
+          Output the projected `CursorSession` as pretty JSON to this file. Mutually exclusive with --project
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export gemini
+Project a toolpath document into a Gemini CLI session
+
+Usage: path p export gemini [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+
+  -p, --project <PROJECT>
+          Target project directory. With this flag, writes the chat files into `~/.gemini/tmp/<slot>/chats/` so `gemini --resume <uuid>` from the same directory can resume it. Defaults to cwd when neither --project nor --output is given
+
+  -o, --output <OUTPUT>
+          Output the main chat file to this path. Sub-agents (if any) land in a sibling `<session-uuid>/` directory next to it. Mutually exclusive with --project
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export opencode
+Project a toolpath document into an opencode session
+
+Usage: path p export opencode [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+
+  -p, --project <PROJECT>
+          Target project directory. With this flag, inserts session, message, and part rows into the opencode database under `~/.local/share/opencode/` (`opencode-stable.db`, or `opencode.db` for older releases) so the `opencode` CLI sees the session. Defaults to cwd when neither --project nor --output is given
+
+  -o, --output <OUTPUT>
+          Output the projected `Session` (with messages and parts) as pretty JSON to this file. Mutually exclusive with --project
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export pathbase
+Upload a toolpath document to Pathbase.
+
+Default behavior depends on whether you're logged in: - Logged in (default): writes an unlisted graph under your `pathstash` repo. Listable from your account; not publicly visible. - Not logged in: falls through to the public anonymous endpoint. Anon graphs are not listable.
+
+Use `--repo`/`--name`/`--public` to override the pathstash default when authenticated. Use `--anon` to force the anonymous endpoint even when credentials are present.
+
+Usage: path p export pathbase [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+
+      --url <URL>
+          Pathbase server URL (defaults to the stored session's server)
+
+      --anon
+          Force the anonymous endpoint, ignoring any stored credentials
+
+      --repo <REPO>
+          Target a specific repo as `owner/name` instead of `<you>/pathstash`
+
+      --name <NAME>
+          Human-readable display label for the uploaded graph (defaults to the toolpath document id). Free-form; not used in the URL — graphs are addressed by UUID server-side
+
+      --public
+          Mark the uploaded graph public (default: unlisted, addressable only by UUID)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p export pi
+Project a toolpath document into a Pi (pi.dev) session
+
+Usage: path p export pi [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
+
+  -p, --project <PROJECT>
+          Target project directory. With this flag, writes the JSONL into `~/.pi/agent/sessions/--<encoded-cwd>--/<session>.jsonl` under the encoding scheme Pi uses for project directories. Defaults to cwd when neither --project nor --output is given
+
+  -o, --output <OUTPUT>
+          Output JSONL to this file. Mutually exclusive with --project
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

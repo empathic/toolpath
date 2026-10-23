@@ -1,0 +1,49 @@
+---
+source: crates/path-cli/tests/core_types.rs
+expression: "pretty(&json!({\n    \"head\": head, \"base\": p.path.base, \"steps\": all, \"ancestors_of_head\":\n    ancestors, \"dead_ends\": dead, \"forks\": forks, \"merges\": merges,\n    \"actor_kinds\": actors,\n}))"
+---
+{
+  "actor_kinds": [
+    "agent",
+    "human",
+    "tool"
+  ],
+  "ancestors_of_head": [
+    "step-001",
+    "step-002b",
+    "step-002c",
+    "step-003b",
+    "step-003c",
+    "step-004"
+  ],
+  "base": {
+    "ref": "main",
+    "uri": "github:myorg/myrepo"
+  },
+  "dead_ends": [
+    "step-002a"
+  ],
+  "forks": {
+    "step-001": [
+      "step-002a",
+      "step-002b",
+      "step-002c"
+    ]
+  },
+  "head": "step-004",
+  "merges": {
+    "step-004": [
+      "step-003b",
+      "step-003c"
+    ]
+  },
+  "steps": [
+    "step-001",
+    "step-002a",
+    "step-002b",
+    "step-002c",
+    "step-003b",
+    "step-003c",
+    "step-004"
+  ]
+}

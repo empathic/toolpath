@@ -5,7 +5,10 @@ consumed by `toolpath-pi`. Pi calls itself a terminal coding agent and
 writes sessions as JSONL files. This doc captures the format observed
 in real Pi sessions plus the schema as defined in
 `crates/toolpath-pi/src/types.rs`. Treat it as observed behaviour as
-of **2026-04-27** (format version 3).
+of **2026-04-27** (format version 3). The baseline's recording
+(`test-fixtures/pi/convo.jsonl`, format version 3) does not record the
+pi version that wrote it; every field it carries is generated in
+[observed/pi.md](observed/pi.md).
 
 ## Storage root
 

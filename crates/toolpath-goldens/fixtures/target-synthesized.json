@@ -1,0 +1,18 @@
+[
+  {"target":"claude","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"claude","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
+  {"target":"codex","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"codex","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
+  {"target":"copilot","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"copilot","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
+  {"target":"cursor","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"cursor","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
+  {"target":"cursor-agent","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"cursor-agent","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
+  {"target":"gemini","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"gemini","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
+  {"target":"opencode","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"opencode","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."},
+  {"target":"pi","path":"paths[].meta.producer.name","why":"The reader of the target stamps its own producer name on the derived document; the source document named another."},
+  {"target":"pi","path":"paths[].meta.producer.version","why":"The reader of the target stamps its own producer version on the derived document."}
+]

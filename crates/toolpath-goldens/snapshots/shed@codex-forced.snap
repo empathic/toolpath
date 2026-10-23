@@ -1,0 +1,290 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_codex
+  agent: codex
+  input_sha256: 6cbcc174ab38b8fb52338caa629770eb35bf5c0236f1a79fb4b426c5de435e94
+input_file: test-fixtures/codex/convo-compacted.jsonl
+---
+{
+  "source": {
+    "lines": 96,
+    "bytes": 104495,
+    "string_chars": 80782,
+    "by_type": {
+      "compacted": 1,
+      "event_msg/agent_message": 15,
+      "event_msg/context_compacted": 1,
+      "event_msg/patch_apply_end": 3,
+      "event_msg/task_complete": 2,
+      "event_msg/task_started": 2,
+      "event_msg/token_count": 16,
+      "event_msg/user_message": 2,
+      "response_item/custom_tool_call": 3,
+      "response_item/custom_tool_call_output": 3,
+      "response_item/function_call": 9,
+      "response_item/function_call_output": 9,
+      "response_item/message": 22,
+      "response_item/reasoning": 3,
+      "response_item/tool_search_call": 1,
+      "response_item/tool_search_output": 1,
+      "session_meta": 1,
+      "turn_context": 2
+    }
+  },
+  "ir": {
+    "bytes": 116368,
+    "string_chars": 81342,
+    "steps": 69,
+    "text_chars": 17497,
+    "tool_uses": 12
+  },
+  "projections": {
+    "claude": {
+      "lines": 35,
+      "bytes": 41661,
+      "string_chars": 31333,
+      "by_type": {
+        "assistant": 15,
+        "permission-mode": 1,
+        "user": 19
+      }
+    },
+    "copilot": {
+      "lines": 83,
+      "bytes": 45854,
+      "string_chars": 35103,
+      "by_type": {
+        "assistant.message": 15,
+        "assistant.turn_end": 15,
+        "assistant.turn_start": 15,
+        "session.start": 1,
+        "subagent.completed": 3,
+        "subagent.started": 3,
+        "system.message": 2,
+        "tool.execution_complete": 12,
+        "tool.execution_start": 12,
+        "user.message": 5
+      }
+    },
+    "cursor": {
+      "lines": 2270,
+      "bytes": 118685,
+      "string_chars": 51499,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 190,
+      "bytes": 49675,
+      "string_chars": 42375,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 509,
+      "bytes": 36477,
+      "string_chars": 25914,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 1728,
+      "bytes": 74131,
+      "string_chars": 34268,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 35,
+      "bytes": 34374,
+      "string_chars": 24946,
+      "by_type": {
+        "message": 34,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 97,
+    "bytes": 92119,
+    "event_types_shed": {
+      "event_msg/context_compacted": {
+        "source": 1,
+        "after": 0
+      },
+      "event_msg/token_count": {
+        "source": 16,
+        "after": 15
+      },
+      "response_item/reasoning": {
+        "source": 3,
+        "after": 0
+      }
+    },
+    "key_paths": {
+      "source": 150,
+      "after": 129,
+      "lost": 29,
+      "gained": 8
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "payload.changes.<path>.content",
+        "example": "scratch — feature elicitation this file …"
+      },
+      {
+        "path": "payload.changes.<path>.move_path",
+        "example": "null"
+      },
+      {
+        "path": "payload.changes.<path>.type",
+        "example": "add"
+      },
+      {
+        "path": "payload.changes.<path>.unified_diff",
+        "example": "@@ -1,2 +1,2 @@ -scratch — feature elici…"
+      },
+      {
+        "path": "payload.encrypted_content",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.cached_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.reasoning_output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.last_token_usage.total_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.model_context_window",
+        "example": "258400"
+      },
+      {
+        "path": "payload.info.total_token_usage.reasoning_output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.info.total_token_usage.total_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.multi_agent_version",
+        "example": "v1"
+      },
+      {
+        "path": "payload.namespace",
+        "example": "multi_agent_v1"
+      },
+      {
+        "path": "payload.rate_limits.credits",
+        "example": "null"
+      },
+      {
+        "path": "payload.rate_limits.individual_limit",
+        "example": "null"
+      },
+      {
+        "path": "payload.rate_limits.limit_id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "payload.rate_limits.limit_name",
+        "example": "null"
+      },
+      {
+        "path": "payload.rate_limits.plan_type",
+        "example": "team"
+      },
+      {
+        "path": "payload.rate_limits.primary.resets_at",
+        "example": "1781131014"
+      },
+      {
+        "path": "payload.rate_limits.primary.used_percent",
+        "example": "3.0"
+      },
+      {
+        "path": "payload.rate_limits.primary.window_minutes",
+        "example": "300"
+      },
+      {
+        "path": "payload.rate_limits.rate_limit_reached_type",
+        "example": "null"
+      },
+      {
+        "path": "payload.rate_limits.secondary.resets_at",
+        "example": "1781717814"
+      },
+      {
+        "path": "payload.rate_limits.secondary.used_percent",
+        "example": "1.0"
+      },
+      {
+        "path": "payload.rate_limits.secondary.window_minutes",
+        "example": "10080"
+      },
+      {
+        "path": "payload.realtime_active",
+        "example": "false"
+      },
+      {
+        "path": "payload.summary",
+        "example": "auto"
+      }
+    ],
+    "gained": [
+      {
+        "path": "payload.aggregated_output",
+        "example": "Chunk ID: 7ba390 Wall time: 0.0000 secon…"
+      },
+      {
+        "path": "payload.command[]",
+        "example": "bash"
+      },
+      {
+        "path": "payload.duration.nanos",
+        "example": "0"
+      },
+      {
+        "path": "payload.duration.secs",
+        "example": "0"
+      },
+      {
+        "path": "payload.exit_code",
+        "example": "0"
+      },
+      {
+        "path": "payload.formatted_output",
+        "example": ""
+      },
+      {
+        "path": "payload.parsed_cmd[].cmd",
+        "example": "ls -la"
+      },
+      {
+        "path": "payload.parsed_cmd[].type",
+        "example": "unknown"
+      }
+    ]
+  }
+}

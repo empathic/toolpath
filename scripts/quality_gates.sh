@@ -8,7 +8,7 @@
 # Usage:
 #   scripts/quality_gates.sh [--verbose] [[-]gate ...]
 #
-# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site
+# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site, secrets
 # No args runs all gates. Prefix with - to exclude a gate.
 #
 # Options:
@@ -43,7 +43,7 @@ trap 'rm -rf "${_tmpdir}"' EXIT
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
 # run_gate; shellcheck can't see the call sites and flags them as unused.
 
-_all_gates=(format shellcheck clippy test doc examples plugin site)
+_all_gates=(format shellcheck clippy test doc examples plugin quickstart site secrets)
 
 # shellcheck disable=SC2329
 gate_format() {
@@ -70,17 +70,17 @@ gate_shellcheck() {
 
 # shellcheck disable=SC2329
 gate_clippy() {
-    cargo clippy --workspace -- -D warnings 2>&1
+    cargo clippy --workspace --features path-cli/develop,toolpath/verify -- -D warnings 2>&1
 }
 
 # shellcheck disable=SC2329
 gate_test() {
-    RUSTFLAGS="-D warnings" cargo test --workspace 2>&1
+    RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/develop,toolpath/verify 2>&1
 }
 
 # shellcheck disable=SC2329
 gate_doc() {
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps 2>&1
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/develop,toolpath/verify --no-deps 2>&1
 }
 
 # shellcheck disable=SC2329
@@ -99,6 +99,12 @@ gate_plugin() {
     "${_root}/scripts/test-plugin.sh" 2>&1
 }
 
+# The toolpath.net quick start, step by step, in a throwaway HOME, offline.
+# shellcheck disable=SC2329
+gate_quickstart() {
+    "${_root}/scripts/test-quickstart.sh" 2>&1
+}
+
 # shellcheck disable=SC2329
 gate_site() {
     # `pnpm install --frozen-lockfile` is a no-op when node_modules is in sync
@@ -107,6 +113,24 @@ gate_site() {
     # `sh: eleventy: command not found` and a stale "did you mean to install?"
     # warning that doesn't say which directory.
     (cd "${_root}/site" && pnpm install --frozen-lockfile 2>&1 && pnpm run build 2>&1)
+}
+
+# shellcheck disable=SC2329
+gate_secrets() {
+    # The whole tree, with gitleaks' default rules plus the custom rules and the allowlist in
+    # .gitleaks.toml. The same file drives crates/toolpath-webmock/tests/no_secrets.rs, which
+    # runs under the test gate everywhere (CI on main has no flake and no gitleaks); this gate
+    # is the wider sweep for a machine that has the binary (the wip flake's dev shell does).
+    if ! command -v gitleaks >/dev/null 2>&1; then
+        echo "gitleaks not on PATH; skipped (crates/toolpath-webmock/tests/no_secrets.rs covers the fixture surfaces under the test gate)"
+        return 0
+    fi
+    # From the repo root, scanning `.`: gitleaks reports paths the way the target was spelled,
+    # and the path allowlist in .gitleaks.toml is anchored repo-relative (`^target/`). Handed
+    # the absolute root it reports absolute paths, nothing in the allowlist matches, and a
+    # checkout that has been built reports every build script's `-Users-…` output as a leak
+    # (1888 findings over 286 MB on a worktree with target/; 0 over 24 MB from `.`).
+    (cd "${_root}" && gitleaks dir . --config .gitleaks.toml --no-banner --redact 2>&1)
 }
 
 # ── Runner ────────────────────────────────────────────────────────────────────

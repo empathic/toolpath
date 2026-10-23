@@ -1,0 +1,311 @@
+{
+  "writer": "codex",
+  "ops": [
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.provider", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.value", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {
+      "op": "drop",
+      "path": "paths[].meta.files_changed[]",
+      "why": "derived from file changes the read-back session no longer carries in full"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.vcs_remote",
+      "why": "codex's session records no vcs remote"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.branch",
+      "why": "codex's session records no branch"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.ref",
+      "why": "codex's session records no ref"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+      "why": "codex's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+      "why": "codex's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
+      "why": "codex's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
+      "why": "codex's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+      "why": "codex records no VCS branch per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+      "why": "codex records no VCS revision per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
+      "why": "codex's format records no stop reason"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+      "why": "codex reports no reasoning-token breakdown",
+      "defect": "codex's token_count has reasoning_output_tokens; the writer does not fill it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
+      "why": "codex reports no cache-write tokens"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.before",
+      "why": "a write in codex's format carries the new content only, not the prior file"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.operation",
+      "why": "codex's format does not name the file operation"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].meta.actors.<actor>.provider",
+      "value": "codex",
+      "why": "the read-back session names its harness as the provider of a non-agent actor"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.aggregated_output",
+      "value": "notes.txt\n",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.call_id",
+      "value": "call-ls",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.cli_version",
+      "value": "0.0.0-projected",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.command[]",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.cwd",
+      "value": "/",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.duration.nanos",
+      "value": 0,
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.duration.secs",
+      "value": 0,
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.entry_type",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.event_data_type",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.event_source_id",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.exit_code",
+      "value": 0,
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.formatted_output",
+      "value": "",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.id",
+      "value": "0b5d3c1e-7a2f-4c9e-9d41-5f6a7b8c9d0e",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.info.total_token_usage.cached_input_tokens",
+      "value": 15,
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.info.total_token_usage.input_tokens",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.info.total_token_usage.output_tokens",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.memory_citation",
+      "value": null,
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.message",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.model",
+      "value": "generated-model-1",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.model_provider",
+      "value": "openai",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.originator",
+      "value": "codex-toolpath",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.parsed_cmd[].cmd",
+      "value": "ls",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.parsed_cmd[].type",
+      "value": "unknown",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.phase",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.rate_limits",
+      "value": null,
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.source",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.status",
+      "value": "completed",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.stderr",
+      "value": "",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.stdout",
+      "value": "",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.timestamp",
+      "value": "2026-10-19T12:00:00.000Z",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.turn_id",
+      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
+    }
+  ]
+}

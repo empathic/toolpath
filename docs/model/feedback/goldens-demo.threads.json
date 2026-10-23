@@ -1,0 +1,703 @@
+{
+  "artifact": "hennefgqrc50",
+  "exported_at": "2026-10-19T19:31:31Z",
+  "threads": [
+    {
+      "id": "01M5AH0KTZ8F7XVTNYQ8AYYXGV",
+      "created_at": "2026-10-19T16:48:14.687Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 8,
+      "anchor": {
+        "quote": "Hermetic goldens",
+        "selector": "#deck > section:nth-of-type(1) > h1"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T16:48:14.687Z",
+          "body": "hi"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T16:50:23.568Z",
+          "body": "Hi. I got this one in the Claude Code session that is watching this page, so comments sent to Claude here reach me."
+        }
+      ]
+    },
+    {
+      "id": "01M5AHFVRGB1734JPJ8VCMRG1E",
+      "created_at": "2026-10-19T16:56:34.320Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T17:13:44.248Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": "$ cargo test -p toolpath-goldens",
+        "selector": "#deck > section:nth-of-type(3) > pre"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T16:56:34.320Z",
+          "body": "could we make sure that goldens only runs under development env flag or if that is an anti patern to the repo path develop . and maybe a flag on that whole thing"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T16:58:47.180Z",
+          "body": "Checked toolpath wip/bdelanghe (151e379). There are two separate pieces, and they want different answers.\n\n1. The `path goldens` subcommand ships in the release binary today. It is only gated off for emscripten (crates/path-cli/src/lib.rs:141), and release.yml builds `-p path-cli --bin path` with default features. That should get a flag. The repo already has the pattern: `resume-remote` is a Cargo feature, off by default, that hides experimental commands and their deps. Proposal: a `goldens` feature on path-cli, off by default, gating `mod goldens` and the `Goldens` subcommand. The release stays as is, and dev builds use `cargo run --features goldens -- goldens check`.\n\n2. `cargo test -p toolpath-goldens` (the snippet you commented on): I would NOT put this behind an env flag. The crate is already `publish = false`, so it never ships. An env-var skip turns the per-PR gate (decided 10-16: gate stays on every PR) into a silent pass whenever the variable is missing. That is the same failure mode as the qualifier silent pass we flagged on the wip. If \"develop\" means the nix devShell, the devShell and CI can set it explicitly instead, e.g. `--features goldens` in the check. A test that skips quietly is the anti-pattern.\n\nWant me to cut (1) as a small PR piece on wip (feature + subcommand gate + a check that `path --help` in a default build has no `goldens`)?"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T17:13:44.235Z",
+          "body": "Done, on toolpath wip/bdelanghe as 08c6a6b (record pr/17-goldens-feature.md). A default build has no `path goldens` (path --help checked). The goldens and goldens_producer tests declare required-features, and quality_gates.sh, justfile, pr/cut.sh and pr/gate-piece.sh all pass --features path-cli/goldens, so the per-PR gate still runs them. Gates green locally: fmt, clippy (default and with the feature), doc, shellcheck, and cargo test --workspace --features path-cli/goldens (77 suites). Also: wip was already on top of origin/main (77dc16a, unchanged since 9-30), so there was nothing to rebase."
+        }
+      ]
+    },
+    {
+      "id": "01M5AHSXBFN1ZPN3CWTG6RJDV3",
+      "created_at": "2026-10-19T17:02:03.631Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T17:33:43.453Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(5) > div > a > img"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T17:02:03.631Z",
+          "body": "can we pin the ones we haven't pinned yet?"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T17:03:17.042Z",
+          "body": "Yes. From the full table (transformations.md), the grey edges and what pinning each one takes:\n\nCan pin in-repo, hermetically:\n1. derive opencode, the DB read: no test opens a real opencode-stable.db. Add a small committed opencode-stable.db fixture and a golden over derive from it.\n2. append after a real turn (all agents, drawn for codex): pin the codex absolute threads.rollout_path behaviour as a known-defect golden (a copied CODEX_HOME appends to the original rollout), plus an append check per agent that the adapters can open.\n3. upload for gemini/opencode/cursor inputs: pathbase's adapters do not open those stores, so the pin is a declared-limit known-defect (it asserts the refusal), not a stored row.\n\nCannot pin hermetically today (would stay grey, with the reason recorded):\n4. resume gemini: no answered model turn (429 on pro, flash stream cut). Needs a working key and quota to record a complete cassette.\n5. resume Cursor.app: opens the workspace only. The transcript body is never shown without a deeplink or agent mode, so there is nothing to compare.\n6. the live stored pathbase row (webmock layer 10): needs a pathbase recording mode.\n\nI will do 1-3 as one piece on wip (pr/18), after the goldens-feature piece I am finishing now (pr/17), since both touch the manifest. Then I will redraw the graph so 1-3 turn green or amber."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T17:33:43.442Z",
+          "body": "Pinned, on both wips (records pr/18 in toolpath, pr/09 in pathbase):\n1. opencode DB read: pinned. A real-schema opencode-stable.db fixture is read through the resolver and ConvoIO; the IR is identical to the export read (toolpath 45cb679).\n2. append after a real turn: pinned as a codex known defect. A copied CODEX_HOME keeps the absolute threads.rollout_path pointing at the original rollout. The test checks the thread row; it does not run codex. The other agents have no such indirection.\n3. upload gemini/opencode/cursor: pinned on the pathbase side, using the document path share actually uploads (not a transcript). All three show empty losses (pathbase 1d5bc39).\n4-6. gemini resume, Cursor.app resume and the live stored row: recorded as declared-unpinned qualifier concerns, with the reasons.\nGates green: toolpath 79 suites; pathbase 41 suites. Pathbase clippy has one lint from a newer toolchain, on an untouched line. The regenerated graph has only gemini and Cursor resume still dashed; this slide still shows the old image."
+        }
+      ]
+    },
+    {
+      "id": "01M5AHWJBHCWB1CE6MEN6KYRK4",
+      "created_at": "2026-10-19T17:03:30.673Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:44:14.395Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": "The map",
+        "selector": "#deck > section:nth-of-type(5) > p:nth-of-type(1)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T17:03:30.673Z",
+          "body": "can we rebase our wip/bdelanghe branch on the latest clax origin/main"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:27:01.199Z",
+          "body": "Yes, it is underway: a subagent is rebasing clax wip/bdelanghe onto origin/main (854 behind, 114 of its own). Main is the base, commits main already has are dropped, and your flake/packaging commits are kept. It pushes only if the gates pass, keeps a local backup ref of the old tip, and leaves the canonical checkout and the installed clax alone. The auto-send toggle is built on top. I will post here when it lands."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:44:14.380Z",
+          "body": "Done: clax wip/bdelanghe went from f50cf9d7 to 39e4d166, on top of main c9ccab30. 110 of the 114 wip commits were already in main and dropped; your 4 were kept, with no conflicts. The flake is rebuilt for main's pnpm 12 web build; nix build .#clax gives 0.5.0 and serves. Web lint, typecheck and 1,731 unit tests pass; Bazel/e2e not run locally (main's own Bazel job is already red). The old tip is kept locally as refs/backup/wip-bdelanghe-pre-rebase-2026-10-19. Your installed clax is still 0.3.0 from the old checkout until the home pin moves."
+        }
+      ]
+    },
+    {
+      "id": "01M5AHZH6SWQ0ZG8XYHCVG13BY",
+      "created_at": "2026-10-19T17:05:07.801Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:44:14.426Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": "The map",
+        "selector": "#deck > section:nth-of-type(5) > p:nth-of-type(1)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T17:05:07.801Z",
+          "body": "if it isn't already added can we create an auto send to agent "
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T17:13:44.265Z",
+          "body": "Not in clax yet, on main or your wip. Today a thread stays plain until you press Send or write @agent, and only later comments on an already-sent thread follow automatically. I would add it as a per-viewer, per-artifact toggle, \"Send new comments to <agent>\", off by default: when it is on, the shell sends every new thread right after it is created, to the agent Send would name. One snag: your clax wip/bdelanghe is 854 commits behind origin/main (114 of its own), so it should be rebased onto main before building on it. I am checking with you before doing that rebase."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:44:14.410Z",
+          "body": "Built, on clax wip 39e4d166: a \"Send new comments to <agent>\" checkbox in the threads panel, off by default, remembered per artifact in your browser. When it is on, a new thread is sent as soon as it is posted, to the agent Send would pick. With no live agent, the thread stays plain. It uses the existing send route; docs/contract.md is updated and there are unit tests. It is not on your machine yet: the installed clax is still 0.3.0 until the home pin moves to the new wip."
+        }
+      ]
+    },
+    {
+      "id": "01M5AJ2FMXBCVTVW80B84239J6",
+      "created_at": "2026-10-19T17:06:44.509Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:44:14.456Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": "red today: derive gemini — 0.47 writes session-*.jsonl, the adapter reads .json; derive cursor — Cursor 3.24 keeps composer heads in a table the reader does not open. Both pinned as known, neither claimed.",
+        "selector": "#deck > section:nth-of-type(5) > p:nth-of-type(3)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T17:06:44.509Z",
+          "body": "do we have a fix for these two? if not lets dispatch sub agents to work on them we'll create seperate prs in jj for each"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:11:47.211Z",
+          "body": "No fix for either yet (only the qualifier concerns and the known-defect pins). Dispatching two subagents now, one per fix, each in its own worktree and each landing as its own piece on toolpath wip/bdelanghe with a pr/NN record and Revset, so pr/cut.sh makes a separate jj bookmark/PR for each:\n- pr/19 gemini: read 0.47 session-*.jsonl (header, message, $set patches) in paths.rs and read_chat_file, and drop the pipeline's private JSONL assembly (pipeline.rs:295) in favour of the adapter.\n- pr/20 cursor: read heads from the 3.24 composerHeaders table when migratedToTable = 1, falling back to the ItemTable key, with a fixture made in the 3.24 shape.\nEach one flips its known-defect pin to fixed in the same piece."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:27:01.221Z",
+          "body": "cursor (pr/20) landed on toolpath wip as 9fc0cd8 (fix e0415cd + record). It was confirmed on a copy of your real Cursor 3.24.12 DB: before the fix the reader listed 0 composers, after it lists both. The reader reads the composerHeaders table when it exists and falls back to the ItemTable key; the projection writes both. Gates are green (79 suites). Still open: the written row has not been seen in a running Cursor.app. gemini (pr/19) is still running."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:44:14.441Z",
+          "body": "Both landed on toolpath wip as separate pieces. pr/20 cursor (e0415cd), and pr/19 gemini (635f8dc), which reads 0.47 session-*.jsonl the way gemini-cli's own loader does; three private copies of that code now call the adapter. Removing them exposed a bug: the old copies counted every assistant turn twice (22 steps, not 12), so the gemini snapshots were recaptured, and the accounting defect is now 489, not 945. 80 suites green. Derive has no red cells left."
+        }
+      ]
+    },
+    {
+      "id": "01M5APB8XDZ6C15ZYCAC8FT6ZG",
+      "created_at": "2026-10-19T18:21:26.829Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:22:23.130Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(2)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T18:21:26.829Z",
+          "body": "can we show a code example of this a snippet of node"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:22:21.966Z",
+          "body": "Added in v9: under the arrows, one IR node, a real turn excerpted from ir@claude-session.snap (id, parent_id, role, model, stop_reason, one Bash tool_use). Checked at 1472x900; the slide still fits one screen. The failure side, the snapshot naming entry_extra.userType, is already on slide 4."
+        }
+      ]
+    },
+    {
+      "id": "01M5APC903RTZ8ZZQMA1A92CK2",
+      "created_at": "2026-10-19T18:21:59.683Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:27:01.070Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": "known_defects",
+        "selector": "#deck > section:nth-of-type(3) > p:nth-of-type(2) > code:nth-of-type(6)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T18:21:59.683Z",
+          "body": "what are the defects?"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:27:01.051Z",
+          "body": "The six, from known_defects@<set>.snap (toolpath wip): codex→claude illegal_claude_types (codex event types claude never emits: agent_message 13, token_count 13, …); claude→codex caller_cwd (the source cwd is written as /); claude→claude renames on the round trip (stop_reason → stopReason); gemini→document and opencode→document accounting (reasoning tokens summed on steps, null in the IR: 945 and 285); copilot→document accounting (session totals not on steps). They are on the new slide 4. A listed defect passes the check; a new one, or one that gets worse, fails it."
+        }
+      ]
+    },
+    {
+      "id": "01M5APCR5BVDKMNQMAPHD3HSDP",
+      "created_at": "2026-10-19T18:22:15.211Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:27:01.107Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": "shed",
+        "selector": "#deck > section:nth-of-type(3) > p:nth-of-type(2) > code:nth-of-type(5)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T18:22:15.211Z",
+          "body": "show an example of what is shed"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:27:01.088Z",
+          "body": "New slide 4, left column: shed@claude-session written back as claude. 281 key paths become 246 (37 lost, 2 gained); stop_reason is renamed stopReason; each dropped path comes with an example value (apiBlockIndex \"0\", message.container null, caller.type \"direct\", signature, inference_geo, cache_creation.*). Size: 178,273 bytes of source become 3,973 as codex."
+        }
+      ]
+    },
+    {
+      "id": "01M5APE4FXYPVQ24C1X2ZTTE1F",
+      "created_at": "2026-10-19T18:23:00.605Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:27:01.146Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": "# undo: bash live/revert.sh",
+        "selector": "#deck > section:nth-of-type(4) > pre:nth-of-type(2) > span:nth-of-type(7)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T18:23:00.605Z",
+          "body": "I'm confused here is this what a failure would look like or is it a real failure"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:27:01.124Z",
+          "body": "A staged one. It is a planted one-line patch (skip_deserializing on user_type), applied live in the demo and reverted right after; the output is the real output the tools printed for it on 10-16. It is not a bug in the code. v11 says so on the slide now: the title is \"break it on purpose\", plus one line explaining it."
+        }
+      ]
+    },
+    {
+      "id": "01M5APG05AF0F4MKK1AYQV8F9R",
+      "created_at": "2026-10-19T18:24:01.706Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T18:27:01.181Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(5)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T18:24:01.706Z",
+          "body": "this is two much for one page first would a sequesnce diagram work. could we break this up by phase or by harness?"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:27:01.164Z",
+          "body": "Broken up in v11, by both at once: the slide is now a grid with harnesses as rows and the four phases as columns (derive, project, resume, upload), one coloured status word per cell. The full graph is a link under it, redrawn after pr/18. I did not use a sequence diagram: these are pipeline stages, not messages between actors, so it would show order and hide the per-harness status. Derive is now the only red column (gemini; fix in flight), and cursor derive shows fixed (pr/20 landed: 9fc0cd8)."
+        }
+      ]
+    },
+    {
+      "id": "01M5APVVPT1SSFSBZZXT54F557",
+      "created_at": "2026-10-19T18:30:30.362Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(6)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T18:30:30.362Z",
+          "body": "show this is there a test framework we built. and this shows up in the request right?\r\n"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:09:35.640Z",
+          "body": "Yes to both. The framework is ours: the toolpath-webmock crate. It is one local server that records an agent's real API traffic once and then replays it with no upstream and fake credentials, and each agent is pointed at it with its own base-URL switch (this slide). And yes, the projected session is in the request: the saved codex → claude recording's POST /v1/messages carries the projected conversation as 5 messages (user/assistant alternating, starting with codex's permissions text and its wc -w turn). So a replayed resume proves the history actually reached the model's request, not just the screen."
+        }
+      ]
+    },
+    {
+      "id": "01M5AR8JRYDDS4NRTV3PDMQGT1",
+      "created_at": "2026-10-19T18:54:55.774Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(7)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T18:54:55.774Z",
+          "body": "can we dig into the copilot issue"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T18:55:34.010Z",
+          "body": "Dug in. Root cause is in our replay keying, not in copilot or GitHub.\n\nCopilot makes three POSTs to GitHub's remote MCP server at /mcp/readonly: initialize (id 0), notifications/initialized, tools/list (id 1). On replay the JSON-RPC ids and progress tokens differ, so the exact key misses. The fallback \"loose\" key is {method, path, model, last user text}, and an MCP request has neither a model nor user text, so all three POSTs share one loose key. The first stored cassette wins, and tools/list gets the wrong answer. Copilot then sees 0 MCP tools instead of 6, so its model request carries 19 tools instead of 25 ($.tools.19-24 only in the recording), and every /v1/messages call misses (rc 1 after 5 retries, 151 s).\n\nFix: when a body is JSON-RPC, put its method in the loose key, and drop id and params._meta.progressToken when normalizing. Then tools/list replays tools/list, the tool list stays 25, and the model request should key EXACT. Dispatching that now as its own piece (pr/21) on toolpath wip: a unit test for the collision, then a re-run of the copilot replay cell (no network, fake credentials) to show EXACT before claiming it."
+        }
+      ]
+    },
+    {
+      "id": "01M5ARK85AYM8SYMH8RPXVBNM0",
+      "created_at": "2026-10-19T19:00:45.354Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(8)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:00:45.354Z",
+          "body": "what does this page mean should/could we use truffle hog."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:01:36.738Z",
+          "body": "What it means: this one is staged too, like the break slide. Cassettes are recorded API exchanges we commit, so a real credential could end up in git (it nearly did: the first gemini recording wrote your real key). The no_secrets test scans every committed fixture with the rules in .gitleaks.toml, and the same file drives the gitleaks gate in CI and home's pre-commit hook (#416). The demo plants a fake sk-ant key, the test fails naming file:line and the rule, then it is reverted. v12 says that on the slide.\n\nTruffleHog: yes as an addition, not a replacement. gitleaks stays the gate, because it is offline, deterministic, and its one rules file is shared by cargo test, CI and the hook. TruffleHog (3.97.9 in nixpkgs) adds many more detectors and can verify a hit by calling the provider. Verification means sending the found secret over the network, so it does not belong in cargo test or CI on fixtures. Where it fits: home's pre-push hook, running trufflehog git file://. --since-commit <upstream> --results=verified,unknown --fail, so a live key is caught before it leaves the machine; plus a one-off full-history scan of toolpath and pathbase. Want me to add that to the home hook as its own PR?"
+        }
+      ]
+    },
+    {
+      "id": "01M5ARNP1HHRK7PZM2A0EBGE1M",
+      "created_at": "2026-10-19T19:02:05.105Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T19:02:54.634Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(9)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:02:05.105Z",
+          "body": "your going to show me this can you make it clear. maybe 1 or 2 examples here?\r\n"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:02:54.621Z",
+          "body": "Clearer in v13 (slide 10). The table stays on the left. On the right is one real line Claude Code appended for a recorded turn, with each field marked response (came back from the API: message id, model, stop_reason, usage, requestId) or harness (made locally: parentUuid, uuid, timestamp, cwd, version). The harness half is what a projection has to invent. The worked example of it going wrong: pi's parentId chain, which resumed empty, one of the three empty resumes. Source: review/payload-to-session.md §1, from the webmock record/replay of that turn."
+        }
+      ]
+    },
+    {
+      "id": "01M5ARRFWQXANCF6CNE1PX483E",
+      "created_at": "2026-10-19T19:03:37.111Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(10)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:03:37.111Z",
+          "body": "the outline thing is stupid I don't care about changes only final state TUI and opened are not good enough."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:04:36.620Z",
+          "body": "Agreed. v14 shows final state only. The outlines are gone here and on the map (\"fixed · pr/20\" is now just ok). The legend says TUI only and opened are not passes. Correction while doing it: codex → opencode has been verified headless since the session-id fix, so that cell is now loaded.\n\nTo turn the rest green:\n- opencode (3 cells): the free-tier refusal was our session-id shape, fixed. Dispatching a run of claude-session/pi/copilot → opencode headless now.\n- gemini (4 cells): needs a turn the model actually answers. The last tries hit 429 on pro and a cut stream on flash. The same run will retry flash with the configured key and report the answer, or the exact error.\n- cursor (4 cells): needs the transcript read back from Cursor.app. That means launching your real Cursor (it writes its real state.vscdb, with the backup/undo from before) and reading the agent panel through Allie, read-only. Say yes and I will run it; I will not open it without that."
+        }
+      ]
+    },
+    {
+      "id": "01M5ARSH49D2J5PQYNGQABYM8Q",
+      "created_at": "2026-10-19T19:04:11.145Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T19:06:14.777Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(11)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:04:11.145Z",
+          "body": "what do you mean by empty?"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:06:14.763Z",
+          "body": "Bad word on my part. It was never a blank screen. pi → claude and pi → pi opened and answered, but the model saw only the new prompt: after the first tool call, 10 of 11 assistant lines had no parent link, so the history walk stopped and nothing before it reached the model. copilot → claude did not open at all: the API returned 400, because a failed tool call was written with empty content, which an errored tool_result may not have. v15 retitles the slide \"How a resume loses the history\", puts that in the captions, and says the screens show today, where all three resume with the full history."
+        }
+      ]
+    },
+    {
+      "id": "01M5ARV72RSX7QXKMV8PJSD51Y",
+      "created_at": "2026-10-19T19:05:06.392Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T19:06:14.804Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(12)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:05:06.392Z",
+          "body": "can you just show me the round trips? codex -> path -> codex"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:06:14.790Z",
+          "body": "Done in v15: slide 13 is now \"Round trips · agent → path → same agent\", with four screens (claude, codex, pi, copilot), each that agent's own TUI reopening its own session after the trip through path. Each caption says what the trip sheds, from the shed snapshots: claude 37 key paths lost (stop_reason → stopReason); codex 69 lost (sandbox policy, rate limits, base_instructions); pi 7 (provider comes back anthropic, not ollama); copilot 77 (fresh session id, model settings). The cross-agent screens moved to the notes page."
+        }
+      ]
+    },
+    {
+      "id": "01M5ARXEC4MYGW8H1N5WEV9Z6D",
+      "created_at": "2026-10-19T19:06:19.396Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T19:07:15.026Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(13)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:06:19.396Z",
+          "body": "this is dumb and against the whole slide. I don't care how. I care about what. what are the ideas and reasoning behind  what we are adding?"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:07:15.009Z",
+          "body": "Fair. v16 replaces the PR list with \"What we are adding, and why\": nine ideas, each with its reason. Real sessions as fixtures; a snapshot at every stage; losses as declared data; all seven agents at real versions; resume checked in the agent itself; the network recorded, not called; no secrets in what we commit; Pathbase held to the same bar; public claims say only what is pinned. The PR count and read order are one muted line at the bottom."
+        }
+      ]
+    },
+    {
+      "id": "01M5ARY5F3MNTPKN4FJ226KEPE",
+      "created_at": "2026-10-19T19:06:43.043Z",
+      "status": "resolved",
+      "resolved_at": "2026-10-19T19:07:50.017Z",
+      "version_n": 8,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(14)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:06:43.043Z",
+          "body": "this is stupid"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:07:48.974Z",
+          "body": "Replaced in v17. The \"decided / to decide\" list is gone. The last slide is now \"Not proven yet\": four gaps, each with why it matters. Resume into gemini, opencode and cursor (history on screen, no answered turn yet except codex → opencode; runs in progress). Each writer on its own (losses are measured end to end, not per writer). The review gate in CI (the qualifier check passes without running on the runner). A human sign-off on the goldens (nothing records that the snapshots were accepted)."
+        }
+      ]
+    },
+    {
+      "id": "01M5AS0YAF8V9MCHEGBJR83TJA",
+      "created_at": "2026-10-19T19:08:14.031Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 8,
+      "anchor": {
+        "quote": "~30 s. Say: formats in, one document, formats out; Pathbase stores it. Hermetic = no network, no creds, same bytes. Total run 12–15 min; if short, skip slides 12, 6, 9, 5 in that order.",
+        "selector": "#deck > section:nth-of-type(1) > aside"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:08:14.031Z",
+          "body": "all of the notes are dumb. instead you present to me. you add a transcript. listen to yourself. ask questions and iterate. add a fake audience get their input."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:14:00.560Z",
+          "body": "Done in v18. The notes are gone. Press n for a transcript of what I would say on each slide, followed by the questions from three rehearsal audiences (Alex as the toolpath owner, a new engineer, the product lead) and my answers. Their input changed the slides: slide 1 now leads with what a user can do; there is one vocabulary (document, golden, snapshot, key path, cassette), defined once; the round-trip slide no longer calls everything bookkeeping (codex loses its sandbox policy, pi its provider, copilot its model settings), and that is now on the open list; the copilot replay row and the key-leak wording now match what happened; a new last slide links every PR in Changeling. Their biggest open objection, from Alex: show the one minimal PR to land first. The last slide marks toolpath #359 and pathbase #527."
+        }
+      ]
+    },
+    {
+      "id": "01M5ASDJP0J0DSPG7EGASNN6YA",
+      "created_at": "2026-10-19T19:15:08.096Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 18,
+      "anchor": {
+        "quote": "A defect listed here passes the check; a new one, or one that gets worse, fails it.",
+        "selector": "#deck > section:nth-of-type(4) > p:nth-of-type(2)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:15:08.096Z",
+          "body": "can we fix all of these defects"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:15:29.479Z",
+          "body": "Yes. Dispatching three agents, grouped by the code each fix touches. Each fix lands as its own piece on toolpath wip with its own pr/NN record, and each one deletes its known_defects entry in the same commit, so the check proves it is gone:\n1. Claude writer (two defects): codex → claude stops writing event types Claude never emits (agent_message, token_count, …) and maps them to Claude's own; claude → claude writes stop_reason, not stopReason.\n2. Codex writer: claude → codex keeps the source session's working directory instead of writing /. If that turns out to be an artifact of the hermetic test setup rather than a real bug, it says so instead of changing code.\n3. Token accounting (three defects): gemini and opencode keep reasoning-token breakdowns in the document totals (489 and 285 today), and copilot puts its session totals on the steps.\nEvery piece runs the full gates before it is pushed. I will post here when they land."
+        }
+      ]
+    },
+    {
+      "id": "01M5ASEZWWN6KS7FYZPNSECAFR",
+      "created_at": "2026-10-19T19:15:54.396Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 18,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(4)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:15:54.396Z",
+          "body": "can we look at all the gains those are most concerning"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:17:21.351Z",
+          "body": "Agreed, they are worse than the losses. I went through every gained key across all 54 round-trip snapshots (most: 39 new fields, gemini through codex), and they sort into three kinds. v19 adds them as slide 5.\n1. Invented values that look real: a Claude session written for Codex claims model_provider \"openai\", cli_version \"0.0.0-projected\", originator \"codex-toolpath\"; every session written for Claude gets permissionMode \"default\"; opencode and pi get a stop_reason; Claude, Gemini and pi grow sub-agent delegations (id, prompt, result) that were never there.\n2. File changes that never happened: opencode turns a failed read of does-not-exist.txt into a file change, and edits come back filed under absolute temp paths (/private/var/folders/…) instead of notes.md.\n3. Translation, not invention: tool inputs renamed into each agent's own words, the working directory, the writer's producer stamp.\nThe check only counts gained keys, not their values, which is why 1 and 2 pass today. Once the six-defect fixes land (they touch the same writers), I will dispatch fixes for 1 and 2 and make the check compare values of fields the source never had."
+        }
+      ]
+    },
+    {
+      "id": "01M5ASH59ZJX7CMMHRYRQCWEP6",
+      "created_at": "2026-10-19T19:17:05.471Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 18,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(6)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:17:05.471Z",
+          "body": "we are fixing these issues? what is the mechanism that causes each? lets start with read."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:17:43.164Z",
+          "body": "Yes, we are fixing them. Read column, mechanism by mechanism (gemini and cursor read are fixed and shown ok):\n\npi, \"lossy · provider\": pi records the provider on every message (\"provider\": \"ollama\", \"model\": \"gemma4\") and in model_change entries. The document has no field for a provider: a turn carries the model name only. So the pi reader keeps the provider only in its pi-private extras (Turn.extra.pi), and it drops model_change entries outright (there is a test named test_model_change_drops_silently). Any other agent's writer never sees the provider. Written back to pi without those extras, pi's writer falls back to its default, \"anthropic\", so ollama/gemma4 comes back as anthropic/gemma4 (qualifier f898c8ff). The fix belongs in the shared document: give a turn a provider, set it in every reader that knows it, and use it in every writer. That touches toolpath-convo, the crate every agent shares, so it is a design call Alex should see. I would add an optional provider on the turn, not overload the model string.\n\nopencode, \"defect · tokens\": opencode records reasoning tokens per message (breakdowns.output.reasoning, 285 in the golden). The reader puts them on each step, but the session total in the document is rebuilt from four counters only (input, output, cache read, cache write), so the reasoning breakdown never reaches the total, and the per-step sums and the total disagree. Gemini had the same shape (489). Both are in the accounting fix already running.\n\nNext I will do the write column the same way. Want the provider fix dispatched now, or written up for Alex first?"
+        }
+      ]
+    },
+    {
+      "id": "01M5ASK4SABRSKZS5D1S0S1MY8",
+      "created_at": "2026-10-19T19:18:10.474Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 18,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(7)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:18:10.474Z",
+          "body": "show this. also what sets this up? it's not manual? we built a tool to help with this right?\r\n"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:21:20.962Z",
+          "body": "Shown in v20: under the table, the real commands. The server runs as WEBMOCK_MODE=replay WEBMOCK_AGENT=claude … webmock; claude runs with ANTHROPIC_BASE_URL pointed at it and a fake token; copilot with COPILOT_API_URL and COPILOT_DEBUG_GITHUB_API_URL.\n\nWhat sets it up, honestly: half of it is a tool and half is not yet. The server (record/replay) is the committed toolpath-webmock crate. Pointing each agent at it is still a scratch script: run-cell.sh sets the switch, makes a temp home, writes the fake credentials, and does codex's local CA, pi's models.json, opencode's config and gemini's .env. It is not manual, but it is not committed either. I have dispatched making it a committed command, webmock run <agent> record|replay, with tests, verified in replay against the committed recordings (never recording live)."
+        }
+      ]
+    },
+    {
+      "id": "01M5ASYEBBNMCY1FCNX4H7GCR9",
+      "created_at": "2026-10-19T19:24:20.715Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 20,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(2)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:24:20.715Z",
+          "body": "go to toolpath.net look at the claims we make there. and lets align our language and modeling."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:26:24.002Z",
+          "body": "Read toolpath.net (home, CLI, FAQ). v22 aligns the deck to it and adds a slide that checks it.\n\nLanguage: the site's model is parse in, project out, resume, with \"harness\" for the agent app and a Toolpath document as a path of steps. The deck now uses those words: the map columns are parse / project / resume / share, the arrows slide says session → parse → document → project → resume in another harness, and the glossary defines harness and document the site's way. \"IR\" stays only as \"what the code calls it\".\n\nClaims (slide 15, the site's words next to the evidence): 1 pinned, 4 partly, 1 not tested.\n- \"Parse any agent's session in, project it out to any harness\": partly. All 49 projections are pinned, but opencode, Gemini and Cursor have undeclared losses, and projections invent values.\n- \"Parsing captures the full session … token usage\": partly. Reasoning totals are dropped for Gemini and opencode (fix running), and the provider is dropped for pi.\n- \"resumes natively\": partly. 19 of 28.\n- path query: not tested.\n- Pathbase \"stores, shares, and resumes\": partly. Resume from Pathbase is not covered.\n- Supported harnesses: pinned for parse and project.\nEach gap is either a fix already in flight or wording for the claims-audit PR (toolpath #369) to cut."
+        }
+      ]
+    },
+    {
+      "id": "01M5AT2D844MKQJAWQHRA8SB00",
+      "created_at": "2026-10-19T19:26:30.660Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 20,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(3)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:26:30.660Z",
+          "body": "I need these objects declared better. also someone should build out all the context as a json one cohesieve object model based on the actual repo and the jj patches. the idea is the feedback changes not just this slide but how our code and prs are written."
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:27:38.291Z",
+          "body": "Declared in v23: slide 3 now has a table of every object. Each row gives what it is, how many there are, and what makes it: set (9), ir (9), document (9), validate (9), projection (54), round_trip (54), shed (9), known_defects (9).\n\nThe object model: dispatched. An agent is building one generated JSON model of the whole thing from the actual repos and the jj/pr records. It covers harnesses, operations (parse, project, resume, share), sets, snapshots, findings (losses, gains with their values, defects, unpinned), toolpath.net claims with evidence, pieces (pr/NN ↔ jj changes ↔ GitHub PR ↔ Changeling link), qualifier concerns, and these feedback threads, each linked to the objects it is about and to the commit that resolved it. It does a prior-art pass first (the Toolpath format itself, qualifier, pr/stack.json, the ax-rebuild JSON-LD extractor, facto). It also adds a test that fails when the model and the repo disagree, so feedback has to land in code and PRs, not just on a slide."
+        }
+      ]
+    },
+    {
+      "id": "01M5AT88PNTF8C9FBN3QNW95VC",
+      "created_at": "2026-10-19T19:29:42.613Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 20,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(5)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:29:42.613Z",
+          "body": "does toolpath already have a key for extended values a clean place for gains. rather than polluting the namespace. does the code explicitly call out these gains in the harness transformers?"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:30:31.532Z",
+          "body": "Short answer: yes, there is a clean place, but the gains do not use it, and the code names them only in comments.\n\nWhere extended values already live:\n- In the conversation view (IR), every turn has extra, keyed by harness: Turn.extra[\"claude\"], [\"pi\"], [\"gemini\"]. The codex writer's own docs say foreign namespaces are dropped \"so they would not pollute the JSONL\".\n- In the document, the agent-coding-session kind allows extra properties, and each harness's native leftovers ride in the conversation.append structural change (entry_extra), next to the shared fields.\n\nWhy gains pollute anyway: a writer fills in values the target harness needs, the target's reader reads them back as if the harness had written them, and they land as ordinary fields in that harness's namespace. Nothing marks them as made up.\n\nDo the transformers call them out? Only in comments, not in the data:\n- codex/project.rs module docs: \"For non-Codex sources, the projector synthesizes sensible defaults (originator \"codex-toolpath\", source \"cli\", model_provider \"openai\")\", plus cli_version \"0.0.0-projected\" at line 233. originator is deliberately a marker (\"so Codex-side tooling can tell projected sessions from real ones\"), and nothing reads that marker back.\n- claude/project.rs:81: \"emit a default permission-mode line so Claude Code can resume them\" (\"permissionMode\": \"default\").\n- path-cli/projection/codex.rs:102-105: \"openai\" when the source has no provider.\n\nProposal:\n(1) Every writer records what it synthesized in one place, a toolpath namespace (e.g. extra.toolpath.synthesized: the key paths it filled and why) or a recognisable marker, as codex already does with originator.\n(2) Readers that see toolpath's own marker keep those values out of the shared fields, or flag them.\n(3) The goldens split gains into \"synthesized, declared by the writer\" and \"undeclared\". Only undeclared gains fail, and the check compares values, not just keys.\nThis also fixes the invented-values row on slide 5 at the root. Want it dispatched after the current fixes land? It touches the same writers."
+        }
+      ]
+    },
+    {
+      "id": "01M5AT9P8HYQ398HN9JTZC9ZGP",
+      "created_at": "2026-10-19T19:30:29.265Z",
+      "status": "open",
+      "resolved_at": null,
+      "version_n": 20,
+      "anchor": {
+        "quote": null,
+        "selector": "#deck > section:nth-of-type(8)"
+      },
+      "comments": [
+        {
+          "author_kind": "viewer",
+          "created_at": "2026-10-19T19:30:29.265Z",
+          "body": "our webmock tooling should set all of this up"
+        },
+        {
+          "author_kind": "agent",
+          "created_at": "2026-10-19T19:30:47.406Z",
+          "body": "Agreed, and it is in progress: an agent is making `path develop webmock run <agent> record|replay` (under the develop feature, so release builds do not carry it). It does everything the scratch run-cell.sh did by hand: it starts the server on a free port, builds the temp home from a cell, applies that harness's switch (ANTHROPIC_BASE_URL, codex's chatgpt_base_url plus a local CA, pi's models.json, opencode's config, GEMINI_CLI_HOME/.env, COPILOT_API_URL), writes fake credentials in replay, runs the harness, and reports EXACT/LOOSE/MISS per request. It also has tests for each harness's setup that do not need the agent binaries, and it is verified in replay against the committed recordings. I will update this slide when it lands."
+        }
+      ]
+    }
+  ]
+}

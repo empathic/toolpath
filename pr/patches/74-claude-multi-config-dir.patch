@@ -1,0 +1,517 @@
+From 0f9d33386825ec37bd5cdf6d2f3df6a1c0693ecc Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 21:08:46 -0400
+Subject: [PATCH] feat(sync): support ':'-separated CLAUDE_CONFIG_DIR list for
+ multi-account cache
+
+Extend cache sync to ingest sessions from multiple Claude config roots in one
+pass, with each session stamped by its owning root. Enables expectations design
+to query work and personal sessions together without looping.
+
+Condition 1 (labeling): every synced session carries `path.meta.claude_config_dir`
+(the owning config root) and `path.meta.account` (derived from the root dir name).
+
+Condition 2 (default unchanged): single-value or unset CLAUDE_CONFIG_DIR still
+works (reads one dir or ~/.claude); paths without a separator treat the value as
+a literal.
+
+Condition 3 (evaluator discipline): sync reads all roots; single-session commands
+(derive, resume) read only the first, so account discipline requires evaluators
+to set CLAUDE_CONFIG_DIR explicitly per account (cross-account queries are a shell
+and Allie feature, not a multi-account privilege). Documented in providers.rs.
+
+Changes:
+- Config.claude_config_dirs() splits $CLAUDE_CONFIG_DIR on ':' (platform path
+  separator); empty entries dropped.
+- ClaudeSource now enumerates all managers and derives with the owning manager.
+- Tests: two fixtures with `:` and single-value lists; one prefix-bleed test for
+  --project-under with seats named work-home, work-home-author, work-home2-author.
+
+Fixes: path query --source claude --project-under ~/.local/state/lobby-seats
+returns empty when $CLAUDE_CONFIG_DIR points at fleet-work but TOOLPATH_CONFIG_DIR
+is on a different machine or cache; now syncs from all listed roots and labels
+which account owns each session.
+
+Decided by recommendation (consultant), local only, no push.
+---
+ crates/path-cli/src/config.rs       |  18 ++++
+ crates/path-cli/src/harness.rs      |   4 +
+ crates/path-cli/src/providers.rs    |  25 ++++-
+ crates/path-cli/src/sync/sources.rs | 117 ++++++++++++++++-------
+ crates/path-cli/tests/query.rs      | 139 ++++++++++++++++++++++++++++
+ 5 files changed, 269 insertions(+), 34 deletions(-)
+
+diff --git a/crates/path-cli/src/config.rs b/crates/path-cli/src/config.rs
+index 7859734e..e06fedcb 100644
+--- a/crates/path-cli/src/config.rs
++++ b/crates/path-cli/src/config.rs
+@@ -49,6 +49,8 @@ pub(crate) struct Config {
+     pub(crate) appdata: Option<PathBuf>,
+     /// `$CLAUDE_CONFIG_DIR`: Claude Code config root override; session
+     /// transcripts live under `<dir>/projects` instead of `~/.claude/projects`.
++    /// May be a `:`-separated list (see [`Config::claude_config_dirs`]);
++    /// only cache sync reads more than the first entry.
+     pub(crate) claude_config_dir: Option<PathBuf>,
+     /// `$COPILOT_HOME`: Copilot CLI session root override.
+     pub(crate) copilot_home: Option<PathBuf>,
+@@ -155,6 +157,22 @@ impl Config {
+     pub(crate) fn home_dir(&self) -> Option<&PathBuf> {
+         self.home.as_ref().or(self.userprofile.as_ref())
+     }
++
++    /// The Claude config roots named by `$CLAUDE_CONFIG_DIR`, split on
++    /// the platform path-list separator (`:` on unix), empty entries
++    /// dropped. A value without a separator yields exactly one root,
++    /// so the single-dir behavior is unchanged; unset yields none
++    /// (the resolver then defaults to `~/.claude`).
++    pub(crate) fn claude_config_dirs(&self) -> Vec<PathBuf> {
++        self.claude_config_dir
++            .as_ref()
++            .map(|v| {
++                std::env::split_paths(v)
++                    .filter(|p| !p.as_os_str().is_empty())
++                    .collect()
++            })
++            .unwrap_or_default()
++    }
+ }
+ 
+ /// The configured toolpath config directory (default `~/.toolpath`,
+diff --git a/crates/path-cli/src/harness.rs b/crates/path-cli/src/harness.rs
+index de693999..0c31d45a 100644
+--- a/crates/path-cli/src/harness.rs
++++ b/crates/path-cli/src/harness.rs
+@@ -99,6 +99,9 @@ impl ArtifactType {
+ #[derive(Default)]
+ pub(crate) struct HarnessBundle {
+     pub(crate) claude: Option<toolpath_claude::ClaudeConvo>,
++    /// Additional Claude config roots (`$CLAUDE_CONFIG_DIR` entries
++    /// after the first); consulted by cache sync only.
++    pub(crate) claude_extra: Vec<toolpath_claude::ClaudeConvo>,
+     pub(crate) gemini: Option<toolpath_gemini::GeminiConvo>,
+     pub(crate) codex: Option<toolpath_codex::CodexConvo>,
+     pub(crate) copilot: Option<toolpath_copilot::CopilotConvo>,
+@@ -114,6 +117,7 @@ impl HarnessBundle {
+     pub(crate) fn from_environment() -> Self {
+         Self {
+             claude: Some(toolpath_claude::ClaudeConvo::new()),
++            claude_extra: Vec::new(),
+             gemini: Some(toolpath_gemini::GeminiConvo::new()),
+             codex: Some(toolpath_codex::CodexConvo::new()),
+             copilot: Some(toolpath_copilot::CopilotConvo::new()),
+diff --git a/crates/path-cli/src/providers.rs b/crates/path-cli/src/providers.rs
+index caac24a7..98fa82e7 100644
+--- a/crates/path-cli/src/providers.rs
++++ b/crates/path-cli/src/providers.rs
+@@ -14,17 +14,35 @@ use crate::config::Config;
+ use crate::harness::HarnessBundle;
+ use std::path::Path;
+ 
+-pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
++fn claude_convo_for(config: &Config, dir: Option<&Path>) -> toolpath_claude::ClaudeConvo {
+     let mut resolver = toolpath_claude::PathResolver::new();
+     if let Some(home) = config.home_dir() {
+         resolver = resolver.with_home(home);
+     }
+-    if let Some(dir) = &config.claude_config_dir {
+-        resolver = resolver.with_claude_dir(dir.clone());
++    if let Some(dir) = dir {
++        resolver = resolver.with_claude_dir(dir);
+     }
+     toolpath_claude::ClaudeConvo::with_resolver(resolver)
+ }
+ 
++/// The primary Claude manager: the first `$CLAUDE_CONFIG_DIR` entry,
++/// or `~/.claude` when unset. Single-session commands use only this.
++pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
++    let dirs = config.claude_config_dirs();
++    claude_convo_for(config, dirs.first().map(|p| p.as_path()))
++}
++
++/// Managers for the second and later `$CLAUDE_CONFIG_DIR` entries,
++/// read by cache sync alongside [`claude_convo`].
++pub(crate) fn claude_extra_convos(config: &Config) -> Vec<toolpath_claude::ClaudeConvo> {
++    config
++        .claude_config_dirs()
++        .iter()
++        .skip(1)
++        .map(|d| claude_convo_for(config, Some(d)))
++        .collect()
++}
++
+ /// The in-process ssh client, with the agent socket and the `.ssh`
+ /// directory taken from [`Config`].
+ #[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
+@@ -114,6 +132,7 @@ pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiC
+ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
+     HarnessBundle {
+         claude: Some(claude_convo(config)),
++        claude_extra: claude_extra_convos(config),
+         gemini: Some(gemini_convo(config)),
+         codex: Some(codex_convo(config)),
+         copilot: Some(copilot_convo(config)),
+diff --git a/crates/path-cli/src/sync/sources.rs b/crates/path-cli/src/sync/sources.rs
+index d310249c..8610d51d 100644
+--- a/crates/path-cli/src/sync/sources.rs
++++ b/crates/path-cli/src/sync/sources.rs
+@@ -67,7 +67,11 @@ pub(crate) fn source_for<'a>(
+     t: ArtifactType,
+ ) -> Option<Box<dyn ArtifactSource + 'a>> {
+     match t {
+-        ArtifactType::Claude => Some(Box::new(ClaudeSource(bundle.claude.as_ref()?))),
++        ArtifactType::Claude => {
++            let mut convos = vec![bundle.claude.as_ref()?];
++            convos.extend(bundle.claude_extra.iter());
++            Some(Box::new(ClaudeSource(convos)))
++        }
+         ArtifactType::Gemini => Some(Box::new(GeminiSource(bundle.gemini.as_ref()?))),
+         ArtifactType::Codex => Some(Box::new(CodexSource(bundle.codex.as_ref()?))),
+         ArtifactType::Opencode => Some(Box::new(OpencodeSource(bundle.opencode.as_ref()?))),
+@@ -100,7 +104,47 @@ fn dir_in_scope(dir: &str, project_under: &Path) -> bool {
+ 
+ // ── claude ─────────────────────────────────────────────────────────
+ 
+-struct ClaudeSource<'a>(&'a toolpath_claude::ClaudeConvo);
++/// One manager per Claude config root, primary first. With a single
++/// root this is the plain one-manager source.
++struct ClaudeSource<'a>(Vec<&'a toolpath_claude::ClaudeConvo>);
++
++impl ClaudeSource<'_> {
++    /// The manager owning session `id` under `project`: the first root
++    /// that holds its transcript, else the primary. A session present
++    /// in two roots resolves to the earlier one.
++    fn owner(&self, project: &str, id: &str) -> &toolpath_claude::ClaudeConvo {
++        self.0
++            .iter()
++            .copied()
++            .find(|c| c.conversation_exists(project, id).unwrap_or(false))
++            .unwrap_or(self.0[0])
++    }
++}
++
++/// Record the owning config root on a derived Claude document, so
++/// sessions synced from different roots stay distinguishable in the
++/// cache and in `path query` (`.path.meta.claude_config_dir`,
++/// `.path.meta.account`).
++fn stamp_owner(doc: &mut toolpath::v1::Graph, mgr: &toolpath_claude::ClaudeConvo) {
++    let Ok(dir) = mgr.claude_dir_path() else {
++        return;
++    };
++    let account = dir
++        .file_name()
++        .map(|n| n.to_string_lossy().trim_start_matches('.').to_string())
++        .unwrap_or_default();
++    for p in &mut doc.paths {
++        if let toolpath::v1::PathOrRef::Path(p) = p {
++            let meta = p.meta.get_or_insert_with(Default::default);
++            meta.extra.insert(
++                "claude_config_dir".into(),
++                serde_json::Value::String(dir.to_string_lossy().into_owned()),
++            );
++            meta.extra
++                .insert("account".into(), serde_json::Value::String(account.clone()));
++        }
++    }
++}
+ 
+ impl ArtifactSource for ClaudeSource<'_> {
+     /// Chain heads via `list_conversations` (bounded first-lines peek
+@@ -109,48 +153,59 @@ impl ArtifactSource for ClaudeSource<'_> {
+     /// the whole chain (see `claude_chain_stamp`) because appends land
+     /// in the newest segment, not the head file.
+     fn enumerate(&self, project_under: Option<&Path>) -> Vec<ArtifactRef> {
+-        let mut out = Vec::new();
+-        let projects = match self.0.list_projects() {
+-            Ok(ps) => ps,
+-            Err(e) if is_not_found_claude(&e) => return out,
+-            Err(e) => {
+-                eprintln!("warning: claude enumeration failed: {e}");
+-                return out;
+-            }
+-        };
+-        for project in projects {
+-            if let Some(project_under) = project_under
+-                && !claude_project_in_scope(&project, project_under)
+-            {
+-                continue;
+-            }
+-            let heads = match self.0.list_conversations(&project) {
+-                Ok(h) => h,
++        let mut out: Vec<ArtifactRef> = Vec::new();
++        for convo in &self.0 {
++            let projects = match convo.list_projects() {
++                Ok(ps) => ps,
++                Err(e) if is_not_found_claude(&e) => continue,
+                 Err(e) => {
+-                    eprintln!("warning: claude project {project} failed: {e}");
++                    eprintln!("warning: claude enumeration failed: {e}");
+                     continue;
+                 }
+             };
+-            for head in heads {
+-                let (modified, size) = claude_chain_stamp(self.0, &project, &head);
+-                out.push(ArtifactRef {
+-                    artifact_type: ArtifactType::Claude,
+-                    id: head,
+-                    path: Some(project.clone()),
+-                    modified,
+-                    size,
+-                });
++            for project in projects {
++                if let Some(project_under) = project_under
++                    && !claude_project_in_scope(&project, project_under)
++                {
++                    continue;
++                }
++                let heads = match convo.list_conversations(&project) {
++                    Ok(h) => h,
++                    Err(e) => {
++                        eprintln!("warning: claude project {project} failed: {e}");
++                        continue;
++                    }
++                };
++                for head in heads {
++                    // A session present in two roots belongs to the earlier.
++                    if out.iter().any(|a| a.id == head) {
++                        continue;
++                    }
++                    let (modified, size) = claude_chain_stamp(convo, &project, &head);
++                    out.push(ArtifactRef {
++                        artifact_type: ArtifactType::Claude,
++                        id: head,
++                        path: Some(project.clone()),
++                        modified,
++                        size,
++                    });
++                }
+             }
+         }
+         out
+     }
+ 
+     fn stamp(&self, project: Option<&str>, id: &str) -> Option<Stamp> {
+-        Some(claude_chain_stamp(self.0, project?, id))
++        let project = project?;
++        Some(claude_chain_stamp(self.owner(project, id), project, id))
+     }
+ 
+     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
+-        derive::derive_claude_session_with(self.0, require_path(artifact)?, &artifact.id)
++        let project = require_path(artifact)?;
++        let owner = self.owner(project, &artifact.id);
++        let mut derived = derive::derive_claude_session_with(owner, project, &artifact.id)?;
++        stamp_owner(&mut derived.doc, owner);
++        Ok(derived)
+     }
+ 
+     fn in_scope(&self, dir: &str, project_under: &Path) -> bool {
+diff --git a/crates/path-cli/tests/query.rs b/crates/path-cli/tests/query.rs
+index 4822e060..70b16db2 100644
+--- a/crates/path-cli/tests/query.rs
++++ b/crates/path-cli/tests/query.rs
+@@ -634,6 +634,145 @@ fn query_project_under_scopes_sync_and_read() {
+         .stderr(predicate::str::contains("synced").not());
+ }
+ 
++/// Write one Claude session under `<cfg_root>/projects/<slug of project>`.
++fn claude_session_in(cfg_root: &Path, project: &Path, id: &str) {
++    std::fs::create_dir_all(project).unwrap();
++    let slug = project
++        .to_string_lossy()
++        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
++    let dir = cfg_root.join("projects").join(slug);
++    std::fs::create_dir_all(&dir).unwrap();
++    std::fs::write(
++        dir.join(format!("{id}.jsonl")),
++        format!(
++            r#"{{"type":"user","uuid":"u-{id}","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
++{{"type":"assistant","uuid":"a-{id}","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
++"#,
++            cwd = project.display()
++        ),
++    )
++    .unwrap();
++}
++
++#[test]
++fn claude_config_dir_list_syncs_every_root_and_labels_the_owner() {
++    let home = tempfile::tempdir().unwrap();
++    let work = home.path().join("claude-fleet-work");
++    let personal = home.path().join("claude-fleet-personal");
++    let proj = home.path().join("seats/.lobby_x");
++    claude_session_in(&work, &proj, "aaaa1111-work");
++    claude_session_in(&personal, &proj, "bbbb2222-personal");
++    let list = std::env::join_paths([&work, &personal]).unwrap();
++    let cfg = tempfile::tempdir().unwrap();
++    let run = |args: &[&str]| {
++        Command::cargo_bin("path")
++            .unwrap()
++            .env("HOME", home.path())
++            .env_remove("XDG_DATA_HOME")
++            .env("CLAUDE_CONFIG_DIR", &list)
++            .env("TOOLPATH_CONFIG_DIR", cfg.path())
++            .arg("query")
++            .args(args)
++            .assert()
++    };
++    let under = home.path().join("seats");
++    let under = under.to_str().unwrap();
++
++    // Both roots ingested in one sync, scoped by --project-under.
++    run(&[
++        "--source",
++        "claude",
++        "--project-under",
++        under,
++        "-c",
++        "[.[].path.meta.account] | unique",
++    ])
++    .success()
++    .stdout(predicate::str::contains(
++        "[\"claude-fleet-personal\",\"claude-fleet-work\"]",
++    ))
++    .stderr(predicate::str::contains("synced claude: 2 new"));
++
++    // Each session carries its own owning root, never the other's.
++    run(&[
++        "--no-sync",
++        "--source",
++        "claude",
++        "-c",
++        "[.[] | select(.path.meta.account == \"claude-fleet-work\") | .path.meta.claude_config_dir] | unique",
++    ])
++    .success()
++    .stdout(predicate::str::contains(work.to_str().unwrap()))
++    .stdout(predicate::str::contains(personal.to_str().unwrap()).not());
++}
++
++#[test]
++fn project_under_matches_exactly_one_seat_title_without_prefix_bleed() {
++    let home = tempfile::tempdir().unwrap();
++    let root = home.path().join("claude-fleet-work");
++    let seats = home.path().join("seats");
++    for (title, id) in [
++        ("work-home-author", "1111aaaa"),
++        ("work-home2-author", "2222bbbb"),
++        ("work-home", "3333cccc"),
++    ] {
++        claude_session_in(&root, &seats.join(title), id);
++    }
++    let cfg = tempfile::tempdir().unwrap();
++    let run = |title: &str| {
++        let under = seats.join(title);
++        let out = Command::cargo_bin("path")
++            .unwrap()
++            .env("HOME", home.path())
++            .env_remove("XDG_DATA_HOME")
++            .env("CLAUDE_CONFIG_DIR", &root)
++            .env("TOOLPATH_CONFIG_DIR", cfg.path())
++            .args([
++                "query",
++                "--source",
++                "claude",
++                "--project-under",
++                under.to_str().unwrap(),
++                "-c",
++                "[.[].path.base.uri] | unique",
++            ])
++            .output()
++            .unwrap();
++        String::from_utf8(out.stdout).unwrap()
++    };
++    let one = run("work-home-author");
++    assert!(one.contains("seats/work-home-author\""), "{one}");
++    assert!(!one.contains("work-home2-author"), "{one}");
++    assert!(!one.contains("seats/work-home\""), "{one}");
++    // "work-home" must not drag in "work-home-author" or "work-home2-author".
++    let two = run("work-home");
++    assert!(two.contains("seats/work-home\""), "{two}");
++    assert!(!two.contains("work-home-author"), "{two}");
++    assert!(!two.contains("work-home2-author"), "{two}");
++}
++
++#[test]
++fn claude_config_dir_single_value_reads_only_that_root() {
++    let home = tempfile::tempdir().unwrap();
++    let work = home.path().join("claude-fleet-work");
++    let personal = home.path().join("claude-fleet-personal");
++    let proj = home.path().join("seats/p");
++    claude_session_in(&work, &proj, "aaaa1111-work");
++    claude_session_in(&personal, &proj, "bbbb2222-personal");
++    let cfg = tempfile::tempdir().unwrap();
++    Command::cargo_bin("path")
++        .unwrap()
++        .env("HOME", home.path())
++        .env_remove("XDG_DATA_HOME")
++        .env("CLAUDE_CONFIG_DIR", &work)
++        .env("TOOLPATH_CONFIG_DIR", cfg.path())
++        .args(["query", "--source", "claude", "-c", "[.[].path.meta.account] | unique"])
++        .assert()
++        .success()
++        .stdout(predicate::str::contains("[\"claude-fleet-work\"]"))
++        .stderr(predicate::str::contains("synced claude: 1 new"));
++}
++
+ #[test]
+ fn an_unknown_source_warns_instead_of_silently_returning_nothing() {
+     let cfg = tempfile::tempdir().unwrap();
+-- 
+2.55.0
+
+From 1695c8c2212c1389d4a5193b6b261a06250768d3 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 15:08:28 -0400
+Subject: [PATCH] docs(sync): record for the multi-config-dir piece (pr/74);
+ rustfmt its test
+
+---
+ crates/path-cli/tests/query.rs   |  8 +++++++-
+ pr/74-claude-multi-config-dir.md | 17 +++++++++++++++++
+ 2 files changed, 24 insertions(+), 1 deletion(-)
+ create mode 100644 pr/74-claude-multi-config-dir.md
+
+diff --git a/crates/path-cli/tests/query.rs b/crates/path-cli/tests/query.rs
+index 70b16db2..ad1fa333 100644
+--- a/crates/path-cli/tests/query.rs
++++ b/crates/path-cli/tests/query.rs
+@@ -766,7 +766,13 @@ fn claude_config_dir_single_value_reads_only_that_root() {
+         .env_remove("XDG_DATA_HOME")
+         .env("CLAUDE_CONFIG_DIR", &work)
+         .env("TOOLPATH_CONFIG_DIR", cfg.path())
+-        .args(["query", "--source", "claude", "-c", "[.[].path.meta.account] | unique"])
++        .args([
++            "query",
++            "--source",
++            "claude",
++            "-c",
++            "[.[].path.meta.account] | unique",
++        ])
+         .assert()
+         .success()
+         .stdout(predicate::str::contains("[\"claude-fleet-work\"]"))
+diff --git a/pr/74-claude-multi-config-dir.md b/pr/74-claude-multi-config-dir.md
+new file mode 100644
+index 00000000..a569470a
+--- /dev/null
++++ b/pr/74-claude-multi-config-dir.md
+@@ -0,0 +1,17 @@
++# feat(sync): CLAUDE_CONFIG_DIR may list several roots (cache sync)
++
++Status: draft · Base: pr/73 · Code: commit 3942feb (Bobby's, 2026-10-18) cherry-picked unchanged as its own piece; this file is its record
++
++## Why
++`path query --source claude --project-under ~/.local/state/lobby-seats` returned nothing when `$CLAUDE_CONFIG_DIR` pointed at one account
++and the sessions lived under another. Cache sync now reads every root in a `:`-separated list and stamps each session with its owner
++(`path.meta.claude_config_dir`, `path.meta.account`).
++
++## What
++- `Config::claude_config_dirs()` splits on the platform path separator; empty entries dropped; unset yields none (the resolver defaults to `~/.claude`).
++- `ClaudeSource` enumerates all managers and derives with the owning one.
++- Single-session commands (derive, resume) still read only the first root; account discipline is the caller's (documented in providers.rs).
++- Default unchanged: a value without `:` is exactly one root. Consultant pick 12: merge-tree against f308ab5 had no conflicts.
++
++## Gates (sandbox, cargo 1.97.1) and not run
++See the report that carries this commit; not run: pinned 1.94, gitleaks.
+-- 
+2.55.0
+

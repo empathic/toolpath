@@ -1,0 +1,114 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: log
+---
+$ path p track init --file src/main.rs --actor human:alex --title 'Refactoring auth'
+exit: 0
+--- stdout
+<home>/tmp/track-<stamp>-<pid>.path.jsonl
+--- stderr
+
+# init (initial content on stdin)
+$ path p track step --session <session> --seq 1 --parent-seq 0
+exit: 0
+--- stdout
+step-001
+--- stderr
+
+# step (current content on stdin)
+$ path p track step --session <session> --seq 2 --parent-seq 1
+exit: 0
+--- stdout
+step-002
+--- stderr
+
+# step (current content on stdin)
+$ path p track annotate --session <session> --intent Extract helper
+exit: 0
+--- stdout
+
+--- stderr
+
+# 
+$ path p track note --session <session> --intent Split main
+exit: 0
+--- stdout
+
+--- stderr
+
+# 
+$ path p track visit --session <session> --seq 1
+exit: 0
+--- stdout
+
+--- stderr
+
+# 
+$ path p track export --session <session> --pretty
+exit: 0
+--- stdout
+{
+  "graph": {
+    "id": "track-<stamp>-<pid>"
+  },
+  "paths": [
+    {
+      "meta": {
+        "title": "Refactoring auth"
+      },
+      "path": {
+        "head": "step-002",
+        "id": "track-<stamp>-<pid>"
+      },
+      "steps": [
+        {
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -1 +1 @@\n-fn main() {}\n+fn main() { a() }\n"
+            }
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-001",
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -1 +1 @@\n-fn main() { a() }\n+fn main() { a(); b() }\n"
+            }
+          },
+          "meta": {
+            "intent": "Split main"
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-002",
+            "parents": [
+              "step-001"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        }
+      ]
+    }
+  ]
+}
+--- stderr
+
+# export
+$ path p track list --session-dir <home>/tmp
+exit: 0
+--- stdout
+track-<stamp>-<pid> | src/main.rs | human:alex | 2 steps | <timestamp>
+--- stderr
+
+# list
+$ path p track close --session <session> --output <home>/done.path.json
+exit: 0
+--- stdout
+
+--- stderr
+
+# close

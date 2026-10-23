@@ -425,3 +425,45 @@ fn projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     ConversationReader::read_conversation(tmp.path()).expect("re-read projected JSONL");
 }
+
+/// Every `thinking` block's signature, in order, from a projected conversation.
+fn thinking_signatures(convo: &toolpath_claude::Conversation) -> Vec<Option<String>> {
+    use toolpath_claude::{ContentPart, MessageContent};
+    convo
+        .entries
+        .iter()
+        .filter_map(|e| e.message.as_ref())
+        .filter_map(|m| match &m.content {
+            Some(MessageContent::Parts(parts)) => Some(parts),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|p| match p {
+            ContentPart::Thinking { signature, .. } => Some(signature.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Anthropic signs each thinking block and checks the signature when a session is resumed, so
+/// a claude -> claude round trip must give back every signature byte for byte (the writer
+/// used to write none).
+#[test]
+fn claude_to_claude_keeps_every_thinking_signature() {
+    let source = ConversationReader::read_conversation(fixture_path()).expect("read fixture");
+    let before = thinking_signatures(&source);
+    assert!(
+        before.iter().any(|s| s.is_some()),
+        "the fixture has signed thinking blocks"
+    );
+
+    let view = toolpath_claude::provider::to_view(&source);
+    let again = ir_roundtrip(&view);
+    let projected = ClaudeProjector.project(&again).expect("project to claude");
+    let after = thinking_signatures(&projected);
+
+    assert_eq!(
+        after, before,
+        "thinking signatures changed in a claude -> claude round trip"
+    );
+}

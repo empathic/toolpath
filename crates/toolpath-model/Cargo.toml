@@ -1,0 +1,19 @@
+[package]
+name = "toolpath-model"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository = "https://github.com/empathic/toolpath"
+description = "One generated object model of the goldens work: harnesses, sets, snapshots, findings, claims, PR pieces, qualifier concerns and review feedback, with provenance"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The validator `path p validate` uses, at the same version.
+jsonschema = { version = "0.46", default-features = false }

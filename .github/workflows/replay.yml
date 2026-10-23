@@ -1,0 +1,17 @@
+name: Replay
+
+# Runs the record/replay tests with no keys. Also what `just act replay <agent>` runs locally.
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: agent to replay (opencode, copilot, claude, pi, codex, cursor)
+        required: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replay
+        run: just replay ${{ inputs.agent }}

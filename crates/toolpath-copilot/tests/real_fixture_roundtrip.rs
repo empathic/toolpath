@@ -235,3 +235,75 @@ fn wire_serde_roundtrip_is_lossless() {
         assert_eq!(orig, back, "line {} not value-identical after serde", i + 1);
     }
 }
+
+// ── Sub-agent messages (parentToolCallId) ────────────────────────────
+
+fn assistant_messages(lines: &[toolpath_copilot::EventLine]) -> Vec<&toolpath_copilot::EventLine> {
+    lines
+        .iter()
+        .filter(|l| l.kind == "assistant.message")
+        .collect()
+}
+
+/// The fixture's sub-agent speaks twice (`assistant.message` with `parentToolCallId` = the `task`
+/// call, turns 0 and 1, no turn_start of their own). Those are the delegation's own turns: they
+/// belong to `delegations[].turns`, not to the parent turn's text.
+#[test]
+fn a_sub_agents_messages_are_the_delegations_turns_not_the_parents_text() {
+    let session = real_session();
+    let view = to_view(&session);
+    let d = view
+        .turns
+        .iter()
+        .flat_map(|t| &t.delegations)
+        .next()
+        .expect("the task delegation");
+    assert_eq!(d.turns.len(), 2, "the sub-agent's two messages");
+    assert!(
+        d.turns[1].text.contains("16 words"),
+        "{:?}",
+        d.turns[1].text
+    );
+    let parent = view
+        .turns
+        .iter()
+        .find(|t| !t.delegations.is_empty())
+        .unwrap();
+    assert!(
+        !parent.text.contains("16 words"),
+        "the sub-agent's reply leaked into the parent turn: {:?}",
+        parent.text
+    );
+}
+
+/// copilot -> copilot gives back every assistant.message (13 in the source, 11 before the fix),
+/// the sub-agent's two still pointing at the task call.
+#[test]
+fn copilot_to_copilot_keeps_every_assistant_message() {
+    let session = real_session();
+    let before = assistant_messages(&session.lines).len();
+    assert_eq!(before, 13);
+    let view = to_view(&session);
+    let projected = CopilotProjector::new().project(&view).expect("project");
+    let after = assistant_messages(&projected.lines);
+    assert_eq!(after.len(), before, "assistant.message events changed");
+    let sub: Vec<_> = after
+        .iter()
+        .filter(|l| l.payload()["parentToolCallId"].is_string())
+        .collect();
+    assert_eq!(
+        sub.len(),
+        2,
+        "the sub-agent's messages keep parentToolCallId"
+    );
+    // every message keeps its own outputTokens: the figures are not double-counted
+    let tokens = |ls: &[&toolpath_copilot::EventLine]| -> Vec<Option<u64>> {
+        let mut v: Vec<_> = ls
+            .iter()
+            .map(|l| l.payload()["outputTokens"].as_u64())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(tokens(&assistant_messages(&session.lines)), tokens(&after));
+}

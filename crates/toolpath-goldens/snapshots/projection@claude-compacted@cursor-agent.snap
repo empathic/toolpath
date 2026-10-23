@@ -1,0 +1,76 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "meta": {
+    "agentId": "5d68952d-a736-437e-a289-3b605f9ea2d0",
+    "latestRootBlobId": "8971a5e5b1f3012992cd31c831e5b9eb424efee9ae6f765e1eba3d38a65f07fe",
+    "name": "Help me refactor the auth module.",
+    "mode": "default",
+    "isRunEverything": false,
+    "createdAt": 1717236000000,
+    "blobEncryptionKey": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "blobs": {
+    "00c9c98744d85fe4b128fc08339f796c40f00272bade5312c65b82b5cfe5b0e7": {
+      "text": "{\"content\":[{\"text\":\"[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation.\",\"type\":\"text\"}],\"role\":\"user\"}"
+    },
+    "02d4c4649b3f2313d582abd4f804676ed02fc484ac85541af52416f29f890851": {
+      "text": "{\"content\":[{\"text\":\"I'll start by reading the current auth code.\",\"type\":\"text\"},{\"args\":{\"file_path\":\"src/auth.rs\"},\"toolCallId\":\"t-pre-1\",\"toolName\":\"Read\",\"type\":\"tool-call\"}],\"id\":\"uuid-pre-2\",\"role\":\"assistant\"}"
+    },
+    "0326e1163a0b1a6525623b73fdc76461e4fe0d92094f0429dee9c61b8ae9c4f6": {
+      "text": "\n.\n,I'll start by reading the current auth code."
+    },
+    "1ea9ec5d1b7c77c5ee04457254e89bf9e63057ddb5fe91b12bc168e094809473": {
+      "text": "{\"content\":[{\"text\":\"Now add the session validation.\",\"type\":\"text\"}],\"role\":\"user\"}"
+    },
+    "4fe7574e0425cfa2532f30532ccad9fe6d5ea34d09abaf52f8f4a0cd28c78e1e": {
+      "text": "\nv[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation.\u0012\fuuid-summary"
+    },
+    "56eb94cd93ccbc2d2c6e4848804f9c8727a99e0f74f6dcffbe48d3726ce1b21f": {
+      "text": "\n8\n6Done. The auth module now validates sessions on login."
+    },
+    "741495f49703166832bbbc47eb1f18db3fba84b883018f7a4132d3513afd3446": {
+      "text": "{\"content\":[{\"isError\":false,\"result\":\"File written successfully\",\"toolCallId\":\"t-post-1\",\"toolName\":\"Edit\",\"type\":\"tool-result\"}],\"role\":\"tool\"}"
+    },
+    "7cb834860de868c374eea4e8ce97357348602b2fd8ee5f5a9c692b3ae747cef9": {
+      "text": "\n\u001fNow add the session validation.\u0012\u000buuid-post-1"
+    },
+    "8971a5e5b1f3012992cd31c831e5b9eb424efee9ae6f765e1eba3d38a65f07fe": {
+      "hex": "0a20ac31b1bdb87ecec654202ea7d02f36b87ca779bd521631f806f0c6a4add9ac3e0a2002d4c4649b3f2313d582abd4f804676ed02fc484ac85541af52416f29f8908510a20a7cfd4dcb360e143a571c8eb58f0709e2e31fa6d43bafbbb309dd25119bd45900a2000c9c98744d85fe4b128fc08339f796c40f00272bade5312c65b82b5cfe5b0e70a201ea9ec5d1b7c77c5ee04457254e89bf9e63057ddb5fe91b12bc168e0948094730a20de10fa6ce41aa38c31b00b0094c9709ab14fc877dcde338bfdc695b094b6ee230a20741495f49703166832bbbc47eb1f18db3fba84b883018f7a4132d3513afd34460a20a9f8786513982ef9f274112ec7b6a966eb6a012465f9eae138e6d050c00306ec4220f0355aca57906a88bd0f9260424fc1fa539ec7888b2513ae06376ab9a2b95dbb4220fc86a8448221dad541c123d0eae7e99189729f568d6d5114bc2ade5aaada2df84220e6fa6e919fcd50a7e2534ee0068efbb244fb5408ed97ac0c5433f5977cdbd4e2"
+    },
+    "a7cfd4dcb360e143a571c8eb58f0709e2e31fa6d43bafbbb309dd25119bd4590": {
+      "text": "{\"content\":[{\"isError\":false,\"result\":\"pub fn login() { ... }\",\"toolCallId\":\"t-pre-1\",\"toolName\":\"Read\",\"type\":\"tool-result\"}],\"role\":\"tool\"}"
+    },
+    "a9f8786513982ef9f274112ec7b6a966eb6a012465f9eae138e6d050c00306ec": {
+      "text": "{\"content\":[{\"text\":\"Done. The auth module now validates sessions on login.\",\"type\":\"text\"}],\"id\":\"uuid-post-4\",\"role\":\"assistant\"}"
+    },
+    "ac31b1bdb87ecec654202ea7d02f36b87ca779bd521631f806f0c6a4add9ac3e": {
+      "text": "{\"content\":[{\"text\":\"Help me refactor the auth module.\",\"type\":\"text\"}],\"role\":\"user\"}"
+    },
+    "b8d65eed0803abb353b57a015f47c496a2d75764edfd9437f477bc7ca0f0ec7e": {
+      "text": "\n'\n%Adding session validation to login()."
+    },
+    "de10fa6ce41aa38c31b00b0094c9709ab14fc877dcde338bfdc695b094b6ee23": {
+      "text": "{\"content\":[{\"text\":\"Adding session validation to login().\",\"type\":\"text\"},{\"args\":{\"file_path\":\"src/auth.rs\",\"new_string\":\"pub fn login() { validate_session();\",\"old_string\":\"pub fn login() {\"},\"toolCallId\":\"t-post-1\",\"toolName\":\"Edit\",\"type\":\"tool-call\"}],\"id\":\"uuid-post-2\",\"role\":\"assistant\"}"
+    },
+    "e6fa6e919fcd50a7e2534ee0068efbb244fb5408ed97ac0c5433f5977cdbd4e2": {
+      "hex": "0a660a207cb834860de868c374eea4e8ce97357348602b2fd8ee5f5a9c692b3ae747cef91220b8d65eed0803abb353b57a015f47c496a2d75764edfd9437f477bc7ca0f0ec7e122056eb94cd93ccbc2d2c6e4848804f9c8727a99e0f74f6dcffbe48d3726ce1b21f"
+    },
+    "f0355aca57906a88bd0f9260424fc1fa539ec7888b2513ae06376ab9a2b95dbb": {
+      "hex": "0a440a20ff20b13c8e61de27e32ba60017909193c99d899f29e73172ebef2deac5775cee12200326e1163a0b1a6525623b73fdc76461e4fe0d92094f0429dee9c61b8ae9c4f6"
+    },
+    "fc86a8448221dad541c123d0eae7e99189729f568d6d5114bc2ade5aaada2df8": {
+      "hex": "0a220a204fe7574e0425cfa2532f30532ccad9fe6d5ea34d09abaf52f8f4a0cd28c78e1e"
+    },
+    "ff20b13c8e61de27e32ba60017909193c99d899f29e73172ebef2deac5775cee": {
+      "text": "\n!Help me refactor the auth module.\u0012\nuuid-pre-1"
+    }
+  }
+}

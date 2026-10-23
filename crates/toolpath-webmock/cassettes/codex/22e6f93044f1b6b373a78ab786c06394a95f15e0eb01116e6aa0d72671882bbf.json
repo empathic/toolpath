@@ -1,0 +1,51 @@
+{
+ "agent": "codex",
+ "recorded_at": "2026-10-15T19:21:09.074Z",
+ "key": "22e6f93044f1b6b373a78ab786c06394a95f15e0eb01116e6aa0d72671882bbf",
+ "loose_key": "01b7c635d0ffaf9337ff1e3359cbc2603ac0feb737dcf263aed40215f0a07ceb",
+ "model": "",
+ "request": {
+  "method": "GET",
+  "url": "/backend-api/plugins/featured?platform=codex",
+  "upstream": "https://chatgpt.com",
+  "headers": {
+   "accept": "*/*",
+   "authorization": "<redacted>",
+   "chatgpt-account-id": "<redacted>",
+   "originator": "codex_exec",
+   "user-agent": "codex_exec/0.162.1 (Mac OS 26.6.2; arm64) unknown"
+  },
+  "body": "",
+  "body_encoding": "identity",
+  "normalized": ""
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a4b12f683c238c77-EWR",
+   "content-type": "application/json",
+   "cross-origin-opener-policy": "same-origin-allow-popups",
+   "date": "Thu, 15 Oct 2026 19:21:09 GMT",
+   "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+   "referrer-policy": "strict-origin-when-cross-origin",
+   "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=v8uZCsFwM4rugU2Sp2kfjWXOU5blbQ9aHt7NlIb6uW4XwXfR%2BFZ9sYuuKD5AFGPLvu6B6daxjhf25ectUUFpAKy%2BBgTY03fPmMan0hRfwFqVquWcVVzMAabV8nTv\"}]}",
+   "server": "cloudflare",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "x-build": "e8c975e103a3",
+   "x-content-type-options": "nosniff",
+   "x-oai-request-id": "a190475b-b991-4878-9f15-70411939e36f",
+   "set-cookie": "<redacted>"
+  },
+  "chunks": [
+   {
+    "t_ms": 270,
+    "b64": "WyJnbWFpbEBvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJnb29nbGUtZHJpdmVAb3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwib3V0bG9vay1lbWFpbEBvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJnaXRodWJAb3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwic2hhcmVwb2ludEBvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJzbGFja0BvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJ0ZWFtc0BvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJvdXRsb29rLWNhbGVuZGFyQG9wZW5haS1jdXJhdGVkLXJlbW90ZSIsImdvb2dsZS1jYWxlbmRhckBvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJhdGxhc3NpYW4tcm92b0BvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJub3Rpb25Ab3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwiY2FudmFAb3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwiZmlnbWFAb3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwibGluZWFyQG9wZW5haS1jdXJhdGVkLXJlbW90ZSIsImRhdGEtYW5hbHl0aWNzQG9wZW5haS1jdXJhdGVkLXJlbW90ZSIsInN1cGVycG93ZXJzQG9wZW5haS1jdXJhdGVkLXJlbW90ZSIsImh1YnNwb3RAb3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwiYXNhbmFAb3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwicHJvZHVjdC1kZXNpZ25Ab3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwiYm94QG9wZW5haS1jdXJhdGVkLXJlbW90ZSIsInZlcmNlbEBvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJncmFub2xhQG9wZW5haS1jdXJhdGVkLXJlbW90ZSIsInN1cGFiYXNlQG9wZW5haS1jdXJhdGVkLXJlbW90ZSIsIm1vbmRheS1jb21Ab3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwiYWlydGFibGVAb3BlbmFpLWN1cmF0ZWQtcmVtb3RlIiwiem9vbUBvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJzYWxlc0BvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJjb2RleC1zZWN1cml0eUBvcGVuYWktY3VyYXRlZC1yZW1vdGUiLCJsb3ZhYmxlQG9wZW5haS1jdXJhdGVkLXJlbW90ZSJd"
+   }
+  ],
+  "bytes": 972,
+  "duration_ms": 270,
+  "sse": false,
+  "text_preview": "[\"gmail@openai-curated-remote\",\"google-drive@openai-curated-remote\",\"outlook-email@openai-curated-remote\",\"github@openai-curated-remote\",\"sharepoint@openai-curated-remote\",\"slack@openai-curated-remote\",\"teams@openai-curated-remote\",\"outlook-calendar@openai-curated-remote\",\"google-calendar@openai-curated-remote\",\"atlassian-rovo@openai-curated-remote\",\"notion@openai-curated-remote\",\"canva@openai-cur"
+ }
+}

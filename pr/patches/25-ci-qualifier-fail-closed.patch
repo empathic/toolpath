@@ -1,0 +1,137 @@
+From 3f75b6b321dc04b7c3077ceb3902c93d3dd701c0 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 16:02:07 -0400
+Subject: [PATCH] ci(goldens): install the pinned qualifier in CI; the
+ qualifier review fails closed there
+
+The GitHub runner had no qualifier binary, so the goldens' qualifier review
+skipped with a note and passed: a silent pass on every PR. The workflow now
+downloads qualifier 0.8.0's linux-musl release asset, checks its pinned
+sha256, and points TOOLPATH_GOLDENS_QUALIFIER at it. Both tests that run the
+review fail instead of skipping when CI is set and the binary is missing; a
+dev shell without qualifier still skips. Record: pr/25.
+---
+ .github/workflows/deploy-site.yml          | 12 +++++++++
+ crates/path-cli/tests/goldens.rs           |  7 +++++
+ crates/toolpath-goldens/tests/qualifier.rs | 15 ++++++++++-
+ pr/25-ci-qualifier-fail-closed.md          | 30 ++++++++++++++++++++++
+ 4 files changed, 63 insertions(+), 1 deletion(-)
+ create mode 100644 pr/25-ci-qualifier-fail-closed.md
+
+diff --git a/.github/workflows/deploy-site.yml b/.github/workflows/deploy-site.yml
+index 7f2d04c6..9fc2eab6 100644
+--- a/.github/workflows/deploy-site.yml
++++ b/.github/workflows/deploy-site.yml
+@@ -34,6 +34,18 @@ jobs:
+           cache: pnpm
+           cache-dependency-path: site/pnpm-lock.yaml
+ 
++      # The goldens' qualifier review needs the binary; without it the tests fail closed under CI.
++      # Pinned release asset, checked against its sha256 before it runs.
++      - name: Install qualifier 0.8.0
++        run: |
++          curl -fsSL -o /tmp/qualifier.tgz \
++            https://github.com/empathic/qualifier/releases/download/v0.8.0/qualifier-x86_64-unknown-linux-musl.tar.gz
++          echo "f39f525234cc7e473d20d88b5fca64b6b9c514de248cb7b7efe8958a8796f1ec  /tmp/qualifier.tgz" | sha256sum -c -
++          mkdir -p "$HOME/.local/bin"
++          tar -xzf /tmp/qualifier.tgz -C "$HOME/.local/bin" qualifier
++          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
++          echo "TOOLPATH_GOLDENS_QUALIFIER=$HOME/.local/bin/qualifier" >> "$GITHUB_ENV"
++
+       - name: Quality gates # same gates as `just ci`
+         run: scripts/quality_gates.sh --verbose
+ 
+diff --git a/crates/path-cli/tests/goldens.rs b/crates/path-cli/tests/goldens.rs
+index 49c3e9d4..f9f90926 100644
+--- a/crates/path-cli/tests/goldens.rs
++++ b/crates/path-cli/tests/goldens.rs
+@@ -20,6 +20,13 @@ fn goldens() {
+     // does not ship qualifier, so the test opts out explicitly when it cannot find the binary
+     // (set TOOLPATH_GOLDENS_QUALIFIER to run it here too).
+     if qualifier_bin().is_none() {
++        // Under CI the workflow installs the pinned qualifier, so a missing binary there is a
++        // broken setup, not a dev shell: fail rather than pass without the review.
++        let ci = std::env::var("CI").is_ok_and(|v| !v.is_empty() && v != "false" && v != "0");
++        assert!(
++            !ci,
++            "goldens test: no qualifier binary and CI is set; the review would be skipped silently"
++        );
+         eprintln!("goldens test: no qualifier binary; qualifier review skipped on purpose");
+         g.qualifier = QualifierReview::Skip;
+     }
+diff --git a/crates/toolpath-goldens/tests/qualifier.rs b/crates/toolpath-goldens/tests/qualifier.rs
+index 1705c596..3be20808 100644
+--- a/crates/toolpath-goldens/tests/qualifier.rs
++++ b/crates/toolpath-goldens/tests/qualifier.rs
+@@ -3,7 +3,10 @@
+ //! an anchor that drifted or went missing means the code moved under a
+ //! finding nobody re-read. The binary is `$TOOLPATH_GOLDENS_QUALIFIER`, else
+ //! `qualifier` on PATH; with neither the test prints why it skipped and
+-//! passes, so a dev shell without qualifier still runs the goldens.
++//! passes, so a dev shell without qualifier still runs the goldens. Under CI
++//! (`CI` set to anything but `false`/`0`) a missing binary fails the test:
++//! the CI workflow installs the pinned qualifier, and a skipped review there
++//! would be a silent pass.
+ //!
+ //! `qualifier review <subject>` matches one subject exactly (a file, not a
+ //! directory), so the test reviews the whole repo as JSON and keeps the
+@@ -22,6 +25,11 @@ const CRATE: &str = "crates/toolpath-goldens/";
+ fn qualifier_anchors_on_this_crate_are_fresh() {
+     let explicit = std::env::var_os("TOOLPATH_GOLDENS_QUALIFIER").filter(|v| !v.is_empty());
+     let Some(bin) = explicit.map(PathBuf::from).or_else(|| on_path("qualifier")) else {
++        assert!(
++            !in_ci(),
++            "qualifier review cannot run: no `qualifier` on PATH and TOOLPATH_GOLDENS_QUALIFIER unset, \
++             and CI is set, so skipping would be a silent pass (the workflow installs the pinned qualifier)"
++        );
+         eprintln!(
+             "qualifier review skipped: no `qualifier` on PATH and TOOLPATH_GOLDENS_QUALIFIER unset"
+         );
+@@ -74,3 +82,8 @@ fn on_path(name: &str) -> Option<PathBuf> {
+         .map(|d| d.join(name))
+         .find(|p| p.is_file())
+ }
++
++/// True under CI: `CI` set to anything but `false` or `0` (GitHub Actions sets `CI=true`).
++fn in_ci() -> bool {
++    std::env::var("CI").is_ok_and(|v| !v.is_empty() && v != "false" && v != "0")
++}
+diff --git a/pr/25-ci-qualifier-fail-closed.md b/pr/25-ci-qualifier-fail-closed.md
+new file mode 100644
+index 00000000..0689aced
+--- /dev/null
++++ b/pr/25-ci-qualifier-fail-closed.md
+@@ -0,0 +1,30 @@
++# ci(goldens): CI installs the pinned qualifier and the qualifier review fails closed there
++
++Status: planned (asked 2026-10-19 on the goldens demo deck: "can we prove it?", gap "one step of the CI check") · Base: the goldens stack once merged
++
++## Why
++The goldens' qualifier review needs a `qualifier` binary. The GitHub runner has none, and both tests that run the
++review (`crates/toolpath-goldens/tests/qualifier.rs`, `crates/path-cli/tests/goldens.rs`) skip it with a printed
++note when the binary is missing. In CI that skip is a silent pass: the review the goldens claim to run never runs on
++any PR.
++
++## What changes
++- `.github/workflows/deploy-site.yml`: before the quality gates, download qualifier 0.8.0's
++  `qualifier-x86_64-unknown-linux-musl.tar.gz` from the empathic/qualifier v0.8.0 release, check it against its
++  pinned sha256 (`f39f5252…6f1ec`, the release's own digest), put it on PATH and set `TOOLPATH_GOLDENS_QUALIFIER`.
++- Both tests fail instead of skipping when the binary is missing and `CI` is set (anything but `false`/`0`; GitHub
++  sets `CI=true`). A dev shell without qualifier still skips, as before.
++
++## Verification (2026-10-19, local simulation of the CI env, qualifier removed from PATH)
++- `CI=true`, no binary: `toolpath-goldens --test qualifier` FAILED ("qualifier review cannot run … CI is set");
++  `path-cli --features goldens --test goldens` FAILED ("no qualifier binary and CI is set").
++- `CI=true`, pinned binary via `TOOLPATH_GOLDENS_QUALIFIER`: both pass (1 + 1 tests).
++- No `CI`, no binary: the qualifier test skips and passes, as before.
++- The release asset's sha256 was checked by download (`shasum -a 256`) and the tarball holds the one `qualifier` binary.
++
++## Paths
++```
++.github/workflows/deploy-site.yml
++crates/toolpath-goldens/tests/qualifier.rs
++crates/path-cli/tests/goldens.rs
++```
+-- 
+2.55.0
+

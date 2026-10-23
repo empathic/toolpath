@@ -1,0 +1,13 @@
+[
+  {"source":"claude","path":"paths[].steps[].change.<artifact>.structural.entry_extra","why":"Claude Code's own transcript-entry fields (uuid chains, attachment payloads, hook output, tool-use result envelopes) kept verbatim under entry_extra; no other agent's format has a place for them."},
+  {"source":"claude","path":"paths[].steps[].change.<artifact>.structural.raw","why":"The Claude transcript entry as it was read, kept for a claude-to-claude round trip; other formats carry their own entry shape."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.info","why":"Codex token_count event bookkeeping (running totals, context window); not part of any other agent's conversation."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.rate_limits","why":"Codex's account rate-limit snapshot attached to token_count events."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.permission_profile","why":"Codex turn_context sandbox and approval settings for the session."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.file_system_sandbox_policy","why":"Codex turn_context sandbox settings."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.sandbox_policy","why":"Codex turn_context sandbox settings."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.collaboration_mode","why":"Codex turn_context collaboration settings (mode, model, effort)."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.truncation_policy","why":"Codex turn_context context-truncation settings."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.source","why":"Codex session_meta origin marker (cli, exec, or sub-agent source)."},
+  {"source":"codex","path":"paths[].steps[].change.<artifact>.structural.timezone","why":"Codex turn_context timezone setting."}
+]

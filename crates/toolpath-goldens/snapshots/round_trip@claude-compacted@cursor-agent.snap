@@ -1,0 +1,46 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 7,
+    "text_chars": 317,
+    "tool_uses": 2,
+    "key_paths": 42
+  },
+  "after": {
+    "steps": 6,
+    "text_chars": 317,
+    "tool_uses": 2,
+    "key_paths": 30
+  },
+  "lost": [
+    "paths[].meta.actors.<actor>.model",
+    "paths[].meta.actors.<actor>.provider",
+    "paths[].meta.files_changed[]",
+    "paths[].path.base.branch",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens",
+    "paths[].steps[].change.src/auth.rs.structural.operation"
+  ],
+  "gained": [
+    "paths[].meta.producer.name",
+    "paths[].steps[].change.src/auth.rs.structural.after",
+    "paths[].steps[].change.src/auth.rs.structural.before"
+  ]
+}

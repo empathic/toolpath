@@ -40,8 +40,8 @@ use crate::types::{
 };
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError as ConvoTraitError,
-    EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn, unified_diff,
+    DelegatedWork, EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn, unified_diff,
 };
 
 /// The dispatch family used in `path.meta.source` and
@@ -317,9 +317,21 @@ impl<'a> Builder<'a> {
                 // shorter conversation than break the parse.
                 _ => continue,
             };
+            // The writer gives a turn's 2nd..nth tool calls bubbles of their own, ids
+            // `<turn id>-tool-<k>` (a Cursor bubble holds one call); read them back as the
+            // one turn they came from, so a re-read has the shape of the first.
+            if let Some(prev) = self.turns.last_mut()
+                && bubble.kind == BUBBLE_TYPE_ASSISTANT
+                && turn.id.starts_with(&format!("{}-tool-", prev.id))
+            {
+                prev.tool_uses.extend(turn.tool_uses);
+                prev.file_mutations.extend(turn.file_mutations);
+                continue;
+            }
             prev_turn_id = Some(turn.id.clone());
             self.turns.push(turn);
         }
+        self.insert_system_turns();
 
         let started_at = self.session.started_at().or_else(|| {
             self.session
@@ -362,9 +374,93 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// The model history's system messages as System turns (bubbles draw no system turn; the
+    /// writer keeps that text only in the history). Each goes before the turn the next user or
+    /// assistant message names (the k-th user turn with text, or the assistant turn with that
+    /// id), or at the end when none follows; parents are then re-chained in order.
+    fn insert_system_turns(&mut self) {
+        let history = self.session.model_messages();
+        if !history.iter().any(|m| m["role"] == "system") {
+            return;
+        }
+        let user_turns: Vec<usize> = (0..self.turns.len())
+            .filter(|&i| self.turns[i].role == Role::User && !self.turns[i].text.is_empty())
+            .collect();
+        let mut users_seen = 0;
+        let mut pending: Vec<(usize, String)> = Vec::new();
+        let mut placed: Vec<(usize, usize, String)> = Vec::new();
+        for (i, msg) in history.iter().enumerate() {
+            let anchor = match msg["role"].as_str() {
+                Some("system") => {
+                    let text = crate::agent_store::system_text(msg);
+                    if !text.is_empty() {
+                        pending.push((i, text));
+                    }
+                    continue;
+                }
+                Some("user") => {
+                    users_seen += 1;
+                    user_turns.get(users_seen - 1).copied()
+                }
+                Some("assistant") => msg["id"]
+                    .as_str()
+                    .and_then(|id| self.turns.iter().position(|t| t.id == id)),
+                _ => None,
+            };
+            if let Some(anchor) = anchor {
+                placed.extend(pending.drain(..).map(|(i, text)| (anchor, i, text)));
+            }
+        }
+        let end = self.turns.len();
+        placed.extend(pending.into_iter().map(|(i, text)| (end, i, text)));
+
+        let bubble_turns = std::mem::take(&mut self.turns);
+        let last_timestamp = bubble_turns
+            .last()
+            .map(|t| t.timestamp.clone())
+            .unwrap_or_default();
+        let mut placed = placed.into_iter().peekable();
+        for (j, turn) in bubble_turns
+            .into_iter()
+            .map(Some)
+            .chain(std::iter::once(None))
+            .enumerate()
+        {
+            let timestamp = turn
+                .as_ref()
+                .map_or_else(|| last_timestamp.clone(), |t| t.timestamp.clone());
+            while let Some((_, i, text)) = placed.next_if(|(anchor, _, _)| *anchor == j) {
+                self.turns.push(Turn {
+                    provider: None,
+                    id: format!("system-{i}"),
+                    parent_id: None,
+                    group_id: None,
+                    role: Role::System,
+                    timestamp: timestamp.clone(),
+                    text,
+                    thinking: None,
+                    thinking_signature: None,
+                    tool_uses: Vec::new(),
+                    model: None,
+                    stop_reason: None,
+                    token_usage: None,
+                    attributed_token_usage: None,
+                    environment: None,
+                    delegations: Vec::new(),
+                    file_mutations: Vec::new(),
+                });
+            }
+            self.turns.extend(turn);
+        }
+        for k in 0..self.turns.len() {
+            self.turns[k].parent_id = k.checked_sub(1).map(|p| self.turns[p].id.clone());
+        }
+    }
+
     fn user_turn(&self, bubble: &Bubble, parent: Option<&str>) -> Turn {
         let environment = self.environment();
         Turn {
+            provider: None,
             id: bubble.bubble_id.clone(),
             parent_id: parent.map(str::to_string),
             group_id: None,
@@ -372,6 +468,7 @@ impl<'a> Builder<'a> {
             timestamp: bubble.created_at.clone().unwrap_or_default(),
             text: bubble.text.clone(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: Vec::new(),
             model: None,
             stop_reason: None,
@@ -395,11 +492,20 @@ impl<'a> Builder<'a> {
             .filter(|t| !t.text.is_empty())
             .map(|t| t.text.clone())
             .collect();
-        let thinking = if thinking_chunks.is_empty() {
-            None
-        } else {
+        // In practice the text is on the bubble's own `thinking` object, with
+        // `allThinkingBlocks` empty; blocks win when present.
+        let own = bubble.thinking.as_ref().filter(|t| !t.text.is_empty());
+        let thinking = if !thinking_chunks.is_empty() {
             Some(thinking_chunks.join("\n\n"))
+        } else {
+            own.map(|t| t.text.clone())
         };
+        // Cursor's signature, tagged with who issued it; only a cursor writer returns it.
+        let thinking_signature = thinking.as_deref().and_then(|text| {
+            own.and_then(|t| t.signature.as_deref())
+                .filter(|s| !s.is_empty())
+                .map(|s| toolpath_convo::ThinkingSignature::new("cursor", s, text))
+        });
 
         // Tool call (at most one per bubble in observed data).
         let mut tool_uses = Vec::new();
@@ -455,7 +561,14 @@ impl<'a> Builder<'a> {
             .filter(|m| !m.is_empty())
             .or_else(|| self.session.data.default_model().map(str::to_string));
 
+        // A delegation-type tool call (`task_v2`, `Task`, ...) is the turn's delegation.
+        let delegations: Vec<DelegatedWork> = tool_uses
+            .iter()
+            .filter_map(ToolInvocation::as_delegation)
+            .collect();
+
         Turn {
+            provider: None,
             id: bubble.bubble_id.clone(),
             parent_id: parent.map(str::to_string),
             group_id: None,
@@ -463,13 +576,14 @@ impl<'a> Builder<'a> {
             timestamp: bubble.created_at.clone().unwrap_or_default(),
             text: bubble.text.clone(),
             thinking,
+            thinking_signature,
             tool_uses,
             model,
             stop_reason: None,
             token_usage,
             attributed_token_usage: None,
             environment,
-            delegations: Vec::new(),
+            delegations,
             file_mutations,
         }
     }

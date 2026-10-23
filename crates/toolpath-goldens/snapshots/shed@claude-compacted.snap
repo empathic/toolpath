@@ -1,0 +1,220 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "source": {
+    "lines": 9,
+    "bytes": 2751,
+    "string_chars": 1189,
+    "by_type": {
+      "assistant": 3,
+      "compact_boundary": 1,
+      "user": 5
+    }
+  },
+  "ir": {
+    "bytes": 3584,
+    "string_chars": 1552,
+    "steps": 7,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "projections": {
+    "codex": {
+      "lines": 23,
+      "bytes": 4477,
+      "string_chars": 2161,
+      "by_type": {
+        "event_msg/agent_message": 3,
+        "event_msg/token_count": 3,
+        "event_msg/user_message": 3,
+        "response_item/function_call": 2,
+        "response_item/function_call_output": 2,
+        "response_item/message": 6,
+        "session_meta": 1,
+        "turn_context": 3
+      }
+    },
+    "copilot": {
+      "lines": 17,
+      "bytes": 5400,
+      "string_chars": 3093,
+      "by_type": {
+        "assistant.message": 3,
+        "assistant.turn_end": 3,
+        "assistant.turn_start": 3,
+        "session.start": 1,
+        "tool.execution_complete": 2,
+        "tool.execution_start": 2,
+        "user.message": 3
+      }
+    },
+    "cursor": {
+      "lines": 851,
+      "bytes": 28879,
+      "string_chars": 4827,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 67,
+      "bytes": 5206,
+      "string_chars": 3017,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 135,
+      "bytes": 3468,
+      "string_chars": 1023,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 417,
+      "bytes": 12194,
+      "string_chars": 2934,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 9,
+      "bytes": 3062,
+      "string_chars": 1147,
+      "by_type": {
+        "message": 8,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 10,
+    "bytes": 3921,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 28,
+      "after": 50,
+      "lost": 2,
+      "gained": 24
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "isCompactSummary",
+        "example": "true"
+      },
+      {
+        "path": "isVisibleInTranscriptOnly",
+        "example": "true"
+      }
+    ],
+    "gained": [
+      {
+        "path": "isSidechain",
+        "example": "false"
+      },
+      {
+        "path": "message.usage.cache_creation",
+        "example": "null"
+      },
+      {
+        "path": "message.usage.cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.service_tier",
+        "example": "null"
+      },
+      {
+        "path": "permissionMode",
+        "example": "default"
+      },
+      {
+        "path": "sourceToolAssistantUUID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.file.content",
+        "example": "pub fn login() { ... }"
+      },
+      {
+        "path": "toolUseResult.file.filePath",
+        "example": "src/auth.rs"
+      },
+      {
+        "path": "toolUseResult.file.numLines",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.file.startLine",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.file.totalLines",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.filePath",
+        "example": "src/auth.rs"
+      },
+      {
+        "path": "toolUseResult.newString",
+        "example": "pub fn login() { validate_session();"
+      },
+      {
+        "path": "toolUseResult.oldString",
+        "example": "pub fn login() {"
+      },
+      {
+        "path": "toolUseResult.originalFile",
+        "example": ""
+      },
+      {
+        "path": "toolUseResult.replaceAll",
+        "example": "false"
+      },
+      {
+        "path": "toolUseResult.structuredPatch[].lines[]",
+        "example": "-pub fn login() {"
+      },
+      {
+        "path": "toolUseResult.structuredPatch[].newLines",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.structuredPatch[].newStart",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.structuredPatch[].oldLines",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.structuredPatch[].oldStart",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.type",
+        "example": "text"
+      },
+      {
+        "path": "toolUseResult.userModified",
+        "example": "false"
+      }
+    ]
+  }
+}

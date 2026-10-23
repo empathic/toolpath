@@ -1,0 +1,391 @@
+From 83042e2f0189f3af3333a9e4a44a2862969be10f Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 15:11:23 -0400
+Subject: [PATCH] fix(webmock): replay JSON-RPC answers with the live id; key
+ JSON-RPC calls by method
+
+Copilot's replay miss was ours. It runs two tools/list calls to GitHub's
+remote MCP at once (ids 1 and 2); both keyed exact, but the replayed answer
+carried the recorded id 1, so call 2 timed out (60 s, three times), and the
+cancel/retry calls fell to a loose key every MCP call shared, getting the
+initialize answer. Copilot then sent 19 tools instead of 25 and every
+/v1/messages call missed.
+
+A replayed JSON-RPC answer now carries the live request's id (top-level
+"id" of a JSON body or of each SSE data line), and a JSON-RPC body's method
+is part of its loose key; no other loose key changes. Same copilot cell,
+pre-scrub cassettes, Rust server: rc 1 in 152 s, 6 misses, 19 tools before;
+rc 0 in 1 s, all exact, 25 tools, the recorded reply after. Committed
+cassettes still miss on their <scratch> paths (declared, qualifier concern).
+---
+ crates/toolpath-webmock/cassettes/.qual     |   1 +
+ crates/toolpath-webmock/cassettes/README.md |   4 +-
+ crates/toolpath-webmock/src/.qual           |   1 +
+ crates/toolpath-webmock/src/lib.rs          | 237 +++++++++++++++++++-
+ pr/21-webmock-jsonrpc-keys.md               |  43 ++++
+ 5 files changed, 281 insertions(+), 5 deletions(-)
+ create mode 100644 crates/toolpath-webmock/src/.qual
+ create mode 100644 pr/21-webmock-jsonrpc-keys.md
+
+diff --git a/crates/toolpath-webmock/cassettes/.qual b/crates/toolpath-webmock/cassettes/.qual
+index d00dc87a..590ae2db 100644
+--- a/crates/toolpath-webmock/cassettes/.qual
++++ b/crates/toolpath-webmock/cassettes/.qual
+@@ -1 +1,2 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-webmock/cassettes/README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T17:24:16.914809Z","id":"aaebd21a0679245e4ec47fb786b3d95d813d98d455b9145f1ec78f1dac74db33","body":{"detail":"cassettes/pathbase pins the path share request and the 201 response byte for byte; what a deployed pathbase stores and serves back is not pinned. The stored row IS pinned in-process in empathic/pathbase (pathbase-goldens stored@<set>, including gemini/opencode/cursor as uploaded documents, pathbase pr/09). Closes with a recording mode against a deployed pathbase that captures GET .../download.","kind":"concern","summary":"the live pathbase stored row is unpinned (webmock layer 10)","tags":["declared-limit","unpinned","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-webmock/cassettes/README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:07:12.491129Z","id":"389dcdab0b82ff9090eadcddb42e0e6562a83bc744411d1408fb178c773cb8e0","body":{"detail":"Seen 2026-10-19 on copilot: with the committed (scrubbed) cassettes the only remaining /v1/messages difference is the cwd and session folder in the system prompt (<scratch>/... vs the replay machine's path). The pre-scrub copies replay exact. Needs the normalizer to mask HOME and the cell directory on both sides, then a re-record.","kind":"concern","summary":"committed model cassettes do not replay exactly: their bodies carry <scratch> for the recording machine's paths","tags":["webmock","replay","declared-limit","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-webmock/cassettes/README.md b/crates/toolpath-webmock/cassettes/README.md
+index cae96754..7530ba45 100644
+--- a/crates/toolpath-webmock/cassettes/README.md
++++ b/crates/toolpath-webmock/cassettes/README.md
+@@ -10,7 +10,9 @@ One directory per upstream, recorded 2026-10-15 by the Bun prototype of this cra
+ | pi | one resume cell | exact in the prototype |
+ | opencode | one `opencode run` resume cell on the free model | exact in the prototype |
+ | gemini | one `gemini --resume -p` cell; the request body carries the restored history, the stream was cut by a 429 retry loop | request pinned; no complete response |
+-| copilot | one `copilot -p` resume cell | records; replay misses (the remote-MCP tool list is nondeterministic) |
++| copilot | one `copilot -p` resume cell (CAPI, plus GitHub's remote MCP at `/mcp/readonly`, JSON-RPC over SSE) | exact with this crate since 2026-10-19 (pre-scrub copies; see below) |
++
++The copilot miss was ours, not copilot's. Copilot runs two `tools/list` calls at once (ids 1 and 2). Both keyed exact, but the replayed answer carried the recorded id 1, so call 2 never resolved: copilot waited out its 60 s MCP timeout three times, sent `notifications/cancelled` and an id-3 retry, and all of those shared one loose key with `initialize` (an MCP call has no model and no user text), so they got the `initialize` answer. It then ran with no MCP tools: 19 tools instead of 25, and every `/v1/messages` call missed (rc 1, 152 s). Now a replayed JSON-RPC answer carries the live request's id (`rewrite_jsonrpc_id`) and a JSON-RPC body's method is part of its loose key. Same cell, pre-scrub cassettes, Rust server: before, rc 1 in 152 s, 6 misses, 19 tools; after, rc 0 in 1 s, every request exact, 25 tools, the recorded reply.
+ 
+ Secret headers are never stored (`is_secret_header`: the list plus any `*-key`, `*-token`, `*-secret`). The first gemini recording predates the `x-goog-api-key` entry and was scrubbed by hand before being committed; the key it carried is to be rotated. The same recordings kept `x-gemini-api-privileged-user-id` (the Google account behind the key) and, in the pi response chunks, the recording machine's scratch path inside the base64; both scrubbed, the header added to the secret list, and `tests/no_secrets.rs` now reads the base64 too.
+ 
+diff --git a/crates/toolpath-webmock/src/.qual b/crates/toolpath-webmock/src/.qual
+new file mode 100644
+index 00000000..fdd8facb
+--- /dev/null
++++ b/crates/toolpath-webmock/src/.qual
+@@ -0,0 +1 @@
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-webmock/src/lib.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:07:12.478214Z","id":"f0809694e34fb506410ab0460b6b8c9e321ac3842712b45108fe9c8bc53c296a","body":{"detail":"Same copilot cell, pre-scrub cassettes, Rust server. Before: rc 1 in 152 s, tools/list id 2 answered with id 1 so copilot timed out 3x at 60 s, cancelled/retry calls got the initialize answer via the shared loose key, model request carried 19 tools, 6 MISS on /v1/messages. After: rc 0 in 1 s, every request EXACT, 25 tools, the recorded reply.","kind":"pass","span":{"start":{"line":316},"end":{"line":316},"content_hash":"cef0e96b1884665f71261f37d6c16ae92537bacf41e61d8858af97f7a1f6b37e"},"summary":"copilot replays exact: a replayed JSON-RPC answer carries the live id; a JSON-RPC method is part of the loose key","tags":["webmock","copilot","replay","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-webmock/src/lib.rs b/crates/toolpath-webmock/src/lib.rs
+index b7d04ae6..d1cf30a4 100644
+--- a/crates/toolpath-webmock/src/lib.rs
++++ b/crates/toolpath-webmock/src/lib.rs
+@@ -12,7 +12,9 @@
+ //!
+ //! The request key is `sha256({method, path+query, normalized body})`. Normalization drops the
+ //! body fields in [`VOLATILE`] (ids and timestamps agents mint per call) and replaces ISO dates in
+-//! strings. A looser key `{method, path, model, last user text}` is tried on an exact miss.
++//! strings. A looser key `{method, path, model, last user text}` (plus the JSON-RPC method for a
++//! JSON-RPC body) is tried on an exact miss. Replaying a JSON-RPC answer carries the live
++//! request's `id`, not the recorded one ([`rewrite_jsonrpc_id`]).
+ //!
+ //! The Bun prototype this is ported from (and the per-agent base-URL overrides, the proofs and the
+ //! limits) is described in the scratchpad review `webmock.md`; this crate is the committed,
+@@ -299,6 +301,93 @@ pub fn last_user_text(body: &Value) -> String {
+     String::new()
+ }
+ 
++/// The `method` of a JSON-RPC 2.0 request or notification body, if it is one.
++pub fn jsonrpc_method(body: &Value) -> Option<&str> {
++    (body.get("jsonrpc").and_then(Value::as_str) == Some("2.0"))
++        .then(|| body.get("method").and_then(Value::as_str))
++        .flatten()
++}
++
++/// Rewrite the top-level `"id"` of each JSON-RPC message in a response (a JSON body, or the
++/// `data:` lines of an SSE stream) from the recorded request's id to the live request's id.
++/// A JSON-RPC client matches a response to its pending call by id; the recorded id answers a call
++/// the live client never made (it numbers calls per session, and may run two at once), so it waits
++/// out its timeout. Only a top-level `"id"` equal to `old` is touched; the rest is byte-identical.
++pub fn rewrite_jsonrpc_id(text: &str, old: &Value, new: &Value) -> Option<String> {
++    if old == new {
++        return None;
++    }
++    let (old_s, new_s) = (old.to_string(), new.to_string());
++    let one = |json: &str| -> Option<String> {
++        let at = top_level_id_value(json)?;
++        let rest = &json[at..];
++        rest.starts_with(&old_s)
++            .then(|| format!("{}{}{}", &json[..at], new_s, &rest[old_s.len()..]))
++    };
++    if let Some(r) = one(text) {
++        return Some(r);
++    }
++    let mut changed = false;
++    let mut out = String::with_capacity(text.len());
++    for line in text.split_inclusive('\n') {
++        if let Some(data) = line.strip_prefix("data:") {
++            let lead = data.len() - data.trim_start().len();
++            if let Some(r) = one(&data[lead..]) {
++                out.push_str("data:");
++                out.push_str(&data[..lead]);
++                out.push_str(&r);
++                changed = true;
++                continue;
++            }
++        }
++        out.push_str(line);
++    }
++    changed.then_some(out)
++}
++
++/// Byte offset of the value of the top-level `"id"` key of a JSON object text.
++fn top_level_id_value(json: &str) -> Option<usize> {
++    let b = json.as_bytes();
++    let (mut i, mut depth, mut in_str) = (0usize, 0i32, false);
++    while i < b.len() {
++        let c = b[i];
++        if in_str {
++            if c == b'\\' {
++                i += 2;
++                continue;
++            }
++            if c == b'"' {
++                in_str = false;
++            }
++            i += 1;
++            continue;
++        }
++        match c {
++            b'{' | b'[' => depth += 1,
++            b'}' | b']' => depth -= 1,
++            b'"' => {
++                if depth == 1 && json[i..].starts_with("\"id\"") {
++                    let mut j = i + 4;
++                    while j < b.len() && b[j].is_ascii_whitespace() {
++                        j += 1;
++                    }
++                    if j < b.len() && b[j] == b':' {
++                        j += 1;
++                        while j < b.len() && b[j].is_ascii_whitespace() {
++                            j += 1;
++                        }
++                        return Some(j);
++                    }
++                }
++                in_str = true;
++            }
++            _ => {}
++        }
++        i += 1;
++    }
++    None
++}
++
+ /// Exact and loose keys for one request.
+ pub fn keys(method: &str, path_and_query: &str, body_text: &str) -> Keys {
+     let parsed: Option<Value> = if body_text.is_empty() {
+@@ -321,9 +410,13 @@ pub fn keys(method: &str, path_and_query: &str, body_text: &str) -> Keys {
+         &serde_json::json!({"method": method, "path": path_and_query, "body": normalized})
+             .to_string(),
+     );
+-    let loose = sha_hex(
+-        &serde_json::json!({"method": method, "path": path, "model": model, "last_user": parsed.as_ref().map(last_user_text).unwrap_or_default()}).to_string(),
+-    );
++    let mut loose_doc = serde_json::json!({"method": method, "path": path, "model": model, "last_user": parsed.as_ref().map(last_user_text).unwrap_or_default()});
++    // A JSON-RPC call (an MCP server) has no model and no user text, so without its method every
++    // call to one endpoint shares a loose key and the first stored answer wins for all of them.
++    if let Some(rpc) = parsed.as_ref().and_then(jsonrpc_method) {
++        loose_doc["rpc"] = Value::String(rpc.to_string());
++    }
++    let loose = sha_hex(&loose_doc.to_string());
+     Keys {
+         exact,
+         loose,
+@@ -760,6 +853,16 @@ fn up_headers_for_client(stored: &HashMap<String, String>) -> Vec<(String, Strin
+         .collect()
+ }
+ 
++/// `(live id, recorded id)` when both bodies are JSON-RPC calls carrying an id.
++fn jsonrpc_ids(live: &str, recorded: &str) -> Option<(Value, Value)> {
++    let id = |t: &str| -> Option<Value> {
++        let v: Value = serde_json::from_str(t).ok()?;
++        jsonrpc_method(&v)?;
++        v.get("id").filter(|i| !i.is_null()).cloned()
++    };
++    Some((id(live)?, id(recorded)?))
++}
++
+ fn replay(
+     cfg: Arc<Config>,
+     method: &str,
+@@ -808,6 +911,24 @@ fn replay(
+         })
+         .map(Bytes::from)
+         .collect();
++    let chunks = match jsonrpc_ids(raw_text, &c.request.body) {
++        Some((live, recorded)) => {
++            let joined: Vec<u8> = chunks.iter().flat_map(|b| b.iter().copied()).collect();
++            match std::str::from_utf8(&joined)
++                .ok()
++                .and_then(|t| rewrite_jsonrpc_id(t, &recorded, &live))
++            {
++                Some(t) => {
++                    (cfg.log)(&format!(
++                        "  jsonrpc id {recorded} -> {live} in the replayed answer"
++                    ));
++                    vec![Bytes::from(t)]
++                }
++                None => chunks,
++            }
++        }
++        None => chunks,
++    };
+     let mut resp = Response::builder().status(c.response.status);
+     for (k2, v) in up_headers_for_client(&c.response.headers) {
+         resp = resp.header(k2, v);
+@@ -926,4 +1047,112 @@ mod tests {
+         assert_ne!(a.exact, b.exact);
+         assert_eq!(a.loose, b.loose);
+     }
++
++    // copilot's MCP handshake as recorded in cassettes/copilot (bodies verbatim, ids as replayed).
++    const INIT: &str = r#"{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"github-copilot-developer","version":"1.0.61"}},"jsonrpc":"2.0","id":0}"#;
++    const INITIALIZED: &str = r#"{"method":"notifications/initialized","jsonrpc":"2.0"}"#;
++    const TOOLS: &str = r#"{"method":"tools/list","params":{},"jsonrpc":"2.0","id":1}"#;
++
++    #[test]
++    fn each_jsonrpc_method_gets_its_own_loose_key() {
++        let l = |b| keys("POST", "/mcp/readonly", b).loose;
++        let (a, b, c) = (l(INIT), l(INITIALIZED), l(TOOLS));
++        assert!(
++            a != b && b != c && a != c,
++            "three MCP calls, three loose keys"
++        );
++        // A retry with no params (copilot's second tools/list) falls back to tools/list, not initialize.
++        assert_eq!(l(r#"{"method":"tools/list","jsonrpc":"2.0","id":3}"#), c);
++    }
++
++    #[test]
++    fn jsonrpc_ids_do_not_change_the_exact_key() {
++        let k = |b| keys("POST", "/mcp/readonly", b).exact;
++        assert_eq!(k(TOOLS), k(&TOOLS.replace(r#""id":1"#, r#""id":2"#)));
++    }
++
++    #[test]
++    fn non_jsonrpc_loose_keys_are_unchanged() {
++        // The pre-JSON-RPC formula, so every committed non-MCP cassette keeps its loose key.
++        let body = r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#;
++        let old = sha_hex(
++            &serde_json::json!({"method": "POST", "path": "/v1/messages", "model": "m", "last_user": "hi"})
++                .to_string(),
++        );
++        assert_eq!(keys("POST", "/v1/messages?beta=true", body).loose, old);
++    }
++
++    #[test]
++    fn replayed_answer_carries_the_live_id() {
++        let sse = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[{\"id\":1,\"name\":\"x\"}]}}\n\n";
++        let got = rewrite_jsonrpc_id(sse, &Value::from(1), &Value::from(2)).unwrap();
++        assert_eq!(
++            got,
++            "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"id\":1,\"name\":\"x\"}]}}\n\n"
++        );
++        let json = r#"{"result":{"id":1},"id":1,"jsonrpc":"2.0"}"#;
++        assert_eq!(
++            rewrite_jsonrpc_id(json, &Value::from(1), &Value::from("a")).unwrap(),
++            r#"{"result":{"id":1},"id":"a","jsonrpc":"2.0"}"#
++        );
++        assert_eq!(
++            rewrite_jsonrpc_id(sse, &Value::from(1), &Value::from(1)),
++            None
++        );
++        assert_eq!(
++            rewrite_jsonrpc_id(sse, &Value::from(7), &Value::from(2)),
++            None
++        );
++        let ids = jsonrpc_ids(&TOOLS.replace(r#""id":1"#, r#""id":2"#), TOOLS).unwrap();
++        assert_eq!(ids, (Value::from(2), Value::from(1)));
++        assert_eq!(jsonrpc_ids(INITIALIZED, INITIALIZED), None);
++    }
++
++    #[test]
++    fn only_jsonrpc_cassettes_change_loose_key() {
++        // Stored `key`/`loose_key` fields come from the Bun prototype's hashing and are informational;
++        // the store recomputes both at open. What must hold: the JSON-RPC change moves no other
++        // committed cassette's loose key (the formula before it, inline here).
++        let before = |c: &Cassette| {
++            let parsed: Option<Value> = serde_json::from_str(&c.request.body).ok();
++            let model = parsed
++                .as_ref()
++                .and_then(|v| v.get("model"))
++                .and_then(Value::as_str)
++                .unwrap_or("");
++            let path = c.request.url.split('?').next().unwrap_or("");
++            sha_hex(&serde_json::json!({"method": c.request.method, "path": path, "model": model, "last_user": parsed.as_ref().map(last_user_text).unwrap_or_default()}).to_string())
++        };
++        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cassettes");
++        let (mut same, mut rpc) = (0, 0);
++        for agent in std::fs::read_dir(&root).unwrap() {
++            let dir = agent.unwrap().path();
++            if !dir.is_dir() {
++                continue;
++            }
++            for f in std::fs::read_dir(&dir).unwrap() {
++                let p = f.unwrap().path();
++                let name = p.file_name().unwrap().to_str().unwrap().to_string();
++                if !name.ends_with(".json") || name == "provenance.json" {
++                    continue;
++                }
++                let c: Cassette = serde_json::from_str(&std::fs::read_to_string(&p).unwrap())
++                    .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
++                let now = keys(&c.request.method, &c.request.url, &c.request.body).loose;
++                let is_rpc = serde_json::from_str::<Value>(&c.request.body)
++                    .ok()
++                    .is_some_and(|v| jsonrpc_method(&v).is_some());
++                if is_rpc {
++                    assert_ne!(now, before(&c), "{}", p.display());
++                    rpc += 1;
++                } else {
++                    assert_eq!(now, before(&c), "{}", p.display());
++                    same += 1;
++                }
++            }
++        }
++        // copilot: initialize, notifications/initialized, tools/list; codex: one ps/mcp initialize.
++        assert_eq!(rpc, 4, "JSON-RPC cassettes");
++        assert_eq!(same, 29, "the other committed cassettes");
++    }
+ }
+diff --git a/pr/21-webmock-jsonrpc-keys.md b/pr/21-webmock-jsonrpc-keys.md
+new file mode 100644
+index 00000000..25587ff5
+--- /dev/null
++++ b/pr/21-webmock-jsonrpc-keys.md
+@@ -0,0 +1,43 @@
++# fix(webmock): replay JSON-RPC answers with the live id; key JSON-RPC calls by method
++
++Status: planned (asked 2026-10-19 on the goldens demo deck: "can we dig into the copilot issue") · Base: the webmock piece (pr/13) once merged
++
++## Why
++The demo's replay table said copilot "miss · GitHub's remote MCP tool list changed (25 → 19)". It was our replay, not
++copilot or GitHub. Copilot talks to GitHub's remote MCP server (`/mcp/readonly`, JSON-RPC over SSE) and runs two
++`tools/list` calls at once (ids 1 and 2). Both keyed exact (`id` is already volatile), but the replayed answer carried
++the recorded `"id":1`, so call 2 never resolved. Copilot waited out its 60 s MCP timeout, sent
++`notifications/cancelled` and an id-3 retry; those keyed loose, and every MCP call shared one loose key (no model, no
++user text), so they got the `initialize` answer. Copilot then ran with no MCP tools: its model request carried 19
++tools instead of 25 and every `POST /v1/messages` missed.
++
++## What changes
++- `crates/toolpath-webmock/src/lib.rs`: on replay, when the live and recorded bodies are both JSON-RPC calls with an
++  id, the answer's top-level `"id"` (a JSON body, or each SSE `data:` line) is rewritten to the live id
++  (`rewrite_jsonrpc_id`, `jsonrpc_ids`); the rest of the answer is byte-identical, sent as one chunk. A JSON-RPC body's
++  `method` is part of its loose key (`jsonrpc_method`); no other body's loose key changes.
++- Tests: three MCP calls get three loose keys and an id-3 `tools/list` retry falls back to `tools/list`; ids do not
++  change the exact key; a non-JSON-RPC loose key equals the old formula; the replayed answer carries the live id (SSE
++  and JSON, nested `"id"`s untouched); across the 33 committed cassettes only the 4 JSON-RPC ones (copilot's 3, codex's
++  `ps/mcp` initialize) change loose key. The stored `key`/`loose_key` fields came from the Bun prototype's hashing and
++  never matched `keys()`; the store recomputes both at open, so no cassette is re-keyed.
++- `cassettes/README.md`: copilot row and what the miss was; qualifier `pass` with the before/after run; a `concern`
++  (declared-limit) that committed model cassettes carry `<scratch>` paths and so do not replay exactly.
++
++## Verification
++End to end, replay only (no upstream, bogus GitHub token), the copilot resume cell (`v3-cell-codex-to-copilot`,
++copilot CLI 1.0.61) against the Rust `webmock` binary built before and after this change, same pre-scrub cassettes:
++before rc 1 in 152 s, `tools/list` id 2 answered with id 1, 3 LOOSE `initialize` answers, 6 MISS on
++`/v1/messages`, 19 tools sent; after rc 0 in 1 s, every request EXACT ("jsonrpc id 1 -> 2"), 25 tools, the recorded
++reply ("You're going to walk through END"). With the committed (scrubbed) cassettes the MCP part replays the same, and
++`/v1/messages` still misses only on the `<scratch>` path in the system prompt (the concern above).
++Gates: fmt, clippy `--workspace --all-targets --features path-cli/goldens -D warnings`,
++`RUSTFLAGS=-D warnings cargo test --workspace --features path-cli/goldens`, doc, shellcheck.
++
++## Paths
++```
++crates/toolpath-webmock/src/lib.rs
++crates/toolpath-webmock/src/.qual
++crates/toolpath-webmock/cassettes/README.md
++crates/toolpath-webmock/cassettes/.qual
++```
+-- 
+2.55.0
+

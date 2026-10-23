@@ -10,3 +10,6 @@ rustflags = [
   "-C", "link-arg=-sENVIRONMENT=web",
   "-C", "link-arg=-sSTACK_SIZE=1048576",
 ]
+
+[alias]
+xtask = "run --package xtask --"

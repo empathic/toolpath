@@ -1,0 +1,2360 @@
+From 881314054771d2fd30fa241c0443844743ebd3c4 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 16:29:05 -0400
+Subject: [PATCH] test(goldens): path query over every session, the core types,
+ both file formats, a schema check on every transform
+
+query@site-example and query@cache-sync run the site's own example
+through path query (all seven harnesses; cache sync over five real
+stores, incremental). core_types@dag and core_types@validate pin the
+RFC's DAG features and what path p validate enforces: five RFC rules it
+accepts are pinned as gaps with qualifier concerns. formats@<set> streams
+every golden document to .path.jsonl and seals it back unchanged;
+formats@examples pins the graph.id difference and fixes the drifted
+path-02 example. validate_transforms@<set>/@writers validate every
+transform's document against the base and v1.1.0 kind schemas; the
+bundled kind schema is byte-identical to the published one.
+---
+ .qual                                         |   3 +
+ crates/path-cli/tests/core_types.rs           | 294 ++++++++++++++++++
+ crates/path-cli/tests/query_every_session.rs  | 266 ++++++++++++++++
+ .../snapshots/core_types__core_types@dag.snap |  49 +++
+ .../core_types__core_types@validate.snap      | 105 +++++++
+ ...query_every_session__query@cache-sync.snap |  46 +++
+ ...ery_every_session__query@site-example.snap |  58 ++++
+ .../snapshots/formats@claude-compacted.snap   |  16 +
+ .../snapshots/formats@claude-session.snap     |  16 +
+ .../snapshots/formats@claude.snap             |  16 +
+ .../snapshots/formats@codex.snap              |  16 +
+ .../snapshots/formats@copilot.snap            |  16 +
+ .../snapshots/formats@cursor.snap             |  16 +
+ .../snapshots/formats@examples.snap           |  38 +++
+ .../snapshots/formats@gemini.snap             |  16 +
+ .../snapshots/formats@opencode.snap           |  16 +
+ .../snapshots/formats@pi.snap                 |  16 +
+ .../validate_transforms@claude-compacted.snap |  56 ++++
+ .../validate_transforms@claude-session.snap   |  56 ++++
+ .../snapshots/validate_transforms@claude.snap |  56 ++++
+ .../snapshots/validate_transforms@codex.snap  |  56 ++++
+ .../validate_transforms@copilot.snap          |  56 ++++
+ .../snapshots/validate_transforms@cursor.snap |  56 ++++
+ .../snapshots/validate_transforms@gemini.snap |  56 ++++
+ .../validate_transforms@opencode.snap         |  56 ++++
+ .../snapshots/validate_transforms@pi.snap     |  56 ++++
+ .../validate_transforms@writers.snap          |  48 +++
+ crates/toolpath-goldens/src/.qual             |   1 +
+ crates/toolpath-goldens/src/pipeline.rs       |  12 +-
+ crates/toolpath-goldens/tests/formats.rs      | 225 ++++++++++++++
+ .../tests/transforms_schema.rs                | 207 ++++++++++++
+ examples/path-02-local-session.path.jsonl     |   2 +-
+ pr/29-site-promises.md                        |  61 ++++
+ 33 files changed, 2061 insertions(+), 2 deletions(-)
+ create mode 100644 .qual
+ create mode 100644 crates/path-cli/tests/core_types.rs
+ create mode 100644 crates/path-cli/tests/query_every_session.rs
+ create mode 100644 crates/path-cli/tests/snapshots/core_types__core_types@dag.snap
+ create mode 100644 crates/path-cli/tests/snapshots/core_types__core_types@validate.snap
+ create mode 100644 crates/path-cli/tests/snapshots/query_every_session__query@cache-sync.snap
+ create mode 100644 crates/path-cli/tests/snapshots/query_every_session__query@site-example.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@claude-compacted.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@claude-session.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@examples.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/formats@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@claude-compacted.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@claude-session.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/validate_transforms@writers.snap
+ create mode 100644 crates/toolpath-goldens/tests/formats.rs
+ create mode 100644 crates/toolpath-goldens/tests/transforms_schema.rs
+ create mode 100644 pr/29-site-promises.md
+
+diff --git a/.qual b/.qual
+new file mode 100644
+index 00000000..9b4691a2
+--- /dev/null
++++ b/.qual
+@@ -0,0 +1,3 @@
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:28:03.242849Z","id":"4188fae59914bcfc4bd303eb0604024b9c84af31c0b77762fa0edc94b6d85451","body":{"detail":"core_types@validate (crates/path-cli/tests/core_types.rs): a duplicated step id, a duplicated path id, a parent naming no step, and a head naming no step all validate. The JSON Schema cannot express these; the validator would need a structural pass after the schema.","kind":"concern","span":{"start":{"line":127},"end":{"line":127},"content_hash":"348caab9de8420e7f36d5a15f2b61a3eb6b1f56a1b3eaaf37d48e52104d2ce62"},"summary":"path p validate does not enforce ID uniqueness, parent references or path.head","tags":["rfc-types","goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:28:03.253618Z","id":"fe818f2b8049614e6361840c310502a6f1bfcbdbb17e9674d8ef4a7fdaf453f6","body":{"detail":"core_types@validate row '$ref MUST NOT point to a .path.jsonl stream': accepted.","kind":"concern","span":{"start":{"line":122},"end":{"line":122},"content_hash":"ebd9ce2deed09df50a67c84bcb86c6b8394d21294f3f99f4c96da9a3c91c4167"},"summary":"path p validate accepts a $ref to a .path.jsonl stream, which the RFC forbids","tags":["rfc-types","goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:28:03.272645Z","id":"7b0b2a9eb1f9a0c89520027e59012af281ab3833397cb4ca3669160f07158948","body":{"detail":"formats@examples: the committed examples' .path.json twins use graph id graph-<path id>; Graph::from_jsonl names it <path id>. Everything else round-trips; all nine golden documents seal back identical (formats@<set>). examples/path-02-local-session.path.jsonl had also drifted (missing base.ref) and is fixed in this piece.","kind":"comment","span":{"start":{"line":116},"end":{"line":116},"content_hash":"da2a3bc8739fc4b4cbedee6bdc50564e311ab1bcf3c2059dd855f5991a45bf81"},"summary":"A .path.jsonl stream carries no graph identity; sealing names the graph after its path","tags":["rfc-types","goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/path-cli/tests/core_types.rs b/crates/path-cli/tests/core_types.rs
+new file mode 100644
+index 00000000..8c907a5c
+--- /dev/null
++++ b/crates/path-cli/tests/core_types.rs
+@@ -0,0 +1,294 @@
++//! The core types, as RFC.md and "Toolpath at a glance" define them: graph,
++//! path, step, base, head, dead end, fork, merge, actors, change perspectives,
++//! meta.intent / meta.refs, `$ref` paths and ID uniqueness.
++//!
++//! Two pins:
++//!
++//! * `core_types@dag`: the DAG features of the exploration example computed
++//!   with the crate's own queries. Dead ends must equal all steps minus the
++//!   ancestors of `path.head` (the RFC's definition), a fork is a step with
++//!   more than one child, a merge a step with more than one parent.
++//! * `core_types@validate`: what `path p validate` says about each valid
++//!   document and its minimal invalid twin, one row per rule. A row whose
++//!   `accepted` differs from what the RFC requires (`rfc_says`) is a gap the
++//!   validator does not enforce yet; it is pinned as it is, not hidden.
++
++use std::collections::{BTreeMap, BTreeSet};
++use std::path::PathBuf;
++
++use assert_cmd::Command;
++use serde_json::{Value, json};
++use toolpath::v1::{Graph, PathOrRef, query};
++
++fn pretty(v: &Value) -> String {
++    serde_json::to_string_pretty(v).expect("json")
++}
++
++fn examples() -> PathBuf {
++    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples")
++}
++
++fn example(name: &str) -> Value {
++    let bytes = std::fs::read(examples().join(name)).expect("read example");
++    serde_json::from_slice(&bytes).expect("example is JSON")
++}
++
++#[test]
++fn dag_features_of_the_exploration_example() {
++    let text = std::fs::read_to_string(examples().join("path-04-exploration.path.json")).unwrap();
++    let g = Graph::from_json(&text).expect("exploration example is a Graph");
++    let PathOrRef::Path(p) = &g.paths[0] else {
++        panic!("inline path")
++    };
++    let steps = &p.steps;
++    let head = &p.path.head;
++
++    let all: BTreeSet<String> = steps.iter().map(|s| s.step.id.clone()).collect();
++    let ancestors: BTreeSet<String> = query::ancestors(steps, head).into_iter().collect();
++    let dead: BTreeSet<String> = query::dead_ends(steps, head)
++        .into_iter()
++        .map(|s| s.step.id.clone())
++        .collect();
++    let rfc_dead: BTreeSet<String> = all.difference(&ancestors).cloned().collect();
++    assert_eq!(
++        dead, rfc_dead,
++        "dead ends are all steps minus ancestors(head)"
++    );
++
++    let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
++    for s in steps {
++        for parent in &s.step.parents {
++            children
++                .entry(parent.clone())
++                .or_default()
++                .push(s.step.id.clone());
++        }
++    }
++    let forks: BTreeMap<String, Vec<String>> =
++        children.into_iter().filter(|(_, c)| c.len() > 1).collect();
++    let merges: BTreeMap<String, Vec<String>> = steps
++        .iter()
++        .filter(|s| s.step.parents.len() > 1)
++        .map(|s| (s.step.id.clone(), s.step.parents.clone()))
++        .collect();
++    let actors: BTreeSet<String> = steps
++        .iter()
++        .filter_map(|s| s.step.actor.split(':').next().map(str::to_string))
++        .collect();
++
++    insta::assert_snapshot!(
++        "core_types@dag",
++        pretty(&json!({
++            "head": head,
++            "base": p.path.base,
++            "steps": all,
++            "ancestors_of_head": ancestors,
++            "dead_ends": dead,
++            "forks": forks,
++            "merges": merges,
++            "actor_kinds": actors,
++        }))
++    );
++}
++
++/// One rule: a document, the RFC's verdict on it, and what `path p validate` says.
++struct Case {
++    rule: &'static str,
++    rfc_says: &'static str,
++    doc: Value,
++    suffix: &'static str,
++}
++
++fn with(mut v: Value, f: impl FnOnce(&mut Value)) -> Value {
++    f(&mut v);
++    v
++}
++
++fn cases() -> Vec<Case> {
++    let minimal = example("step-01-minimal.json");
++    let exploration = example("path-04-exploration.path.json");
++    let step_only = minimal["paths"][0]["steps"][0].clone();
++    let path_only = minimal["paths"][0].clone();
++    vec![
++        Case {
++            rule: "graph is the root (step-01-minimal)",
++            rfc_says: "valid",
++            doc: minimal.clone(),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "a step alone is not a document root",
++            rfc_says: "invalid",
++            doc: step_only,
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "a path alone is not a document root",
++            rfc_says: "invalid",
++            doc: path_only,
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "fork, merge and dead end (path-04-exploration)",
++            rfc_says: "valid",
++            doc: exploration.clone(),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "step ids are unique within a path",
++            rfc_says: "invalid",
++            doc: with(exploration.clone(), |v| {
++                let first = v["paths"][0]["steps"][0].clone();
++                v["paths"][0]["steps"].as_array_mut().unwrap().push(first);
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "path ids are unique within a graph",
++            rfc_says: "invalid",
++            doc: with(minimal.clone(), |v| {
++                let p = v["paths"][0].clone();
++                v["paths"].as_array_mut().unwrap().push(p);
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "a parent reference names a step in the path",
++            rfc_says: "invalid",
++            doc: with(minimal.clone(), |v| {
++                v["paths"][0]["steps"][0]["step"]["parents"] = json!(["step-does-not-exist"]);
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "path.head names a step in the path",
++            rfc_says: "invalid",
++            doc: with(minimal.clone(), |v| {
++                v["paths"][0]["path"]["head"] = json!("step-missing")
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "actors human:, agent:, tool:, ci:",
++            rfc_says: "valid",
++            doc: with(minimal.clone(), |v| {
++                let mut steps = vec![];
++                for (i, a) in [
++                    "human:alex",
++                    "agent:claude-code/session-xyz",
++                    "tool:rustfmt/1.5.0",
++                    "ci:github-actions/workflow-123",
++                ]
++                .iter()
++                .enumerate()
++                {
++                    let mut s = v["paths"][0]["steps"][0].clone();
++                    s["step"]["id"] = json!(format!("s{i}"));
++                    s["step"]["actor"] = json!(a);
++                    if i > 0 {
++                        s["step"]["parents"] = json!([format!("s{}", i - 1)]);
++                    }
++                    steps.push(s);
++                }
++                v["paths"][0]["steps"] = json!(steps);
++                v["paths"][0]["path"]["head"] = json!("s3");
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "an actor prefix is one of human, agent, tool, ci",
++            rfc_says: "invalid",
++            doc: with(minimal.clone(), |v| {
++                v["paths"][0]["steps"][0]["step"]["actor"] = json!("robot:r2")
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "perspectives: raw and structural on one artifact",
++            rfc_says: "valid",
++            doc: example("step-02-agent.json"),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "meta.intent and meta.refs",
++            rfc_says: "valid",
++            doc: example("path-01-pr.path.json"),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "base: toolpath:<path-id>/<step-id>",
++            rfc_says: "valid",
++            doc: with(minimal.clone(), |v| {
++                v["paths"][0]["path"]["base"] = json!({"uri": "toolpath:path-main/step-005"})
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "a $ref path to a sealed .path.json",
++            rfc_says: "valid",
++            doc: with(minimal.clone(), |v| {
++                v["paths"]
++                    .as_array_mut()
++                    .unwrap()
++                    .push(json!({"$ref": "https://example.com/toolpath/path-44.path.json"}));
++            }),
++            suffix: ".path.json",
++        },
++        Case {
++            rule: "a $ref MUST NOT point to a .path.jsonl stream",
++            rfc_says: "invalid",
++            doc: with(minimal.clone(), |v| {
++                v["paths"]
++                    .as_array_mut()
++                    .unwrap()
++                    .push(json!({"$ref": "https://example.com/toolpath/path-44.path.jsonl"}));
++            }),
++            suffix: ".path.json",
++        },
++    ]
++}
++
++#[test]
++fn validate_on_each_type_rule_and_its_invalid_twin() {
++    let dir = tempfile::tempdir().unwrap();
++    let mut rows = Vec::new();
++    let mut gaps = Vec::new();
++    for (i, c) in cases().into_iter().enumerate() {
++        let file = dir.path().join(format!("case-{i:02}{}", c.suffix));
++        std::fs::write(&file, serde_json::to_vec_pretty(&c.doc).unwrap()).unwrap();
++        let out = Command::cargo_bin("path")
++            .unwrap()
++            .env("HOME", dir.path())
++            .args(["p", "validate", "--input"])
++            .arg(&file)
++            .output()
++            .expect("run path p validate");
++        let accepted = out.status.success();
++        let expected = c.rfc_says == "valid";
++        if accepted != expected {
++            gaps.push(c.rule);
++        }
++        rows.push(json!({
++            "rule": c.rule,
++            "rfc_says": c.rfc_says,
++            "accepted": accepted,
++            "agrees_with_rfc": accepted == expected,
++        }));
++    }
++    insta::assert_snapshot!(
++        "core_types@validate",
++        pretty(&json!({ "rows": rows, "validator_does_not_enforce": gaps }))
++    );
++    // Everything the RFC calls valid must validate; the invalid twins it
++    // misses are pinned above (`validator_does_not_enforce`), not failed here.
++    let false_rejections: Vec<&str> = cases()
++        .iter()
++        .zip(&rows)
++        .filter(|(c, r)| c.rfc_says == "valid" && r["accepted"] == json!(false))
++        .map(|(c, _)| c.rule)
++        .collect();
++    assert!(
++        false_rejections.is_empty(),
++        "the validator rejects documents the RFC calls valid: {false_rejections:?}"
++    );
++}
+diff --git a/crates/path-cli/tests/query_every_session.rs b/crates/path-cli/tests/query_every_session.rs
+new file mode 100644
+index 00000000..a141d62e
+--- /dev/null
++++ b/crates/path-cli/tests/query_every_session.rs
+@@ -0,0 +1,266 @@
++//! "path query runs one jq filter across every session on the machine,
++//! whichever agent wrote it" (toolpath.net), and the site's own example.
++//!
++//! Two pins, both through the real `path` binary in a temp HOME:
++//!
++//! * `query@site-example`: the cache holds one document per golden set (the
++//!   pinned `document@<set>` snapshots: all seven harnesses, nine sessions),
++//!   and the site's exact filter runs over all of them. Every harness's model
++//!   must show up as its own `agent:` group.
++//! * `query@cache-sync`: the site's other step, `path p cache sync`, over
++//!   real session files placed where each harness keeps them (Claude Code,
++//!   Codex, Copilot, pi, Gemini CLI); the sync is run twice and must be
++//!   incremental, then the same filter runs over what it ingested. opencode
++//!   and Cursor keep sessions in SQLite stores this test does not build, so
++//!   their sync is not covered here (the first pin covers their documents).
++
++use std::collections::BTreeSet;
++use std::path::{Path, PathBuf};
++
++use assert_cmd::Command;
++use serde_json::Value;
++use sha2::{Digest, Sha256};
++
++/// The example on toolpath.net, verbatim.
++const SITE_FILTER: &str = "group_by(.step.actor) | map({actor: .[0].step.actor, output_tokens: ([.[].change[]?.structural.token_usage.output_tokens // 0] | add)})";
++
++fn pretty(v: &Value) -> String {
++    serde_json::to_string_pretty(v).expect("json")
++}
++
++fn root() -> PathBuf {
++    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
++}
++
++fn path_cmd(home: &Path) -> Command {
++    let mut c = Command::cargo_bin("path").unwrap();
++    c.env_clear()
++        .env("HOME", home)
++        .env("PATH", "/usr/bin:/bin")
++        .env("TOOLPATH_CONFIG_DIR", home.join(".toolpath"))
++        .current_dir(home);
++    c
++}
++
++fn query(home: &Path) -> Value {
++    let out = path_cmd(home)
++        .args(["query", SITE_FILTER])
++        .output()
++        .expect("run path query");
++    assert!(
++        out.status.success(),
++        "path query failed: {}",
++        String::from_utf8_lossy(&out.stderr)
++    );
++    serde_json::from_slice(&out.stdout).expect("path query prints JSON")
++}
++
++fn snapshot_body(path: &Path) -> String {
++    let text = std::fs::read_to_string(path).unwrap();
++    let mut parts = text.splitn(3, "---\n");
++    parts.next();
++    parts.next();
++    parts.next().unwrap().to_string()
++}
++
++fn agent_groups(result: &Value) -> BTreeSet<String> {
++    result
++        .as_array()
++        .expect("the site filter returns an array")
++        .iter()
++        .filter_map(|g| g["actor"].as_str())
++        .filter(|a| a.starts_with("agent:"))
++        .map(str::to_string)
++        .collect()
++}
++
++#[test]
++fn site_example_over_every_harness() {
++    let home = tempfile::tempdir().unwrap();
++    let docs = home.path().join(".toolpath/documents");
++    std::fs::create_dir_all(&docs).unwrap();
++    let snaps = root().join("crates/toolpath-goldens/snapshots");
++    let mut sources = BTreeSet::new();
++    let mut expected_agents = BTreeSet::new();
++    for entry in std::fs::read_dir(&snaps).unwrap().flatten() {
++        let name = entry.file_name().to_string_lossy().into_owned();
++        let Some(set) = name
++            .strip_prefix("document@")
++            .and_then(|n| n.strip_suffix(".snap"))
++        else {
++            continue;
++        };
++        let body = snapshot_body(&entry.path());
++        let doc: Value = serde_json::from_str(&body).unwrap();
++        for p in doc["paths"].as_array().unwrap() {
++            sources.insert(p["meta"]["source"].as_str().unwrap_or("").to_string());
++            for s in p["steps"].as_array().unwrap() {
++                if let Some(a) = s["step"]["actor"]
++                    .as_str()
++                    .filter(|a| a.starts_with("agent:"))
++                {
++                    expected_agents.insert(a.to_string());
++                }
++            }
++        }
++        std::fs::write(docs.join(format!("{set}.json")), body).unwrap();
++    }
++    assert_eq!(
++        sources.len(),
++        7,
++        "all seven harnesses are in the cache: {sources:?}"
++    );
++
++    let result = query(home.path());
++    assert_eq!(
++        agent_groups(&result),
++        expected_agents,
++        "every harness's model is its own group"
++    );
++    insta::assert_snapshot!("query@site-example", pretty(&result));
++}
++
++fn write(path: &Path, bytes: &[u8]) {
++    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
++    std::fs::write(path, bytes).unwrap();
++}
++
++/// The first JSON line of `input` for which `f` returns something.
++fn pick(input: &[u8], f: impl Fn(&Value) -> Option<Value>) -> Value {
++    String::from_utf8_lossy(input)
++        .lines()
++        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
++        .find_map(|v| f(&v))
++        .expect("fixture carries the identity its harness needs")
++}
++
++fn str_of(v: &Value) -> String {
++    v.as_str().expect("a string").to_string()
++}
++
++/// Real session files, where each harness keeps them (the goldens' layout).
++fn place_sessions(home: &Path) {
++    let read = |rel: &str| std::fs::read(root().join(rel)).unwrap();
++
++    let claude = read("goldens/claude-session/input.jsonl");
++    let cwd = str_of(&pick(&claude, |v| v.get("cwd").cloned()));
++    let sid = str_of(&pick(&claude, |v| v.get("sessionId").cloned()));
++    let slug = cwd.replace(['/', '_', '.'], "-");
++    write(
++        &home
++            .join(".claude/projects")
++            .join(slug)
++            .join(format!("{sid}.jsonl")),
++        &claude,
++    );
++
++    let codex = read("test-fixtures/codex/convo.jsonl");
++    let meta = pick(&codex, |v| {
++        (v["type"] == "session_meta").then(|| v["payload"].clone())
++    });
++    let (id, ts) = (str_of(&meta["id"]), str_of(&meta["timestamp"]));
++    let (date, time) = ts.split_once('T').unwrap();
++    let time = time.split('.').next().unwrap().replace(':', "-");
++    write(
++        &home
++            .join(".codex/sessions")
++            .join(date.replace('-', "/"))
++            .join(format!("rollout-{date}T{time}-{id}.jsonl")),
++        &codex,
++    );
++
++    let copilot = read("test-fixtures/copilot/convo.jsonl");
++    let sid = str_of(&pick(&copilot, |v| {
++        v.get("data")?.get("sessionId").cloned()
++    }));
++    write(
++        &home
++            .join(".copilot/session-state")
++            .join(sid)
++            .join("events.jsonl"),
++        &copilot,
++    );
++
++    let pi = read("test-fixtures/pi/convo.jsonl");
++    let head = pick(&pi, |v| (v["type"] == "session").then(|| v.clone()));
++    let cwd = str_of(&head["cwd"]);
++    let enc = format!("--{}--", cwd.trim_start_matches('/').replace('/', "-"));
++    let ts = str_of(&head["timestamp"]).replace([':', '.'], "-");
++    write(
++        &home
++            .join(".pi/agent/sessions")
++            .join(enc)
++            .join(format!("{ts}_{}.jsonl", str_of(&head["id"]))),
++        &pi,
++    );
++
++    // Gemini CLI 0.47: tmp/<sha256(project)>/chats/session-*.jsonl, found by
++    // the slot's .project_root marker.
++    let gemini = read("test-fixtures/gemini/convo.jsonl");
++    let header = pick(&gemini, |v| v.get("sessionId").map(|_| v.clone()));
++    let project = "/work/gemini-project";
++    let slot = hex::encode(Sha256::digest(project.as_bytes()));
++    let dir = home.join(".gemini/tmp").join(slot);
++    let start = str_of(&header["startTime"])[..16].replace(':', "-");
++    let sid = str_of(&header["sessionId"]);
++    write(&dir.join(".project_root"), project.as_bytes());
++    write(
++        &dir.join("chats")
++            .join(format!("session-{start}-{}.jsonl", &sid[..8])),
++        &gemini,
++    );
++}
++
++fn sync(home: &Path) -> String {
++    let out = path_cmd(home)
++        .args(["p", "cache", "sync"])
++        .output()
++        .expect("run path p cache sync");
++    assert!(
++        out.status.success(),
++        "cache sync failed: {}",
++        String::from_utf8_lossy(&out.stderr)
++    );
++    // The per-harness summary lines, wherever they are printed.
++    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
++    text.push_str(&String::from_utf8_lossy(&out.stderr));
++    let mut lines: Vec<String> = text
++        .lines()
++        .filter(|l| l.contains(" new, "))
++        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
++        .collect();
++    lines.sort();
++    lines.join("\n")
++}
++
++#[test]
++fn cache_sync_then_query_over_real_session_files() {
++    let home = tempfile::tempdir().unwrap();
++    place_sessions(home.path());
++    let first = sync(home.path());
++    let second = sync(home.path());
++    for harness in ["claude", "codex", "copilot", "pi", "gemini"] {
++        assert!(
++            first
++                .lines()
++                .any(|l| l.starts_with(&format!("{harness} 1 new"))),
++            "{harness} ingested on the first sync:\n{first}"
++        );
++        assert!(
++            second
++                .lines()
++                .any(|l| l.starts_with(&format!("{harness} 0 new, 0 updated, 1 unchanged"))),
++            "{harness} unchanged on the second sync (incremental):\n{second}"
++        );
++    }
++    let result = query(home.path());
++    assert_eq!(
++        agent_groups(&result).len(),
++        5,
++        "one model per synced harness: {result}"
++    );
++    insta::assert_snapshot!(
++        "query@cache-sync",
++        pretty(&serde_json::json!({ "first_sync": first, "second_sync": second, "query": result }))
++    );
++}
+diff --git a/crates/path-cli/tests/snapshots/core_types__core_types@dag.snap b/crates/path-cli/tests/snapshots/core_types__core_types@dag.snap
+new file mode 100644
+index 00000000..318f0046
+--- /dev/null
++++ b/crates/path-cli/tests/snapshots/core_types__core_types@dag.snap
+@@ -0,0 +1,49 @@
++---
++source: crates/path-cli/tests/core_types.rs
++expression: "pretty(&json!({\n    \"head\": head, \"base\": p.path.base, \"steps\": all, \"ancestors_of_head\":\n    ancestors, \"dead_ends\": dead, \"forks\": forks, \"merges\": merges,\n    \"actor_kinds\": actors,\n}))"
++---
++{
++  "actor_kinds": [
++    "agent",
++    "human",
++    "tool"
++  ],
++  "ancestors_of_head": [
++    "step-001",
++    "step-002b",
++    "step-002c",
++    "step-003b",
++    "step-003c",
++    "step-004"
++  ],
++  "base": {
++    "ref": "main",
++    "uri": "github:myorg/myrepo"
++  },
++  "dead_ends": [
++    "step-002a"
++  ],
++  "forks": {
++    "step-001": [
++      "step-002a",
++      "step-002b",
++      "step-002c"
++    ]
++  },
++  "head": "step-004",
++  "merges": {
++    "step-004": [
++      "step-003b",
++      "step-003c"
++    ]
++  },
++  "steps": [
++    "step-001",
++    "step-002a",
++    "step-002b",
++    "step-002c",
++    "step-003b",
++    "step-003c",
++    "step-004"
++  ]
++}
+diff --git a/crates/path-cli/tests/snapshots/core_types__core_types@validate.snap b/crates/path-cli/tests/snapshots/core_types__core_types@validate.snap
+new file mode 100644
+index 00000000..9f65a57d
+--- /dev/null
++++ b/crates/path-cli/tests/snapshots/core_types__core_types@validate.snap
+@@ -0,0 +1,105 @@
++---
++source: crates/path-cli/tests/core_types.rs
++expression: "pretty(&json!({ \"rows\": rows, \"validator_does_not_enforce\": gaps }))"
++---
++{
++  "rows": [
++    {
++      "accepted": true,
++      "agrees_with_rfc": true,
++      "rfc_says": "valid",
++      "rule": "graph is the root (step-01-minimal)"
++    },
++    {
++      "accepted": false,
++      "agrees_with_rfc": true,
++      "rfc_says": "invalid",
++      "rule": "a step alone is not a document root"
++    },
++    {
++      "accepted": false,
++      "agrees_with_rfc": true,
++      "rfc_says": "invalid",
++      "rule": "a path alone is not a document root"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": true,
++      "rfc_says": "valid",
++      "rule": "fork, merge and dead end (path-04-exploration)"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": false,
++      "rfc_says": "invalid",
++      "rule": "step ids are unique within a path"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": false,
++      "rfc_says": "invalid",
++      "rule": "path ids are unique within a graph"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": false,
++      "rfc_says": "invalid",
++      "rule": "a parent reference names a step in the path"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": false,
++      "rfc_says": "invalid",
++      "rule": "path.head names a step in the path"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": true,
++      "rfc_says": "valid",
++      "rule": "actors human:, agent:, tool:, ci:"
++    },
++    {
++      "accepted": false,
++      "agrees_with_rfc": true,
++      "rfc_says": "invalid",
++      "rule": "an actor prefix is one of human, agent, tool, ci"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": true,
++      "rfc_says": "valid",
++      "rule": "perspectives: raw and structural on one artifact"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": true,
++      "rfc_says": "valid",
++      "rule": "meta.intent and meta.refs"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": true,
++      "rfc_says": "valid",
++      "rule": "base: toolpath:<path-id>/<step-id>"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": true,
++      "rfc_says": "valid",
++      "rule": "a $ref path to a sealed .path.json"
++    },
++    {
++      "accepted": true,
++      "agrees_with_rfc": false,
++      "rfc_says": "invalid",
++      "rule": "a $ref MUST NOT point to a .path.jsonl stream"
++    }
++  ],
++  "validator_does_not_enforce": [
++    "step ids are unique within a path",
++    "path ids are unique within a graph",
++    "a parent reference names a step in the path",
++    "path.head names a step in the path",
++    "a $ref MUST NOT point to a .path.jsonl stream"
++  ]
++}
+diff --git a/crates/path-cli/tests/snapshots/query_every_session__query@cache-sync.snap b/crates/path-cli/tests/snapshots/query_every_session__query@cache-sync.snap
+new file mode 100644
+index 00000000..4d99d34d
+--- /dev/null
++++ b/crates/path-cli/tests/snapshots/query_every_session__query@cache-sync.snap
+@@ -0,0 +1,46 @@
++---
++source: crates/path-cli/tests/query_every_session.rs
++expression: "pretty(&serde_json::json!({\n    \"first_sync\": first, \"second_sync\": second, \"query\": result\n}))"
++---
++{
++  "first_sync": "claude 1 new, 0 updated, 0 unchanged\ncodex 1 new, 0 updated, 0 unchanged\ncopilot 1 new, 0 updated, 0 unchanged\ngemini 1 new, 0 updated, 0 unchanged\npi 1 new, 0 updated, 0 unchanged",
++  "query": [
++    {
++      "actor": "agent:claude-haiku-4-5-20251001",
++      "output_tokens": 332
++    },
++    {
++      "actor": "agent:claude-haiku-4.5",
++      "output_tokens": 3141
++    },
++    {
++      "actor": "agent:gemini-3-flash-preview",
++      "output_tokens": 1080
++    },
++    {
++      "actor": "agent:gemma4",
++      "output_tokens": 1555
++    },
++    {
++      "actor": "agent:gpt-5.5",
++      "output_tokens": 2365
++    },
++    {
++      "actor": "human:user",
++      "output_tokens": 0
++    },
++    {
++      "actor": "tool:claude-code",
++      "output_tokens": 0
++    },
++    {
++      "actor": "tool:codex",
++      "output_tokens": 0
++    },
++    {
++      "actor": "tool:copilot",
++      "output_tokens": 0
++    }
++  ],
++  "second_sync": "claude 0 new, 0 updated, 1 unchanged\ncodex 0 new, 0 updated, 1 unchanged\ncopilot 0 new, 0 updated, 1 unchanged\ngemini 0 new, 0 updated, 1 unchanged\npi 0 new, 0 updated, 1 unchanged"
++}
+diff --git a/crates/path-cli/tests/snapshots/query_every_session__query@site-example.snap b/crates/path-cli/tests/snapshots/query_every_session__query@site-example.snap
+new file mode 100644
+index 00000000..b4e37656
+--- /dev/null
++++ b/crates/path-cli/tests/snapshots/query_every_session__query@site-example.snap
+@@ -0,0 +1,58 @@
++---
++source: crates/path-cli/tests/query_every_session.rs
++expression: pretty(&result)
++---
++[
++  {
++    "actor": "agent:big-pickle",
++    "output_tokens": 1480
++  },
++  {
++    "actor": "agent:claude-haiku-4-5-20251001",
++    "output_tokens": 332
++  },
++  {
++    "actor": "agent:claude-haiku-4.5",
++    "output_tokens": 3141
++  },
++  {
++    "actor": "agent:claude-opus-4-6",
++    "output_tokens": 140
++  },
++  {
++    "actor": "agent:claude-opus-4-7",
++    "output_tokens": 5275
++  },
++  {
++    "actor": "agent:default",
++    "output_tokens": 0
++  },
++  {
++    "actor": "agent:gemini-3-flash-preview",
++    "output_tokens": 1080
++  },
++  {
++    "actor": "agent:gemma4",
++    "output_tokens": 1555
++  },
++  {
++    "actor": "agent:gpt-5.5",
++    "output_tokens": 2365
++  },
++  {
++    "actor": "human:user",
++    "output_tokens": 0
++  },
++  {
++    "actor": "tool:claude-code",
++    "output_tokens": 0
++  },
++  {
++    "actor": "tool:codex",
++    "output_tokens": 0
++  },
++  {
++    "actor": "tool:copilot",
++    "output_tokens": 0
++  }
++]
+diff --git a/crates/toolpath-goldens/snapshots/formats@claude-compacted.snap b/crates/toolpath-goldens/snapshots/formats@claude-compacted.snap
+new file mode 100644
+index 00000000..7cf578db
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@claude-compacted.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 13,
++  "lines_by_tag": {
++    "ActorDef": 3,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 7
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@claude-session.snap b/crates/toolpath-goldens/snapshots/formats@claude-session.snap
+new file mode 100644
+index 00000000..49498f99
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@claude-session.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 33,
++  "lines_by_tag": {
++    "ActorDef": 3,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 27
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@claude.snap b/crates/toolpath-goldens/snapshots/formats@claude.snap
+new file mode 100644
+index 00000000..72777a12
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@claude.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 67,
++  "lines_by_tag": {
++    "ActorDef": 3,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 61
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@codex.snap b/crates/toolpath-goldens/snapshots/formats@codex.snap
+new file mode 100644
+index 00000000..5ccb5a3e
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@codex.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 48,
++  "lines_by_tag": {
++    "ActorDef": 3,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 42
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@copilot.snap b/crates/toolpath-goldens/snapshots/formats@copilot.snap
+new file mode 100644
+index 00000000..9c382008
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@copilot.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 20,
++  "lines_by_tag": {
++    "ActorDef": 3,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 14
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@cursor.snap b/crates/toolpath-goldens/snapshots/formats@cursor.snap
+new file mode 100644
+index 00000000..47b6aaba
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@cursor.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 27,
++  "lines_by_tag": {
++    "ActorDef": 2,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 22
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@examples.snap b/crates/toolpath-goldens/snapshots/formats@examples.snap
+new file mode 100644
+index 00000000..7e920717
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@examples.snap
+@@ -0,0 +1,38 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: rows
++---
++[
++  {
++    "differs_only_in": [
++      "graph.id"
++    ],
++    "example": "path-01-pr.path.jsonl",
++    "json_graph_id": "graph-path-pr-42",
++    "sealed_graph_id": "path-pr-42"
++  },
++  {
++    "differs_only_in": [
++      "graph.id"
++    ],
++    "example": "path-02-local-session.path.jsonl",
++    "json_graph_id": "graph-path-session-xyz",
++    "sealed_graph_id": "path-session-xyz"
++  },
++  {
++    "differs_only_in": [
++      "graph.id"
++    ],
++    "example": "path-03-signed-pr.path.jsonl",
++    "json_graph_id": "graph-path-pr-42",
++    "sealed_graph_id": "path-pr-42"
++  },
++  {
++    "differs_only_in": [
++      "graph.id"
++    ],
++    "example": "path-04-exploration.path.jsonl",
++    "json_graph_id": "graph-path-explore-cli-args",
++    "sealed_graph_id": "path-explore-cli-args"
++  }
++]
+diff --git a/crates/toolpath-goldens/snapshots/formats@gemini.snap b/crates/toolpath-goldens/snapshots/formats@gemini.snap
+new file mode 100644
+index 00000000..90103ca7
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@gemini.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 17,
++  "lines_by_tag": {
++    "ActorDef": 2,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 12
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@opencode.snap b/crates/toolpath-goldens/snapshots/formats@opencode.snap
+new file mode 100644
+index 00000000..90103ca7
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@opencode.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 17,
++  "lines_by_tag": {
++    "ActorDef": 2,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 12
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/formats@pi.snap b/crates/toolpath-goldens/snapshots/formats@pi.snap
+new file mode 100644
+index 00000000..90103ca7
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/formats@pi.snap
+@@ -0,0 +1,16 @@
++---
++source: crates/toolpath-goldens/tests/formats.rs
++expression: result
++---
++{
++  "differing_key_paths": [],
++  "jsonl_lines": 17,
++  "lines_by_tag": {
++    "ActorDef": 2,
++    "Head": 1,
++    "PathClose": 1,
++    "PathOpen": 1,
++    "Step": 12
++  },
++  "sealed_equals_json": true
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@claude-compacted.snap b/crates/toolpath-goldens/snapshots/validate_transforms@claude-compacted.snap
+new file mode 100644
+index 00000000..66625c89
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@claude-compacted.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@claude-session.snap b/crates/toolpath-goldens/snapshots/validate_transforms@claude-session.snap
+new file mode 100644
+index 00000000..66625c89
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@claude-session.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@claude.snap b/crates/toolpath-goldens/snapshots/validate_transforms@claude.snap
+new file mode 100644
+index 00000000..66625c89
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@claude.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@codex.snap b/crates/toolpath-goldens/snapshots/validate_transforms@codex.snap
+new file mode 100644
+index 00000000..14321ba2
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@codex.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "claude": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@copilot.snap b/crates/toolpath-goldens/snapshots/validate_transforms@copilot.snap
+new file mode 100644
+index 00000000..f9c9dc16
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@copilot.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "claude": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@cursor.snap b/crates/toolpath-goldens/snapshots/validate_transforms@cursor.snap
+new file mode 100644
+index 00000000..4cc18f09
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@cursor.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "claude": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@gemini.snap b/crates/toolpath-goldens/snapshots/validate_transforms@gemini.snap
+new file mode 100644
+index 00000000..57734593
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@gemini.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "claude": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@opencode.snap b/crates/toolpath-goldens/snapshots/validate_transforms@opencode.snap
+new file mode 100644
+index 00000000..3610ddb9
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@opencode.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "claude": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "pi": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@pi.snap b/crates/toolpath-goldens/snapshots/validate_transforms@pi.snap
+new file mode 100644
+index 00000000..f5dde3d2
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@pi.snap
+@@ -0,0 +1,56 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: result
++---
++{
++  "document": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "jsonl_sealed": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "round_trips": {
++    "claude": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "codex": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "copilot": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "cursor": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "gemini": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    },
++    "opencode": {
++      "kinds": [
++        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++      ],
++      "outcome": "valid"
++    }
++  }
++}
+diff --git a/crates/toolpath-goldens/snapshots/validate_transforms@writers.snap b/crates/toolpath-goldens/snapshots/validate_transforms@writers.snap
+new file mode 100644
+index 00000000..859953ed
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/validate_transforms@writers.snap
+@@ -0,0 +1,48 @@
++---
++source: crates/toolpath-goldens/tests/transforms_schema.rs
++expression: "Value::Object(writers)"
++---
++{
++  "claude": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "codex": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "copilot": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "cursor": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "gemini": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "opencode": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  },
++  "pi": {
++    "kinds": [
++      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
++    ],
++    "outcome": "valid"
++  }
++}
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index b9f632e2..64089a7c 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -20,3 +20,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/accounting.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:23:30.321367Z","id":"19b5a82642c37f773ecb7ee78a878b92481f2d53c723459c3a70538519cf453d","body":{"kind":"resolve","summary":"Fixed: gemini sum_usage and opencode accumulate_total add breakdowns class by class; copilot puts every counter only session.shutdown reports, verbatim, on the last assistant turn, so the steps sum to the session total. The accounting contract holds for every set and no known defect pins a gap","supersedes":"18549e27eaac75e08112044300f95ae714dcd48327d0c2821f85050a3bc987cf","tags":["session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:fixed"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/defects.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:08:54.811658Z","id":"d1465c82ea302bedcaf167c2048b4c3974bc35f881e7c42490f2f96b8fbd6f3c","body":{"detail":"The classification of a changed known_defects body is the reviewer's, guided by tests/goldens.rs's doc comment. claude-to-codex-caller-cwd was retired 2026-10-19 as not a defect (pr/22-codex-resume-cwd). The three accounting defects (gemini and opencode totals dropping breakdowns, copilot session totals on no step) were fixed in their adapters the same day (pr/*-accounting-totals) and their Defect entries deleted, with the accounting_gap measure and Target::Document they alone used; a new accounting defect brings both back. Resolve this record when every defect is fixed and its snapshot accepted.","kind":"concern","span":{"start":{"line":50},"end":{"line":50},"content_hash":"2e1040b296bb70b5e4614fe3f886af2ddb83174dab983c22fda92737fc98ffe0"},"summary":"Two defects pinned as expected current behaviour (codex-to-claude-illegal-types, claude-roundtrip-renames), neither an accounting gap: the accounting invariant holds for every set; a diff in known_defects@<set>.snap is FIXED or WORSE and must be read, insta cannot tell the two apart","supersedes":"122da212472671c8e0d215332a5fda04abd602a91ace0a60d6cc56bd40efe017","tags":["goldens","known-defect","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/defects.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:21:50.495071Z","id":"0c8cb0692057add3165a95a2ecba4605a0a24494d2e98ea6af99c1ce81765919","body":{"kind":"resolve","summary":"Every defect is fixed: codex-to-claude-illegal-types and claude-roundtrip-renames fixed in toolpath-claude (pr/28), the accounting three in pr/27; DEFECTS is empty and known_defects@<set>.snap is [] for every set","supersedes":"d1465c82ea302bedcaf167c2048b4c3974bc35f881e7c42490f2f96b8fbd6f3c","tags":["goldens","known-defect","reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:36:28.681029Z","id":"526d3a25a88af2522546bf61d6230665aad73c4ad1fb82df1cd21e829d118d6c","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":506},"end":{"line":506},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"cf4e2d360d37040594dddc82c2217bc51f4a62bec0651d7db679168935f12d90","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index 90f8dd42..b91f519c 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -471,12 +471,22 @@ fn project(path: &Document, target: Agent) -> Result<String, String> {
+ /// its reader, drops, renames or invents, independent of which agent wrote
+ /// the source.
+ pub fn writer(document_json: &str, target: Agent, scratch: &Path) -> Result<RoundTrip, StageError> {
++    writer_with_document(document_json, target, scratch).map(|(trip, _)| trip)
++}
++
++/// [`writer`], plus the document the writer's output derives back to (None
++/// when its own adapter cannot read it), so the caller can validate it.
++pub fn writer_with_document(
++    document_json: &str,
++    target: Agent,
++    scratch: &Path,
++) -> Result<(RoundTrip, Option<Value>), StageError> {
+     let document: Value = serde_json::from_str(document_json)
+         .map_err(|e| StageError::new(Stage::Derive, format!("document is not JSON: {e}")))?;
+     let path = single_path(document_json).map_err(|e| StageError::new(Stage::Derive, e))?;
+     let text = project(&path, target)
+         .map_err(|e| StageError::new(Stage::Project, format!("-> {target}: {e}")))?;
+-    Ok(round_trip(&document, target, &text, scratch).0)
++    Ok(round_trip(&document, target, &text, scratch))
+ }
+ 
+ /// One JSON object per line, newline-terminated.
+diff --git a/crates/toolpath-goldens/tests/formats.rs b/crates/toolpath-goldens/tests/formats.rs
+new file mode 100644
+index 00000000..8367a59d
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/formats.rs
+@@ -0,0 +1,225 @@
++//! Both file formats, `.path.json` (the canonical Graph) and `.path.jsonl`
++//! (a stream that seals to a single-path Graph), on every golden document.
++//!
++//! The RFC's promise: a `.path.jsonl` stream encodes exactly one inline Path
++//! and seals to a single-path Graph at the file boundary, and a multi-path
++//! Graph or a `$ref` entry has no JSONL form. Each golden's pinned
++//! `document@<set>` is streamed to JSONL, sealed back, and compared with the
++//! original in canonical form (keys sorted, no whitespace); `formats@<set>`
++//! pins the stream's shape and the result. The committed `examples/*.path.jsonl`
++//! are checked against their `.path.json` twins the same way, and the two
++//! refusals are asserted.
++
++use std::path::{Path, PathBuf};
++
++use serde_json::{Value, json};
++use toolpath::v1::Graph;
++
++const SNAPSHOTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/snapshots");
++const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples");
++
++/// Keys sorted at every level, then compact: the comparison form.
++fn canonical(v: &Value) -> Value {
++    match v {
++        Value::Object(m) => {
++            let mut keys: Vec<&String> = m.keys().collect();
++            keys.sort();
++            let mut out = serde_json::Map::new();
++            for k in keys {
++                out.insert(k.clone(), canonical(&m[k]));
++            }
++            Value::Object(out)
++        }
++        Value::Array(a) => Value::Array(a.iter().map(canonical).collect()),
++        other => other.clone(),
++    }
++}
++
++fn canonical_bytes(g: &Graph) -> Vec<u8> {
++    let v = serde_json::to_value(g).expect("graph serializes");
++    serde_json::to_vec(&canonical(&v)).expect("value serializes")
++}
++
++/// Key paths whose values differ between `a` and `b` (array indices collapsed to `[]`).
++fn differing(a: &Value, b: &Value, at: &str, out: &mut std::collections::BTreeSet<String>) {
++    match (a, b) {
++        (Value::Object(x), Value::Object(y)) => {
++            for k in x.keys().chain(y.keys()) {
++                let p = if at.is_empty() {
++                    k.clone()
++                } else {
++                    format!("{at}.{k}")
++                };
++                match (x.get(k), y.get(k)) {
++                    (Some(l), Some(r)) => differing(l, r, &p, out),
++                    _ => {
++                        out.insert(p);
++                    }
++                }
++            }
++        }
++        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
++            for (l, r) in x.iter().zip(y) {
++                differing(l, r, &format!("{at}[]"), out);
++            }
++        }
++        _ if a == b => {}
++        _ => {
++            out.insert(at.to_string());
++        }
++    }
++}
++
++/// The body of an insta snapshot: everything after the second `---` line.
++fn snapshot_body(path: &Path) -> String {
++    let text = std::fs::read_to_string(path).expect("read snapshot");
++    let mut parts = text.splitn(3, "---\n");
++    parts.next();
++    parts.next();
++    parts.next().expect("snapshot has a body").to_string()
++}
++
++fn document_snapshots() -> Vec<(String, PathBuf)> {
++    let mut out: Vec<(String, PathBuf)> = std::fs::read_dir(SNAPSHOTS)
++        .expect("read snapshots dir")
++        .filter_map(|e| e.ok().map(|e| e.path()))
++        .filter_map(|p| {
++            let name = p.file_name()?.to_str()?.to_string();
++            let set = name.strip_prefix("document@")?.strip_suffix(".snap")?;
++            Some((set.to_string(), p))
++        })
++        .collect();
++    out.sort();
++    out
++}
++
++/// Stream `g` to JSONL, seal it back, compare in canonical form.
++fn stream_and_seal(g: &Graph) -> Value {
++    let jsonl = g
++        .to_jsonl_string()
++        .expect("a single-path graph has a JSONL form");
++    let sealed = Graph::from_jsonl_str(&jsonl).expect("our own JSONL reads back");
++    let mut tags: std::collections::BTreeMap<String, usize> = Default::default();
++    for line in jsonl.lines() {
++        let v: Value = serde_json::from_str(line).expect("each JSONL line is JSON");
++        let tag = v
++            .as_object()
++            .and_then(|m| m.keys().next().cloned())
++            .unwrap_or_default();
++        *tags.entry(tag).or_default() += 1;
++    }
++    let (a, b) = (canonical_bytes(g), canonical_bytes(&sealed));
++    let mut diff = std::collections::BTreeSet::new();
++    if a != b {
++        differing(
++            &serde_json::to_value(g).unwrap(),
++            &serde_json::to_value(&sealed).unwrap(),
++            "",
++            &mut diff,
++        );
++    }
++    json!({
++        "jsonl_lines": jsonl.lines().count(),
++        "lines_by_tag": tags,
++        "sealed_equals_json": a == b,
++        "differing_key_paths": diff,
++    })
++}
++
++#[test]
++fn every_golden_document_streams_to_jsonl_and_seals_back_unchanged() {
++    let docs = document_snapshots();
++    assert_eq!(docs.len(), 9, "one document@<set> per golden set");
++    let mut settings = insta::Settings::clone_current();
++    settings.set_snapshot_path("../snapshots");
++    settings.set_prepend_module_to_snapshot(false);
++    settings.set_sort_maps(true);
++    let mut unequal = Vec::new();
++    settings.bind(|| {
++        for (set, path) in &docs {
++            let g = Graph::from_json(&snapshot_body(path))
++                .unwrap_or_else(|e| panic!("document@{set} is a Graph: {e}"));
++            let result = stream_and_seal(&g);
++            if result["sealed_equals_json"] != json!(true) {
++                unequal.push(format!("{set}: {}", result["differing_key_paths"]));
++            }
++            insta::assert_json_snapshot!(format!("formats@{set}"), result);
++        }
++    });
++    assert!(
++        unequal.is_empty(),
++        "sealed .path.jsonl differs from .path.json:\n{}",
++        unequal.join("\n")
++    );
++}
++
++/// The committed `examples/*.path.jsonl` against their `.path.json` twins.
++///
++/// A stream carries no graph identity: sealing names the graph after its
++/// path (`Graph::from_path`), while the committed twins name it
++/// `graph-<path id>`. Everything else must match; the graph-id difference is
++/// pinned in `formats@examples` rather than hidden.
++#[test]
++fn committed_jsonl_examples_seal_to_their_json_twins() {
++    let mut entries: Vec<PathBuf> = std::fs::read_dir(EXAMPLES)
++        .expect("read examples")
++        .filter_map(|e| e.ok().map(|e| e.path()))
++        .filter(|p| p.to_string_lossy().ends_with(".path.jsonl"))
++        .collect();
++    entries.sort();
++    let mut rows = Vec::new();
++    for jsonl in &entries {
++        let twin = PathBuf::from(jsonl.to_string_lossy().replace(".path.jsonl", ".path.json"));
++        let sealed = Graph::from_jsonl_str(&std::fs::read_to_string(jsonl).unwrap())
++            .unwrap_or_else(|e| panic!("{}: {e}", jsonl.display()));
++        let json = Graph::from_json(&std::fs::read_to_string(&twin).unwrap())
++            .unwrap_or_else(|e| panic!("{}: {e}", twin.display()));
++        let mut diff = std::collections::BTreeSet::new();
++        differing(
++            &serde_json::to_value(&json).unwrap(),
++            &serde_json::to_value(&sealed).unwrap(),
++            "",
++            &mut diff,
++        );
++        let name = jsonl.file_name().unwrap().to_string_lossy().into_owned();
++        assert!(
++            diff.iter().all(|p| p == "graph.id"),
++            "{name} differs from its .path.json twin beyond graph.id: {diff:?}"
++        );
++        rows.push(json!({
++            "example": name,
++            "differs_only_in": diff,
++            "json_graph_id": json.graph.id,
++            "sealed_graph_id": sealed.graph.id,
++        }));
++    }
++    assert!(rows.len() >= 4, "the four path-0N examples have both forms");
++    let mut settings = insta::Settings::clone_current();
++    settings.set_snapshot_path("../snapshots");
++    settings.set_prepend_module_to_snapshot(false);
++    settings.bind(|| insta::assert_json_snapshot!("formats@examples", rows));
++}
++
++#[test]
++fn a_multi_path_graph_has_no_jsonl_form() {
++    let release = std::fs::read_to_string(format!("{EXAMPLES}/graph-01-release.json")).unwrap();
++    let g = Graph::from_json(&release).expect("graph-01-release parses");
++    assert!(g.paths.len() > 1, "the release example holds several paths");
++    let err = g
++        .to_jsonl_string()
++        .expect_err("multi-path graphs cannot stream");
++    assert!(
++        err.to_string().to_lowercase().contains("path"),
++        "the refusal names the reason: {err}"
++    );
++}
++
++#[test]
++fn a_ref_only_graph_has_no_jsonl_form() {
++    let g = Graph::from_json(
++        r#"{"graph":{"id":"g-ref"},"paths":[{"$ref":"https://example.com/toolpath/path-44.path.json"}]}"#,
++    )
++    .expect("a $ref-only graph parses");
++    g.to_jsonl_string()
++        .expect_err("a $ref entry has no inline Path to stream");
++}
+diff --git a/crates/toolpath-goldens/tests/transforms_schema.rs b/crates/toolpath-goldens/tests/transforms_schema.rs
+new file mode 100644
+index 00000000..2316eefa
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/transforms_schema.rs
+@@ -0,0 +1,207 @@
++//! A schema check on every transform: each document a transform produces is
++//! validated against the base schema and the `agent-coding-session` v1.1.0
++//! kind schema (the bundled `crates/path-cli/kinds/agent-coding-session/
++//! v1.1.0/schema.json`, which is what toolpath.net publishes: see
++//! `bundled_kind_schema_is_the_published_one`).
++//!
++//! Transforms covered, per golden set (`validate_transforms@<set>`):
++//! * `document`: the derived document (the pinned `document@<set>`);
++//! * `round_trips.<agent>`: that document projected for each other agent,
++//!   read back by that agent's adapter and derived again (the 54 pairs);
++//! * `jsonl_sealed`: the document streamed to `.path.jsonl` and sealed back.
++//!
++//! And `validate_transforms@writers`: the generated full document through
++//! each writer alone, derived again.
++//!
++//! Each entry records the outcome and the `meta.kind` of every path. A path
++//! with no kind would skip the kind schema silently, so a document that
++//! claims no kind fails here by name, as does any schema error.
++
++use std::path::Path;
++
++use serde_json::{Value, json};
++use toolpath::v1::Graph;
++use toolpath_convo::{ConversationView, DeriveConfig, derive_path};
++use toolpath_goldens::model::{Agent, Validation};
++use toolpath_goldens::pipeline::writer_with_document;
++use toolpath_goldens::validate::validate;
++
++const SNAPSHOTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/snapshots");
++const KIND: &str = toolpath::v1::PATH_KIND_AGENT_CODING_SESSION;
++const VIEW: &str = include_str!("../fixtures/full-view.json");
++
++fn snapshot(path: &Path) -> (String, String) {
++    let text = std::fs::read_to_string(path).unwrap();
++    let mut parts = text.splitn(3, "---\n");
++    parts.next();
++    let header = parts.next().unwrap().to_string();
++    (header, parts.next().unwrap().to_string())
++}
++
++fn kinds(doc: &Value) -> Vec<Value> {
++    doc["paths"]
++        .as_array()
++        .map(|ps| {
++            ps.iter()
++                .map(|p| p.pointer("/meta/kind").cloned().unwrap_or(Value::Null))
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++/// Outcome of one transform: schema result plus the kinds its paths claim.
++fn check(doc: Option<&Value>, failures: &mut Vec<String>, label: &str) -> Value {
++    let Some(doc) = doc else {
++        return json!({ "outcome": "not_derived" });
++    };
++    let ks = kinds(doc);
++    if ks.iter().any(|k| k.as_str() != Some(KIND)) {
++        failures.push(format!(
++            "{label}: a path does not claim {KIND} (kinds {ks:?})"
++        ));
++    }
++    match validate(doc) {
++        Validation::Valid => json!({ "outcome": "valid", "kinds": ks }),
++        Validation::Invalid { errors } => {
++            failures.push(format!("{label}: {}", errors.join("; ")));
++            json!({ "outcome": "invalid", "kinds": ks, "errors": errors })
++        }
++        Validation::NotDerived => json!({ "outcome": "not_derived" }),
++    }
++}
++
++fn agent_named(name: &str) -> Agent {
++    *Agent::ALL
++        .iter()
++        .find(|a| a.name() == name)
++        .expect("known agent")
++}
++
++fn point_every_store_at(home: &Path) {
++    let vars = [
++        ("HOME", home.to_path_buf()),
++        ("TMPDIR", home.to_path_buf()),
++        ("XDG_CONFIG_HOME", home.join(".config")),
++        ("XDG_DATA_HOME", home.join(".local/share")),
++        ("XDG_STATE_HOME", home.join(".local/state")),
++        ("XDG_CACHE_HOME", home.join(".cache")),
++        ("CLAUDE_CONFIG_DIR", home.join(".claude")),
++        ("CODEX_HOME", home.join(".codex")),
++        ("COPILOT_HOME", home.join(".copilot")),
++        ("TOOLPATH_CONFIG_DIR", home.join(".toolpath")),
++    ];
++    for (k, v) in vars {
++        // SAFETY: one test in this binary, set before any adapter runs.
++        unsafe { std::env::set_var(k, v) };
++    }
++}
++
++#[test]
++fn every_transform_validates_against_the_v1_1_0_kind() {
++    let home = tempfile::tempdir().unwrap();
++    point_every_store_at(home.path());
++    let mut settings = insta::Settings::clone_current();
++    settings.set_snapshot_path("../snapshots");
++    settings.set_prepend_module_to_snapshot(false);
++    settings.set_sort_maps(true);
++
++    let mut failures = Vec::new();
++    let mut docs: Vec<(String, std::path::PathBuf)> = std::fs::read_dir(SNAPSHOTS)
++        .unwrap()
++        .filter_map(|e| e.ok().map(|e| e.path()))
++        .filter_map(|p| {
++            let n = p.file_name()?.to_str()?;
++            let set = n
++                .strip_prefix("document@")?
++                .strip_suffix(".snap")?
++                .to_string();
++            Some((set, p))
++        })
++        .collect();
++    docs.sort();
++    assert_eq!(docs.len(), 9);
++
++    settings.bind(|| {
++        for (set, path) in &docs {
++            let (header, body) = snapshot(path);
++            let agent = header
++                .lines()
++                .find_map(|l| l.trim().strip_prefix("agent: "))
++                .map(agent_named)
++                .expect("document snapshot names its agent");
++            let document: Value = serde_json::from_str(&body).unwrap();
++            let mut round_trips = serde_json::Map::new();
++            for target in agent.targets() {
++                let (_, again) = writer_with_document(&body, target, home.path())
++                    .unwrap_or_else(|e| panic!("{set} -> {}: {e}", target.name()));
++                round_trips.insert(
++                    target.name().to_string(),
++                    check(
++                        again.as_ref(),
++                        &mut failures,
++                        &format!("{set} -> {}", target.name()),
++                    ),
++                );
++            }
++            let g = Graph::from_json(&body).unwrap();
++            let sealed = Graph::from_jsonl_str(&g.to_jsonl_string().unwrap()).unwrap();
++            let sealed = serde_json::to_value(&sealed).unwrap();
++            let result = json!({
++                "document": check(Some(&document), &mut failures, &format!("{set} document")),
++                "round_trips": round_trips,
++                "jsonl_sealed": check(Some(&sealed), &mut failures, &format!("{set} jsonl")),
++            });
++            insta::assert_json_snapshot!(format!("validate_transforms@{set}"), result);
++        }
++
++        let view: ConversationView = serde_json::from_str(VIEW).unwrap();
++        let cfg = DeriveConfig {
++            include_thinking: true,
++            include_tool_uses: true,
++            ..DeriveConfig::default()
++        };
++        let document_json = Graph::from_path(derive_path(&view, &cfg))
++            .to_json()
++            .unwrap();
++        let mut writers = serde_json::Map::new();
++        for agent in Agent::ALL {
++            let (_, again) = writer_with_document(&document_json, agent, home.path())
++                .unwrap_or_else(|e| panic!("writer {}: {e}", agent.name()));
++            writers.insert(
++                agent.name().to_string(),
++                check(
++                    again.as_ref(),
++                    &mut failures,
++                    &format!("writer {}", agent.name()),
++                ),
++            );
++        }
++        insta::assert_json_snapshot!("validate_transforms@writers", Value::Object(writers));
++    });
++
++    assert!(
++        failures.is_empty(),
++        "transforms whose document the v1.1.0 kind rejects (or that claim no kind):\n{}",
++        failures.join("\n")
++    );
++}
++
++/// The bundled kind schema and the copy the site publishes
++/// (`site/kinds/agent-coding-session/v1.1.0/schema.json`, served at
++/// https://toolpath.net/kinds/agent-coding-session/v1.1.0/schema.json) are the
++/// same bytes. Checked against the live URL once by hand on 2026-10-19
++/// (sha256 0557c0c06fe285704a672ac7f86abbd78f2e6e17e44aed0abbbdcc524ad523da,
++/// identical); this keeps the two in-repo copies from drifting.
++#[test]
++fn bundled_kind_schema_is_the_published_one() {
++    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
++    let bundled =
++        std::fs::read(root.join("crates/path-cli/kinds/agent-coding-session/v1.1.0/schema.json"))
++            .unwrap();
++    let site =
++        std::fs::read(root.join("site/kinds/agent-coding-session/v1.1.0/schema.json")).unwrap();
++    assert!(
++        bundled == site,
++        "the bundled v1.1.0 kind schema differs from the site's copy"
++    );
++}
+diff --git a/examples/path-02-local-session.path.jsonl b/examples/path-02-local-session.path.jsonl
+index c0173b0b..12b65a21 100644
+--- a/examples/path-02-local-session.path.jsonl
++++ b/examples/path-02-local-session.path.jsonl
+@@ -1,4 +1,4 @@
+-{"PathOpen":{"version":"1","id":"path-session-xyz","base":{"uri":"file:///home/alex/projects/myrepo"},"meta":{"title":"Claude Code session: Add service config","source":"agent://claude-code/session-xyz"}}}
++{"PathOpen":{"version":"1","id":"path-session-xyz","base":{"uri":"file:///home/alex/projects/myrepo","ref":"def789abc123456"},"meta":{"title":"Claude Code session: Add service config","source":"agent://claude-code/session-xyz"}}}
+ {"Step":{"step":{"id":"step-001","actor":"agent:claude-code/session-xyz","timestamp":"2026-01-29T14:00:00Z"},"change":{"src/lib.rs":{"raw":"@@ -1,3 +1,10 @@\n+/// Configuration for the service\n+pub struct Config {\n+    pub port: u16,\n+    pub host: String,\n+}\n","structural":{"type":"rust.add_items","items":[{"kind":"struct","name":"Config"}]}}},"meta":{"intent":"Add Config struct for service configuration","refs":[{"rel":"requested_by","href":"agent://claude-code/session-xyz/turn/1"}]}}}
+ {"Step":{"step":{"id":"step-002","parents":["step-001"],"actor":"agent:claude-code/session-xyz","timestamp":"2026-01-29T14:02:00Z"},"change":{"src/lib.rs":{"raw":"@@ -8,0 +9,15 @@\n+impl Config {\n+    pub fn from_env() -> Self {\n+        Self {\n+            port: std::env::var(\"PORT\")\n+                .unwrap_or_else(|_| \"8080\".to_string())\n+                .parse()\n+                .expect(\"PORT must be a number\"),\n+            host: std::env::var(\"HOST\")\n+                .unwrap_or_else(|_| \"localhost\".to_string()),\n+        }\n+    }\n+}\n","structural":{"type":"rust.add_items","items":[{"for":"Config","kind":"impl","methods":["from_env"]}]}}},"meta":{"intent":"Add from_env constructor for Config"}}}
+ {"Step":{"step":{"id":"step-003","parents":["step-002"],"actor":"tool:rustfmt/1.7.0","timestamp":"2026-01-29T14:02:05Z"},"change":{"src/lib.rs":{"raw":"@@ -12,4 +12,5 @@\n-            port: std::env::var(\"PORT\").unwrap_or_else(|_| \"8080\".to_string()).parse().expect(\"PORT must be a number\"),\n+            port: std::env::var(\"PORT\")\n+                .unwrap_or_else(|_| \"8080\".to_string())\n+                .parse()\n+                .expect(\"PORT must be a number\"),"}},"meta":{"intent":"Auto-format"}}}
+diff --git a/pr/29-site-promises.md b/pr/29-site-promises.md
+new file mode 100644
+index 00000000..2176ac55
+--- /dev/null
++++ b/pr/29-site-promises.md
+@@ -0,0 +1,61 @@
++# test(goldens): what the site and RFC promise — path query over every session, the core types, both file formats, a schema check on every transform
++
++Status: planned (asked 2026-10-19 on the goldens demo deck: test "Query every session", "do we demonstrate tests over these types", "and both formats", "can we do a schema check on transform") · Base: the goldens stack once merged
++
++## Why
++toolpath.net and RFC.md make claims the goldens did not test: `path query` runs one filter across every session whichever
++agent wrote it; a document is a Graph of Paths of Steps with base, head, dead ends, forks, merges, actors and
++perspectives; `.path.json` and `.path.jsonl` are the same document; and every transform yields a document the
++`agent-coding-session` kind accepts. Each is now a pinned test, and where the code falls short the gap is pinned as it
++is, with a qualifier record, rather than claimed.
++
++## What changes
++- `crates/path-cli/tests/query_every_session.rs`
++  - `query@site-example`: the cache holds the nine pinned `document@<set>` (all seven harnesses) and the site's exact
++    filter runs through `path query`. It works on v1.1.0 and returns output tokens per model: one `agent:` group per
++    harness (plus `human:user`, and `tool:` groups with 0).
++  - `query@cache-sync`: `path p cache sync` over real session files placed where Claude Code, Codex, Copilot, pi and
++    Gemini CLI keep them, twice (the second sync is all-unchanged: incremental), then the same filter. opencode and
++    Cursor keep sessions in SQLite stores this test does not build; their documents are covered by the first pin.
++- `crates/path-cli/tests/core_types.rs`
++  - `core_types@dag`: on `examples/path-04-exploration`, dead ends equal all steps minus `ancestors(head)` (the RFC's
++    definition): `step-002a`; a fork at `step-001` (three children); a merge at `step-004` (`step-003b`, `step-003c`).
++  - `core_types@validate`: `path p validate` on each valid document and its minimal invalid twin, one row per rule.
++    Rejected as the RFC says: a step or a path as the document root, an actor prefix outside human/agent/tool/ci.
++    **Accepted although the RFC forbids them** (`validator_does_not_enforce`): a duplicated step id, a duplicated path
++    id, a parent naming no step, a head naming no step, a `$ref` to a `.path.jsonl` (qualifier concerns on RFC.md 122,
++    127).
++- `crates/toolpath-goldens/tests/formats.rs`
++  - `formats@<set>`: each golden document streamed to `.path.jsonl` and sealed back is identical in canonical form (all
++    nine).
++  - `formats@examples`: the committed `examples/*.path.jsonl` against their `.path.json` twins. They differ only in
++    `graph.id` (a stream carries no graph identity; sealing names the graph after its path, the twins use
++    `graph-<path id>`), pinned and recorded (qualifier comment on RFC.md 116).
++  - The two refusals: a multi-path graph and a `$ref`-only graph have no JSONL form.
++  - `examples/path-02-local-session.path.jsonl` had drifted from its twin (no `base.ref`); fixed.
++- `crates/toolpath-goldens/tests/transforms_schema.rs` and `pipeline::writer_with_document`
++  - `validate_transforms@<set>`: the derived document, every round trip derived again (all 54 pairs) and the sealed
++    JSONL, each validated against the base schema and the v1.1.0 kind schema, with the `meta.kind` each path claims; a
++    path claiming no kind fails (it would otherwise skip the kind schema silently).
++  - `validate_transforms@writers`: the generated full document through each writer alone, derived again.
++  - All valid, all claiming v1.1.0.
++  - `bundled_kind_schema_is_the_published_one`: the bundled and site copies are byte-identical. Compared with the live
++    https://toolpath.net/kinds/agent-coding-session/v1.1.0/schema.json by hand on 2026-10-19: identical, sha256
++    `0557c0c06fe285704a672ac7f86abbd78f2e6e17e44aed0abbbdcc524ad523da`.
++
++## Verification
++New tests pass; gates as `scripts/quality_gates.sh` with `--features path-cli/goldens` (see the commit). Snapshots are new
++kinds only; no existing snapshot changed.
++
++## Paths
++```
++crates/path-cli/tests/query_every_session.rs
++crates/path-cli/tests/core_types.rs
++crates/path-cli/tests/snapshots/
++crates/toolpath-goldens/src/pipeline.rs
++crates/toolpath-goldens/tests/formats.rs
++crates/toolpath-goldens/tests/transforms_schema.rs
++crates/toolpath-goldens/snapshots/
++examples/path-02-local-session.path.jsonl
++.qual
++```
+-- 
+2.55.0
+

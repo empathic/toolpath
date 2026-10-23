@@ -1,0 +1,34 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_pi
+  agent: pi
+  input_sha256: 5d8b4c3d058fc57ab50967cb86e403d05d1c66f88174957543c81637cfc0d13d
+input_file: test-fixtures/pi/convo-compacted.jsonl
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 6,
+    "text_chars": 4900,
+    "tool_uses": 0,
+    "key_paths": 22
+  },
+  "after": {
+    "steps": 6,
+    "text_chars": 4900,
+    "tool_uses": 0,
+    "key_paths": 18
+  },
+  "lost": [
+    "paths[].meta.actors.<actor>.model",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens"
+  ],
+  "gained": [
+    "paths[].meta.producer.name"
+  ]
+}
