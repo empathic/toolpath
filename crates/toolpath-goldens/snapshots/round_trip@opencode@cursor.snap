@@ -1,0 +1,47 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
+input_file: test-fixtures/opencode/convo.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 12,
+    "text_chars": 2851,
+    "tool_uses": 10,
+    "key_paths": 54
+  },
+  "after": {
+    "steps": 12,
+    "text_chars": 2851,
+    "tool_uses": 10,
+    "key_paths": 49
+  },
+  "lost": [
+    "paths[].meta.producer.version",
+    "paths[].path.base.ref",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+    "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.newString",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.oldString",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.pattern",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.workdir"
+  ],
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.globPattern",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.targetDirectory",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.targetFile"
+  ]
+}

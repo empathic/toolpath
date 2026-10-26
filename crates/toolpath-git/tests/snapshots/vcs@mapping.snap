@@ -1,0 +1,94 @@
+---
+source: crates/toolpath-git/tests/vcs_mapping.rs
+expression: rows
+---
+[
+  {
+    "holds": true,
+    "observed": {
+      "merge_step_parents": [
+        "c3",
+        "f2"
+      ]
+    },
+    "rfc": "Commit → Step"
+  },
+  {
+    "holds": true,
+    "observed": [
+      {
+        "base_ref": "c2",
+        "branch": "main",
+        "head": "signed",
+        "path": "path-main",
+        "steps": [
+          "c3",
+          "f1",
+          "f2",
+          "merge",
+          "signed"
+        ]
+      },
+      {
+        "base_ref": "c1",
+        "branch": "feature",
+        "head": "f2",
+        "path": "path-feature",
+        "steps": [
+          "c2",
+          "f1",
+          "f2"
+        ]
+      }
+    ],
+    "rfc": "Branch → Path (base context)"
+  },
+  {
+    "holds": false,
+    "observed": {
+      "c3_intent": "Main moves on",
+      "note": "the RFC says machine-readable intent; the import keeps the subject line only"
+    },
+    "rfc": "Commit message → meta.intent"
+  },
+  {
+    "holds": false,
+    "observed": {
+      "meta_signatures_on_its_step": false,
+      "signed_commit_made": true
+    },
+    "rfc": "GPG signature → meta.signatures"
+  },
+  {
+    "holds": true,
+    "observed": {
+      "human:alex": {
+        "identities": [
+          {
+            "id": "alex@empathic.dev",
+            "system": "email"
+          }
+        ],
+        "name": "Alex Kesling"
+      },
+      "human:bob": {
+        "identities": [
+          {
+            "id": "bob@example.com",
+            "system": "email"
+          }
+        ],
+        "name": "Bob Builder"
+      }
+    },
+    "rfc": "Author identity → meta.actors"
+  },
+  {
+    "holds": false,
+    "observed": {
+      "deleted_branch_commit_in_document": false,
+      "note": "git dropped the branch before import; the import walks branch tips only"
+    },
+    "rfc": "Abandoned paths: dead ends preserved"
+  }
+]

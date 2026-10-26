@@ -1,0 +1,39 @@
+{
+ "agent": "copilot",
+ "recorded_at": "2026-10-15T19:38:46.044Z",
+ "key": "9418809bf59535ef8e29bf7e143fabad956abb3b73b2a40cc5aa1374f3bc97ac",
+ "loose_key": "28dc1d42f7ad76c956df2b9e3e70a78d349370ef8cad4b559e853b5371c17644",
+ "model": "",
+ "request": {
+  "method": "GET",
+  "url": "/copilot_internal/user",
+  "upstream": "https://api.github.com",
+  "headers": {
+   "accept": "application/json",
+   "authorization": "<redacted>",
+   "user-agent": "copilot/1.0.61 (darwin v24.19.0) term/unknown"
+  },
+  "body": "",
+  "body_encoding": "identity",
+  "normalized": ""
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "cache-control": "private, max-age=60, s-maxage=60",
+   "content-type": "application/json; charset=utf-8",
+   "vary": "Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With",
+   "x-github-media-type": "github.v3"
+  },
+  "chunks": [
+   {
+    "t_ms": 752,
+    "b64": "eyJpZCI6MCwibG9naW4iOiJ3ZWJtb2NrLXJlcGxheSIsImFjY2Vzc190eXBlX3NrdSI6Im1vbnRobHlfc3Vic2NyaWJlcl9xdW90YSIsImFuYWx5dGljc190cmFja2luZ19pZCI6IndlYm1vY2stcmVwbGF5IiwiYXNzaWduZWRfZGF0ZSI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwiY2FuX3NpZ251cF9mb3JfbGltaXRlZCI6ZmFsc2UsImNoYXRfZW5hYmxlZCI6dHJ1ZSwiY2xpX2VuYWJsZWQiOnRydWUsImNvcGlsb3RpZ25vcmVfZW5hYmxlZCI6ZmFsc2UsImNvcGlsb3RfcGxhbiI6ImluZGl2aWR1YWwiLCJlZGl0b3JfcHJldmlld19mZWF0dXJlc19lbmFibGVkIjp0cnVlLCJpc19tY3BfZW5hYmxlZCI6dHJ1ZSwiaXNfc3RhZmYiOmZhbHNlLCJlbnRlcnByaXNlX2xpc3QiOltdLCJvcmdhbml6YXRpb25fbG9naW5fbGlzdCI6W10sIm9yZ2FuaXphdGlvbl9saXN0IjpbXSwicmVzdHJpY3RlZF90ZWxlbWV0cnkiOmZhbHNlLCJjbGlfcmVtb3RlX2NvbnRyb2xfZW5hYmxlZCI6dHJ1ZSwiY29waWxvdF9hcHBfZW5hYmxlZCI6dHJ1ZSwiY2xvdWRfc2Vzc2lvbl9zdG9yYWdlX2VuYWJsZWQiOnRydWUsImVuZHBvaW50cyI6eyJhcGkiOiJodHRwczovL2FwaS5pbmRpdmlkdWFsLmdpdGh1YmNvcGlsb3QuY29tIiwib3JpZ2luLXRyYWNrZXIiOiJodHRwczovL29yaWdpbi10cmFja2VyLmluZGl2aWR1YWwuZ2l0aHViY29waWxvdC5jb20iLCJwcm94eSI6Imh0dHBzOi8vcHJveHkuaW5kaXZpZHVhbC5naXRodWJjb3BpbG90LmNvbSIsInRlbGVtZXRyeSI6Imh0dHBzOi8vdGVsZW1ldHJ5LmluZGl2aWR1YWwuZ2l0aHViY29waWxvdC5jb20iLCJleHAiOiJodHRwczovL2V4cC5pbmRpdmlkdWFsLmdpdGh1YmNvcGlsb3QuY29tIn0sImNhbl91cGdyYWRlX3BsYW4iOnRydWUsImVudGVycHJpc2VfdXNhZ2VfdGVsZW1ldHJ5IjpmYWxzZSwidGUiOmZhbHNlLCJxdW90YV9yZXNldF9kYXRlIjoiMjAyNi0xMS0wMSIsInF1b3RhX3NuYXBzaG90cyI6eyJjaGF0Ijp7Im92ZXJhZ2VfY291bnQiOjAsIm92ZXJhZ2VfcGVybWl0dGVkIjpmYWxzZSwicGVyY2VudF9yZW1haW5pbmciOjEwMC4wLCJxdW90YV9pZCI6ImNoYXQiLCJxdW90YV9yZW1haW5pbmciOjAuMCwidW5saW1pdGVkIjp0cnVlLCJ0aW1lc3RhbXBfdXRjIjoiMjAyNi0xMC0xNVQxOTozODo0Ni43ODdaIiwiaGFzX3F1b3RhIjp0cnVlLCJxdW90YV9yZXNldF9hdCI6MCwidG9rZW5fYmFzZWRfYmlsbGluZyI6dHJ1ZSwiY3JlZGl0c191c2VkIjowLCJvdmVyYWdlX2VudGl0bGVtZW50IjowLCJyZW1haW5pbmciOjAsImVudGl0bGVtZW50IjowfSwiY29tcGxldGlvbnMiOnsib3ZlcmFnZV9jb3VudCI6MCwib3ZlcmFnZV9wZXJtaXR0ZWQiOmZhbHNlLCJwZXJjZW50X3JlbWFpbmluZyI6MTAwLjAsInF1b3RhX2lkIjoiY29tcGxldGlvbnMiLCJxdW90YV9yZW1haW5pbmciOjAuMCwidW5saW1pdGVkIjp0cnVlLCJ0aW1lc3RhbXBfdXRjIjoiMjAyNi0xMC0xNVQxOTozODo0Ni43ODdaIiwiaGFzX3F1b3RhIjp0cnVlLCJxdW90YV9yZXNldF9hdCI6MCwidG9rZW5fYmFzZWRfYmlsbGluZyI6dHJ1ZSwiY3JlZGl0c191c2VkIjowLCJvdmVyYWdlX2VudGl0bGVtZW50IjowLCJyZW1haW5pbmciOjAsImVudGl0bGVtZW50IjowfSwicHJlbWl1bV9pbnRlcmFjdGlvbnMiOnsib3ZlcmFnZV9jb3VudCI6MTAxMSwib3ZlcmFnZV9wZXJtaXR0ZWQiOnRydWUsInBlcmNlbnRfcmVtYWluaW5nIjowLjAsInF1b3RhX2lkIjoicHJlbWl1bV9pbnRlcmFjdGlvbnMiLCJxdW90YV9yZW1haW5pbmciOi0xNDU5LjEsInVubGltaXRlZCI6ZmFsc2UsInRpbWVzdGFtcF91dGMiOiIyMDI2LTEwLTE1VDE5OjM4OjQ2Ljc4N1oiLCJoYXNfcXVvdGEiOnRydWUsInF1b3RhX3Jlc2V0X2F0IjowLCJ0b2tlbl9iYXNlZF9iaWxsaW5nIjp0cnVlLCJjcmVkaXRzX3VzZWQiOjI5NTksIm92ZXJhZ2VfZW50aXRsZW1lbnQiOjIwMDAsInJlbWFpbmluZyI6LTE0NjAsImVudGl0bGVtZW50IjoxNTAwfX0sInF1b3RhX3Jlc2V0X2RhdGVfdXRjIjoiMjAyNi0xMS0wMVQwMDowMDowMC4wMDBaIiwidG9rZW5fYmFzZWRfYmlsbGluZyI6dHJ1ZX0="
+   }
+  ],
+  "bytes": 2063,
+  "duration_ms": 753,
+  "sse": false,
+  "text_preview": "{\"id\":0,\"login\":\"webmock-replay\",\"access_type_sku\":\"monthly_subscriber_quota\",\"analytics_tracking_id\":\"webmock-replay\",\"assigned_date\":\"2026-01-01T00:00:00Z\",\"can_signup_for_limited\":false,\"chat_enabled\":true,\"cli_enabled\":true,\"copilotignore_enabled\":false,\"copilot_plan\":\"individual\",\"editor_preview_features_enabled\":true,\"is_mcp_enabled\":true,\"is_staff\":false,\"enterprise_list\":[],\"organization_l"
+ }
+}

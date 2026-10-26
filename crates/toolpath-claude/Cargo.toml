@@ -3,10 +3,12 @@ name = "toolpath-claude"
 version = "0.13.4"
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 repository = "https://github.com/empathic/toolpath"
 description = "Derive Toolpath provenance documents from Claude conversation logs"
 keywords = ["claude", "provenance", "toolpath", "audit", "ai"]
 categories = ["development-tools"]
+exclude = ["**/.qual"]
 
 [features]
 default = ["watcher"]
@@ -25,5 +27,7 @@ notify = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time", "fs"], optional = true }
 
 [dev-dependencies]
+toolpath-codex = { workspace = true }
+toolpath-golden = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }

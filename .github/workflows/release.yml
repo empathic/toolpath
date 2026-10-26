@@ -8,26 +8,40 @@ on:
 permissions:
   contents: write
 
+# Never cancelled: one group per tag (or dispatched ref) and sha, so a release run always finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The full quality gates on the tagged commit, the same matrix CI runs (gates.yml): a tag never
+  # publishes binaries built from a tree that did not pass them.
+  gates:
+    uses: ./.github/workflows/gates.yml
+    permissions:
+      contents: read
+
   build:
     name: Build ${{ matrix.target }}
+    needs: gates
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-26
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install musl-tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -65,7 +79,7 @@ jobs:
             shasum -a 256 path-${{ matrix.target }}.tar.gz > path-${{ matrix.target }}.tar.gz.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: path-${{ matrix.target }}
           path: |
@@ -75,18 +89,19 @@ jobs:
   release:
     name: Create Release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: artifacts
           merge-multiple: true
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: artifacts/*
           generate_release_notes: true

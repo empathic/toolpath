@@ -1,0 +1,57 @@
+From 4d7b7e1d1f408f01b25c45e435f2d519dadc6af0 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 11:43:51 -0400
+Subject: [PATCH] docs(goldens): where the four lossy share cells die (pr/89)
+
+---
+ pr/89-share-cells-findings.md | 38 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+ create mode 100644 pr/89-share-cells-findings.md
+
+diff --git a/pr/89-share-cells-findings.md b/pr/89-share-cells-findings.md
+new file mode 100644
+index 00000000..70d3d944
+--- /dev/null
++++ b/pr/89-share-cells-findings.md
+@@ -0,0 +1,38 @@
++# findings: where the four lossy share cells die (read-only; no code)
++
++Status: analysis only · Base: pr/88 · Pathbase read: empathic/pathbase @ 27683847d8d0 (local clone, read only, nothing written there)
++
++## What `path share` uploads
++`run_pathbase_inner` (crates/path-cli/src/cmd_export.rs:911) validates the derived document locally (`Graph::from_json`, :923) and POSTs `body` as it is. The upload body
++IS the derived document, verbatim. So toolpath loses nothing between the document and Pathbase: every cell below is lost, if at all, when Pathbase READS the stored document.
++
++## Pathbase's reader: pathbase-doc-format (crates/pathbase-doc-format/src/acs/model.rs)
++- `TokenUsage` (:107-120) has the four counters only. The doc comment (:102-106) says `breakdowns` is "intentionally not modelled": nothing sums it and a map per step would cost every walk.
++  => codex per-turn token breakdowns die in Pathbase's reader. Our document carries them (document@codex.snap has `breakdowns`). Not a toolpath-side bug; pr/01 does not change this.
++- `Event` (:268-273) reads `entry_type` and `event_source_id` and nothing else; `Payload::read` (:314) sends every `conversation.event` through it.
++  => copilot's model setting dies there: our document has it as a `conversation.event` step with `entry_type: session.model_change`, `newModel`, `reasoningEffort`, `contextTier`
++  (document@copilot.snap:549-557); `newModel` is never read. Same reader, same loss, for every other event field (claude's `entry_extra.*` among them: the claude "fields" cell).
++- pi's model setting is stored differently: in the actor definition (`paths[].meta.actors.<actor>.model/provider`, document@pi.snap:17-23), not in an event. Whether Pathbase's reader keeps
++  actor definitions' `model` is NOT verified: `split_actor` (document.rs:152) reads the actor id, and I did not find an actor-definition reader. So pi's cell may die in the reader or in the
++  surface that renders it (frontend `projections.ts`, not read). Needs the measurement.
++
++## Verified vs not
++Verified by reading code: the upload is verbatim; `breakdowns` unmodelled; `Event` reads two fields. NOT verified: that these are exactly the four cells' "fields" (the hand-checked map's wording for claude
++is "fields" and I read it as the event/entry_extra fields); the pi cell; anything about Pathbase's HTTP API or frontend (what a user sees).
++
++## What the "share" stage needs, and the blocker
++The stage the brief asks for (document -> request body -> Pathbase reader at a pinned rev) needs `pathbase-doc-format` as a dependency of the baseline. It lives in another repository
++and itself depends on `toolpath-convo`. Options, none done:
++1. a git dependency on empathic/pathbase at a pinned rev (cargo must fetch it: not possible in this offline sandbox; scratch-main-82 could vendor/verify; Cargo.lock and the nix vendoring change);
++2. a path dependency on a checkout (breaks CI);
++3. keep the reader out of this repo and run the share stage in Pathbase's repo against our committed `document@*` snapshots (the owner seat of pathbase), with the cells here read from its output.
++Recommendation: 3 for the measurement (no cross-repo dependency, uses the exact reader), and the toolpath-side tests are then trivial because the upload is verbatim: one test that the body equals the derived document byte for byte.
++
++## Proposed fixes (Pathbase side; to route through work-controller-core, not pushed by me)
++- `TokenUsage`: model `breakdowns` as `Option<BTreeMap<String, BTreeMap<String, u32>>>`, read but never summed (the existing test `breakdowns_are_ignored_rather_than_summed` keeps passing); tests: shared codex keeps per-turn breakdowns.
++- `Event`: carry the payload's remaining fields (a `fields: Map<String, Value>` flatten), so model settings and claude's entry fields survive; tests: shared copilot keeps `newModel`; shared claude keeps `entry_extra`.
++- pi: measure first.
++Whether any of this is a DECLARED loss instead (the format cannot hold it) is Bobby's call; nothing here is declared.
++
++## Not run
++No code, no gates. The four failing-first tests, the measurement, and the scratch-clone patch are not written: they depend on the choice above (and on Ben's #305/#356, which change the upload path: JSONL batches, remote records).
+-- 
+2.55.0
+

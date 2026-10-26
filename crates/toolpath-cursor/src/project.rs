@@ -13,17 +13,19 @@ use toolpath_convo::{
 
 use crate::reader::CONTENT_PREFIX;
 use crate::types::{
-    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader, CAPABILITY_TOOL,
-    ComposerData, ComposerHead, CursorSession, ModelConfig, ModelInfo, SelectedModel,
-    TOOL_EDIT_FILE_V2, TOOL_GLOB_FILE_SEARCH, TOOL_READ_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2,
-    TOOL_TASK_V2, ThinkingBlock, TokenCount, ToolFormerData, WorkspaceIdentifier, WorkspaceUri,
+    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader, BubbleThinking,
+    CAPABILITY_TOOL, ComposerData, ComposerHead, CursorSession, ModelConfig, ModelInfo,
+    SelectedModel, TOOL_EDIT_FILE_V2, TOOL_GLOB_FILE_SEARCH, TOOL_READ_FILE_V2,
+    TOOL_RUN_TERMINAL_COMMAND_V2, TOOL_TASK_V2, ThinkingBlock, TokenCount, ToolFormerData,
+    WorkspaceIdentifier, WorkspaceUri,
 };
 
-const DEFAULT_AGENT_BACKEND: &str = "cursor-agent";
 const DEFAULT_MODEL_NAME: &str = "default";
 const DEFAULT_UNIFIED_MODE: &str = "agent";
 const DEFAULT_FORCE_MODE: &str = "edit";
-const COMPOSER_SCHEMA_V: u32 = 16;
+// 18 is what Cursor 3.24 writes for an IDE chat. A `_v` 16 composer with
+// `agentBackend: "cursor-agent"` is listed but opens empty in 3.24.
+const COMPOSER_SCHEMA_V: u32 = 18;
 const BUBBLE_SCHEMA_V: u32 = 3;
 const UNIFIED_MODE_AGENT: u32 = 2;
 const CAPABILITY_THINKING: u32 = crate::types::CAPABILITY_THINKING;
@@ -110,22 +112,22 @@ fn project_view(
                 .as_ref()
                 .and_then(|b| b.working_dir.clone())
                 .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| PathBuf::from("/"));
-    let workspace_path_str = workspace_path.to_string_lossy().into_owned();
+        });
+    // No directory named by the caller or the view: write none, never `/`.
+    let workspace_path_str = workspace_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned());
 
     let workspace_id = cfg
         .workspace_id
         .clone()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| workspace_hash(&workspace_path_str));
+        .or_else(|| workspace_path_str.as_deref().map(workspace_hash));
 
     let title = cfg.title.clone().or_else(|| view.title(80));
 
-    let agent_backend = cfg
-        .agent_backend
-        .clone()
-        .unwrap_or_else(|| DEFAULT_AGENT_BACKEND.to_string());
+    // None (the IDE's own agent) unless a caller asks for another backend.
+    let agent_backend = cfg.agent_backend.clone();
     let default_model = cfg
         .default_model
         .clone()
@@ -170,25 +172,36 @@ fn project_view(
 
         headers.push(header_for(&bubble, turn));
         bubbles.push(bubble);
+
+        // A Cursor bubble carries one tool call (`toolFormerData`): a turn's further calls
+        // each get a bubble of their own, as Cursor writes them, so none is dropped.
+        for (k, tu) in turn.tool_uses.iter().enumerate().skip(1) {
+            let mut extra = turn.clone();
+            extra.id = format!("{}-tool-{k}", turn.id);
+            extra.text = String::new();
+            extra.thinking = None;
+            extra.token_usage = None;
+            extra.tool_uses = vec![tu.clone()];
+            let bubble = build_bubble(&extra, &mut content_blobs);
+            headers.push(header_for(&bubble, &extra));
+            bubbles.push(bubble);
+        }
     }
 
-    let workspace_identifier = if workspace_path_str.starts_with('/') {
-        Some(WorkspaceIdentifier {
-            id: workspace_id.clone(),
-            uri: Some(WorkspaceUri {
+    // Cursor tolerates a head with no `workspaceIdentifier`, and one with an
+    // id but no `uri` (a remote or folderless window).
+    let workspace_identifier = workspace_id.map(|id| WorkspaceIdentifier {
+        id,
+        uri: workspace_path_str
+            .filter(|p| p.starts_with('/'))
+            .map(|p| WorkspaceUri {
                 mid: Some(1),
-                fs_path: Some(workspace_path_str.clone()),
-                external: Some(format!("file://{}", workspace_path_str)),
-                path: Some(workspace_path_str.clone()),
+                fs_path: Some(p.clone()),
+                external: Some(format!("file://{p}")),
+                path: Some(p),
                 scheme: Some("file".into()),
             }),
-        })
-    } else {
-        Some(WorkspaceIdentifier {
-            id: workspace_id.clone(),
-            uri: None,
-        })
-    };
+    });
 
     let head = ComposerHead {
         kind: Some("head".into()),
@@ -227,7 +240,7 @@ fn project_view(
         status: Some("completed".into()),
         unified_mode: Some(DEFAULT_UNIFIED_MODE.into()),
         force_mode: Some(DEFAULT_FORCE_MODE.into()),
-        agent_backend: Some(agent_backend),
+        agent_backend,
         model_config: Some(ModelConfig {
             model_name: Some(default_model.clone()),
             max_mode: false,
@@ -244,11 +257,22 @@ fn project_view(
         extra: composer_required_extras(),
     };
 
+    // What Cursor sends the model: `conversationState` lists the history
+    // blobs. Without it a resumed chat starts from nothing.
+    let (conversation_state, agent_blobs) = model_history(view);
+    let mut data = data;
+    data.extra.insert(
+        "conversationState".into(),
+        Value::String(conversation_state),
+    );
+    data.extra.insert("hasLoaded".into(), Value::Bool(true));
+
     Ok(CursorSession {
         head: Some(head),
         data,
         bubbles,
         content_blobs,
+        agent_blobs,
         transcript_path: None,
     })
 }
@@ -328,6 +352,23 @@ fn build_bubble(turn: &Turn, content_blobs: &mut HashMap<String, String>) -> Bub
         token_count,
         model_info,
         tool_former_data,
+        // Cursor's own `thinking` object, as real bubbles carry it; the signature goes back only
+        // when this turn's thinking is the text Cursor signed.
+        thinking: turn
+            .thinking
+            .as_ref()
+            .filter(|t| !t.is_empty())
+            .map(|t| BubbleThinking {
+                text: t.clone(),
+                signature: Some(
+                    turn.thinking_signature
+                        .as_ref()
+                        .and_then(|s| s.value_for("cursor", t))
+                        .unwrap_or_default()
+                        .to_string(),
+                ),
+                extra: HashMap::new(),
+            }),
         all_thinking_blocks,
         tool_results: Vec::new(),
         extra: bubble_required_extras(is_tool_bubble),
@@ -664,7 +705,7 @@ fn workspace_hash(path: &str) -> String {
     full.chars().take(32).collect()
 }
 
-fn parse_timestamp_ms(ts: &str) -> Option<i64> {
+pub(crate) fn parse_timestamp_ms(ts: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(ts)
         .ok()
         .map(|dt| dt.timestamp_millis())
@@ -676,7 +717,7 @@ fn parse_timestamp_ms(ts: &str) -> Option<i64> {
         .or_else(|| ts.parse::<i64>().ok())
 }
 
-fn ensure_uuid_shape(id: &str) -> String {
+pub(crate) fn ensure_uuid_shape(id: &str) -> String {
     if looks_like_uuid(id) {
         return id.to_string();
     }
@@ -799,6 +840,118 @@ fn empty_context_value() -> Value {
     })
 }
 
+/// The model-visible history of a conversation: one AI SDK `ModelMessage`
+/// per message, as JSON, keyed by the SHA-256 of its bytes, and the hashes
+/// in order. Both Cursor writers carry it: the IDE lists the hashes in
+/// `conversationState` (blobs under `agentKv:blob:<sha256>`), the
+/// `cursor-agent` CLI in field 1 of its root blob (blobs in `store.db`).
+pub(crate) struct ModelHistory {
+    pub(crate) order: Vec<[u8; 32]>,
+    pub(crate) blobs: HashMap<String, String>,
+}
+
+pub(crate) fn model_messages(view: &ConversationView) -> ModelHistory {
+    let mut blobs: HashMap<String, String> = HashMap::new();
+    let mut order: Vec<[u8; 32]> = Vec::new();
+    let mut push = |msg: Value| {
+        let body = msg.to_string();
+        let digest: [u8; 32] = Sha256::digest(body.as_bytes()).into();
+        blobs.insert(hex_lower(&digest), body);
+        order.push(digest);
+    };
+    for turn in &view.turns {
+        match turn.role {
+            Role::User => {
+                if !turn.text.is_empty() {
+                    push(json!({"role": "user", "content": [{"type": "text", "text": turn.text}]}));
+                }
+            }
+            Role::Assistant => {
+                let mut parts: Vec<Value> = Vec::new();
+                if let Some(t) = turn.thinking.as_ref().filter(|t| !t.is_empty()) {
+                    parts.push(json!({"type": "reasoning", "text": t}));
+                }
+                if !turn.text.is_empty() {
+                    parts.push(json!({"type": "text", "text": turn.text}));
+                }
+                for tu in &turn.tool_uses {
+                    parts.push(json!({
+                        "type": "tool-call",
+                        "toolCallId": tu.id,
+                        "toolName": tu.name,
+                        "args": tu.input,
+                    }));
+                }
+                if !parts.is_empty() {
+                    push(json!({"role": "assistant", "id": turn.id, "content": parts}));
+                }
+                for tu in &turn.tool_uses {
+                    if let Some(r) = &tu.result {
+                        push(json!({
+                            "role": "tool",
+                            "content": [{
+                                "type": "tool-result",
+                                "toolCallId": tu.id,
+                                "toolName": tu.name,
+                                "result": r.content,
+                                "isError": r.is_error,
+                            }],
+                        }));
+                    }
+                }
+            }
+            // The model history keeps a system message, as the CLI's own first blob does.
+            Role::System => {
+                if !turn.text.is_empty() {
+                    push(json!({"role": "system", "content": turn.text}));
+                }
+            }
+            Role::Other(_) => {}
+        }
+    }
+    ModelHistory { order, blobs }
+}
+
+/// Cursor 3.24 IDE model history: `conversationState` is `"~"` + base64 of
+/// a protobuf whose field 1 repeats the 32-byte hashes of
+/// [`model_messages`] in order. Observed in Cursor 3.24.12
+/// (docs/agents/formats/cursor.md).
+fn model_history(view: &ConversationView) -> (String, HashMap<String, String>) {
+    let ModelHistory { order, blobs } = model_messages(view);
+    let mut proto: Vec<u8> = Vec::with_capacity(order.len() * 34);
+    for h in &order {
+        crate::proto::put_bytes(&mut proto, 1, h);
+    }
+    (format!("~{}", base64_std(&proto)), blobs)
+}
+
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub(crate) fn base64_std(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
+        out.push(A[(n >> 18) as usize & 63] as char);
+        out.push(A[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            A[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            A[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 // Each key is required by Cursor's chat loader — omitting any of
 // them throws inside the renderer and hangs the chat panel.
 fn composer_required_extras() -> HashMap<String, Value> {
@@ -910,6 +1063,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -917,6 +1071,7 @@ mod tests {
             timestamp: "2026-06-01T00:00:00.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -934,6 +1089,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -941,6 +1097,7 @@ mod tests {
             timestamp: "2026-06-01T00:00:01.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: Some("claude-opus-4-7".into()),
             stop_reason: None,
@@ -1155,7 +1312,14 @@ mod tests {
         assert_eq!(s.head.as_ref().unwrap().name.as_deref(), Some("My session"));
         assert!(s.data.is_agentic);
         assert_eq!(s.data.unified_mode.as_deref(), Some("agent"));
-        assert_eq!(s.data.agent_backend.as_deref(), Some("cursor-agent"));
+        // Cursor 3.24 IDE chats carry no agentBackend; "cursor-agent" made
+        // the composer open empty.
+        assert_eq!(s.data.agent_backend, None);
+        assert_eq!(s.data.v, 18);
+        assert_eq!(
+            s.data.extra.get("hasLoaded"),
+            Some(&serde_json::Value::Bool(true))
+        );
         let ws = s
             .head
             .as_ref()
@@ -1208,6 +1372,33 @@ mod tests {
             .workspace_identifier
             .as_ref()
             .unwrap();
+        assert!(ws.uri.is_none());
+    }
+
+    #[test]
+    fn no_working_dir_writes_no_workspace() {
+        let mut turn = user_turn("u1", "hi");
+        turn.environment = None;
+        let mut view = view_with(vec![turn]);
+        view.base = None;
+
+        let s = CursorProjector::new().project(&view).unwrap();
+        assert!(s.head.as_ref().unwrap().workspace_identifier.is_none());
+        assert_eq!(s.workspace_path(), None);
+
+        // A caller-given id with no directory keeps the id and names no folder.
+        let s = CursorProjector::new()
+            .with_workspace_id("workspaceid")
+            .project(&view)
+            .unwrap();
+        let ws = s
+            .head
+            .as_ref()
+            .unwrap()
+            .workspace_identifier
+            .as_ref()
+            .unwrap();
+        assert_eq!(ws.id, "workspaceid");
         assert!(ws.uri.is_none());
     }
 
@@ -1402,5 +1593,108 @@ mod tests {
             s.content_blobs.get(after_hash).map(String::as_str),
             Some("real after")
         );
+    }
+
+    /// Cursor 3.24 sends the model the messages `conversationState` lists:
+    /// field 1 of a protobuf, one 32-byte SHA-256 per `agentKv:blob:` row,
+    /// in order. Shape observed in a native 3.24.12 chat.
+    #[test]
+    fn conversation_state_lists_the_history_blobs_in_order() {
+        let mut a = user_turn("a1", "");
+        a.role = Role::Assistant;
+        a.text = "running it".into();
+        a.tool_uses = vec![ToolInvocation {
+            id: "call-1".into(),
+            name: "Bash".into(),
+            input: serde_json::json!({"command": "ls"}),
+            result: Some(toolpath_convo::ToolResult {
+                content: "notes.txt".into(),
+                is_error: false,
+            }),
+            category: None,
+        }];
+        let s = CursorProjector::new()
+            .project(&view_with(vec![user_turn("u1", "list the files"), a]))
+            .unwrap();
+        let cs = s.data.extra["conversationState"].as_str().unwrap();
+        assert!(cs.starts_with('~'));
+        let raw = decode_b64(&cs[1..]);
+        assert_eq!(raw.len(), 3 * 34, "user, assistant, tool");
+        let mut roles = Vec::new();
+        for chunk in raw.chunks(34) {
+            assert_eq!(&chunk[..2], &[0x0a, 32]);
+            let hash = hex_lower(&chunk[2..]);
+            let body = s
+                .agent_blobs
+                .get(&hash)
+                .expect("every listed hash has its blob");
+            let digest: [u8; 32] = Sha256::digest(body.as_bytes()).into();
+            assert_eq!(hex_lower(&digest), hash, "the key is the blob's sha256");
+            let msg: serde_json::Value = serde_json::from_str(body).unwrap();
+            roles.push(msg["role"].as_str().unwrap().to_string());
+        }
+        assert_eq!(roles, ["user", "assistant", "tool"]);
+        let assistant: serde_json::Value = s
+            .agent_blobs
+            .values()
+            .map(|b| serde_json::from_str::<serde_json::Value>(b).unwrap())
+            .find(|m| m["role"] == "assistant")
+            .unwrap();
+        assert_eq!(assistant["content"][1]["type"], "tool-call");
+        assert_eq!(assistant["content"][1]["toolName"], "Bash");
+    }
+
+    fn decode_b64(s: &str) -> Vec<u8> {
+        crate::types::base64_std_decode(s).expect("standard base64")
+    }
+
+    #[test]
+    fn system_text_reads_back_from_the_model_history_in_place() {
+        let mut sys = user_turn("s0", "be terse");
+        sys.role = Role::System;
+        let mut sys2 = user_turn("s1", "the second instructions");
+        sys2.role = Role::System;
+        let view = view_with(vec![
+            sys,
+            user_turn("u1", "hello"),
+            assistant_turn("a1", "hi"),
+            sys2,
+            user_turn("u2", "again"),
+            assistant_turn("a2", "ok"),
+        ]);
+        let s = CursorProjector::new().project(&view).unwrap();
+        let back = crate::session_to_view(&s);
+        let shape: Vec<(Role, &str)> = back
+            .turns
+            .iter()
+            .map(|t| (t.role.clone(), t.text.as_str()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (Role::System, "be terse"),
+                (Role::User, "hello"),
+                (Role::Assistant, "hi"),
+                (Role::System, "the second instructions"),
+                (Role::User, "again"),
+                (Role::Assistant, "ok"),
+            ]
+        );
+        for k in 1..back.turns.len() {
+            assert_eq!(
+                back.turns[k].parent_id.as_deref(),
+                Some(back.turns[k - 1].id.as_str())
+            );
+        }
+        assert_eq!(back.turns[0].parent_id, None);
+    }
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        assert_eq!(base64_std(b""), "");
+        assert_eq!(base64_std(b"f"), "Zg==");
+        assert_eq!(base64_std(b"fo"), "Zm8=");
+        assert_eq!(base64_std(b"foo"), "Zm9v");
+        assert_eq!(decode_b64(&base64_std(b"foobar")), b"foobar");
     }
 }

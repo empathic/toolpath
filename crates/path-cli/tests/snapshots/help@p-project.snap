@@ -1,0 +1,56 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path p project
+Project a Toolpath document into a harness's session format (file or stdout — the narrower, file-shaped sibling of `export`)
+
+Usage: path p project [OPTIONS] <COMMAND>
+
+Commands:
+  claude  Project a toolpath document into Claude JSONL format
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p project claude
+Project a toolpath document into Claude JSONL format
+
+Usage: path p project claude [OPTIONS] --input <INPUT>
+
+Options:
+  -i, --input <INPUT>
+          Input toolpath document (JSON path, or cache id)
+
+  -o, --output <OUTPUT>
+          Output file (JSONL). Prints to stdout if omitted
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

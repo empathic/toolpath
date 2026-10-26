@@ -139,13 +139,13 @@ mod tests {
         let session = mgr.read_session(&id).unwrap();
         let path = derive_path(&session, &DeriveConfig::default());
         // The assistant turn that ran `apply_patch` carries a sibling
-        // `file.write` entry keyed by the file path.
+        // `file.write` entry keyed by the file path, relative to the session's cwd (/tmp/proj).
         let file_step = path
             .steps
             .iter()
-            .find(|s| s.change.contains_key("/tmp/proj/a.rs"))
+            .find(|s| s.change.contains_key("a.rs"))
             .expect("no step carries the file artifact");
-        let change = &file_step.change["/tmp/proj/a.rs"];
+        let change = &file_step.change["a.rs"];
         assert!(change.raw.is_some(), "raw perspective must be populated");
         assert!(
             change.raw.as_ref().unwrap().contains("+fn main() {}"),

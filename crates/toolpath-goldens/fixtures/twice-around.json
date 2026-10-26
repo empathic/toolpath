@@ -1,0 +1,4 @@
+[
+  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.turn_id","why":"exec_command_end.turn_id is copied from the source id, then the reader renumbers turns to codex-turn-NNNN; settles after one pass (project.rs exec_command_end, provider.rs renumbering).","defect":"stabilise by writing codex-turn-NNNN ids at projection time."},
+  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.model_provider","why":"Seen only for pi (served by ollama): the value moves between passes; one-time, IR2 is a fixed point.","defect":"cause not traced yet: check which of the first and second read keeps the turn's provider."}
+]

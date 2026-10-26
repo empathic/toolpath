@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Finding": {
+      "description": "What a known defect measures.",
+      "oneOf": [
+        {
+          "description": "Top-level `type` values a Claude projection writes that Claude Code does not define, with how many lines carry each.",
+          "properties": {
+            "counts": {
+              "additionalProperties": {
+                "format": "uint",
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "kind": {
+              "enum": [
+                "illegal_claude_types"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "counts",
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Fields the same-format round trip writes under another spelling.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "renames"
+              ],
+              "type": "string"
+            },
+            "renames": {
+              "items": {
+                "$ref": "#/definitions/Rename"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "renames"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Fields of the session's token accounting on which the sum over steps, the adapter's total and the extracted total disagree.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "accounting"
+              ],
+              "type": "string"
+            },
+            "mismatches": {
+              "items": {
+                "$ref": "#/definitions/Mismatch"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "mismatches"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "KnownDefect": {
+      "description": "A defect pinned as expected current behaviour. A fix changes the finding, so the snapshot that holds it fails; accepting the new snapshot is the acknowledgement that the defect is gone.",
+      "properties": {
+        "finding": {
+          "$ref": "#/definitions/Finding"
+        },
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "description": "The projection the finding is measured on: an agent, or `self:<agent>` for the same-format round trip.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding",
+        "name",
+        "target"
+      ],
+      "type": "object"
+    },
+    "Mismatch": {
+      "description": "One field of the session's token accounting on which the three witnesses disagree: the sum over `conversation.append` steps, the adapter's `total_usage`, and the `total_usage` extracted from the document.",
+      "properties": {
+        "extracted": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "field": {
+          "description": "`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, or `breakdowns.<class>.<sub>`.",
+          "type": "string"
+        },
+        "ir": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "steps": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "type": "object"
+    },
+    "Rename": {
+      "description": "A field the same-format round trip writes under another spelling.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "The defects accepted today for one recording. A known defect passes the baseline; a new one, or one that gets worse, fails it.",
+  "items": {
+    "$ref": "#/definitions/KnownDefect"
+  },
+  "title": "known_defects snapshot",
+  "type": "array"
+}

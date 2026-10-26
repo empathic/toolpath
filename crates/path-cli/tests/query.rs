@@ -634,6 +634,151 @@ fn query_project_under_scopes_sync_and_read() {
         .stderr(predicate::str::contains("synced").not());
 }
 
+/// Write one Claude session under `<cfg_root>/projects/<slug of project>`.
+fn claude_session_in(cfg_root: &Path, project: &Path, id: &str) {
+    std::fs::create_dir_all(project).unwrap();
+    let slug = project
+        .to_string_lossy()
+        .replace([std::path::MAIN_SEPARATOR, '_', '.'], "-");
+    let dir = cfg_root.join("projects").join(slug);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{id}.jsonl")),
+        format!(
+            r#"{{"type":"user","uuid":"u-{id}","timestamp":"2024-01-01T00:00:00Z","cwd":"{cwd}","message":{{"role":"user","content":"hi"}}}}
+{{"type":"assistant","uuid":"a-{id}","timestamp":"2024-01-01T00:00:01Z","message":{{"role":"assistant","content":"hello"}}}}
+"#,
+            cwd = project.display()
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn claude_config_dir_list_syncs_every_root_and_labels_the_owner() {
+    let home = tempfile::tempdir().unwrap();
+    let work = home.path().join("claude-fleet-work");
+    let personal = home.path().join("claude-fleet-personal");
+    let proj = home.path().join("seats/.lobby_x");
+    claude_session_in(&work, &proj, "aaaa1111-work");
+    claude_session_in(&personal, &proj, "bbbb2222-personal");
+    let list = std::env::join_paths([&work, &personal]).unwrap();
+    let cfg = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Command::cargo_bin("path")
+            .unwrap()
+            .env("HOME", home.path())
+            .env_remove("XDG_DATA_HOME")
+            .env("CLAUDE_CONFIG_DIR", &list)
+            .env("TOOLPATH_CONFIG_DIR", cfg.path())
+            .arg("query")
+            .args(args)
+            .assert()
+    };
+    let under = home.path().join("seats");
+    let under = under.to_str().unwrap();
+
+    // Both roots ingested in one sync, scoped by --project-under.
+    run(&[
+        "--source",
+        "claude",
+        "--project-under",
+        under,
+        "-c",
+        "[.[].path.meta.account] | unique",
+    ])
+    .success()
+    .stdout(predicate::str::contains(
+        "[\"claude-fleet-personal\",\"claude-fleet-work\"]",
+    ))
+    .stderr(predicate::str::contains("synced claude: 2 new"));
+
+    // Each session carries its own owning root, never the other's.
+    run(&[
+        "--no-sync",
+        "--source",
+        "claude",
+        "-c",
+        "[.[] | select(.path.meta.account == \"claude-fleet-work\") | .path.meta.claude_config_dir] | unique",
+    ])
+    .success()
+    .stdout(predicate::str::contains(work.to_str().unwrap()))
+    .stdout(predicate::str::contains(personal.to_str().unwrap()).not());
+}
+
+#[test]
+fn project_under_matches_exactly_one_seat_title_without_prefix_bleed() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join("claude-fleet-work");
+    let seats = home.path().join("seats");
+    for (title, id) in [
+        ("work-home-author", "1111aaaa"),
+        ("work-home2-author", "2222bbbb"),
+        ("work-home", "3333cccc"),
+    ] {
+        claude_session_in(&root, &seats.join(title), id);
+    }
+    let cfg = tempfile::tempdir().unwrap();
+    let run = |title: &str| {
+        let under = seats.join(title);
+        let out = Command::cargo_bin("path")
+            .unwrap()
+            .env("HOME", home.path())
+            .env_remove("XDG_DATA_HOME")
+            .env("CLAUDE_CONFIG_DIR", &root)
+            .env("TOOLPATH_CONFIG_DIR", cfg.path())
+            .args([
+                "query",
+                "--source",
+                "claude",
+                "--project-under",
+                under.to_str().unwrap(),
+                "-c",
+                "[.[].path.base.uri] | unique",
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let one = run("work-home-author");
+    assert!(one.contains("seats/work-home-author\""), "{one}");
+    assert!(!one.contains("work-home2-author"), "{one}");
+    assert!(!one.contains("seats/work-home\""), "{one}");
+    // "work-home" must not drag in "work-home-author" or "work-home2-author".
+    let two = run("work-home");
+    assert!(two.contains("seats/work-home\""), "{two}");
+    assert!(!two.contains("work-home-author"), "{two}");
+    assert!(!two.contains("work-home2-author"), "{two}");
+}
+
+#[test]
+fn claude_config_dir_single_value_reads_only_that_root() {
+    let home = tempfile::tempdir().unwrap();
+    let work = home.path().join("claude-fleet-work");
+    let personal = home.path().join("claude-fleet-personal");
+    let proj = home.path().join("seats/p");
+    claude_session_in(&work, &proj, "aaaa1111-work");
+    claude_session_in(&personal, &proj, "bbbb2222-personal");
+    let cfg = tempfile::tempdir().unwrap();
+    Command::cargo_bin("path")
+        .unwrap()
+        .env("HOME", home.path())
+        .env_remove("XDG_DATA_HOME")
+        .env("CLAUDE_CONFIG_DIR", &work)
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .args([
+            "query",
+            "--source",
+            "claude",
+            "-c",
+            "[.[].path.meta.account] | unique",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[\"claude-fleet-work\"]"))
+        .stderr(predicate::str::contains("synced claude: 1 new"));
+}
+
 #[test]
 fn an_unknown_source_warns_instead_of_silently_returning_nothing() {
     let cfg = tempfile::tempdir().unwrap();

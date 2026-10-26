@@ -1,0 +1,1485 @@
+From 054eb77d13b2493bfccd17c64e010896a66c9a26 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 13:11:19 -0400
+Subject: [PATCH] fix(gemini): the writer states tokens.tool and tokens.total
+ (pr/107)
+
+---
+ crates/toolpath-gemini/src/project.rs         | 44 +++++++--
+ .../projection@claude-compacted@gemini.snap   | 12 ++-
+ .../projection@claude-forced@gemini.snap      | 40 ++++++--
+ .../projection@claude-session@gemini.snap     |  8 +-
+ .../snapshots/projection@claude@gemini.snap   | 80 +++++++++++----
+ .../projection@codex-forced@gemini.snap       |  8 +-
+ .../snapshots/projection@codex@gemini.snap    |  4 +-
+ .../snapshots/projection@copilot@gemini.snap  |  4 +-
+ .../projection@opencode-forced@gemini.snap    | 48 ++++++---
+ .../snapshots/projection@opencode@gemini.snap | 44 ++++++---
+ .../projection@pi-forced@gemini.snap          |  8 +-
+ .../snapshots/projection@pi@gemini.snap       | 44 ++++++---
+ .../snapshots/shed@claude-compacted.snap      |  4 +-
+ .../snapshots/shed@claude-forced.snap         |  4 +-
+ .../snapshots/shed@claude-session.snap        |  4 +-
+ .../snapshots/shed@claude.snap                |  4 +-
+ .../snapshots/shed@codex-forced.snap          |  4 +-
+ .../snapshots/shed@codex.snap                 |  4 +-
+ .../snapshots/shed@copilot.snap               |  4 +-
+ .../snapshots/shed@gemini.snap                | 16 +--
+ .../snapshots/shed@opencode-forced.snap       |  4 +-
+ .../snapshots/shed@opencode.snap              |  4 +-
+ .../snapshots/shed@pi-forced.snap             |  4 +-
+ .../toolpath-goldens/snapshots/shed@pi.snap   |  4 +-
+ goldens/manifest.json                         | 98 +++++++++----------
+ 25 files changed, 336 insertions(+), 166 deletions(-)
+
+diff --git a/crates/toolpath-gemini/src/project.rs b/crates/toolpath-gemini/src/project.rs
+index c3b106f8..ec7f441a 100644
+--- a/crates/toolpath-gemini/src/project.rs
++++ b/crates/toolpath-gemini/src/project.rs
+@@ -279,16 +279,22 @@ fn tokens_from_common(u: &TokenUsage) -> Tokens {
+         .get("output")
+         .and_then(|m| m.get("reasoning"))
+         .copied();
++    let output = match (u.output_tokens, thoughts) {
++        (Some(o), Some(r)) => Some(o.saturating_sub(r)),
++        (o, _) => o,
++    };
++    // Gemini states `tool` (tool-use prompt tokens, 0 when none) and `total` (input + output +
++    // thoughts + tool; cached is inside input) on every message. The usage has no tool slot.
++    let total = u
++        .input_tokens
++        .map(|i| i + output.unwrap_or(0) + thoughts.unwrap_or(0));
+     Tokens {
+         input: u.input_tokens,
+-        output: match (u.output_tokens, thoughts) {
+-            (Some(o), Some(r)) => Some(o.saturating_sub(r)),
+-            (o, _) => o,
+-        },
++        output,
+         cached: u.cache_read_tokens,
+         thoughts,
+-        tool: None,
+-        total: None,
++        tool: u.input_tokens.map(|_| 0),
++        total,
+     }
+ }
+ 
+@@ -583,6 +589,26 @@ mod tests {
+         assert_eq!(tokens.thoughts, Some(243));
+     }
+ 
++    /// Gemini states `tool` and `total` on every message: `total` is the sum of input, output,
++    /// thoughts and tool (cached is part of input), so both follow from the usage.
++    #[test]
++    fn tokens_from_common_states_tool_and_total() {
++        let usage = TokenUsage {
++            input_tokens: Some(8702),
++            output_tokens: Some(365),
++            cache_read_tokens: Some(0),
++            breakdowns: BTreeMap::from([(
++                "output".to_string(),
++                BTreeMap::from([("reasoning".to_string(), 329u32)]),
++            )]),
++            ..Default::default()
++        };
++        let tokens = tokens_from_common(&usage);
++        assert_eq!(tokens.output, Some(36));
++        assert_eq!(tokens.tool, Some(0));
++        assert_eq!(tokens.total, Some(9067));
++    }
++
+     #[test]
+     fn tokens_from_common_without_breakdown_leaves_output_unchanged() {
+         let usage = TokenUsage {
+@@ -732,8 +758,10 @@ mod tests {
+         assert_eq!(tokens.input, Some(100));
+         assert_eq!(tokens.output, Some(50));
+         assert_eq!(tokens.cached, Some(20));
+-        // thoughts/tool/total unknown on the fallback path
+-        assert!(tokens.total.is_none());
++        // thoughts unknown on the fallback path; tool is stated as 0 (the usage has no tool-use
++        // prompt slot) and total follows: input + output
++        assert_eq!(tokens.tool, Some(0));
++        assert_eq!(tokens.total, Some(150));
+     }
+ 
+     #[test]
+diff --git a/crates/toolpath-goldens/snapshots/projection@claude-compacted@gemini.snap b/crates/toolpath-goldens/snapshots/projection@claude-compacted@gemini.snap
+index b81ac272..55a19151 100644
+--- a/crates/toolpath-goldens/snapshots/projection@claude-compacted@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@claude-compacted@gemini.snap
+@@ -34,7 +34,9 @@ input_file: goldens/claude-compacted/input.jsonl
+       "content": "I'll start by reading the current auth code.",
+       "tokens": {
+         "input": 300,
+-        "output": 40
++        "output": 40,
++        "tool": 0,
++        "total": 340
+       },
+       "model": "claude-opus-4-6",
+       "toolCalls": [
+@@ -91,7 +93,9 @@ input_file: goldens/claude-compacted/input.jsonl
+       "content": "Adding session validation to login().",
+       "tokens": {
+         "input": 600,
+-        "output": 80
++        "output": 80,
++        "tool": 0,
++        "total": 680
+       },
+       "model": "claude-opus-4-6",
+       "toolCalls": [
+@@ -130,7 +134,9 @@ input_file: goldens/claude-compacted/input.jsonl
+       "content": "Done. The auth module now validates sessions on login.",
+       "tokens": {
+         "input": 700,
+-        "output": 20
++        "output": 20,
++        "tool": 0,
++        "total": 720
+       },
+       "model": "claude-opus-4-6"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@claude-forced@gemini.snap b/crates/toolpath-goldens/snapshots/projection@claude-forced@gemini.snap
+index f3f47a0e..e6609a6e 100644
+--- a/crates/toolpath-goldens/snapshots/projection@claude-forced@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@claude-forced@gemini.snap
+@@ -49,7 +49,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2486,
+         "output": 368,
+-        "cached": 15334
++        "cached": 15334,
++        "tool": 0,
++        "total": 2854
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -102,7 +104,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2,
+         "output": 253,
+-        "cached": 18551
++        "cached": 18551,
++        "tool": 0,
++        "total": 255
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -155,7 +159,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 223,
+         "output": 169,
+-        "cached": 21506
++        "cached": 21506,
++        "tool": 0,
++        "total": 392
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -207,7 +213,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2,
+         "output": 252,
+-        "cached": 21848
++        "cached": 21848,
++        "tool": 0,
++        "total": 254
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -296,7 +304,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2,
+         "output": 410,
+-        "cached": 22271
++        "cached": 22271,
++        "tool": 0,
++        "total": 412
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -349,7 +359,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 131,
+         "output": 281,
+-        "cached": 22639
++        "cached": 22639,
++        "tool": 0,
++        "total": 412
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -401,7 +413,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2,
+         "output": 319,
+-        "cached": 23127
++        "cached": 23127,
++        "tool": 0,
++        "total": 321
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -447,7 +461,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2,
+         "output": 116,
+-        "cached": 23619
++        "cached": 23619,
++        "tool": 0,
++        "total": 118
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -500,7 +516,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2,
+         "output": 670,
+-        "cached": 24027
++        "cached": 24027,
++        "tool": 0,
++        "total": 672
+       },
+       "model": "claude-opus-4-8",
+       "toolCalls": [
+@@ -547,7 +565,9 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       "tokens": {
+         "input": 2,
+         "output": 438,
+-        "cached": 24161
++        "cached": 24161,
++        "tool": 0,
++        "total": 440
+       },
+       "model": "claude-opus-4-8"
+     },
+diff --git a/crates/toolpath-goldens/snapshots/projection@claude-session@gemini.snap b/crates/toolpath-goldens/snapshots/projection@claude-session@gemini.snap
+index ca03208a..642db445 100644
+--- a/crates/toolpath-goldens/snapshots/projection@claude-session@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@claude-session@gemini.snap
+@@ -76,7 +76,9 @@ input_file: goldens/claude-session/input.jsonl
+       "tokens": {
+         "input": 10,
+         "output": 245,
+-        "cached": 15045
++        "cached": 15045,
++        "tool": 0,
++        "total": 255
+       },
+       "model": "claude-haiku-4-5-20251001",
+       "toolCalls": [
+@@ -122,7 +124,9 @@ input_file: goldens/claude-session/input.jsonl
+       "tokens": {
+         "input": 8,
+         "output": 87,
+-        "cached": 22202
++        "cached": 22202,
++        "tool": 0,
++        "total": 95
+       },
+       "model": "claude-haiku-4-5-20251001"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@claude@gemini.snap b/crates/toolpath-goldens/snapshots/projection@claude@gemini.snap
+index 65375cfe..0a622b9e 100644
+--- a/crates/toolpath-goldens/snapshots/projection@claude@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@claude@gemini.snap
+@@ -49,7 +49,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 6,
+         "output": 218,
+-        "cached": 18183
++        "cached": 18183,
++        "tool": 0,
++        "total": 224
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -95,7 +97,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 190,
+-        "cached": 26587
++        "cached": 26587,
++        "tool": 0,
++        "total": 191
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -148,7 +152,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 241,
+-        "cached": 26914
++        "cached": 26914,
++        "tool": 0,
++        "total": 242
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -201,7 +207,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 226,
+-        "cached": 27208
++        "cached": 27208,
++        "tool": 0,
++        "total": 227
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -247,7 +255,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 234,
+-        "cached": 27553
++        "cached": 27553,
++        "tool": 0,
++        "total": 235
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -293,7 +303,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 220,
+-        "cached": 28013
++        "cached": 28013,
++        "tool": 0,
++        "total": 221
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -339,7 +351,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 296,
+-        "cached": 28313
++        "cached": 28313,
++        "tool": 0,
++        "total": 297
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -385,7 +399,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 390,
+-        "cached": 28790
++        "cached": 28790,
++        "tool": 0,
++        "total": 391
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -431,7 +447,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 210,
+-        "cached": 29318
++        "cached": 29318,
++        "tool": 0,
++        "total": 211
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -484,7 +502,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 379,
+-        "cached": 29812
++        "cached": 29812,
++        "tool": 0,
++        "total": 380
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -537,7 +557,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 488,
+-        "cached": 30069
++        "cached": 30069,
++        "tool": 0,
++        "total": 489
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -608,7 +630,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 419,
+-        "cached": 30474
++        "cached": 30474,
++        "tool": 0,
++        "total": 420
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -660,7 +684,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 252,
+-        "cached": 30992
++        "cached": 30992,
++        "tool": 0,
++        "total": 253
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -713,7 +739,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 446,
+-        "cached": 31503
++        "cached": 31503,
++        "tool": 0,
++        "total": 447
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -758,7 +786,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 133,
+-        "cached": 32014
++        "cached": 32014,
++        "tool": 0,
++        "total": 134
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -804,7 +834,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 172,
+-        "cached": 32475
++        "cached": 32475,
++        "tool": 0,
++        "total": 173
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -849,7 +881,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 230,
+-        "cached": 32624
++        "cached": 32624,
++        "tool": 0,
++        "total": 231
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -888,7 +922,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 116,
+-        "cached": 32888
++        "cached": 32888,
++        "tool": 0,
++        "total": 117
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -934,7 +970,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 1,
+         "output": 195,
+-        "cached": 33199
++        "cached": 33199,
++        "tool": 0,
++        "total": 196
+       },
+       "model": "claude-opus-4-7",
+       "toolCalls": [
+@@ -974,7 +1012,9 @@ input_file: test-fixtures/claude/convo.jsonl
+       "tokens": {
+         "input": 6,
+         "output": 220,
+-        "cached": 33336
++        "cached": 33336,
++        "tool": 0,
++        "total": 226
+       },
+       "model": "claude-opus-4-7"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@codex-forced@gemini.snap b/crates/toolpath-goldens/snapshots/projection@codex-forced@gemini.snap
+index a16c4594..ec2b8a3c 100644
+--- a/crates/toolpath-goldens/snapshots/projection@codex-forced@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@codex-forced@gemini.snap
+@@ -468,7 +468,9 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "input": 227038,
+         "output": 1306,
+         "cached": 216320,
+-        "thoughts": 811
++        "thoughts": 811,
++        "tool": 0,
++        "total": 229155
+       },
+       "model": "gpt-5.5"
+     },
+@@ -506,7 +508,9 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+       "tokens": {
+         "input": 14038,
+         "output": 5,
+-        "cached": 11136
++        "cached": 11136,
++        "tool": 0,
++        "total": 14043
+       },
+       "model": "gpt-5.5"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@codex@gemini.snap b/crates/toolpath-goldens/snapshots/projection@codex@gemini.snap
+index b59ca019..b9f69d4c 100644
+--- a/crates/toolpath-goldens/snapshots/projection@codex@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@codex@gemini.snap
+@@ -113,7 +113,9 @@ input_file: test-fixtures/codex/convo.jsonl
+         "input": 163484,
+         "output": 1040,
+         "cached": 149632,
+-        "thoughts": 1325
++        "thoughts": 1325,
++        "tool": 0,
++        "total": 165849
+       },
+       "model": "gpt-5.5"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@copilot@gemini.snap b/crates/toolpath-goldens/snapshots/projection@copilot@gemini.snap
+index a6a43b5f..4a8a2431 100644
+--- a/crates/toolpath-goldens/snapshots/projection@copilot@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@copilot@gemini.snap
+@@ -551,7 +551,9 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "tokens": {
+         "input": 54,
+         "output": 173,
+-        "cached": 198884
++        "cached": 198884,
++        "tool": 0,
++        "total": 227
+       },
+       "model": "claude-haiku-4.5"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@opencode-forced@gemini.snap b/crates/toolpath-goldens/snapshots/projection@opencode-forced@gemini.snap
+index 8080a13f..03b83a9c 100644
+--- a/crates/toolpath-goldens/snapshots/projection@opencode-forced@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@opencode-forced@gemini.snap
+@@ -47,7 +47,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "tokens": {
+         "input": 8596,
+         "output": 85,
+-        "thoughts": 133
++        "thoughts": 133,
++        "tool": 0,
++        "total": 8814
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -92,7 +94,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 188,
+         "output": 128,
+         "cached": 8704,
+-        "thoughts": 26
++        "thoughts": 26,
++        "tool": 0,
++        "total": 342
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -138,7 +142,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 102,
+         "output": 95,
+         "cached": 8960,
+-        "thoughts": 14
++        "thoughts": 14,
++        "tool": 0,
++        "total": 211
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -183,7 +189,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 184,
+         "output": 141,
+         "cached": 9088,
+-        "thoughts": 24
++        "thoughts": 24,
++        "tool": 0,
++        "total": 349
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -230,7 +238,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 108,
+         "output": 112,
+         "cached": 9344,
+-        "thoughts": 21
++        "thoughts": 21,
++        "tool": 0,
++        "total": 241
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -277,7 +287,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 169,
+         "output": 118,
+         "cached": 9472,
+-        "thoughts": 27
++        "thoughts": 27,
++        "tool": 0,
++        "total": 314
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -324,7 +336,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 132,
+         "output": 103,
+         "cached": 9728,
+-        "thoughts": 31
++        "thoughts": 31,
++        "tool": 0,
++        "total": 266
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -369,7 +383,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 74,
+         "output": 148,
+         "cached": 9984,
+-        "thoughts": 30
++        "thoughts": 30,
++        "tool": 0,
++        "total": 252
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -415,7 +431,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 140,
+         "output": 122,
+         "cached": 10112,
+-        "thoughts": 6
++        "thoughts": 6,
++        "tool": 0,
++        "total": 268
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -463,7 +481,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 34,
+         "output": 171,
+         "cached": 10368,
+-        "thoughts": 31
++        "thoughts": 31,
++        "tool": 0,
++        "total": 236
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -516,7 +536,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "input": 160,
+         "output": 136,
+         "cached": 10496,
+-        "thoughts": 204
++        "thoughts": 204,
++        "tool": 0,
++        "total": 500
+       },
+       "model": "big-pickle"
+     },
+@@ -560,7 +582,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "tokens": {
+         "input": 3461,
+         "output": 661,
+-        "thoughts": 214
++        "thoughts": 214,
++        "tool": 0,
++        "total": 4336
+       },
+       "model": "big-pickle"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@opencode@gemini.snap b/crates/toolpath-goldens/snapshots/projection@opencode@gemini.snap
+index 206da9c3..a4d75c25 100644
+--- a/crates/toolpath-goldens/snapshots/projection@opencode@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@opencode@gemini.snap
+@@ -52,7 +52,9 @@ input_file: test-fixtures/opencode/convo.json
+       "tokens": {
+         "input": 11294,
+         "output": 85,
+-        "thoughts": 100
++        "thoughts": 100,
++        "tool": 0,
++        "total": 11479
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -97,7 +99,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 165,
+         "output": 117,
+         "cached": 11392,
+-        "thoughts": 26
++        "thoughts": 26,
++        "tool": 0,
++        "total": 308
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -143,7 +147,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 68,
+         "output": 88,
+         "cached": 11648,
+-        "thoughts": 13
++        "thoughts": 13,
++        "tool": 0,
++        "total": 169
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -188,7 +194,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 142,
+         "output": 124,
+         "cached": 11776,
+-        "thoughts": 18
++        "thoughts": 18,
++        "tool": 0,
++        "total": 284
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -235,7 +243,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 43,
+         "output": 101,
+         "cached": 12032,
+-        "thoughts": 17
++        "thoughts": 17,
++        "tool": 0,
++        "total": 161
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -282,7 +292,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 89,
+         "output": 102,
+         "cached": 12160,
+-        "thoughts": 18
++        "thoughts": 18,
++        "tool": 0,
++        "total": 209
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -329,7 +341,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 155,
+         "output": 91,
+         "cached": 12288,
+-        "thoughts": 17
++        "thoughts": 17,
++        "tool": 0,
++        "total": 263
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -374,7 +388,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 71,
+         "output": 122,
+         "cached": 12544,
+-        "thoughts": 21
++        "thoughts": 21,
++        "tool": 0,
++        "total": 214
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -420,7 +436,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 102,
+         "output": 122,
+         "cached": 12672,
+-        "thoughts": 4
++        "thoughts": 4,
++        "tool": 0,
++        "total": 228
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -468,7 +486,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 122,
+         "output": 135,
+         "cached": 12800,
+-        "thoughts": 34
++        "thoughts": 34,
++        "tool": 0,
++        "total": 291
+       },
+       "model": "big-pickle",
+       "toolCalls": [
+@@ -516,7 +536,9 @@ input_file: test-fixtures/opencode/convo.json
+         "input": 89,
+         "output": 108,
+         "cached": 13056,
+-        "thoughts": 17
++        "thoughts": 17,
++        "tool": 0,
++        "total": 214
+       },
+       "model": "big-pickle"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/projection@pi-forced@gemini.snap b/crates/toolpath-goldens/snapshots/projection@pi-forced@gemini.snap
+index ac5a398d..d6f11935 100644
+--- a/crates/toolpath-goldens/snapshots/projection@pi-forced@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@pi-forced@gemini.snap
+@@ -51,7 +51,9 @@ input_file: test-fixtures/pi/convo-compacted.jsonl
+       ],
+       "tokens": {
+         "input": 2107,
+-        "output": 467
++        "output": 467,
++        "tool": 0,
++        "total": 2574
+       },
+       "model": "gemma4"
+     },
+@@ -130,7 +132,9 @@ input_file: test-fixtures/pi/convo-compacted.jsonl
+       ],
+       "tokens": {
+         "input": 2287,
+-        "output": 613
++        "output": 613,
++        "tool": 0,
++        "total": 2900
+       },
+       "model": "gemma4"
+     },
+diff --git a/crates/toolpath-goldens/snapshots/projection@pi@gemini.snap b/crates/toolpath-goldens/snapshots/projection@pi@gemini.snap
+index f6207e85..b9773070 100644
+--- a/crates/toolpath-goldens/snapshots/projection@pi@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@pi@gemini.snap
+@@ -51,7 +51,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       ],
+       "tokens": {
+         "input": 2108,
+-        "output": 316
++        "output": 316,
++        "tool": 0,
++        "total": 2424
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -100,7 +102,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       ],
+       "tokens": {
+         "input": 2440,
+-        "output": 101
++        "output": 101,
++        "tool": 0,
++        "total": 2541
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -138,7 +142,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       "content": "**Step 2: Write `notes.md`**\n\nI used the `write` tool to create `notes.md` with the specified content.\n\nNext for Step 3: Read `notes.md` using the dedicated `read` tool.\n<channel|>",
+       "tokens": {
+         "input": 2562,
+-        "output": 70
++        "output": 70,
++        "tool": 0,
++        "total": 2632
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -187,7 +193,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       ],
+       "tokens": {
+         "input": 2658,
+-        "output": 114
++        "output": 114,
++        "tool": 0,
++        "total": 2772
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -230,7 +238,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       "content": "**Step 3: Read `notes.md`**\n\nI used the `read` tool to read `notes.md` and confirmed that both lines (\"scratch — feature elicitation\" and \"this file will be edited and searched.\") were present.\n\nThe content read was:\n```\nscratch — feature elicitation\nthis file will be edited and searched.\n```\n\nStep 4 is complete. The content should now reflect the change.\n<channel|>",
+       "tokens": {
+         "input": 2795,
+-        "output": 109
++        "output": 109,
++        "tool": 0,
++        "total": 2904
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -279,7 +289,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       ],
+       "tokens": {
+         "input": 2930,
+-        "output": 110
++        "output": 110,
++        "tool": 0,
++        "total": 3040
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -316,7 +328,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       "content": "**Step 4: Edit `notes.md`**\n\nI used the `edit` tool to change \"scratch\" to \"fixture\" in `notes.md`.\n\nThen, I read the file again to confirm the change, which was successful.\n\n**Step 5: Find files starting with \"note\"**\n\nI used the `bash find` utility as requested to find files starting with \"note\" in the current directory, which successfully returned `./notes.md`.\n\nNext for Step 6: Search contents for \"fixture\".\nI must use `bash grep -r fixture .`.\n<channel|>",
+       "tokens": {
+         "input": 3055,
+-        "output": 142
++        "output": 142,
++        "tool": 0,
++        "total": 3197
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -365,7 +379,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       ],
+       "tokens": {
+         "input": 3220,
+-        "output": 88
++        "output": 88,
++        "tool": 0,
++        "total": 3308
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -402,7 +418,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       "content": "**Step 6: Search contents for \"fixture\"**\n\nI used the `bash grep` utility to perform a recursive search for \"fixture\". The search was successful, reporting the word in `./notes.md`.\n\n**Step 7: Read a file that does not exist**\n\nI used the `read` tool on `does-not-exist.txt`. The call failed as expected, reporting the `ENOENT` error, and I have acknowledged the error.\n\nFinally, Step 8: Write and run `count.sh`.\nI will first write the script, then execute it.\n<channel|>",
+       "tokens": {
+         "input": 3387,
+-        "output": 169
++        "output": 169,
++        "tool": 0,
++        "total": 3556
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -452,7 +470,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       ],
+       "tokens": {
+         "input": 3578,
+-        "output": 66
++        "output": 66,
++        "tool": 0,
++        "total": 3644
+       },
+       "model": "gemma4",
+       "toolCalls": [
+@@ -489,7 +509,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       "content": "**Step 8: Write and run `count.sh`**\n\nI used the `write` tool to create `count.sh` with a shell loop, and then executed it using `bash count.sh`. The output confirmed that the script prints the numbers 1 through 5 on separate lines, resulting in exactly five lines of output.\n\nStep 9: Sub-agent dispatch.\nI checked my available tools and found no dedicated sub-agent or task-dispatch tool. Therefore, I must skip this step and report it explicitly.\n\nStep 10: Summarize.\nI will now summarize the entire process.\n<channel|>**Step 9: Sub-agent dispatch**\n\nI do not have a dedicated sub-agent or task-dispatch tool available, so I must skip this step.\n\n**Step 10: Summary**\n\nI successfully completed a sequence of tasks designed to exercise various tool functionalities. I started by listing directory contents, creating and reading a markdown file (`notes.md`). I then practiced content modification using the `edit` tool, followed by searching the filesystem (`find`) and file contents (`grep`). I demonstrated graceful error handling by attempting to read a non-existent file. Finally, I created and ran a shell script to confirm sequential output, fulfilling all the outlined steps.",
+       "tokens": {
+         "input": 3664,
+-        "output": 270
++        "output": 270,
++        "tool": 0,
++        "total": 3934
+       },
+       "model": "gemma4"
+     }
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap b/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
+index c38bca3f..2a4b02a2 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
+@@ -72,8 +72,8 @@ input_file: goldens/claude-compacted/input.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 129,
+-      "bytes": 3345,
++      "lines": 135,
++      "bytes": 3468,
+       "string_chars": 1023,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-forced.snap b/crates/toolpath-goldens/snapshots/shed@claude-forced.snap
+index 812434c4..e41a16f7 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-forced.snap
+@@ -80,8 +80,8 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 586,
+-      "bytes": 31545,
++      "lines": 606,
++      "bytes": 31956,
+       "string_chars": 20152,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-session.snap b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+index 924f22b8..36b28153 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+@@ -77,8 +77,8 @@ input_file: goldens/claude-session/input.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 121,
+-      "bytes": 3848,
++      "lines": 125,
++      "bytes": 3929,
+       "string_chars": 1607,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude.snap b/crates/toolpath-goldens/snapshots/shed@claude.snap
+index 51944e13..d773cbfd 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude.snap
+@@ -78,8 +78,8 @@ input_file: test-fixtures/claude/convo.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 973,
+-      "bytes": 39296,
++      "lines": 1013,
++      "bytes": 40116,
+       "string_chars": 19964,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index efe930cd..f438e073 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -85,8 +85,8 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 505,
+-      "bytes": 36390,
++      "lines": 509,
++      "bytes": 36477,
+       "string_chars": 25914,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index cffe14f4..5297d22d 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -76,8 +76,8 @@ input_file: test-fixtures/codex/convo.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 112,
+-      "bytes": 16486,
++      "lines": 114,
++      "bytes": 16530,
+       "string_chars": 14495,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@copilot.snap b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+index a298f41f..02fc5d17 100644
+--- a/crates/toolpath-goldens/snapshots/shed@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+@@ -79,8 +79,8 @@ input_file: test-fixtures/copilot/convo.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 550,
+-      "bytes": 53211,
++      "lines": 552,
++      "bytes": 53252,
+       "string_chars": 41317,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@gemini.snap b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+index ca4335cc..2b039e74 100644
+--- a/crates/toolpath-goldens/snapshots/shed@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+@@ -104,25 +104,17 @@ input_file: test-fixtures/gemini/convo.jsonl
+     }
+   },
+   "same_format": {
+-    "lines": 439,
+-    "bytes": 18846,
++    "lines": 461,
++    "bytes": 19312,
+     "event_types_shed": {},
+     "key_paths": {
+       "source": 86,
+-      "after": 42,
+-      "lost": 45,
++      "after": 44,
++      "lost": 43,
+       "gained": 1
+     },
+     "renamed": [],
+     "dropped": [
+-      {
+-        "path": "messages[].tokens.tool",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].tokens.total",
+-        "example": "9067"
+-      },
+       {
+         "path": "messages[].toolCalls[].agentId",
+         "example": "<withheld>"
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+index 5c6b1603..f4e1ac45 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+@@ -84,8 +84,8 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       }
+     },
+     "gemini": {
+-      "lines": 559,
+-      "bytes": 25615,
++      "lines": 583,
++      "bytes": 26109,
+       "string_chars": 14146,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index bf709d10..23cacdea 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -84,8 +84,8 @@ input_file: test-fixtures/opencode/convo.json
+       }
+     },
+     "gemini": {
+-      "lines": 515,
+-      "bytes": 19933,
++      "lines": 537,
++      "bytes": 20386,
+       "string_chars": 9424,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@pi-forced.snap b/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
+index 04df2fd1..c5569824 100644
+--- a/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
+@@ -82,8 +82,8 @@ input_file: test-fixtures/pi/convo-compacted.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 135,
+-      "bytes": 11593,
++      "lines": 139,
++      "bytes": 11677,
+       "string_chars": 9060,
+       "by_type": {
+         "?": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@pi.snap b/crates/toolpath-goldens/snapshots/shed@pi.snap
+index f1293454..89651aa6 100644
+--- a/crates/toolpath-goldens/snapshots/shed@pi.snap
++++ b/crates/toolpath-goldens/snapshots/shed@pi.snap
+@@ -85,8 +85,8 @@ input_file: test-fixtures/pi/convo.jsonl
+       }
+     },
+     "gemini": {
+-      "lines": 488,
+-      "bytes": 20386,
++      "lines": 510,
++      "bytes": 20848,
+       "string_chars": 10414,
+       "by_type": {
+         "?": 1
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 9dd9cd66..323fce5e 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++    "toolpath_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
++        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "acb928e3af8679e8dbf23fa02ddaa0babde8b649"
++        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+-- 
+2.55.0
+

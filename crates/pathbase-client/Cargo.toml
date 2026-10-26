@@ -3,9 +3,11 @@ name = "pathbase-client"
 version = "0.2.0"
 edition = { workspace = true }
 license = { workspace = true }
+rust-version = { workspace = true }
 repository = "https://github.com/empathic/toolpath"
 documentation = "https://docs.rs/pathbase-client"
 description = "Auto-generated typed client for the Pathbase HTTP API (derived from openapi.json via progenitor)."
+exclude = ["**/.qual"]
 
 [dependencies]
 progenitor-client = "0.14"

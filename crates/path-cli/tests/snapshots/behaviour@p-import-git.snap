@@ -1,0 +1,172 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: "format!(\"{}\\n{}\",\ntranscript(\"the page's \\\"See what happened in this repo\\\"\",\n&[\"p\", \"import\", \"git\", \"--repo\", \".\", \"--branch\", \"main\", \"--no-cache\",\n\"--pretty\"], &one, Some(home.path())),\ntranscript(\"the page's \\\"Multi-branch import\\\"\",\n&[\"p\", \"import\", \"git\", \"--repo\", \".\", \"--branch\", \"main\", \"--branch\",\n\"feature/auth\", \"--no-cache\", \"--pretty\"], &two, Some(home.path())))"
+---
+$ path p import git --repo . --branch main --no-cache --pretty
+exit: 0
+--- stdout
+{
+  "graph": {
+    "id": "path-main"
+  },
+  "paths": [
+    {
+      "meta": {
+        "actors": {
+          "human:alex": {
+            "identities": [
+              {
+                "id": "alex@example.com",
+                "system": "email"
+              }
+            ],
+            "name": "Alex"
+          }
+        },
+        "title": "Branch: main"
+      },
+      "path": {
+        "base": {
+          "branch": "main",
+          "ref": "130666e755fa91cef750aacd40d3aa5a50d05247",
+          "uri": "file://<home>/repo"
+        },
+        "head": "step-465f8f60",
+        "id": "path-main"
+      },
+      "steps": [
+        {
+          "change": {
+            "a.txt": {
+              "raw": "@@ -1 +1,2 @@\n one\n+two\n"
+            }
+          },
+          "meta": {
+            "intent": "Add a second line",
+            "source": {
+              "revision": "465f8f6019a1f4687c203e6fc27a4373a7210dcf",
+              "type": "git"
+            }
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-465f8f60",
+            "timestamp": "<timestamp>"
+          }
+        }
+      ]
+    }
+  ]
+}
+--- stderr
+
+# the page's "See what happened in this repo"
+
+$ path p import git --repo . --branch main --branch feature/auth --no-cache --pretty
+exit: 0
+--- stdout
+{
+  "graph": {
+    "id": "graph-main-feature-auth"
+  },
+  "meta": {
+    "title": "Branches: main, feature/auth"
+  },
+  "paths": [
+    {
+      "meta": {
+        "actors": {
+          "human:alex": {
+            "identities": [
+              {
+                "id": "alex@example.com",
+                "system": "email"
+              }
+            ],
+            "name": "Alex"
+          }
+        },
+        "title": "Branch: main"
+      },
+      "path": {
+        "base": {
+          "branch": "main",
+          "ref": "130666e755fa91cef750aacd40d3aa5a50d05247",
+          "uri": "file://<home>/repo"
+        },
+        "head": "step-465f8f60",
+        "id": "path-main"
+      },
+      "steps": [
+        {
+          "change": {
+            "a.txt": {
+              "raw": "@@ -1 +1,2 @@\n one\n+two\n"
+            }
+          },
+          "meta": {
+            "intent": "Add a second line",
+            "source": {
+              "revision": "465f8f6019a1f4687c203e6fc27a4373a7210dcf",
+              "type": "git"
+            }
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-465f8f60",
+            "timestamp": "<timestamp>"
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "actors": {
+          "human:alex": {
+            "identities": [
+              {
+                "id": "alex@example.com",
+                "system": "email"
+              }
+            ],
+            "name": "Alex"
+          }
+        },
+        "title": "Branch: feature/auth"
+      },
+      "path": {
+        "base": {
+          "branch": "feature/auth",
+          "ref": "465f8f6019a1f4687c203e6fc27a4373a7210dcf",
+          "uri": "file://<home>/repo"
+        },
+        "head": "step-77c4992b",
+        "id": "path-feature-auth"
+      },
+      "steps": [
+        {
+          "change": {
+            "b.txt": {
+              "raw": "@@ -0,0 +1 @@\n+auth\n"
+            }
+          },
+          "meta": {
+            "intent": "Add auth",
+            "source": {
+              "revision": "77c4992b68592ce0672610d1170bfb7648f854ea",
+              "type": "git"
+            }
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-77c4992b",
+            "timestamp": "<timestamp>"
+          }
+        }
+      ]
+    }
+  ]
+}
+--- stderr
+
+# the page's "Multi-branch import"

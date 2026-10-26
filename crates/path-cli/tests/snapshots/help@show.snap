@@ -1,0 +1,218 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path show
+Show a single session as a markdown summary (used by fzf preview)
+
+Usage: path show [OPTIONS] <COMMAND>
+
+Commands:
+  claude    Show a Claude conversation as a markdown summary
+  gemini    Show a Gemini CLI conversation as a markdown summary
+  codex     Show a Codex CLI session as a markdown summary
+  copilot   Show a GitHub Copilot CLI session as a markdown summary (preview)
+  opencode  Show an opencode session as a markdown summary
+  cursor    Show a Cursor composer as a markdown summary
+  pi        Show a Pi (pi.dev) session as a markdown summary
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --ansi
+          Emit ANSI-styled terminal output instead of raw markdown (bold speakers, dim metadata, colored diffs). Used by the fzf preview panes
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path show claude
+Show a Claude conversation as a markdown summary
+
+Usage: path show claude [OPTIONS] --project <PROJECT> --session <SESSION>
+
+Options:
+  -p, --project <PROJECT>
+          Project path (e.g., /Users/alex/myproject)
+
+  -s, --session <SESSION>
+          Session id (the file stem of the JSONL)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path show codex
+Show a Codex CLI session as a markdown summary
+
+Usage: path show codex [OPTIONS] --session <SESSION>
+
+Options:
+  -s, --session <SESSION>
+          Session id, UUID, or filename stem
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path show copilot
+Show a GitHub Copilot CLI session as a markdown summary (preview)
+
+Usage: path show copilot [OPTIONS] --session <SESSION>
+
+Options:
+  -s, --session <SESSION>
+          Session id or unique prefix
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path show cursor
+Show a Cursor composer as a markdown summary
+
+Usage: path show cursor [OPTIONS] --session <SESSION>
+
+Options:
+  -s, --session <SESSION>
+          Composer UUID
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path show gemini
+Show a Gemini CLI conversation as a markdown summary
+
+Usage: path show gemini [OPTIONS] --project <PROJECT> --session <SESSION>
+
+Options:
+  -p, --project <PROJECT>
+          Project path (e.g., /Users/alex/myproject)
+
+  -s, --session <SESSION>
+          Session UUID (the directory name under chats/)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path show opencode
+Show an opencode session as a markdown summary
+
+Usage: path show opencode [OPTIONS] --session <SESSION>
+
+Options:
+  -s, --session <SESSION>
+          Session id (`ses_…`)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path show pi
+Show a Pi (pi.dev) session as a markdown summary
+
+Usage: path show pi [OPTIONS] --project <PROJECT> --session <SESSION>
+
+Options:
+  -p, --project <PROJECT>
+          Project path
+
+  -s, --session <SESSION>
+          Session id
+
+      --base <BASE>
+          Override the Pi sessions base directory (default: ~/.pi/agent/sessions)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

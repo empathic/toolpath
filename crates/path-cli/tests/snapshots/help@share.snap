@@ -1,0 +1,59 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path share
+Share an agent session to Pathbase via an interactive picker
+
+Usage: path share [OPTIONS]
+
+Options:
+      --url <URL>
+          Pathbase server URL (defaults to the stored session's server)
+
+      --anon
+          Force the anonymous endpoint, ignoring any stored credentials
+
+      --repo <REPO>
+          Target a specific repo as `owner/name` instead of `<you>/pathstash`
+
+      --name <NAME>
+          Human-readable display label for the uploaded graph (defaults to the toolpath document id). Free-form; not used in the URL — graphs are addressed by UUID server-side
+
+      --public
+          Mark the uploaded graph public (default: unlisted, addressable only by UUID)
+
+      --harness <HARNESS>
+          Narrow the picker to one harness, or skip the picker entirely when used with --session
+          
+          [possible values: claude, gemini, codex, opencode, cursor, cursor-agent, pi, copilot]
+
+      --session <SESSION>
+          Skip the picker. Requires --harness; requires --project for claude/gemini/pi
+
+      --project <PROJECT>
+          Override cwd-as-project. Filters the picker to sessions tied to this project across all harnesses
+
+      --no-cache
+          Skip writing the cache; derive in-memory only
+
+      --timeout <SECS>
+          Seconds to allow the upload before giving up (default 300).
+          
+          A long session derives to several MB and goes up in one request, so the ceiling that suits every other call is the wrong one here. Sets `PATH_HTTP_TIMEOUT_SECS` for this invocation; export that directly for commands that have no flag, or for an agent that runs `share` for you.
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

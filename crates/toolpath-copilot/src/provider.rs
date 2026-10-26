@@ -174,6 +174,13 @@ pub fn to_view(session: &Session) -> ConversationView {
                 t.text = m.text;
                 push_linked(&mut turns, t);
             }
+            CopilotEvent::SystemMessage(m) => {
+                flush(&mut turns, &mut current);
+                seq += 1;
+                let mut t = empty_turn(format!("s{seq}"), Role::System, ts);
+                t.text = m.text;
+                push_linked(&mut turns, t);
+            }
             CopilotEvent::AssistantTurnStart => {
                 flush(&mut turns, &mut current);
                 seq += 1;
@@ -183,6 +190,32 @@ pub fn to_view(session: &Session) -> ConversationView {
             }
             CopilotEvent::AssistantMessage(m) => {
                 let usage = m.token_usage();
+                // A sub-agent's own message belongs to its delegation, not to the parent turn.
+                // Its tokens stay in the dispatching turn's usage too (a step's usage is what the
+                // session spent while that step ran, so steps still sum to the total); the
+                // delegation turn keeps its own figure and the writer subtracts it again.
+                if let Some(pid) = m.parent_tool_call_id.as_deref()
+                    && let Some(parent) = find_delegation_parent(&mut current, &mut turns, pid)
+                {
+                    merge_turn_usage(&mut parent.token_usage, usage.clone());
+                    let d = parent
+                        .delegations
+                        .iter_mut()
+                        .rev()
+                        .find(|d| d.agent_id == pid)
+                        .expect("found by find_delegation_parent");
+                    let mut t = empty_turn(
+                        format!("{}-{}", d.agent_id, d.turns.len()),
+                        Role::Assistant,
+                        ts,
+                    );
+                    t.text = m.text;
+                    t.thinking = m.reasoning;
+                    t.model = m.model.or_else(|| default_model.clone());
+                    t.token_usage = usage;
+                    d.turns.push(t);
+                    continue;
+                }
                 let cur = ensure_assistant(&mut current, &mut seq, &default_model, &ts);
                 merge_turn_usage(&mut cur.token_usage, usage);
                 append_text(&mut cur.text, &m.text);
@@ -227,10 +260,17 @@ pub fn to_view(session: &Session) -> ConversationView {
                 {
                     upgrade_mutation_diff(&mut current, &mut turns, id, det);
                 }
-                let result = ToolResult {
-                    content: te.output.clone().unwrap_or_default(),
-                    is_error: te.success == Some(false),
+                // A failed call carries no `result`, only `error.message`;
+                // that message is what the model saw, so it is the result.
+                // (An errored result with empty content is also rejected by
+                // the Anthropic Messages API when a projection replays it.)
+                let is_error = te.success == Some(false);
+                let content = match (te.output.clone(), is_error) {
+                    (Some(out), _) if !out.is_empty() => out,
+                    (_, true) => te.error.clone().unwrap_or_default(),
+                    (out, false) => out.unwrap_or_default(),
                 };
+                let result = ToolResult { content, is_error };
                 if !attach_tool_result(
                     &mut current,
                     &mut turns,
@@ -297,28 +337,43 @@ pub fn to_view(session: &Session) -> ConversationView {
     }
 
     // Session total = field-wise sum of per-turn usage (Σ turns = session
-    // total). Per-turn usage only carries `output` (Copilot's
-    // `assistant.message` reports only `outputTokens`), so the session's real
-    // input/cache totals live on `session.shutdown`. When both are present,
-    // take `output` from the per-message sum and fill input/cache from the
-    // shutdown — otherwise ~all of the session's input + cache tokens (222k in
-    // the real fixture) get dropped. Fall back to whichever exists alone.
+    // total, the agent-coding-session accounting contract). Copilot's
+    // `assistant.message` reports only `outputTokens`; the session's input
+    // and cache totals exist only on `session.shutdown`, settled once for
+    // the whole session and attributable to no message. Every counter no
+    // turn reports is taken from the shutdown and put on the session's LAST
+    // assistant turn, where the session settles (as Codex puts a round's
+    // total on the round's final turn), so the document's steps sum to the
+    // session total and every projection carries it. The value is verbatim
+    // from the shutdown; it is the session's, not that message's own spend.
+    // A counter any turn reports stays the per-turn sum (the shutdown's is
+    // ignored, never added twice). Without an assistant turn there is no
+    // step to carry it, and the total alone keeps it.
     let mut summed: Option<TokenUsage> = None;
     for t in &turns {
         if let Some(u) = &t.token_usage {
             merge_turn_usage(&mut summed, Some(u.clone()));
         }
     }
-    let total_usage = match (summed, shutdown_usage) {
-        (Some(mut s), Some(sd)) => {
-            s.input_tokens = s.input_tokens.or(sd.input_tokens);
-            s.cache_read_tokens = s.cache_read_tokens.or(sd.cache_read_tokens);
-            s.cache_write_tokens = s.cache_write_tokens.or(sd.cache_write_tokens);
-            s.output_tokens = s.output_tokens.or(sd.output_tokens);
-            Some(s)
+    if let Some(sd) = shutdown_usage {
+        let unreported = |own: fn(&TokenUsage) -> Option<u32>, from_shutdown: Option<u32>| {
+            from_shutdown.filter(|_| summed.as_ref().and_then(own).is_none())
+        };
+        let remainder = TokenUsage {
+            input_tokens: unreported(|u| u.input_tokens, sd.input_tokens),
+            output_tokens: unreported(|u| u.output_tokens, sd.output_tokens),
+            cache_read_tokens: unreported(|u| u.cache_read_tokens, sd.cache_read_tokens),
+            cache_write_tokens: unreported(|u| u.cache_write_tokens, sd.cache_write_tokens),
+            breakdowns: Default::default(),
+        };
+        if remainder != TokenUsage::default() {
+            if let Some(last) = turns.iter_mut().rev().find(|t| t.role == Role::Assistant) {
+                merge_turn_usage(&mut last.token_usage, Some(remainder.clone()));
+            }
+            merge_turn_usage(&mut summed, Some(remainder));
         }
-        (s, sd) => s.or(sd),
-    };
+    }
+    let total_usage = summed;
 
     // Files changed, in first-touch order, deduped.
     let mut files_changed: Vec<String> = Vec::new();
@@ -384,6 +439,7 @@ pub fn to_view(session: &Session) -> ConversationView {
 
 fn empty_turn(id: String, role: Role, timestamp: String) -> Turn {
     Turn {
+        provider: None,
         id,
         parent_id: None,
         group_id: None,
@@ -391,6 +447,7 @@ fn empty_turn(id: String, role: Role, timestamp: String) -> Turn {
         timestamp,
         text: String::new(),
         thinking: None,
+        thinking_signature: None,
         tool_uses: Vec::new(),
         model: None,
         stop_reason: None,
@@ -526,6 +583,23 @@ fn upgrade_mutation_diff(current: &mut Option<Turn>, turns: &mut [Turn], id: &st
             return;
         }
     }
+}
+
+/// The turn holding the delegation whose `agent_id` is `id`.
+fn find_delegation_parent<'a>(
+    current: &'a mut Option<Turn>,
+    turns: &'a mut [Turn],
+    id: &str,
+) -> Option<&'a mut Turn> {
+    if let Some(cur) = current.as_mut()
+        && cur.delegations.iter().any(|d| d.agent_id == id)
+    {
+        return Some(cur);
+    }
+    turns
+        .iter_mut()
+        .rev()
+        .find(|t| t.delegations.iter().any(|d| d.agent_id == id))
 }
 
 fn backfill_delegation_result(
@@ -746,6 +820,26 @@ mod tests {
     }
 
     #[test]
+    fn failed_tool_call_keeps_its_error_message_as_the_result() {
+        // Shaped after copilot 1.0.68: a failed `view` has no `result`, only
+        // `error.message`. That text is the result the model saw; an errored
+        // result with empty content is also rejected by the Anthropic API
+        // when a projection replays it.
+        let body = [
+            r#"{"type":"session.start","timestamp":"2026-06-30T10:00:00.000Z","data":{"copilotVersion":"1.0.68","producer":"copilot-agent","context":{"cwd":"/tmp/proj"}}}"#,
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"read a missing file"}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"Reading.","model":"claude-haiku-4.5"}}"#,
+            r#"{"type":"tool.execution_start","timestamp":"2026-06-30T10:00:04.000Z","data":{"toolCallId":"c1","toolName":"view","arguments":{"path":"/tmp/proj/does-not-exist.txt"}}}"#,
+            r#"{"type":"tool.execution_complete","timestamp":"2026-06-30T10:00:05.000Z","data":{"toolCallId":"c1","success":false,"error":{"message":"Path does not exist","code":"failure"}}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        assert!(result.is_error);
+        assert_eq!(result.content, "Path does not exist");
+    }
+
+    #[test]
     fn builds_user_and_assistant_turns() {
         let view = to_view(&parse(&body()));
         assert_eq!(view.turns.len(), 2);
@@ -845,6 +939,52 @@ mod tests {
         let u = view.total_usage.unwrap();
         assert_eq!(u.input_tokens, Some(1200));
         assert_eq!(u.output_tokens, Some(340));
+    }
+
+    #[test]
+    fn shutdown_totals_settle_on_the_last_assistant_turn() {
+        // The accounting contract: the turns' usage sums to the session
+        // total. Input/cache are reported only by session.shutdown, so they
+        // sit on the last assistant turn (verbatim); each turn keeps its own
+        // output, and the shutdown's output (already reported per message)
+        // is not added again.
+        let body = [
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:01.000Z","data":{"content":"go"}}"#,
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:03.000Z","data":{"content":"a","outputTokens":50}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:05.000Z","data":{"content":"more"}}"#,
+            r#"{"type":"assistant.turn_start","data":{}}"#,
+            r#"{"type":"assistant.message","timestamp":"2026-06-30T10:00:08.000Z","data":{"content":"b","outputTokens":20}}"#,
+            r#"{"type":"assistant.turn_end","data":{}}"#,
+            r#"{"type":"user.message","timestamp":"2026-06-30T10:00:09.000Z","data":{"content":"thanks"}}"#,
+            r#"{"type":"session.shutdown","timestamp":"2026-06-30T10:00:10.000Z","data":{"tokenDetails":{"input":{"tokenCount":800},"cache_read":{"tokenCount":9000},"cache_write":{"tokenCount":1500},"output":{"tokenCount":70}}}}"#,
+        ]
+        .join("\n");
+        let view = to_view(&parse(&body));
+        let usage: Vec<_> = view.turns.iter().map(|t| t.token_usage.clone()).collect();
+        let first = usage[1].as_ref().expect("first assistant turn");
+        assert_eq!(
+            (
+                first.output_tokens,
+                first.input_tokens,
+                first.cache_read_tokens
+            ),
+            (Some(50), None, None)
+        );
+        let last = usage[3].as_ref().expect("last assistant turn");
+        assert_eq!(last.output_tokens, Some(20));
+        assert_eq!(last.input_tokens, Some(800));
+        assert_eq!(last.cache_read_tokens, Some(9000));
+        assert_eq!(last.cache_write_tokens, Some(1500));
+        assert!(usage[4].is_none(), "the trailing user turn carries none");
+
+        let mut summed = None;
+        for u in usage.into_iter().flatten() {
+            merge_turn_usage(&mut summed, Some(u));
+        }
+        assert_eq!(summed, view.total_usage);
+        assert_eq!(view.total_usage.unwrap().output_tokens, Some(70));
     }
 
     #[test]

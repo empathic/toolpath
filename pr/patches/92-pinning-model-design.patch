@@ -1,0 +1,133 @@
+From 1c7afcd6f5ffd2947250800eeae7dab161fdca17 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 13:16:34 -0400
+Subject: [PATCH 1/2] docs(baseline): one pinning model, flake-shaped
+ agents.lock, and CI isolation (design, pr/92)
+
+---
+ docs/baseline/pinning.md | 82 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 82 insertions(+)
+ create mode 100644 docs/baseline/pinning.md
+
+diff --git a/docs/baseline/pinning.md b/docs/baseline/pinning.md
+new file mode 100644
+index 00000000..fe2357e6
+--- /dev/null
++++ b/docs/baseline/pinning.md
+@@ -0,0 +1,82 @@
++# One pinning model: inputs, derivations, provenance, and what fails the build
++
++Status: DESIGN (no code) · 2026-10-21 · Bobby's brief (fd32432a), refined the same day (pinned downloads, flake-shaped, no nix required; isolation in GitHub Actions) ·
++Merges and supersedes the queue items "version pinning", "vendor schema tests" and "harness provenance". Decisions below are consultant picks; the ones that need Bobby are in "Open".
++
++## What is pinned today (read from this tree, not assumed)
++- `flake.lock`, `Cargo.lock`, `rust-toolchain.toml` (channel 1.94.0) are hashed into `goldens/manifest.json` `environment.*`; `nix_pinned_binary` is the store path of the `path` binary, or null.
++- `goldens/manifest.json` records per recording `harness: {name, version, version_source: "declared in the input", first_seen}`. The version is whatever the recording declares; nothing says which
++  agent BINARY made it. Cassettes (`toolpath-webmock/cassettes`) and `provenance.json` carry `harness: null`.
++- Agent CLIs are whatever is installed (capture-live runs the installed `claude`/`codex`/...). Nothing refuses an unpinned or newer binary.
++
++## The model
++
++### 1. Inputs, each pinned by content hash
++| input | pinned as |
++|---|---|
++| (a) each agent CLI, per platform | an entry in `agents.lock` (below): version, source URL, sha256 (or SRI), signing identity |
++| (b) the vendor's source or types at that version, where open (codex tag, gemini-cli-core / pi npm tarballs, the Copilot SDK) | an entry in `agents.lock` under `sources`, same fields |
++| (c) the Pathbase rev | the git sha, in `agents.lock` under `sources` |
++| (d) our toolpath rev | the repo's own git sha, recorded in each derived artifact |
++
++### 2. `agents.lock` (JSON, shaped like `flake.lock`; nix is optional)
++```json
++{ "version": 1,
++  "agents": { "claude": { "darwin-arm64": { "version": "2.1.132", "url": "https://...", "sha256": "sha256-...", "signature": {"kind": "apple-notarised", "team": "..."} },
++                          "linux-x64":    { "version": "2.1.132", "url": "https://...", "sha256": "sha256-..." } }, "codex": {...}, "pi": {...}, "copilot": {...},
++              "gemini": {...}, "opencode": {...}, "cursor-agent": {...} },
++  "sources": { "codex-tag": {...}, "gemini-cli-core": {...}, "pi-npm": {...}, "copilot-sdk": {...}, "pathbase": {"rev": "..."} } }
++```
++- The lock is the ONLY way capture, live checks and CI get a binary. No path lookup, no "latest", no whatever-is-installed.
++- A fetcher (`path d agents fetch <agent>`): download -> verify the hash (and the signature where one exists: Apple notarisation for casks/notarised binaries, a vendor signature or
++  checksum file otherwise) -> unpack into a content-addressed store `~/.cache/toolpath/agents/<hash>-<name>-<version>`, read-only after write. A wrong hash is a hard failure, never a warning.
++- Platform keys: `darwin-arm64` and `linux-x64` (stock ubuntu runners). An agent with no build for a platform has no entry, and the matrix skips it by name.
++- Nix stays OPTIONAL: a flake can read the same JSON (`builtins.fromJSON`) and `fetchurl` the same hashes; nothing requires nix, and CI runs on stock ubuntu runners.
++- Third-party binaries never run unsandboxed on phobos (the macOS-block rule): locally they run under Seatbelt or in a VM; in CI they run only on GitHub-hosted ephemeral runners (see isolation).
++
++### 3. Derivations, keyed by their inputs' hashes (a stale one is detectable, like a stale flake.lock)
++Every derived artifact records `{inputs: {name: sha256, ...}, toolpath_rev, tool}` next to its output, and its filename carries the hash of its inputs.
++- codex: its schema generator, run from the pinned binary.
++- gemini, pi, Copilot: TypeScript types -> JSON Schema from the pinned tarball/SDK, plus our overlay for Copilot.
++- claude and Cursor: built by us from the observed tables at a named recording set (they publish no schema).
++- Pathbase OpenAPI: `pathbase-server --openapi` at the pinned rev.
++- Our own specs are versioned with our code, not pinned from outside: the kind (agent-coding-session vX, an immutable URI, bundled in path-cli) and each writer's contract (`fixtures/contract/*.json`).
++
++### 4. Provenance per recording and per cassette
++`{harness name, version, binary sha256, source: <agents.lock entry>}`, filling `goldens/manifest.json` for all 7 agents (replacing "declared in the input") and written into every cassette header.
++Each recording is validated against the schema DERIVED FROM ITS OWN pinned version. Replay refuses a cassette recorded with a different pinned version, as a drift message naming both.
++
++### 5. What fails the build
++- a snapshot changed without acceptance; a recording invalid against its own version's schema; a document invalid against its kind; a contract violated;
++- an unpinned agent CLI (anything not resolved through `agents.lock`);
++- a derived artifact whose recorded inputs no longer match the lock (stale, like an out-of-date flake.lock): `path d agents check`.
++A NEWER vendor version is a drift REPORT (a new derivation diffed against the pinned one, listed by a scheduled job), never a failure.
++
++### 6. Bumping a pin is one reviewed change
++update the `agents.lock` entry -> re-derive the schemas -> re-record through CI capture -> snapshot diffs. That diff is the PR.
++
++## Isolation in GitHub Actions (the CI capture workflow)
++`workflow_dispatch` only; first run (gemini) waits for Bobby's click; proven on the mirror `bdelanghe/toolpath` first (`push-branch` to `fleet/*`).
++- ONE agent per job, `environment: live-<agent>`: the job sees only its own key (the environments exist on the mirror).
++- GitHub-hosted EPHEMERAL runners only: a fresh VM per job is the sandbox for a third-party binary. Never the self-hosted runners on phobos/orthrus.
++- `permissions: {}` (or `contents: read`); no `pull_request_target`; never on fork PRs; no other trigger.
++- Every action pinned by full commit SHA.
++- Egress allowlist per job (step-security/harden-runner in block mode): only that agent's API host and the hosts named in `agents.lock` for that agent.
++- The key never reaches the agent process. The API proxy (pr/72) holds it as a SEPARATE user or a service container; the agent gets a fake key and the base-URL switch, so a compromised binary
++  cannot read the real key from its environment or `/proc`. Caps and stop-at-first-429 apply (mandatory for codex and pi).
++- Outputs leave only as uploaded artifacts. A SEPARATE job with no secrets downloads them and opens the branch with the refreshed recordings and the snapshot diffs. The fresh-capture vs
++  Ben-fixture drift comparison is that job's diff, not a separate job.
++
++## Build order (each its own piece; nothing recorded before Bobby reviews this and the extended prompt)
++1. `agents.lock` format + `path d agents fetch/check` + store, with a fixture-hash test (no network in tests: a local file URL).
++2. Provenance in manifest and cassette headers; replay's version-drift refusal.
++3. Derivations one agent at a time, codex first (its generator is in the binary), each with a staleness test.
++4. The workflow file, run first on the mirror with the API proxy.
++
++## Open (Bobby)
++1. Which signature checks are mandatory: macOS notarisation for the casks, and what for npm/GitHub-release binaries (checksum files only?). Default: hash always, signature when the vendor publishes one, recorded in the lock.
++2. Store location on CI (`actions/cache` keyed by lock hash, or re-download each run). Default: re-download and verify each run (a cache is another trust root).
++3. Who updates the lock: a scheduled drift job opens a PR that bumps entries, or a human edits. Default: the job reports; a human bumps.
++
++## Not run
++Design only; no code, no gates.
+-- 
+2.55.0
+
+
+From 736bcfb84fd50764e51f31a89c8063d6cc195f8f Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 13:18:13 -0400
+Subject: [PATCH 2/2] docs(baseline): pinning.md names where the live keys live
+ in CI and the click as the spend cap (pr/92)
+
+---
+ docs/baseline/pinning.md | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/docs/baseline/pinning.md b/docs/baseline/pinning.md
+index fe2357e6..fb49bdad 100644
+--- a/docs/baseline/pinning.md
++++ b/docs/baseline/pinning.md
+@@ -78,5 +78,12 @@ update the `agents.lock` entry -> re-derive the schemas -> re-record through CI
+ 2. Store location on CI (`actions/cache` keyed by lock hash, or re-download each run). Default: re-download and verify each run (a cache is another trust root).
+ 3. Who updates the lock: a scheduled drift job opens a PR that bumps entries, or a human edits. Default: the job reports; a human bumps.
+ 
++4. The live API keys reach GitHub Actions. "GitHub-hosted runners only" and "the API proxy holds the key as a separate user or service container" both mean the real keys live in GitHub:
++   as Environment secrets, one environment per agent (`live-<agent>`). Anyone who can run, or edit a workflow that declares, that environment can read that agent's key (and an environment's
++   protection rules, a required reviewer or a branch restriction, are what narrow that). This WIDENS the credential surface compared with keys that exist only in 1Password on Bobby's machine:
++   Bobby decides whether it is acceptable. Default: yes for the toolpath-ci keys only (they are capped: claude 10 USD/month; codex and pi have no provider-side cap, so the proxy's caps are the
++   only limit), with a required reviewer on each `live-<agent>` environment.
++5. `workflow_dispatch` only means a human click per live run. That click is the cap on spend: nothing schedules a live call. A scheduled job would be the drift REPORT (no keys), never a capture.
++
+ ## Not run
+ Design only; no code, no gates.
+-- 
+2.55.0
+

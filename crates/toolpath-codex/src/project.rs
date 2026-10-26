@@ -8,22 +8,15 @@
 //! line, followed by a `turn_context`, then per-turn `response_item`
 //! and `event_msg` lines).
 //!
-//! The projector consumes provider-specific data the forward path
-//! stashed under `Turn.extra["codex"]`:
+//! [`Turn`] has no per-harness extras, so `codex_extras` always returns
+//! `None`: encrypted reasoning and per-`call_id` tool extras (exec exit
+//! codes, custom-call statuses, patch manifests) are not carried through
+//! the view and are not round-tripped. The code that would re-emit them
+//! stays in place behind that `None`.
 //!
-//! - `reasoning_encrypted`: opaque ciphertext blobs that round-trip
-//!   verbatim as `Reasoning::encrypted_content`
-//! - `tool_extras`: per-`call_id` extras (exec exit_codes, custom-call
-//!   statuses, patch-change manifests, etc.) preserved on the matching
-//!   `function_call_output` / `custom_tool_call_output` line
-//!
-//! For non-Codex sources, the projector synthesizes sensible defaults
-//! (originator: `"codex-toolpath"`, source: `"cli"`, model_provider:
-//! `"openai"`).
-//!
-//! Foreign-namespace extras (`Turn.extra["claude"]`,
-//! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
-//! Codex's protocol and would pollute the JSONL.
+//! For every source, the projector synthesizes defaults for fields the
+//! view does not carry (originator: `"codex-toolpath"`, source: `"cli"`,
+//! model_provider: `"openai"` unless the view names one).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -35,10 +28,24 @@ use toolpath_convo::{
 
 use crate::types::{
     ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall, FunctionCallOutput, Message,
-    Reasoning, RolloutLine, SessionMeta, TurnContext,
+    Reasoning, RolloutLine, SandboxPolicy, SessionMeta, TurnContext,
 };
 
 // ── CodexProjector ───────────────────────────────────────────────────
+
+/// Values this writer invents because codex needs them and the view does not
+/// carry them, as `(key, value)` in the written rollout. The baseline checks
+/// each is really written, and that a round trip gains nothing else
+/// (`crates/toolpath-goldens/fixtures/contract/codex.json`).
+/// `model_provider` is only invented when no turn of the view names a provider.
+pub const SYNTHESIZED: &[(&str, &str)] = &[
+    ("originator", "codex-toolpath"),
+    ("cli_version", "0.0.0-projected"),
+    ("model_provider", DEFAULT_MODEL_PROVIDER),
+];
+
+/// The `model_provider` Codex itself writes for OpenAI-served sessions.
+const DEFAULT_MODEL_PROVIDER: &str = "openai";
 
 /// Project a [`ConversationView`] into a Codex [`crate::types::Session`].
 ///
@@ -134,6 +141,8 @@ fn project_view(
         .or_else(|| view.turns.first().map(|t| t.timestamp.clone()))
         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
 
+    let settings = TurnSettings::from_view(view);
+
     let mut lines: Vec<RolloutLine> = Vec::new();
 
     // Line 1: session_meta. Codex always writes this first.
@@ -165,7 +174,14 @@ fn project_view(
         .turns
         .iter()
         .enumerate()
-        .find(|(_, t)| matches!(t.role, Role::Assistant))
+        .find(|(i, t)| {
+            matches!(t.role, Role::Assistant)
+                && assistant_writes_lines(
+                    t,
+                    &codex_extras(t).cloned().unwrap_or_default(),
+                    Some(*i) == last_assistant_idx,
+                )
+        })
         .map(|(i, t)| group_of(i, t))
         .unwrap_or_else(|| view.id.clone());
     lines.push(make_turn_context_line(
@@ -173,6 +189,7 @@ fn project_view(
         &session_timestamp,
         &cwd,
         &model,
+        &settings,
     ));
     let mut current_group = Some(first_group);
 
@@ -181,8 +198,18 @@ fn project_view(
     // emit it after the turn, so a re-read differences it back to the same
     // per-step spend.
     let mut running = toolpath_convo::TokenUsage::default();
+    let mut passthrough = codex_passthrough(view).into_iter().peekable();
     for (idx, turn) in view.turns.iter().enumerate() {
-        if matches!(turn.role, Role::Assistant) {
+        // Codex's own items, in time order, ahead of the first turn that follows them.
+        while let Some(line) = passthrough.next_if(|l| l.timestamp <= turn.timestamp) {
+            lines.push(line);
+        }
+        let codex_extra = codex_extras(turn).cloned().unwrap_or_default();
+        // A turn that writes no line must not open a group: its turn_context would be
+        // stamped on nothing, and the reader would move it (and its step id) to the next turn.
+        if matches!(turn.role, Role::Assistant)
+            && assistant_writes_lines(turn, &codex_extra, Some(idx) == last_assistant_idx)
+        {
             let group = group_of(idx, turn);
             if current_group.as_deref() != Some(&group) {
                 lines.push(make_turn_context_line(
@@ -190,6 +217,7 @@ fn project_view(
                     &turn.timestamp,
                     &cwd,
                     &model,
+                    &settings,
                 ));
                 current_group = Some(group);
             }
@@ -206,11 +234,43 @@ fn project_view(
         );
     }
 
+    lines.extend(passthrough);
+
     Ok(crate::types::Session {
         id: view.id.clone(),
         file_path: PathBuf::new(),
         lines,
     })
+}
+
+/// The response items Codex wrote that the IR keeps only as events (`tool_search_call` and
+/// `tool_search_output`, whose output holds the tool definitions it found), as rollout lines.
+/// Only for a view Codex recorded: no other harness has them. In event order.
+fn codex_passthrough(view: &ConversationView) -> Vec<RolloutLine> {
+    if view.provider_id.as_deref() != Some("codex") {
+        return Vec::new();
+    }
+    view.events
+        .iter()
+        .filter_map(|e| {
+            let payload = Value::Object(e.data.clone().into_iter().collect());
+            if e.event_type == "compacted" {
+                // The compaction Codex wrote, with its replacement history.
+                return Some(RolloutLine {
+                    timestamp: e.timestamp.clone(),
+                    kind: "compacted".to_string(),
+                    payload,
+                    extra: HashMap::new(),
+                });
+            }
+            if matches!(e.event_type.as_str(), "task_started" | "task_complete") {
+                // The task lifecycle: times, duration, time to first token, mode, context window.
+                return Some(event_msg_line(&e.timestamp, payload));
+            }
+            let kind = e.event_type.strip_prefix("response_item.")?;
+            Some(response_item_line(&e.timestamp, kind, payload))
+        })
+        .collect()
 }
 
 fn make_session_meta_line(
@@ -236,12 +296,30 @@ fn make_session_meta_line(
         agent_nickname: None,
         agent_role: None,
         agent_path: None,
-        model_provider: Some("openai".to_string()),
-        base_instructions: None,
+        // Who served the session's model, when the view says (the first turn that names one);
+        // else the default Codex itself writes.
+        model_provider: Some(
+            view.turns
+                .iter()
+                .find_map(|t| t.provider.clone().filter(|p| !p.is_empty()))
+                .unwrap_or_else(|| DEFAULT_MODEL_PROVIDER.to_string()),
+        ),
+        // The session's own system prompt, when a Codex view carries it.
+        base_instructions: (view.provider_id.as_deref() == Some("codex"))
+            .then(|| view.events.iter().find(|e| e.event_type == "session_meta"))
+            .flatten()
+            .and_then(|e| e.data.get("base_instructions").cloned())
+            .and_then(|v| serde_json::from_value(v).ok()),
         dynamic_tools: None,
         memory_mode: None,
         git: None,
-        extra: HashMap::new(),
+        // What Codex states on session_meta beyond the typed fields (a Codex view only).
+        extra: (view.provider_id.as_deref() == Some("codex"))
+            .then(|| view.events.iter().find(|e| e.event_type == "session_meta"))
+            .flatten()
+            .and_then(|e| e.data.get("thread_source").cloned())
+            .map(|v| HashMap::from([("thread_source".to_string(), v)]))
+            .unwrap_or_default(),
     };
     RolloutLine {
         timestamp: timestamp.to_string(),
@@ -251,18 +329,95 @@ fn make_session_meta_line(
     }
 }
 
-fn make_turn_context_line(turn_id: &str, timestamp: &str, cwd: &str, model: &str) -> RolloutLine {
+/// The settings a Codex session states on its `turn_context` lines, taken
+/// from the view's first `turn_context` event, so a Codex session projected
+/// back to Codex keeps them. Only for a view Codex recorded
+/// (`provider_id == "codex"`): no other harness has these settings, and
+/// what they lose is declared in the writer contract
+/// (`toolpath-goldens/fixtures/contract/codex.json`).
+#[derive(Default)]
+struct TurnSettings {
+    approval_policy: Option<String>,
+    sandbox_policy: Option<SandboxPolicy>,
+    /// The permission settings Codex states besides `sandbox_policy`, kept as the JSON it wrote.
+    permission_profile: Option<Value>,
+    file_system_sandbox_policy: Option<Value>,
+    personality: Option<String>,
+    current_date: Option<String>,
+    timezone: Option<String>,
+    /// The workspace roots as Codex wrote them, and the cwd that turn_context named: when the
+    /// roots were just that cwd, they follow the cwd the session is written for.
+    workspace_roots: Option<Vec<String>>,
+    source_cwd: Option<String>,
+    collaboration_mode: Option<Value>,
+}
+
+impl TurnSettings {
+    fn from_view(view: &ConversationView) -> Self {
+        if view.provider_id.as_deref() != Some("codex") {
+            return Self::default();
+        }
+        let Some(event) = view.events.iter().find(|e| e.event_type == "turn_context") else {
+            return Self::default();
+        };
+        fn field<T: serde::de::DeserializeOwned>(
+            data: &HashMap<String, Value>,
+            key: &str,
+        ) -> Option<T> {
+            serde_json::from_value(data.get(key)?.clone()).ok()
+        }
+        Self {
+            approval_policy: field(&event.data, "approval_policy"),
+            sandbox_policy: field(&event.data, "sandbox_policy"),
+            permission_profile: event.data.get("permission_profile").cloned(),
+            file_system_sandbox_policy: event.data.get("file_system_sandbox_policy").cloned(),
+            personality: field(&event.data, "personality"),
+            current_date: field(&event.data, "current_date"),
+            timezone: field(&event.data, "timezone"),
+            workspace_roots: field(&event.data, "workspace_roots"),
+            source_cwd: field(&event.data, "cwd"),
+            collaboration_mode: field(&event.data, "collaboration_mode"),
+        }
+    }
+}
+
+fn make_turn_context_line(
+    turn_id: &str,
+    timestamp: &str,
+    cwd: &str,
+    model: &str,
+    settings: &TurnSettings,
+) -> RolloutLine {
+    let mut extra = HashMap::new();
+    if let Some(v) = &settings.permission_profile {
+        extra.insert("permission_profile".to_string(), v.clone());
+    }
+    if let Some(v) = &settings.file_system_sandbox_policy {
+        extra.insert("file_system_sandbox_policy".to_string(), v.clone());
+    }
+    if let Some(roots) = &settings.workspace_roots {
+        let just_the_cwd = settings
+            .source_cwd
+            .as_ref()
+            .is_some_and(|c| roots == std::slice::from_ref(c));
+        let roots = if just_the_cwd {
+            vec![cwd.to_string()]
+        } else {
+            roots.clone()
+        };
+        extra.insert("workspace_roots".to_string(), serde_json::json!(roots));
+    }
     let tc = TurnContext {
         turn_id: turn_id.to_string(),
         cwd: PathBuf::from(cwd),
-        current_date: None,
-        timezone: None,
-        approval_policy: None,
-        sandbox_policy: None,
+        current_date: settings.current_date.clone(),
+        timezone: settings.timezone.clone(),
+        approval_policy: settings.approval_policy.clone(),
+        sandbox_policy: settings.sandbox_policy.clone(),
         model: Some(model.to_string()),
-        personality: None,
-        collaboration_mode: None,
-        extra: HashMap::new(),
+        personality: settings.personality.clone(),
+        collaboration_mode: settings.collaboration_mode.clone(),
+        extra,
     };
     RolloutLine {
         timestamp: timestamp.to_string(),
@@ -356,6 +511,25 @@ fn emit_developer_message(turn: &Turn, lines: &mut Vec<RolloutLine>) {
         "message",
         serde_json::to_value(&msg).unwrap_or(Value::Null),
     ));
+}
+
+/// Whether [`emit_assistant`] writes any line for this turn: encrypted or plain reasoning, a
+/// message (any final assistant, or one with text, tool calls or thinking). Keep in step with it.
+fn assistant_writes_lines(
+    turn: &Turn,
+    codex: &Map<String, Value>,
+    is_final_assistant: bool,
+) -> bool {
+    let encrypted = codex
+        .get("reasoning_encrypted")
+        .and_then(Value::as_array)
+        .is_some_and(|a| !a.is_empty());
+    let has_thinking = turn.thinking.as_ref().is_some_and(|s| !s.is_empty());
+    encrypted
+        || is_final_assistant
+        || !turn.text.is_empty()
+        || !turn.tool_uses.is_empty()
+        || has_thinking
 }
 
 fn emit_assistant(
@@ -711,6 +885,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -718,6 +893,7 @@ mod tests {
             timestamp: "2026-04-20T16:00:00.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -731,6 +907,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -738,6 +915,7 @@ mod tests {
             timestamp: "2026-04-20T16:00:01.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: Some("gpt-5.4".into()),
             stop_reason: Some("stop".into()),
@@ -794,6 +972,309 @@ mod tests {
             .unwrap();
         assert_eq!(s.id, "session-uuid");
         assert_eq!(line_kinds(&s), vec!["session_meta", "turn_context"]);
+    }
+
+    fn with_turn_context(mut view: ConversationView) -> ConversationView {
+        let payload = json!({
+            "turn_id": "t1",
+            "cwd": "/tmp/proj",
+            "approval_policy": "on-request",
+            "sandbox_policy": {"type": "workspace-write", "network_access": false},
+            "permission_profile": {
+                "type": "managed",
+                "network": "restricted",
+                "file_system": {
+                    "type": "restricted",
+                    "entries": [{"access": "read", "path": {"type": "special", "value": {"kind": "root"}}}]
+                }
+            },
+            "file_system_sandbox_policy": {
+                "kind": "restricted",
+                "entries": [{"access": "write", "path": {"type": "path", "path": "/tmp/proj"}}]
+            },
+            "personality": "pragmatic",
+            "current_date": "2026-04-20",
+            "timezone": "America/New_York",
+            "workspace_roots": ["/tmp/proj", "/tmp/other"],
+            "collaboration_mode": {"mode": "default", "settings": {"model": "gpt-5.4"}},
+        });
+        view.events.push(toolpath_convo::ConversationEvent {
+            id: "turn_context-1".into(),
+            timestamp: "2026-04-20T16:00:00.000Z".into(),
+            parent_id: None,
+            event_type: "turn_context".into(),
+            data: payload
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        });
+        view
+    }
+
+    fn turn_contexts(s: &crate::types::Session) -> Vec<&Value> {
+        s.lines
+            .iter()
+            .filter(|l| l.kind == "turn_context")
+            .map(|l| &l.payload)
+            .collect()
+    }
+
+    #[test]
+    fn codex_session_keeps_its_turn_settings() {
+        let view = with_turn_context(view_with(vec![
+            user_turn("u1", "hi"),
+            assistant_turn("a1", "hello"),
+        ]));
+        let s = CodexProjector::default().project(&view).unwrap();
+        let tcs = turn_contexts(&s);
+        assert!(!tcs.is_empty());
+        for tc in tcs {
+            assert_eq!(tc["approval_policy"], "on-request");
+            assert_eq!(tc["sandbox_policy"]["type"], "workspace-write");
+            assert_eq!(tc["sandbox_policy"]["network_access"], false);
+            assert_eq!(tc["personality"], "pragmatic");
+            assert_eq!(tc["current_date"], "2026-04-20");
+            assert_eq!(tc["timezone"], "America/New_York");
+            assert_eq!(tc["workspace_roots"][1], "/tmp/other");
+            assert_eq!(tc["collaboration_mode"]["mode"], "default");
+            // the permission settings Codex states besides `sandbox_policy`
+            assert_eq!(tc["permission_profile"]["type"], "managed");
+            assert_eq!(tc["permission_profile"]["network"], "restricted");
+            assert_eq!(
+                tc["permission_profile"]["file_system"]["entries"][0]["path"]["value"]["kind"],
+                "root"
+            );
+            assert_eq!(tc["file_system_sandbox_policy"]["kind"], "restricted");
+            assert_eq!(
+                tc["file_system_sandbox_policy"]["entries"][0]["path"]["path"],
+                "/tmp/proj"
+            );
+        }
+    }
+
+    fn tool_search_events(mut view: ConversationView) -> ConversationView {
+        let ev = |ts: &str, kind: &str, payload: Value| toolpath_convo::ConversationEvent {
+            id: format!("{kind}-{ts}"),
+            timestamp: ts.into(),
+            parent_id: None,
+            event_type: format!("response_item.{kind}"),
+            data: payload
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        };
+        view.events.push(ev(
+            "2026-04-20T16:00:01.000Z",
+            "tool_search_call",
+            json!({"type": "tool_search_call", "call_id": "c1", "status": "completed",
+                   "execution": "client", "arguments": {"query": "spawn agent", "limit": 8}}),
+        ));
+        view.events.push(ev(
+            "2026-04-20T16:00:01.500Z",
+            "tool_search_output",
+            json!({"type": "tool_search_output", "call_id": "c1", "status": "completed",
+                   "execution": "client",
+                   "tools": [{"type": "namespace", "name": "multi_agent_v1",
+                              "tools": [{"name": "spawn_agent", "strict": false}]}]}),
+        ));
+        view
+    }
+
+    /// Codex's own tool-search items hold the tool definitions it found; a Codex view gives them
+    /// back, the call before its output, ahead of the first turn that follows them.
+    #[test]
+    fn codex_tool_search_items_are_written_back() {
+        let mut u = user_turn("u1", "hi");
+        u.timestamp = "2026-04-20T16:00:00.000Z".into();
+        let mut a = assistant_turn("a1", "hello");
+        a.timestamp = "2026-04-20T16:00:02.000Z".into();
+        let view = tool_search_events(view_with(vec![u, a]));
+        let s = CodexProjector::default().project(&view).unwrap();
+        let kinds = inner_types(&s);
+        let call = kinds
+            .iter()
+            .position(|k| k == "tool_search_call")
+            .expect("call");
+        let out = kinds
+            .iter()
+            .position(|k| k == "tool_search_output")
+            .expect("output");
+        assert_eq!(out, call + 1, "the output follows its call: {kinds:?}");
+        let line = &s.lines[out];
+        assert_eq!(line.kind, "response_item");
+        assert_eq!(line.timestamp, "2026-04-20T16:00:01.500Z");
+        assert_eq!(line.payload["tools"][0]["tools"][0]["name"], "spawn_agent");
+        assert_eq!(line.payload["call_id"], "c1");
+    }
+
+    fn compacted_and_meta_events(mut view: ConversationView) -> ConversationView {
+        let mut ev = |ts: &str, kind: &str, payload: Value| {
+            view.events.push(toolpath_convo::ConversationEvent {
+                id: format!("{kind}-{ts}"),
+                timestamp: ts.into(),
+                parent_id: None,
+                event_type: kind.into(),
+                data: payload
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            });
+        };
+        ev(
+            "2026-04-20T16:00:00.000Z",
+            "session_meta",
+            json!({"id": "s", "thread_source": "user",
+                   "base_instructions": {"text": "You are Codex."}}),
+        );
+        ev(
+            "2026-04-20T16:00:01.000Z",
+            "compacted",
+            json!({"message": "", "replacement_history": [
+                {"type": "message", "role": "user",
+                 "content": [{"type": "input_text", "text": "kept"}]}]}),
+        );
+        view
+    }
+
+    /// The compaction Codex wrote (`compacted`, with its replacement history) and the session's
+    /// base instructions go back for a Codex view.
+    #[test]
+    fn codex_compaction_and_base_instructions_are_written_back() {
+        let mut u = user_turn("u1", "hi");
+        u.timestamp = "2026-04-20T16:00:00.000Z".into();
+        let mut a = assistant_turn("a1", "hello");
+        a.timestamp = "2026-04-20T16:00:02.000Z".into();
+        let view = compacted_and_meta_events(view_with(vec![u, a]));
+        let s = CodexProjector::default().project(&view).unwrap();
+        let c = s
+            .lines
+            .iter()
+            .find(|l| l.kind == "compacted")
+            .expect("compacted line");
+        assert_eq!(
+            c.payload["replacement_history"][0]["content"][0]["text"],
+            "kept"
+        );
+        let meta = &s.lines[0];
+        assert_eq!(meta.kind, "session_meta");
+        assert_eq!(meta.payload["base_instructions"]["text"], "You are Codex.");
+        assert_eq!(meta.payload["thread_source"], "user");
+    }
+
+    #[test]
+    fn other_harness_compaction_and_base_instructions_are_not_copied() {
+        let mut view = compacted_and_meta_events(view_with(vec![assistant_turn("a1", "hi")]));
+        view.provider_id = Some("claude".into());
+        let s = CodexProjector::default().project(&view).unwrap();
+        assert!(s.lines.iter().all(|l| l.kind != "compacted"));
+        assert!(s.lines[0].payload.get("base_instructions").is_none());
+    }
+
+    /// The task lifecycle Codex wrote (`task_started` / `task_complete`: start and completion
+    /// times, duration, time to first token, the mode and context window) goes back.
+    #[test]
+    fn codex_task_lifecycle_events_are_written_back() {
+        let mut view = view_with(vec![assistant_turn("a1", "hello")]);
+        let mut push = |ts: &str, kind: &str, payload: Value| {
+            view.events.push(toolpath_convo::ConversationEvent {
+                id: format!("{kind}-{ts}"),
+                timestamp: ts.into(),
+                parent_id: None,
+                event_type: kind.into(),
+                data: payload
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            });
+        };
+        push(
+            "2026-04-20T16:00:00.000Z",
+            "task_started",
+            json!({"type": "task_started", "turn_id": "t1", "started_at": 1,
+                   "model_context_window": 258400, "collaboration_mode_kind": "default"}),
+        );
+        push(
+            "2026-04-20T16:00:09.000Z",
+            "task_complete",
+            json!({"type": "task_complete", "turn_id": "t1", "completed_at": 9,
+                   "duration_ms": 8000, "time_to_first_token_ms": 120,
+                   "last_agent_message": "done"}),
+        );
+        let s = CodexProjector::default().project(&view).unwrap();
+        let started = s
+            .lines
+            .iter()
+            .find(|l| l.kind == "event_msg" && l.payload["type"] == "task_started")
+            .expect("task_started");
+        assert_eq!(started.payload["model_context_window"], 258400);
+        assert_eq!(started.payload["collaboration_mode_kind"], "default");
+        let done = s
+            .lines
+            .iter()
+            .find(|l| l.kind == "event_msg" && l.payload["type"] == "task_complete")
+            .expect("task_complete");
+        assert_eq!(done.payload["duration_ms"], 8000);
+        assert_eq!(done.payload["time_to_first_token_ms"], 120);
+        assert_eq!(done.payload["last_agent_message"], "done");
+    }
+
+    #[test]
+    fn other_harness_tool_search_items_are_not_copied() {
+        let mut view = tool_search_events(view_with(vec![assistant_turn("a1", "hello")]));
+        view.provider_id = Some("claude".into());
+        let s = CodexProjector::default().project(&view).unwrap();
+        assert!(
+            !inner_types(&s).iter().any(|k| k.starts_with("tool_search")),
+            "copied from a claude view"
+        );
+    }
+
+    /// When Codex's workspace roots were only its cwd, they follow the cwd the session is
+    /// written for (a resume in another directory must not point at the old one).
+    #[test]
+    fn workspace_roots_that_were_just_the_cwd_follow_the_new_cwd() {
+        let mut view = with_turn_context(view_with(vec![assistant_turn("a1", "hello")]));
+        for e in &mut view.events {
+            e.data
+                .insert("workspace_roots".into(), json!(["/tmp/proj"]));
+        }
+        let s = CodexProjector::new()
+            .with_cwd("/work/new")
+            .project(&view)
+            .unwrap();
+        for tc in turn_contexts(&s) {
+            assert_eq!(tc["workspace_roots"], json!(["/work/new"]));
+        }
+    }
+
+    #[test]
+    fn other_harness_settings_are_not_copied() {
+        let mut view = with_turn_context(view_with(vec![assistant_turn("a1", "hello")]));
+        view.provider_id = Some("claude".into());
+        let s = CodexProjector::default().project(&view).unwrap();
+        for tc in turn_contexts(&s) {
+            for key in [
+                "approval_policy",
+                "sandbox_policy",
+                "permission_profile",
+                "file_system_sandbox_policy",
+                "personality",
+                "current_date",
+                "timezone",
+                "workspace_roots",
+                "collaboration_mode",
+            ] {
+                assert!(tc.get(key).is_none(), "{key} copied from a claude view");
+            }
+        }
     }
 
     #[test]

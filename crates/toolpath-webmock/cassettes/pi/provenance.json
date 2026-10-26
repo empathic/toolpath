@@ -1,0 +1,31 @@
+{
+ "cassettes": "pi",
+ "recorded_at": "2026-10-15T19:38:03.637Z",
+ "recorded_with": "the Bun prototype of this crate (webmock.ts, the spec it was ported from) driven by the scratch run-cell.sh: `run pi record`; secret headers never stored, the recording machine's scratch root replaced by <scratch>",
+ "golden": {
+  "set": "codex",
+  "input": "goldens/codex/input.jsonl",
+  "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "same_bytes_as": "test-fixtures/codex/convo.jsonl"
+ },
+ "projection": {
+  "toolpath_rev": "6aeff36",
+  "path_version": "0.30.0",
+  "basis": "tp worktree at 6aeff36 (wip/bdelanghe), path 0.30.0 built 10:39 EDT 2026-10-15; review/resume-matrix-v2.md",
+  "derive": "path p derive codex --all",
+  "resume": "path resume --harness pi",
+  "cell": "resume-matrix/v2-cell-codex-to-pi",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "session_id_origin": "kept from the golden"
+ },
+ "probe": {
+  "command": "pi -p --no-tools --no-extensions --no-skills --no-context-files --no-prompt-templates --model openai-codex/gpt-5.6-terra --session 019e03b2-11a2-7320-9098-5d831813e66c <prompt>",
+  "prompt": "Reply with exactly the first five words of the very first user message in this conversation (not this one), then the word END. No other text.",
+  "turns": "the golden conversation plus this one headless turn; nothing else was sent"
+ },
+ "files": [
+  "813c0e770ed37ee952c1835ac68ef2f19d0ffba842f2f8233f91b66f72c6e5a0.json",
+  "index.jsonl"
+ ]
+}

@@ -1,0 +1,36 @@
+DRAFT for review. Nothing is recorded from this until it is approved. The core recording (feature-elicit.prompt.txt, Ben's 10 steps) is unchanged and stays the core.
+
+This is a driver script's worth of prompts, not one prompt: a multi-turn session needs one invocation per TURN on the same session (--continue / --resume, or stdin). Each TURN below is a separate prompt sent to the same session, in an empty scratch directory. Stay inside the current working directory.
+
+TURN 1 (set up, several files)
+Create `app/`, `app/main.py`, `app/util.py` and `app/README.md`. main.py imports `greet` from util.py and prints `greet("world")`; util.py defines `greet(name)` returning "hello, " + name; README.md has two lines describing the app. Then run `python3 app/main.py` and report its output.
+
+TURN 2 (multi-file edit, one atomic request)
+Rename `greet` to `salute` everywhere it is used (definition and call), and update README.md to say so. Do all three edits, then run the app again.
+
+TURN 3 (larger file)
+Write `data/words.txt` with 400 lines, line N being the word "word" followed by N. Then count its lines with a shell command and report the count.
+
+TURN 4 (follow-up that changes direction)
+Actually, forget the rename: put `greet` back as it was in util.py and main.py, but keep README.md as it is now. Then tell me which files differ from how they were after turn 1.
+
+TURN 5 (interrupted or retried turn, only where the driver can do it)
+(driver: send this turn and cancel it after the first tool call, then send it again unchanged)
+List every file under the current directory with its size in bytes, largest first.
+
+TURN 6 (model switch; driver changes the model flag for this turn only)
+In one sentence, which file is the largest and how many bytes is it?
+
+TURN 7 (attachment, where the agent takes one)
+(driver attaches `fixtures/pixel.png`, a 16x16 solid-colour PNG)
+Describe in one sentence what the attached image is.
+
+TURN 8 (extension / MCP tool, where configured)
+(driver configures one local stdio MCP server exposing `echo(text)`)
+Call the `echo` tool with the text "extended-elicit" and report what it returned.
+
+TURN 9 (a required sub-agent step, where the agent has one)
+Dispatch a sub-agent with this exact instruction: "Count the words in app/README.md and reply with just the number." Report the number it returned. This step is required: do not do it yourself.
+
+TURN 10 (close)
+Summarise in 2-3 sentences what changed in this session. Stop without asking for further work.

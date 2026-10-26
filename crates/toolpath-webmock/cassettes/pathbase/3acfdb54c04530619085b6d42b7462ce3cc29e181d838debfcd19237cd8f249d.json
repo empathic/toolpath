@@ -1,0 +1,43 @@
+{
+  "agent": "pathbase",
+  "recorded_at": "2026-10-23T19:08:21.460Z",
+  "key": "3acfdb54c04530619085b6d42b7462ce3cc29e181d838debfcd19237cd8f249d",
+  "loose_key": "9116acc428d074de6030b2f478577ade9b1ea24930265c56488d07d069f491a4",
+  "model": "",
+  "request": {
+    "method": "POST",
+    "url": "/api/v1/u/sync/repos/pathstash/graphs/f7036301-c4e6-4828-8ff2-2bdf8c16264b/paths/25931f53-6ddf-49a9-9e2f-c58f8b01f90e/steps",
+    "upstream": "http://127.0.0.1:18899",
+    "headers": {
+      "accept": "*/*",
+      "content-type": "application/x-ndjson",
+      "cookie": "<redacted>"
+    },
+    "body": "{\"Step\":{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s4\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s4\",\"parents\":[\"s3\"],\"timestamp\":\"2026-01-01T00:00:00Z\"}}}\n{\"Head\":{\"step_id\":\"s4\"}}\n",
+    "body_encoding": "identity",
+    "normalized": "{\"Step\":{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s4\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s4\",\"parents\":[\"s3\"],\"timestamp\":\"2026-01-01T00:00:00Z\"}}}\n{\"Head\":{\"step_id\":\"s4\"}}\n"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "cache-control": "private, no-cache, must-revalidate",
+      "date": "Fri, 23 Oct 2026 19:08:21 GMT",
+      "x-pathbase-version": "0.1.0+d874b09",
+      "x-request-id": "b1badaa6-d698-42ce-9f48-4111cdb65c48",
+      "access-control-allow-origin": "*",
+      "vary": "Authorization",
+      "x-content-type-options": "nosniff",
+      "content-type": "application/json"
+    },
+    "chunks": [
+      {
+        "t_ms": 5,
+        "b64": "eyJpbnNlcnRlZCI6MSwiaGVhZCI6InM0In0="
+      }
+    ],
+    "bytes": 26,
+    "duration_ms": 5,
+    "sse": false,
+    "text_preview": "{\"inserted\":1,\"head\":\"s4\"}"
+  }
+}

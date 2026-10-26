@@ -233,6 +233,38 @@ fn file_input_explicit_pi_projects_and_records_exec() {
     assert!(sessions.exists(), "pi sessions dir not created");
 }
 
+#[test]
+fn file_input_explicit_cursor_agent_projects_and_records_exec() {
+    let _env = env_lock();
+    let home = ScopedHome::new();
+    let _path = ScopedPath::with_binary("cursor-agent");
+    let cwd = tempfile::tempdir().unwrap();
+
+    let path = make_convo_path("agent:cursor", "cursor://resume-cursor-agent-int");
+    let doc_file = write_path_to_temp(cwd.path(), path);
+
+    let recorder = RecordingExec::default();
+    run_with_strategy(
+        args_explicit(doc_file, cwd.path(), Harness::CursorAgent),
+        &recorder,
+    )
+    .unwrap();
+
+    let cap = recorder.captured();
+    assert_eq!(cap.binary, "cursor-agent");
+    assert_eq!(cap.args[0], "--resume");
+    let id = &cap.args[1];
+    assert_eq!(cap.cwd, std::fs::canonicalize(cwd.path()).unwrap());
+
+    // The store lands under $XDG_CONFIG_HOME/cursor (pinned by ScopedHome),
+    // in the directory cursor-agent lists for this cwd.
+    let config = home.home_dir().join(".config/cursor");
+    let db = toolpath_cursor::agent_store::store_path(&config, &cap.cwd, id);
+    let store = toolpath_cursor::AgentStore::read(&db).expect("store.db written");
+    assert_eq!(store.agent_id(), id);
+    assert_eq!(store.to_view().unwrap().turns[0].text, "hello");
+}
+
 // ── Cache-id input ──────────────────────────────────────────────────
 
 #[test]

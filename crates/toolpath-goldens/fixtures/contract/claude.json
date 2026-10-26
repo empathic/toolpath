@@ -1,0 +1,147 @@
+{
+  "writer": "claude",
+  "ops": [
+    {
+      "op": "drop",
+      "path": "paths[].meta.producer.name",
+      "why": "toolpath's own producer stamp; the target format has no place for it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.producer.version",
+      "why": "toolpath's own producer stamp; the target format has no place for it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.vcs_remote",
+      "why": "claude's session records no vcs remote"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.ref",
+      "why": "claude's session records no ref"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+      "why": "claude reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+      "why": "claude reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+      "why": "claude's session format has no delegation record",
+      "defect": "Claude Code keeps sub-agent work as sidechain sessions; the writer could write them"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+      "why": "claude's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
+      "why": "claude's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
+      "why": "claude's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+      "why": "claude records no VCS revision per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+      "why": "claude reports no reasoning-token breakdown"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.before",
+      "why": "a write in claude's format carries the new content only, not the prior file"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].meta.actors.<actor>.provider",
+      "value": "claude-code",
+      "why": "the read-back session names its harness as the provider of a non-agent actor"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.entry_type",
+      "value": "permission-mode",
+      "why": "the added permission-mode line read back as an event"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.event_source_id",
+      "value": "claude-preamble-0",
+      "why": "the added permission-mode line's event id"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+      "value": "default",
+      "why": "Claude Code needs a permission-mode line to resume; the view carries none"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+      "value": "0b5d3c1e-7a2f-4c9e-9d41-5f6a7b8c9d0e",
+      "why": "the session id copied onto the added permission-mode line"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.raw.type",
+      "value": "permission-mode",
+      "why": "the permission-mode preamble line the writer adds"
+    }
+  ]
+}

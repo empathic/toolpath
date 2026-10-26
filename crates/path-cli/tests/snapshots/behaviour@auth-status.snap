@@ -1,0 +1,11 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: "transcript(\"no credentials in HOME\", &[\"auth\", \"status\"], &r,\nSome(home.path()))"
+---
+$ path auth status
+exit: 0
+--- stdout
+Not logged in. Run `path auth login`.
+--- stderr
+
+# no credentials in HOME

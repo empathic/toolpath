@@ -109,13 +109,21 @@ pub(crate) fn write_into_cursor_db(
         blob_count += 1;
     }
 
+    let mut history_count = 0_usize;
+    for (hash, body) in &session.agent_blobs {
+        let key = format!("{}{}", toolpath_cursor::reader::AGENT_BLOB_PREFIX, hash);
+        upsert_cursor_kv(&tx, &key, body)?;
+        history_count += 1;
+    }
+
     tx.commit()?;
 
     eprintln!(
-        "Exported Cursor composer {} ({} bubbles, {} blobs) → {}",
+        "Exported Cursor composer {} ({} bubbles, {} blobs, {} history messages) → {}",
         session.data.composer_id,
         bubble_count,
         blob_count,
+        history_count,
         db_path.display()
     );
     eprintln!();
@@ -193,6 +201,7 @@ fn upsert_cursor_composer_header(
     };
 
     let composer_id = session.data.composer_id.clone();
+    upsert_cursor_composer_header_row(tx, &new_head)?;
     headers
         .all_composers
         .retain(|h| h.composer_id != composer_id);
@@ -204,4 +213,114 @@ fn upsert_cursor_composer_header(
         rusqlite::params![HEADERS_KEY, payload],
     )?;
     Ok(())
+}
+
+/// Cursor 3.24+ keeps heads in the `composerHeaders` table and reads
+/// them from there; write our head as a row too when the table exists.
+/// The ItemTable blob above stays: Cursor 3.24 migrates it at launch
+/// (seen in the 2026-10-15 resume matrix), so a DB from either side of
+/// the migration lists the composer.
+fn upsert_cursor_composer_header_row(
+    tx: &rusqlite::Transaction<'_>,
+    head: &toolpath_cursor::ComposerHead,
+) -> Result<()> {
+    use toolpath_cursor::reader::HEADERS_TABLE;
+
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        rusqlite::params![HEADERS_TABLE],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Ok(());
+    }
+    let workspace_id = head.workspace_identifier.as_ref().map(|w| w.id.clone());
+    let recency = head.last_updated_at.or(head.created_at);
+    tx.execute(
+        &format!(
+            "INSERT OR REPLACE INTO {HEADERS_TABLE} \
+             (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7)"
+        ),
+        rusqlite::params![
+            head.composer_id,
+            workspace_id,
+            head.created_at,
+            head.last_updated_at,
+            head.is_archived,
+            recency,
+            serde_json::to_string(head)?,
+        ],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE_SCHEMA: &str = "
+        CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
+        CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);";
+    /// As Cursor 3.24.12 creates it.
+    const HEADERS_TABLE_3_24: &str = "
+        CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, subagentTypeName TEXT, value TEXT);
+        INSERT INTO cursorDiskKV (key, value) VALUES ('composer.composerHeaders.migratedToTable', '1');";
+
+    fn fixture_session() -> toolpath_cursor::CursorSession {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/cursor/convo.json");
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
+    /// Write the fixture's head into a DB built from `schema`, then list
+    /// heads back through the reader.
+    fn write_head_then_list(schema: &str) -> (tempfile::NamedTempFile, Vec<String>) {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = rusqlite::Connection::open(f.path()).unwrap();
+        conn.execute_batch(schema).unwrap();
+        let tx = conn.transaction().unwrap();
+        upsert_cursor_composer_header(&tx, &fixture_session()).unwrap();
+        tx.commit().unwrap();
+        drop(conn);
+        let ids = toolpath_cursor::DbReader::open(f.path())
+            .unwrap()
+            .list_composer_ids()
+            .unwrap();
+        (f, ids)
+    }
+
+    #[test]
+    fn head_lands_in_the_3_24_table_and_the_blob() {
+        let (f, ids) = write_head_then_list(&format!("{BASE_SCHEMA}{HEADERS_TABLE_3_24}"));
+        let id = fixture_session().data.composer_id;
+        assert_eq!(ids, vec![id.clone()]);
+        let conn = rusqlite::Connection::open(f.path()).unwrap();
+        let (ws, recency, value): (String, i64, String) = conn
+            .query_row(
+                "SELECT workspaceId, recency, value FROM composerHeaders WHERE composerId = ?1",
+                [&id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(ws, "37d08546371c642419dba431e57bcbde");
+        assert_eq!(recency, 1780338804591);
+        let head: toolpath_cursor::ComposerHead = serde_json::from_str(&value).unwrap();
+        assert_eq!(head.composer_id, id);
+        // The legacy key stays: Cursor 3.24 migrates it at launch.
+        let blob: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ItemTable WHERE key = 'composer.composerHeaders'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(blob, 1);
+    }
+
+    #[test]
+    fn head_lands_in_the_blob_before_3_24() {
+        let (_f, ids) = write_head_then_list(BASE_SCHEMA);
+        assert_eq!(ids, vec![fixture_session().data.composer_id]);
+    }
 }

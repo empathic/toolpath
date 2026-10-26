@@ -1,13 +1,15 @@
 [package]
 name = "path-cli"
-version = "0.29.0"
+version = "0.30.0"
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 repository = "https://github.com/empathic/toolpath"
 description = "CLI for deriving, querying, and visualizing Toolpath provenance (binary: path)"
 keywords = ["provenance", "toolpath", "cli", "audit", "traceability"]
 categories = ["command-line-utilities", "development-tools"]
 default-run = "path"
+exclude = ["**/.qual"]
 
 [lib]
 name = "path_cli"
@@ -101,10 +103,34 @@ embedded-picker = ["dep:skim", "dep:regex"]
 # `--cwd`, `path resume --remote`, `--dry-run`, and the ssh transport
 # module. Pulls in the in-process SSH client.
 resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path"]
+# `path d` (alias `path develop`): the repo's development tools, off by
+# default so the release binary does not carry them. `path d baseline`
+# (the snapshot baseline, alias `goldens`; `just baseline`), `path d webmock` and `path d model`
+# (run the unpublished toolpath-webmock and toolpath-model crates'
+# binaries, so path-cli keeps no dependency crates.io lacks). The
+# quality gates build with `--features path-cli/develop`, so the goldens
+# tests run on every gate rather than skipping.
+develop = []
+
+[[test]]
+name = "goldens"
+required-features = ["develop"]
+
+[[test]]
+name = "goldens_producer"
+required-features = ["develop"]
+
+[[test]]
+name = "cli_surface"
+required-features = ["develop"]
 
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
 insta = { workspace = true }
+# Captured goldens as test fixtures (tests/roundtrip.rs); never part of the shipped binary.
+toolpath-golden = { workspace = true }
 toolpath-convo = { workspace = true }
 figment = { version = "0.10", features = ["env", "test"] }
+# The goldens pipeline derives the generated examples from real recorded sessions (tests/examples_generated.rs).
+toolpath-goldens = { path = "../toolpath-goldens" }

@@ -1,0 +1,368 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: 578c79666bff7c4570fa919975859bc0ef1d564f24c5a0ffc928f8c25b1d4b15
+input_file: test-fixtures/claude/convo-compacted.jsonl
+---
+{
+  "source": {
+    "lines": 71,
+    "bytes": 93352,
+    "string_chars": 57288,
+    "by_type": {
+      "ai-title": 7,
+      "assistant": 29,
+      "attachment": 9,
+      "last-prompt": 4,
+      "mode": 2,
+      "queue-operation": 4,
+      "system": 1,
+      "user": 15
+    }
+  },
+  "ir": {
+    "bytes": 74209,
+    "string_chars": 53033,
+    "steps": 61,
+    "text_chars": 12194,
+    "tool_uses": 10
+  },
+  "projections": {
+    "codex": {
+      "lines": 82,
+      "bytes": 43949,
+      "string_chars": 34325,
+      "by_type": {
+        "event_msg/agent_message": 10,
+        "event_msg/exec_command_end": 4,
+        "event_msg/token_count": 10,
+        "event_msg/user_message": 2,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 10,
+        "response_item/message": 25,
+        "session_meta": 1,
+        "turn_context": 10
+      }
+    },
+    "copilot": {
+      "lines": 115,
+      "bytes": 49083,
+      "string_chars": 34890,
+      "by_type": {
+        "assistant.message": 29,
+        "assistant.turn_end": 29,
+        "assistant.turn_start": 29,
+        "session.start": 1,
+        "subagent.completed": 1,
+        "subagent.started": 1,
+        "tool.execution_complete": 10,
+        "tool.execution_start": 10,
+        "user.message": 5
+      }
+    },
+    "cursor": {
+      "lines": 4133,
+      "bytes": 177190,
+      "string_chars": 56893,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 181,
+      "bytes": 54802,
+      "string_chars": 47939,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 606,
+      "bytes": 31956,
+      "string_chars": 20152,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 2545,
+      "bytes": 91511,
+      "string_chars": 34203,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 45,
+      "bytes": 34374,
+      "string_chars": 21512,
+      "by_type": {
+        "message": 44,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 71,
+    "bytes": 73818,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 163,
+      "after": 104,
+      "lost": 60,
+      "gained": 1
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "isCompactSummary",
+        "example": "true"
+      },
+      {
+        "path": "isVisibleInTranscriptOnly",
+        "example": "true"
+      },
+      {
+        "path": "message.content[].caller.type",
+        "example": "direct"
+      },
+      {
+        "path": "message.content[].content[].text",
+        "example": "The file `notes.md` contains **11 words*…"
+      },
+      {
+        "path": "message.content[].content[].type",
+        "example": "text"
+      },
+      {
+        "path": "message.diagnostics",
+        "example": "null"
+      },
+      {
+        "path": "message.stop_details",
+        "example": "null"
+      },
+      {
+        "path": "message.stop_sequence",
+        "example": "null"
+      },
+      {
+        "path": "message.type",
+        "example": "message"
+      },
+      {
+        "path": "message.usage.cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.inference_geo",
+        "example": "not_available"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].type",
+        "example": "message"
+      },
+      {
+        "path": "message.usage.server_tool_use.web_fetch_requests",
+        "example": "0"
+      },
+      {
+        "path": "message.usage.server_tool_use.web_search_requests",
+        "example": "0"
+      },
+      {
+        "path": "message.usage.speed",
+        "example": "standard"
+      },
+      {
+        "path": "permissionMode",
+        "example": "auto"
+      },
+      {
+        "path": "promptId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "promptSource",
+        "example": "sdk"
+      },
+      {
+        "path": "requestId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.agentId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.agentType",
+        "example": "Explore"
+      },
+      {
+        "path": "toolUseResult.content[].text",
+        "example": "The file `notes.md` contains **11 words*…"
+      },
+      {
+        "path": "toolUseResult.content[].type",
+        "example": "text"
+      },
+      {
+        "path": "toolUseResult.prompt",
+        "example": "Count the words in `notes.md` and report…"
+      },
+      {
+        "path": "toolUseResult.status",
+        "example": "completed"
+      },
+      {
+        "path": "toolUseResult.toolStats.bashCount",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.toolStats.editFileCount",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.linesAdded",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.linesRemoved",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.otherToolCount",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.toolStats.readCount",
+        "example": "1"
+      },
+      {
+        "path": "toolUseResult.toolStats.searchCount",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.totalDurationMs",
+        "example": "5645"
+      },
+      {
+        "path": "toolUseResult.totalTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.totalToolUseCount",
+        "example": "2"
+      },
+      {
+        "path": "toolUseResult.usage.cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.inference_geo",
+        "example": "not_available"
+      },
+      {
+        "path": "toolUseResult.usage.input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.iterations[].type",
+        "example": "message"
+      },
+      {
+        "path": "toolUseResult.usage.output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "toolUseResult.usage.server_tool_use.web_fetch_requests",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.usage.server_tool_use.web_search_requests",
+        "example": "0"
+      },
+      {
+        "path": "toolUseResult.usage.service_tier",
+        "example": "standard"
+      },
+      {
+        "path": "toolUseResult.usage.speed",
+        "example": "standard"
+      }
+    ],
+    "gained": [
+      {
+        "path": "message.usage.cache_creation",
+        "example": "null"
+      }
+    ]
+  }
+}

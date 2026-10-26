@@ -11,6 +11,13 @@ site/wasm/
 # Synthetic benchmark fixtures — generate locally via gen_synthetic_path.
 /bench/fixtures/
 
+# insta's pending snapshots: a review artifact, never committed (accept into
+# the .snap, or delete). pr/53 committed twenty of them.
+*.snap.new
+*.pending-snap
+
 # macOS
 .DS_Store
 
+# nix build output symlink
+result

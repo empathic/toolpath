@@ -1,0 +1,1470 @@
+From f82f03e401b9351c04766fa0dcc76ae239a6adcc Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:10:29 -0400
+Subject: [PATCH] test(baseline): a JSON Schema per snapshot kind; every
+ committed snapshot checked against its kind
+
+Generated from the model types with schemars: known_defects, round_trip,
+writer, shed, validate (docs/baseline/schemas/, regenerate with
+UPDATE_SCHEMAS=1 cargo test -p toolpath-goldens --test schemas).
+Hand-written: formats, validate_transforms, opencode_db (bodies built
+with json!), document (the base schema plus the v1.1.0 kind, checked the
+way path p validate checks it) and recording provenance. No schema, with
+the reason: projection (harness-native) and ir (ConversationView has
+none; qualifier concern baa7a7b5).
+
+tests/schemas.rs: generated schemas current; every committed snapshot
+validates against its kind; every recording's provenance validates. A
+snapshot with a broken shape fails by name (negative control run by hand).
+All committed snapshots pass. Record: pr/41-baseline-schemas.md.
+---
+ Cargo.lock                                    |   1 +
+ crates/toolpath-goldens/Cargo.toml            |   2 +
+ crates/toolpath-goldens/src/keypaths.rs       |   2 +-
+ crates/toolpath-goldens/src/lib.rs            |   3 +
+ crates/toolpath-goldens/src/model.rs          |  32 +--
+ crates/toolpath-goldens/src/schemas.rs        |  86 +++++++
+ crates/toolpath-goldens/tests/.qual           |   1 +
+ crates/toolpath-goldens/tests/schemas.rs      | 157 ++++++++++++
+ docs/baseline/schemas/README.md               |  40 +++
+ docs/baseline/schemas/document.schema.json    |   9 +
+ docs/baseline/schemas/formats.schema.json     |  32 +++
+ .../schemas/known_defects.schema.json         | 158 ++++++++++++
+ docs/baseline/schemas/opencode_db.schema.json |  14 ++
+ docs/baseline/schemas/provenance.schema.json  |  27 ++
+ docs/baseline/schemas/round_trip.schema.json  |  99 ++++++++
+ docs/baseline/schemas/shed.schema.json        | 236 ++++++++++++++++++
+ docs/baseline/schemas/validate.schema.json    |  79 ++++++
+ .../schemas/validate_transforms.schema.json   |  31 +++
+ docs/baseline/schemas/writer.schema.json      |  99 ++++++++
+ pr/41-baseline-schemas.md                     |  47 ++++
+ 20 files changed, 1139 insertions(+), 16 deletions(-)
+ create mode 100644 crates/toolpath-goldens/src/schemas.rs
+ create mode 100644 crates/toolpath-goldens/tests/schemas.rs
+ create mode 100644 docs/baseline/schemas/README.md
+ create mode 100644 docs/baseline/schemas/document.schema.json
+ create mode 100644 docs/baseline/schemas/formats.schema.json
+ create mode 100644 docs/baseline/schemas/known_defects.schema.json
+ create mode 100644 docs/baseline/schemas/opencode_db.schema.json
+ create mode 100644 docs/baseline/schemas/provenance.schema.json
+ create mode 100644 docs/baseline/schemas/round_trip.schema.json
+ create mode 100644 docs/baseline/schemas/shed.schema.json
+ create mode 100644 docs/baseline/schemas/validate.schema.json
+ create mode 100644 docs/baseline/schemas/validate_transforms.schema.json
+ create mode 100644 docs/baseline/schemas/writer.schema.json
+ create mode 100644 pr/41-baseline-schemas.md
+
+diff --git a/Cargo.lock b/Cargo.lock
+index a61f2e39..2c3dfa9e 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5487,6 +5487,7 @@ dependencies = [
+  "insta",
+  "jsonschema",
+  "rusqlite",
++ "schemars",
+  "serde",
+  "serde_json",
+  "sha2 0.10.9",
+diff --git a/crates/toolpath-goldens/Cargo.toml b/crates/toolpath-goldens/Cargo.toml
+index 05588404..9875839a 100644
+--- a/crates/toolpath-goldens/Cargo.toml
++++ b/crates/toolpath-goldens/Cargo.toml
+@@ -22,6 +22,8 @@ serde_json = { workspace = true }
+ # The validator `path p validate` uses, at the same version as path-cli.
+ jsonschema = { version = "0.46", default-features = false }
+ sha2 = "0.10"
++# JSON Schemas of the baseline's snapshot kinds (src/schemas.rs, docs/baseline/schemas/).
++schemars = "0.8"
+ hex = "0.4"
+ tempfile = { workspace = true }
+ uuid = { workspace = true, features = ["v4"] }
+diff --git a/crates/toolpath-goldens/src/keypaths.rs b/crates/toolpath-goldens/src/keypaths.rs
+index e724caa4..22ed4662 100644
+--- a/crates/toolpath-goldens/src/keypaths.rs
++++ b/crates/toolpath-goldens/src/keypaths.rs
+@@ -12,7 +12,7 @@ use crate::model::Counts;
+ /// A generalised path into a toolpath document: array indices collapsed to
+ /// `[]`, artifact-URL keys (whose text embeds a session id) to `<artifact>`,
+ /// actor-id keys to `<actor>`. `paths[].steps[].change.<artifact>.structural.text`.
+-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, schemars::JsonSchema)]
+ #[serde(transparent)]
+ pub struct KeyPath(String);
+ 
+diff --git a/crates/toolpath-goldens/src/lib.rs b/crates/toolpath-goldens/src/lib.rs
+index f28f29fc..570f4499 100644
+--- a/crates/toolpath-goldens/src/lib.rs
++++ b/crates/toolpath-goldens/src/lib.rs
+@@ -23,6 +23,8 @@
+ //!   identical runs (Copilot mints a session id).
+ //! * [`leaks`]: a scan of output bytes for strings that must not be in a
+ //!   golden (the developer's home directory, the temp directory).
++//! * [`schemas`]: the JSON Schema of each snapshot kind, generated from these
++//!   types where a type is behind it (`docs/baseline/schemas/`).
+ //!
+ //! The view is `tests/goldens.rs`: every set through the pipeline, one insta
+ //! snapshot per stage under `snapshots/`. `cargo test` checks them,
+@@ -38,5 +40,6 @@ pub mod leaks;
+ pub mod losses;
+ pub mod model;
+ pub mod pipeline;
++pub mod schemas;
+ pub mod shed;
+ pub mod validate;
+diff --git a/crates/toolpath-goldens/src/model.rs b/crates/toolpath-goldens/src/model.rs
+index 2749f037..d01d2c48 100644
+--- a/crates/toolpath-goldens/src/model.rs
++++ b/crates/toolpath-goldens/src/model.rs
+@@ -258,7 +258,7 @@ impl std::error::Error for StageError {}
+ 
+ /// Size of a toolpath document: steps, conversation text, tool uses, and
+ /// distinct generalised key paths.
+-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct Counts {
+     pub steps: usize,
+     pub text_chars: usize,
+@@ -268,7 +268,7 @@ pub struct Counts {
+ 
+ /// A projection read back by its own adapter and derived again, compared to
+ /// the document it was projected from.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ #[serde(tag = "outcome", rename_all = "snake_case")]
+ pub enum RoundTrip {
+     /// The adapter read its projection; this is what survived.
+@@ -286,7 +286,7 @@ pub enum RoundTrip {
+ 
+ /// What `path p validate` says of a document: the base schema and, for a
+ /// path naming a bundled kind, that kind's schema.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ #[serde(tag = "outcome", rename_all = "snake_case")]
+ pub enum Validation {
+     Valid,
+@@ -299,17 +299,18 @@ pub enum Validation {
+ }
+ 
+ /// The validation of the document and of every projection derived again.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct Validate {
+     pub document: Validation,
+     #[serde(serialize_with = "by_agent_name")]
++    #[schemars(with = "BTreeMap<String, Validation>")]
+     pub round_trips: BTreeMap<Agent, Validation>,
+ }
+ 
+ /// One field of the session's token accounting on which the three witnesses
+ /// disagree: the sum over `conversation.append` steps, the adapter's
+ /// `total_usage`, and the `total_usage` extracted from the document.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct Mismatch {
+     /// `input_tokens`, `output_tokens`, `cache_read_tokens`,
+     /// `cache_write_tokens`, or `breakdowns.<class>.<sub>`.
+@@ -334,7 +335,7 @@ impl fmt::Display for Mismatch {
+ }
+ 
+ /// Lines, bytes and event types of a transcript.
+-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct TranscriptStats {
+     pub lines: usize,
+     pub bytes: usize,
+@@ -346,7 +347,7 @@ pub struct TranscriptStats {
+ }
+ 
+ /// Bytes and content of a toolpath document.
+-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct DocumentStats {
+     pub bytes: usize,
+     pub string_chars: usize,
+@@ -356,14 +357,14 @@ pub struct DocumentStats {
+ }
+ 
+ /// How many lines of one event type the same-format round trip kept.
+-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct Kept {
+     pub source: usize,
+     pub after: usize,
+ }
+ 
+ /// A field the same-format round trip writes under another spelling.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct Rename {
+     pub from: String,
+     pub to: String,
+@@ -372,7 +373,7 @@ pub struct Rename {
+ /// A field of the transcript the same-format round trip does not write
+ /// back, with one example value (withheld when it looks like an identifier
+ /// or a secret).
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct Dropped {
+     pub path: String,
+     pub example: String,
+@@ -380,7 +381,7 @@ pub struct Dropped {
+ 
+ /// Leaf key paths of a transcript before and after the same-format round
+ /// trip.
+-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct KeyPathTally {
+     pub source: usize,
+     pub after: usize,
+@@ -390,7 +391,7 @@ pub struct KeyPathTally {
+ 
+ /// The transcript projected back to its own format and compared field by
+ /// field with the original.
+-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct SameFormat {
+     pub lines: usize,
+     pub bytes: usize,
+@@ -403,11 +404,12 @@ pub struct SameFormat {
+ 
+ /// What is shed at each stage: transcript -> document -> projections, and
+ /// the same-format round trip.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct Shed {
+     pub source: TranscriptStats,
+     pub ir: DocumentStats,
+     #[serde(serialize_with = "by_agent_name")]
++    #[schemars(with = "BTreeMap<String, TranscriptStats>")]
+     pub projections: BTreeMap<Agent, TranscriptStats>,
+     pub same_format: SameFormat,
+ }
+@@ -415,7 +417,7 @@ pub struct Shed {
+ /// A defect pinned as expected current behaviour. A fix changes the
+ /// finding, so the snapshot that holds it fails; accepting the new snapshot
+ /// is the acknowledgement that the defect is gone.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ pub struct KnownDefect {
+     pub name: &'static str,
+     /// The projection the finding is measured on: an agent, or
+@@ -425,7 +427,7 @@ pub struct KnownDefect {
+ }
+ 
+ /// What a known defect measures.
+-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+ #[serde(tag = "kind", rename_all = "snake_case")]
+ pub enum Finding {
+     /// Top-level `type` values a Claude projection writes that Claude Code
+diff --git a/crates/toolpath-goldens/src/schemas.rs b/crates/toolpath-goldens/src/schemas.rs
+new file mode 100644
+index 00000000..069a2272
+--- /dev/null
++++ b/crates/toolpath-goldens/src/schemas.rs
+@@ -0,0 +1,86 @@
++//! JSON Schemas of the baseline's snapshot kinds.
++//!
++//! A snapshot is one stage's pinned output for one recording; its kind is
++//! the name before the first `@` (`round_trip@codex@claude.snap` is a
++//! `round_trip`). The kinds whose body is one of this crate's types get a
++//! schema generated from that type here; the rest are written by hand under
++//! [`DIR`] (see its README). `tests/schemas.rs` keeps the generated files in
++//! step with the types and validates every committed snapshot body against
++//! its kind's schema.
++//!
++//! Regenerate after changing a model type:
++//! `UPDATE_SCHEMAS=1 cargo test -p toolpath-goldens --test schemas`.
++
++use schemars::schema_for;
++use serde_json::{Value, json};
++
++use crate::model::{KnownDefect, RoundTrip, Shed, Validate};
++
++/// Where the schemas live, relative to the workspace root.
++pub const DIR: &str = "docs/baseline/schemas";
++
++/// The generated schemas: `(kind, schema)`, in file-name order.
++pub fn generated() -> Vec<(&'static str, Value)> {
++    vec![
++        (
++            "known_defects",
++            titled(
++                serde_json::to_value(schema_for!(Vec<KnownDefect>)).expect("schema serialises"),
++                "known_defects snapshot",
++                "The defects accepted today for one recording. A known defect passes the baseline; a new one, or one that gets worse, fails it.",
++            ),
++        ),
++        (
++            "round_trip",
++            titled(
++                serde_json::to_value(schema_for!(RoundTrip)).expect("schema serialises"),
++                "round_trip snapshot",
++                "One recording's document projected into another harness, read back by that harness's own reader and derived again: what survived, what was lost, what was gained.",
++            ),
++        ),
++        (
++            "shed",
++            titled(
++                serde_json::to_value(schema_for!(Shed)).expect("schema serialises"),
++                "shed snapshot",
++                "What each stage sheds for one recording: transcript, document, every projection, and the same-format round trip field by field.",
++            ),
++        ),
++        (
++            "validate",
++            titled(
++                serde_json::to_value(schema_for!(Validate)).expect("schema serialises"),
++                "validate snapshot",
++                "`path p validate` over one recording's document and over every projection derived again.",
++            ),
++        ),
++        (
++            "writer",
++            titled(
++                serde_json::to_value(schema_for!(RoundTrip)).expect("schema serialises"),
++                "writer snapshot",
++                "One writer on its own: the generated full-view document projected by a single harness's writer and read back by that harness's reader.",
++            ),
++        ),
++    ]
++}
++
++/// A generated schema with the baseline's title and description on top.
++fn titled(mut schema: Value, title: &str, description: &str) -> Value {
++    let obj = schema.as_object_mut().expect("a root schema is an object");
++    obj.insert("title".into(), json!(title));
++    obj.insert("description".into(), json!(description));
++    schema
++}
++
++/// The file a kind's schema lives in, relative to the workspace root.
++pub fn file(kind: &str) -> String {
++    format!("{DIR}/{kind}.schema.json")
++}
++
++/// A schema as committed: pretty JSON and a trailing newline.
++pub fn render(schema: &Value) -> String {
++    let mut s = serde_json::to_string_pretty(schema).expect("schema serialises");
++    s.push('\n');
++    s
++}
+diff --git a/crates/toolpath-goldens/tests/.qual b/crates/toolpath-goldens/tests/.qual
+index 2e1e4665..cb295932 100644
+--- a/crates/toolpath-goldens/tests/.qual
++++ b/crates/toolpath-goldens/tests/.qual
+@@ -4,3 +4,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/regressions.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:48:36.362824Z","id":"c226e4b928a439c169dda92f74dd2c38a769157b1a95cd2a2d1a3999f133f558","body":{"detail":"It is path-cli export/resume behaviour against an existing session file, not a pipeline stage. Covered by crates/path-cli/src/cmd_export.rs export_claude_refuses_existing_session_without_force. To close: a golden that exports a set over its own source in a temp project and requires the refusal (and the resume-picks-local rule).","kind":"concern","span":{"start":{"line":1},"end":{"line":10},"content_hash":"2ebe9a6d6abb316b782bf9945125221b250cc637d2b1fd9ddb7069efa0eebc5f"},"summary":"The goldens do not reach the export clobber of a richer local original (2026-07-30)","tags":["regression-corpus","gap","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/regressions.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:48:36.382585Z","id":"d66327a3cb41fead5f47cc470bcee4f0d705a452ec43c6ae855b7aba09ace04b","body":{"detail":"The cursor set is a JSON dump of a CursorSession, not a database, so a reader regression on the 3.24 table cannot fail here. Covered by crates/toolpath-cursor/src/reader.rs reads_heads_from_the_3_24_table. To close: a database-shaped cursor set (as opencode_db.rs does for opencode).","kind":"concern","span":{"start":{"line":1},"end":{"line":10},"content_hash":"2ebe9a6d6abb316b782bf9945125221b250cc637d2b1fd9ddb7069efa0eebc5f"},"summary":"The goldens do not reach Cursor's state.vscdb (3.24 composerHeaders)","tags":["regression-corpus","gap","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.846503Z","id":"2414bd5b143e09fc2a229f820da7bdd55324ff23099f0e3c018c5394c6420657","body":{"detail":"If a second #[test] is added to this file, the env writes race its threads. Keep one test per binary, or move the stores into an argument the pipeline threads through (the opencode store already is: pipeline::opencode_store roots it in scratch).","kind":"concern","span":{"start":{"line":173},"end":{"line":173},"content_hash":"dc4bcb594f6f16fdb896fb1931054d14025b7294123b4247ecb340edf0ca1c27"},"summary":"The test sets HOME and every agent store with std::env::set_var (unsafe in edition 2024) before the globs; sound only while this binary has one test","supersedes":"53729a2d268d88790984d31c1c9017be54c263551aa3989a2a7efd40eaf4cd36","tags":["goldens","test-hygiene","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/tests/schemas.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:26:03.116248Z","id":"baa7a7b57845cd6b98a0bffae8b2644a7cef2a5ad35e53ae6a13d4a196099eb1","body":{"detail":"The ir@<recording> snapshot body is a toolpath-convo ConversationView. toolpath-convo derives no JsonSchema and the kind spec describes the document, not the view, so every_snapshot_matches_its_kind skips ir@. A schemars derive on ConversationView (and Turn, Usage, the event and tool types) would close it; it touches the shared crate every harness uses, so it is its own piece.","kind":"concern","span":{"start":{"line":34},"end":{"line":37},"content_hash":"723633ea717167f8d0561071a2bf59dc8afb561bb4f69b8a190be3d254a542e4"},"summary":"ir@ snapshots have no JSON Schema: ConversationView has none","tags":["baseline","schema","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/tests/schemas.rs b/crates/toolpath-goldens/tests/schemas.rs
+new file mode 100644
+index 00000000..a687aaf7
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/schemas.rs
+@@ -0,0 +1,157 @@
++//! The JSON Schema of every snapshot kind, and every committed snapshot
++//! checked against its kind's schema.
++//!
++//! * `generated_schemas_are_current`: the schemas generated from the model
++//!   types (`toolpath_goldens::schemas::generated`) equal the committed files
++//!   under `docs/baseline/schemas/`. `UPDATE_SCHEMAS=1` rewrites them.
++//! * `every_snapshot_matches_its_kind`: each `snapshots/<kind>@….snap` body
++//!   (the JSON after the insta header) validates against
++//!   `<kind>.schema.json`. `document@` bodies are Toolpath documents: they are
++//!   checked the way `path p validate` checks them (base schema plus the
++//!   bundled kind). `projection@` bodies are harness-native files and `ir@`
++//!   bodies are conversation views: neither has a schema here (see the
++//!   README beside the schemas).
++//! * `recording_provenance_matches`: every `cassettes/<harness>/provenance.json`
++//!   validates against `provenance.schema.json`.
++
++use std::fs;
++use std::path::{Path, PathBuf};
++
++use serde_json::Value;
++use toolpath_goldens::model::Validation;
++use toolpath_goldens::schemas;
++use toolpath_goldens::validate::validate;
++
++const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
++const SNAPSHOTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/snapshots");
++
++/// Snapshot kinds with no schema here, and why.
++const NO_SCHEMA: &[(&str, &str)] = &[
++    (
++        "projection",
++        "harness-native: see docs/agents/formats/<harness>",
++    ),
++    (
++        "ir",
++        "a toolpath-convo ConversationView, which has no JSON Schema yet",
++    ),
++];
++
++fn root() -> PathBuf {
++    Path::new(ROOT).to_path_buf()
++}
++
++fn schema(kind: &str) -> Value {
++    let path = root().join(schemas::file(kind));
++    let text = fs::read_to_string(&path)
++        .unwrap_or_else(|e| panic!("{}: {e} (no schema for kind {kind})", path.display()));
++    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
++}
++
++/// The JSON body of an insta snapshot: everything after the header's closing
++/// `---`.
++fn body(snap: &str) -> &str {
++    let rest = snap
++        .strip_prefix("---\n")
++        .expect("an insta header opens the file");
++    let end = rest.find("\n---\n").expect("an insta header closes");
++    &rest[end + "\n---\n".len()..]
++}
++
++fn errors(schema: &Value, instance: &Value) -> Vec<String> {
++    let v = jsonschema::validator_for(schema).expect("the schema compiles");
++    v.iter_errors(instance)
++        .map(|e| format!("{} at {}", e, e.instance_path()))
++        .collect()
++}
++
++#[test]
++fn generated_schemas_are_current() {
++    let update = std::env::var_os("UPDATE_SCHEMAS").is_some_and(|v| !v.is_empty());
++    let mut stale = Vec::new();
++    for (kind, generated) in schemas::generated() {
++        let path = root().join(schemas::file(kind));
++        let want = schemas::render(&generated);
++        if update {
++            fs::create_dir_all(path.parent().unwrap()).unwrap();
++            fs::write(&path, &want).unwrap();
++            continue;
++        }
++        if fs::read_to_string(&path).ok().as_deref() != Some(want.as_str()) {
++            stale.push(kind);
++        }
++    }
++    assert!(
++        stale.is_empty(),
++        "generated schemas differ from {}: {stale:?}. Regenerate: UPDATE_SCHEMAS=1 cargo test -p toolpath-goldens --test schemas",
++        schemas::DIR
++    );
++}
++
++#[test]
++fn every_snapshot_matches_its_kind() {
++    let mut names: Vec<_> = fs::read_dir(SNAPSHOTS)
++        .unwrap()
++        .map(|e| e.unwrap().file_name().into_string().unwrap())
++        .filter(|n| n.ends_with(".snap"))
++        .collect();
++    names.sort();
++    let mut failures = Vec::new();
++    let mut checked = 0;
++    for name in &names {
++        let kind = name.split('@').next().unwrap();
++        if NO_SCHEMA.iter().any(|(k, _)| *k == kind) {
++            continue;
++        }
++        let text = fs::read_to_string(Path::new(SNAPSHOTS).join(name)).unwrap();
++        let instance: Value = serde_json::from_str(body(&text))
++            .unwrap_or_else(|e| panic!("{name}: body is not JSON: {e}"));
++        let errs = if kind == "document" {
++            match validate(&instance) {
++                Validation::Valid => vec![],
++                Validation::Invalid { errors } => errors,
++                Validation::NotDerived => vec!["not derived".into()],
++            }
++        } else {
++            errors(&schema(kind), &instance)
++        };
++        if !errs.is_empty() {
++            failures.push(format!("{name}:\n  {}", errs.join("\n  ")));
++        }
++        checked += 1;
++    }
++    assert!(
++        failures.is_empty(),
++        "snapshots that break their kind's schema:\n{}",
++        failures.join("\n")
++    );
++    assert!(
++        checked > 100,
++        "suspiciously few snapshots checked: {checked}"
++    );
++}
++
++#[test]
++fn recording_provenance_matches() {
++    let schema = schema("provenance");
++    let dir = root().join("crates/toolpath-webmock/cassettes");
++    let mut checked = 0;
++    let mut failures = Vec::new();
++    for entry in fs::read_dir(&dir).unwrap() {
++        let p = entry.unwrap().path().join("provenance.json");
++        if !p.exists() {
++            continue;
++        }
++        let instance: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
++        let errs = errors(&schema, &instance);
++        if !errs.is_empty() {
++            failures.push(format!("{}:\n  {}", p.display(), errs.join("\n  ")));
++        }
++        checked += 1;
++    }
++    assert!(failures.is_empty(), "{}", failures.join("\n"));
++    assert!(
++        checked >= 7,
++        "expected a provenance file per recorded harness, found {checked}"
++    );
++}
+diff --git a/docs/baseline/schemas/README.md b/docs/baseline/schemas/README.md
+new file mode 100644
+index 00000000..0a3e61aa
+--- /dev/null
++++ b/docs/baseline/schemas/README.md
+@@ -0,0 +1,40 @@
++# Baseline schemas
++
++The baseline is the set of recordings (real sessions, one per harness and
++version) and the snapshots each stage of the pipeline pins for them. Every
++snapshot kind has a schema here, or a stated reason it has none.
++`crates/toolpath-goldens/tests/schemas.rs` checks every committed snapshot
++body against its kind's schema.
++
++A snapshot file is `crates/toolpath-goldens/snapshots/<kind>@<recording>[@<harness>].snap`:
++an insta header (`source`, `expression`, `info` with `adapter`, `agent`,
++`input_sha256`, and `input_file`) between two `---` lines, then the body
++the schema describes.
++
++| kind | schema | how |
++|---|---|---|
++| `known_defects` | [known_defects.schema.json](known_defects.schema.json) | generated from `model::KnownDefect` |
++| `round_trip` | [round_trip.schema.json](round_trip.schema.json) | generated from `model::RoundTrip` |
++| `shed` | [shed.schema.json](shed.schema.json) | generated from `model::Shed` |
++| `validate` | [validate.schema.json](validate.schema.json) | generated from `model::Validate` |
++| `writer` | [writer.schema.json](writer.schema.json) | generated from `model::RoundTrip` |
++| `document` | [document.schema.json](document.schema.json) | the format's own: `schema/toolpath.schema.json` plus the agent-coding-session v1.1.0 kind; checked the way `path p validate` checks it |
++| `formats` | [formats.schema.json](formats.schema.json) | hand-written (body built with `json!`) |
++| `validate_transforms` | [validate_transforms.schema.json](validate_transforms.schema.json) | hand-written (body built with `json!`) |
++| `opencode_db` | [opencode_db.schema.json](opencode_db.schema.json) | hand-written (body built with `json!`) |
++| `projection` | none | harness-native files; see [docs/agents/formats/](../../agents/formats/README.md) |
++| `ir` | none | a `toolpath-convo` `ConversationView`, which has no JSON Schema yet |
++
++Recording provenance (`crates/toolpath-webmock/cassettes/<harness>/provenance.json`)
++is checked against [provenance.schema.json](provenance.schema.json).
++
++Not covered here: `goldens/manifest.json` and the `goldens/roundtrip/` and
++`goldens/shed/` files, which `path goldens` in `path-cli` writes with
++`json!`; and the `path-cli` snapshots (`query@`, `core_types@`, `help@`,
++`behaviour@`), which belong to that crate.
++
++Regenerate the generated schemas after changing a model type:
++
++```sh
++UPDATE_SCHEMAS=1 cargo test -p toolpath-goldens --test schemas
++```
+diff --git a/docs/baseline/schemas/document.schema.json b/docs/baseline/schemas/document.schema.json
+new file mode 100644
+index 00000000..f44b76ea
+--- /dev/null
++++ b/docs/baseline/schemas/document.schema.json
+@@ -0,0 +1,9 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "title": "document snapshot",
++  "description": "One recording parsed and derived: a Toolpath document (a graph of paths of steps), path kind agent-coding-session v1.1.0. Its schema is the format's own: the base schema plus the kind schema, exactly what `path p validate` checks (toolpath_goldens::validate). This file only points at them.",
++  "allOf": [
++    { "$ref": "../../../schema/toolpath.schema.json" },
++    { "$ref": "../../../site/kinds/agent-coding-session/v1.1.0/schema.json" }
++  ]
++}
+diff --git a/docs/baseline/schemas/formats.schema.json b/docs/baseline/schemas/formats.schema.json
+new file mode 100644
+index 00000000..916a206d
+--- /dev/null
++++ b/docs/baseline/schemas/formats.schema.json
+@@ -0,0 +1,32 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "title": "formats snapshot",
++  "description": "Both file formats for one recording (formats@<set>): its document streamed to .path.jsonl and sealed back, compared with the .path.json. formats@examples lists each committed .path.jsonl example against its .path.json twin. Hand-written: the body is built with json! in tests/formats.rs.",
++  "oneOf": [
++    {
++      "type": "object",
++      "required": ["differing_key_paths", "jsonl_lines", "lines_by_tag", "sealed_equals_json"],
++      "additionalProperties": false,
++      "properties": {
++        "differing_key_paths": { "type": "array", "items": { "type": "string" } },
++        "jsonl_lines": { "type": "integer", "minimum": 1 },
++        "lines_by_tag": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
++        "sealed_equals_json": { "type": "boolean" }
++      }
++    },
++    {
++      "type": "array",
++      "items": {
++        "type": "object",
++        "required": ["differs_only_in", "example", "json_graph_id", "sealed_graph_id"],
++        "additionalProperties": false,
++        "properties": {
++          "differs_only_in": { "type": "array", "items": { "type": "string" } },
++          "example": { "type": "string", "pattern": "\\.path\\.jsonl$" },
++          "json_graph_id": { "type": "string" },
++          "sealed_graph_id": { "type": "string" }
++        }
++      }
++    }
++  ]
++}
+diff --git a/docs/baseline/schemas/known_defects.schema.json b/docs/baseline/schemas/known_defects.schema.json
+new file mode 100644
+index 00000000..21e492bd
+--- /dev/null
++++ b/docs/baseline/schemas/known_defects.schema.json
+@@ -0,0 +1,158 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "definitions": {
++    "Finding": {
++      "description": "What a known defect measures.",
++      "oneOf": [
++        {
++          "description": "Top-level `type` values a Claude projection writes that Claude Code does not define, with how many lines carry each.",
++          "properties": {
++            "counts": {
++              "additionalProperties": {
++                "format": "uint",
++                "minimum": 0.0,
++                "type": "integer"
++              },
++              "type": "object"
++            },
++            "kind": {
++              "enum": [
++                "illegal_claude_types"
++              ],
++              "type": "string"
++            }
++          },
++          "required": [
++            "counts",
++            "kind"
++          ],
++          "type": "object"
++        },
++        {
++          "description": "Fields the same-format round trip writes under another spelling.",
++          "properties": {
++            "kind": {
++              "enum": [
++                "renames"
++              ],
++              "type": "string"
++            },
++            "renames": {
++              "items": {
++                "$ref": "#/definitions/Rename"
++              },
++              "type": "array"
++            }
++          },
++          "required": [
++            "kind",
++            "renames"
++          ],
++          "type": "object"
++        },
++        {
++          "description": "Fields of the session's token accounting on which the sum over steps, the adapter's total and the extracted total disagree.",
++          "properties": {
++            "kind": {
++              "enum": [
++                "accounting"
++              ],
++              "type": "string"
++            },
++            "mismatches": {
++              "items": {
++                "$ref": "#/definitions/Mismatch"
++              },
++              "type": "array"
++            }
++          },
++          "required": [
++            "kind",
++            "mismatches"
++          ],
++          "type": "object"
++        }
++      ]
++    },
++    "KnownDefect": {
++      "description": "A defect pinned as expected current behaviour. A fix changes the finding, so the snapshot that holds it fails; accepting the new snapshot is the acknowledgement that the defect is gone.",
++      "properties": {
++        "finding": {
++          "$ref": "#/definitions/Finding"
++        },
++        "name": {
++          "type": "string"
++        },
++        "target": {
++          "description": "The projection the finding is measured on: an agent, or `self:<agent>` for the same-format round trip.",
++          "type": "string"
++        }
++      },
++      "required": [
++        "finding",
++        "name",
++        "target"
++      ],
++      "type": "object"
++    },
++    "Mismatch": {
++      "description": "One field of the session's token accounting on which the three witnesses disagree: the sum over `conversation.append` steps, the adapter's `total_usage`, and the `total_usage` extracted from the document.",
++      "properties": {
++        "extracted": {
++          "format": "uint32",
++          "minimum": 0.0,
++          "type": [
++            "integer",
++            "null"
++          ]
++        },
++        "field": {
++          "description": "`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, or `breakdowns.<class>.<sub>`.",
++          "type": "string"
++        },
++        "ir": {
++          "format": "uint32",
++          "minimum": 0.0,
++          "type": [
++            "integer",
++            "null"
++          ]
++        },
++        "steps": {
++          "format": "uint32",
++          "minimum": 0.0,
++          "type": [
++            "integer",
++            "null"
++          ]
++        }
++      },
++      "required": [
++        "field"
++      ],
++      "type": "object"
++    },
++    "Rename": {
++      "description": "A field the same-format round trip writes under another spelling.",
++      "properties": {
++        "from": {
++          "type": "string"
++        },
++        "to": {
++          "type": "string"
++        }
++      },
++      "required": [
++        "from",
++        "to"
++      ],
++      "type": "object"
++    }
++  },
++  "description": "The defects accepted today for one recording. A known defect passes the baseline; a new one, or one that gets worse, fails it.",
++  "items": {
++    "$ref": "#/definitions/KnownDefect"
++  },
++  "title": "known_defects snapshot",
++  "type": "array"
++}
+diff --git a/docs/baseline/schemas/opencode_db.schema.json b/docs/baseline/schemas/opencode_db.schema.json
+new file mode 100644
+index 00000000..d795ee9b
+--- /dev/null
++++ b/docs/baseline/schemas/opencode_db.schema.json
+@@ -0,0 +1,14 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "title": "opencode_db snapshot",
++  "description": "The opencode recording stored in a real-schema opencode-stable.db and read through the adapter's own reader. Hand-written: the body is built with json! in tests/opencode_db.rs.",
++  "type": "object",
++  "required": ["ir_differs_from_export", "messages", "parts", "resolved_file"],
++  "additionalProperties": false,
++  "properties": {
++    "ir_differs_from_export": { "type": "object", "description": "Key paths where the database read differs from the export read; empty when identical." },
++    "messages": { "type": "integer", "minimum": 0 },
++    "parts": { "type": "integer", "minimum": 0 },
++    "resolved_file": { "type": "string" }
++  }
++}
+diff --git a/docs/baseline/schemas/provenance.schema.json b/docs/baseline/schemas/provenance.schema.json
+new file mode 100644
+index 00000000..66893b1a
+--- /dev/null
++++ b/docs/baseline/schemas/provenance.schema.json
+@@ -0,0 +1,27 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "title": "recording provenance",
++  "description": "crates/toolpath-webmock/cassettes/<harness>/provenance.json: where a recorded API exchange came from (which recording, which projection, which probe turn) and which files it covers. Hand-written: these files are written by hand when a recording is made.",
++  "type": "object",
++  "required": ["cassettes", "recorded_at", "recorded_with", "golden", "projection", "probe", "files"],
++  "properties": {
++    "cassettes": { "type": "string", "description": "The harness (or pathbase) the recording belongs to." },
++    "recorded_at": { "type": "string", "format": "date-time" },
++    "recorded_with": { "type": "string" },
++    "golden": {
++      "type": "object",
++      "description": "The recording the projection came from.",
++      "required": ["set", "input", "input_sha256"],
++      "properties": {
++        "set": { "type": "string" },
++        "input": { "type": "string" },
++        "input_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
++        "session_id": { "type": "string" },
++        "same_bytes_as": { "type": "string" }
++      }
++    },
++    "projection": { "type": "object" },
++    "probe": { "type": "object" },
++    "files": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
++  }
++}
+diff --git a/docs/baseline/schemas/round_trip.schema.json b/docs/baseline/schemas/round_trip.schema.json
+new file mode 100644
+index 00000000..4053bb50
+--- /dev/null
++++ b/docs/baseline/schemas/round_trip.schema.json
+@@ -0,0 +1,99 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "definitions": {
++    "Counts": {
++      "description": "Size of a toolpath document: steps, conversation text, tool uses, and distinct generalised key paths.",
++      "properties": {
++        "key_paths": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "steps": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "text_chars": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "tool_uses": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        }
++      },
++      "required": [
++        "key_paths",
++        "steps",
++        "text_chars",
++        "tool_uses"
++      ],
++      "type": "object"
++    }
++  },
++  "description": "One recording's document projected into another harness, read back by that harness's own reader and derived again: what survived, what was lost, what was gained.",
++  "oneOf": [
++    {
++      "description": "The adapter read its projection; this is what survived.",
++      "properties": {
++        "after": {
++          "$ref": "#/definitions/Counts"
++        },
++        "before": {
++          "$ref": "#/definitions/Counts"
++        },
++        "gained": {
++          "description": "Key paths present only after: vestigial or invented.",
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "lost": {
++          "description": "Key paths of the document absent after the round trip.",
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "outcome": {
++          "enum": [
++            "compared"
++          ],
++          "type": "string"
++        }
++      },
++      "required": [
++        "after",
++        "before",
++        "gained",
++        "lost",
++        "outcome"
++      ],
++      "type": "object"
++    },
++    {
++      "description": "The adapter could not read what was projected for it.",
++      "properties": {
++        "error": {
++          "type": "string"
++        },
++        "outcome": {
++          "enum": [
++            "unreadable"
++          ],
++          "type": "string"
++        }
++      },
++      "required": [
++        "error",
++        "outcome"
++      ],
++      "type": "object"
++    }
++  ],
++  "title": "round_trip snapshot"
++}
+diff --git a/docs/baseline/schemas/shed.schema.json b/docs/baseline/schemas/shed.schema.json
+new file mode 100644
+index 00000000..42e2c08b
+--- /dev/null
++++ b/docs/baseline/schemas/shed.schema.json
+@@ -0,0 +1,236 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "definitions": {
++    "DocumentStats": {
++      "description": "Bytes and content of a toolpath document.",
++      "properties": {
++        "bytes": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "steps": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "string_chars": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "text_chars": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "tool_uses": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        }
++      },
++      "required": [
++        "bytes",
++        "steps",
++        "string_chars",
++        "text_chars",
++        "tool_uses"
++      ],
++      "type": "object"
++    },
++    "Dropped": {
++      "description": "A field of the transcript the same-format round trip does not write back, with one example value (withheld when it looks like an identifier or a secret).",
++      "properties": {
++        "example": {
++          "type": "string"
++        },
++        "path": {
++          "type": "string"
++        }
++      },
++      "required": [
++        "example",
++        "path"
++      ],
++      "type": "object"
++    },
++    "Kept": {
++      "description": "How many lines of one event type the same-format round trip kept.",
++      "properties": {
++        "after": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "source": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        }
++      },
++      "required": [
++        "after",
++        "source"
++      ],
++      "type": "object"
++    },
++    "KeyPathTally": {
++      "description": "Leaf key paths of a transcript before and after the same-format round trip.",
++      "properties": {
++        "after": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "gained": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "lost": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "source": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        }
++      },
++      "required": [
++        "after",
++        "gained",
++        "lost",
++        "source"
++      ],
++      "type": "object"
++    },
++    "Rename": {
++      "description": "A field the same-format round trip writes under another spelling.",
++      "properties": {
++        "from": {
++          "type": "string"
++        },
++        "to": {
++          "type": "string"
++        }
++      },
++      "required": [
++        "from",
++        "to"
++      ],
++      "type": "object"
++    },
++    "SameFormat": {
++      "description": "The transcript projected back to its own format and compared field by field with the original.",
++      "properties": {
++        "bytes": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "dropped": {
++          "items": {
++            "$ref": "#/definitions/Dropped"
++          },
++          "type": "array"
++        },
++        "event_types_shed": {
++          "additionalProperties": {
++            "$ref": "#/definitions/Kept"
++          },
++          "description": "Event types with fewer lines after than before.",
++          "type": "object"
++        },
++        "key_paths": {
++          "$ref": "#/definitions/KeyPathTally"
++        },
++        "lines": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "renamed": {
++          "items": {
++            "$ref": "#/definitions/Rename"
++          },
++          "type": "array"
++        }
++      },
++      "required": [
++        "bytes",
++        "dropped",
++        "event_types_shed",
++        "key_paths",
++        "lines",
++        "renamed"
++      ],
++      "type": "object"
++    },
++    "TranscriptStats": {
++      "description": "Lines, bytes and event types of a transcript.",
++      "properties": {
++        "by_type": {
++          "additionalProperties": {
++            "format": "uint",
++            "minimum": 0.0,
++            "type": "integer"
++          },
++          "description": "Count per event type (`type`, or `type/payload.type`), per JSON value: per line of a JSONL transcript, once for a whole-document session.",
++          "type": "object"
++        },
++        "bytes": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "lines": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "string_chars": {
++          "description": "Characters in every string value, summed.",
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        }
++      },
++      "required": [
++        "by_type",
++        "bytes",
++        "lines",
++        "string_chars"
++      ],
++      "type": "object"
++    }
++  },
++  "description": "What each stage sheds for one recording: transcript, document, every projection, and the same-format round trip field by field.",
++  "properties": {
++    "ir": {
++      "$ref": "#/definitions/DocumentStats"
++    },
++    "projections": {
++      "additionalProperties": {
++        "$ref": "#/definitions/TranscriptStats"
++      },
++      "type": "object"
++    },
++    "same_format": {
++      "$ref": "#/definitions/SameFormat"
++    },
++    "source": {
++      "$ref": "#/definitions/TranscriptStats"
++    }
++  },
++  "required": [
++    "ir",
++    "projections",
++    "same_format",
++    "source"
++  ],
++  "title": "shed snapshot",
++  "type": "object"
++}
+diff --git a/docs/baseline/schemas/validate.schema.json b/docs/baseline/schemas/validate.schema.json
+new file mode 100644
+index 00000000..8738c0f5
+--- /dev/null
++++ b/docs/baseline/schemas/validate.schema.json
+@@ -0,0 +1,79 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "definitions": {
++    "Validation": {
++      "description": "What `path p validate` says of a document: the base schema and, for a path naming a bundled kind, that kind's schema.",
++      "oneOf": [
++        {
++          "properties": {
++            "outcome": {
++              "enum": [
++                "valid"
++              ],
++              "type": "string"
++            }
++          },
++          "required": [
++            "outcome"
++          ],
++          "type": "object"
++        },
++        {
++          "description": "Every violation, as `path p validate` prints it.",
++          "properties": {
++            "errors": {
++              "items": {
++                "type": "string"
++              },
++              "type": "array"
++            },
++            "outcome": {
++              "enum": [
++                "invalid"
++              ],
++              "type": "string"
++            }
++          },
++          "required": [
++            "errors",
++            "outcome"
++          ],
++          "type": "object"
++        },
++        {
++          "description": "There was no document to validate: the projection was unreadable.",
++          "properties": {
++            "outcome": {
++              "enum": [
++                "not_derived"
++              ],
++              "type": "string"
++            }
++          },
++          "required": [
++            "outcome"
++          ],
++          "type": "object"
++        }
++      ]
++    }
++  },
++  "description": "`path p validate` over one recording's document and over every projection derived again.",
++  "properties": {
++    "document": {
++      "$ref": "#/definitions/Validation"
++    },
++    "round_trips": {
++      "additionalProperties": {
++        "$ref": "#/definitions/Validation"
++      },
++      "type": "object"
++    }
++  },
++  "required": [
++    "document",
++    "round_trips"
++  ],
++  "title": "validate snapshot",
++  "type": "object"
++}
+diff --git a/docs/baseline/schemas/validate_transforms.schema.json b/docs/baseline/schemas/validate_transforms.schema.json
+new file mode 100644
+index 00000000..bbd44b30
+--- /dev/null
++++ b/docs/baseline/schemas/validate_transforms.schema.json
+@@ -0,0 +1,31 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "title": "validate_transforms snapshot",
++  "description": "The base schema plus the agent-coding-session v1.1.0 kind over every document a transform produces for one recording (validate_transforms@<set>: the derived document, the sealed JSONL, every round trip), or over each writer's output on its own (validate_transforms@writers). Hand-written: the body is built with json! in tests/transforms_schema.rs.",
++  "definitions": {
++    "outcome": {
++      "type": "object",
++      "required": ["outcome"],
++      "additionalProperties": false,
++      "properties": {
++        "outcome": { "enum": ["valid", "invalid", "not_derived"] },
++        "kinds": { "type": "array", "items": { "type": "string", "format": "uri" } },
++        "errors": { "type": "array", "items": { "type": "string" } }
++      }
++    },
++    "by_harness": { "type": "object", "additionalProperties": { "$ref": "#/definitions/outcome" } }
++  },
++  "oneOf": [
++    {
++      "type": "object",
++      "required": ["document", "jsonl_sealed", "round_trips"],
++      "additionalProperties": false,
++      "properties": {
++        "document": { "$ref": "#/definitions/outcome" },
++        "jsonl_sealed": { "$ref": "#/definitions/outcome" },
++        "round_trips": { "$ref": "#/definitions/by_harness" }
++      }
++    },
++    { "$ref": "#/definitions/by_harness" }
++  ]
++}
+diff --git a/docs/baseline/schemas/writer.schema.json b/docs/baseline/schemas/writer.schema.json
+new file mode 100644
+index 00000000..478036b4
+--- /dev/null
++++ b/docs/baseline/schemas/writer.schema.json
+@@ -0,0 +1,99 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "definitions": {
++    "Counts": {
++      "description": "Size of a toolpath document: steps, conversation text, tool uses, and distinct generalised key paths.",
++      "properties": {
++        "key_paths": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "steps": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "text_chars": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        },
++        "tool_uses": {
++          "format": "uint",
++          "minimum": 0.0,
++          "type": "integer"
++        }
++      },
++      "required": [
++        "key_paths",
++        "steps",
++        "text_chars",
++        "tool_uses"
++      ],
++      "type": "object"
++    }
++  },
++  "description": "One writer on its own: the generated full-view document projected by a single harness's writer and read back by that harness's reader.",
++  "oneOf": [
++    {
++      "description": "The adapter read its projection; this is what survived.",
++      "properties": {
++        "after": {
++          "$ref": "#/definitions/Counts"
++        },
++        "before": {
++          "$ref": "#/definitions/Counts"
++        },
++        "gained": {
++          "description": "Key paths present only after: vestigial or invented.",
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "lost": {
++          "description": "Key paths of the document absent after the round trip.",
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "outcome": {
++          "enum": [
++            "compared"
++          ],
++          "type": "string"
++        }
++      },
++      "required": [
++        "after",
++        "before",
++        "gained",
++        "lost",
++        "outcome"
++      ],
++      "type": "object"
++    },
++    {
++      "description": "The adapter could not read what was projected for it.",
++      "properties": {
++        "error": {
++          "type": "string"
++        },
++        "outcome": {
++          "enum": [
++            "unreadable"
++          ],
++          "type": "string"
++        }
++      },
++      "required": [
++        "error",
++        "outcome"
++      ],
++      "type": "object"
++    }
++  ],
++  "title": "writer snapshot"
++}
+diff --git a/pr/41-baseline-schemas.md b/pr/41-baseline-schemas.md
+new file mode 100644
+index 00000000..68fe55a5
+--- /dev/null
++++ b/pr/41-baseline-schemas.md
+@@ -0,0 +1,47 @@
++# test(baseline): a JSON Schema per snapshot kind; every committed snapshot checked against its kind
++
++Status: planned (asked 2026-10-19: "could we create a json schema for the goldens") · Base: the goldens stack once merged (`crates/toolpath-goldens`) · Independent of the other pieces: it adds a test and docs, and derives `JsonSchema` on the crate's own model types; no snapshot changes
++
++## Why
++The baseline (the recordings, and the snapshot each stage pins for them) had no stated shape. A snapshot kind
++could change what it records — a field renamed, a variant added, a count turned into a list — and the only signal
++was a snapshot diff someone accepted. A schema per kind states the shape once, and checking every committed
++snapshot against it means an accepted diff can no longer change the shape silently.
++
++## What changes
++- `crates/toolpath-goldens/src/schemas.rs` (new): the generated schemas, from the model types with `schemars`
++  (0.8, already in `Cargo.lock`): `known_defects` (`Vec<KnownDefect>`), `round_trip` and `writer` (`RoundTrip`),
++  `shed` (`Shed`), `validate` (`Validate`). `src/model.rs` and `src/keypaths.rs` derive `JsonSchema`; the two
++  harness-keyed maps serialised with `by_agent_name` declare string keys.
++- `docs/baseline/schemas/`: the five generated schemas; hand-written `formats`, `validate_transforms` and
++  `opencode_db` (their bodies are built with `json!`); `document` (points at `schema/toolpath.schema.json` plus the
++  agent-coding-session v1.1.0 kind); `provenance` for `crates/toolpath-webmock/cassettes/*/provenance.json`; and a
++  README listing every kind, how its schema is made, the insta header shape, and what is not covered.
++- `crates/toolpath-goldens/tests/schemas.rs` (new):
++  - `generated_schemas_are_current`: the committed generated schemas equal what the types produce
++    (`UPDATE_SCHEMAS=1 cargo test -p toolpath-goldens --test schemas` regenerates).
++  - `every_snapshot_matches_its_kind`: every `snapshots/<kind>@….snap` body validates against its kind's schema;
++    `document@` bodies are checked the way `path p validate` checks them (`toolpath_goldens::validate`).
++  - `recording_provenance_matches`: every recording's `provenance.json` validates.
++
++## Not covered (stated in the README)
++- `projection@`: harness-native files; their shape is `docs/agents/formats/<harness>`.
++- `ir@`: a `toolpath-convo` `ConversationView`, which has no JSON Schema — qualifier concern `baa7a7b5` on
++  `tests/schemas.rs`. Closing it means deriving `JsonSchema` in the shared crate; its own piece.
++- `goldens/manifest.json`, `goldens/roundtrip/`, `goldens/shed/` (written by `path goldens` in path-cli with
++  `json!`) and the path-cli snapshots (`query@`, `core_types@`, `help@`, `behaviour@`).
++
++## Findings
++Every committed snapshot of a schema'd kind validates against its schema, and all seven recordings' provenance
++files validate. No finding.
++
++## Verification
++- `cargo test -p toolpath-goldens --test schemas`: 3 passed.
++- Gates (`scripts/quality_gates.sh` with `--features path-cli/goldens,toolpath/verify`): see the commit.
++
++## Paths
++- `crates/toolpath-goldens/Cargo.toml`, `Cargo.lock`
++- `crates/toolpath-goldens/src/{lib.rs,model.rs,keypaths.rs,schemas.rs}`
++- `crates/toolpath-goldens/tests/{schemas.rs,.qual}`
++- `docs/baseline/schemas/*`
++- `pr/41-baseline-schemas.md`
+-- 
+2.55.0
+

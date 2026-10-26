@@ -1,0 +1,658 @@
+From 86c325bd600e52158ee1a03517fad380e5757c3e Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 16:02:07 -0400
+Subject: [PATCH] =?UTF-8?q?test(goldens):=20each=20writer=20on=20its=20own?=
+ =?UTF-8?q?=20=E2=80=94=20one=20generated=20document,=20a=20writer@<agent>?=
+ =?UTF-8?q?=20snapshot=20per=20writer?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The goldens measure losses end to end, so a loss could be the source reader's
+or the target writer's. A generated view that fills every field the
+conversation view carries is derived once and projected for each of the seven
+agents alone, read back by that agent's adapter and compared. Every writer
+keeps the text; cursor drops one of three tool calls; no writer keeps a
+delegation's own turns. The qualifier concern on round_trip is re-anchored
+(--supersedes) after the function moved. Record: pr/26.
+---
+ .../toolpath-goldens/fixtures/full-view.json  | 66 ++++++++++++++++
+ .../snapshots/writer@claude.snap              | 49 ++++++++++++
+ .../snapshots/writer@codex.snap               | 78 +++++++++++++++++++
+ .../snapshots/writer@copilot.snap             | 45 +++++++++++
+ .../snapshots/writer@cursor.snap              | 49 ++++++++++++
+ .../snapshots/writer@gemini.snap              | 46 +++++++++++
+ .../snapshots/writer@opencode.snap            | 52 +++++++++++++
+ .../toolpath-goldens/snapshots/writer@pi.snap | 47 +++++++++++
+ crates/toolpath-goldens/src/.qual             |  1 +
+ crates/toolpath-goldens/src/pipeline.rs       | 15 ++++
+ crates/toolpath-goldens/tests/writers.rs      | 43 ++++++++++
+ pr/26-writer-isolation.md                     | 43 ++++++++++
+ 12 files changed, 534 insertions(+)
+ create mode 100644 crates/toolpath-goldens/fixtures/full-view.json
+ create mode 100644 crates/toolpath-goldens/snapshots/writer@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/writer@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/writer@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/writer@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/writer@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/writer@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/writer@pi.snap
+ create mode 100644 crates/toolpath-goldens/tests/writers.rs
+ create mode 100644 pr/26-writer-isolation.md
+
+diff --git a/crates/toolpath-goldens/fixtures/full-view.json b/crates/toolpath-goldens/fixtures/full-view.json
+new file mode 100644
+index 00000000..fc28b63e
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/full-view.json
+@@ -0,0 +1,66 @@
++{
++  "id": "0b5d3c1e-7a2f-4c9e-9d41-5f6a7b8c9d0e",
++  "started_at": "2026-10-19T12:00:00Z",
++  "last_activity": "2026-10-19T12:00:09Z",
++  "provider_id": "generated",
++  "producer": { "name": "toolpath-goldens", "version": "writers-fixture-1" },
++  "base": { "working_dir": "/", "vcs_revision": "0123456789abcdef0123456789abcdef01234567", "vcs_branch": "main", "vcs_remote": "https://example.com/repo.git" },
++  "files_changed": ["notes.md"],
++  "total_usage": {
++    "input_tokens": 120, "output_tokens": 45, "cache_read_tokens": 30, "cache_write_tokens": 10,
++    "breakdowns": { "output": { "reasoning": 12 } }
++  },
++  "turns": [
++    {
++      "id": "t1", "parent_id": null, "role": "User", "timestamp": "2026-10-19T12:00:00Z",
++      "text": "List the files, write notes.md, then read a file that does not exist.",
++      "thinking": null, "tool_uses": [], "model": null, "stop_reason": null, "token_usage": null,
++      "environment": { "working_dir": "/", "vcs_branch": "main", "vcs_revision": "0123456789abcdef0123456789abcdef01234567" }
++    },
++    {
++      "id": "t2", "parent_id": "t1", "group_id": "msg-1", "role": "Assistant", "timestamp": "2026-10-19T12:00:02Z",
++      "text": "Listing the directory first.",
++      "thinking": "The user wants three steps; start with ls.",
++      "tool_uses": [
++        { "id": "call-ls", "name": "Bash", "input": { "command": "ls" },
++          "result": { "content": "notes.txt\n", "is_error": false }, "category": "shell" }
++      ],
++      "model": "generated-model-1", "stop_reason": "tool_use",
++      "token_usage": { "input_tokens": 60, "output_tokens": 20, "cache_read_tokens": 15, "cache_write_tokens": 5,
++                       "breakdowns": { "output": { "reasoning": 6 } } },
++      "attributed_token_usage": { "input_tokens": 60, "output_tokens": 20 },
++      "environment": { "working_dir": "/" }
++    },
++    {
++      "id": "t3", "parent_id": "t2", "group_id": "msg-2", "role": "Assistant", "timestamp": "2026-10-19T12:00:05Z",
++      "text": "Writing notes.md and checking the missing file.",
++      "thinking": "Write, then a read that fails.",
++      "tool_uses": [
++        { "id": "call-write", "name": "Write", "input": { "file_path": "notes.md", "content": "first line\n" },
++          "result": { "content": "File written", "is_error": false }, "category": "file_write" },
++        { "id": "call-read", "name": "Read", "input": { "file_path": "does-not-exist.txt" },
++          "result": { "content": "No such file", "is_error": true }, "category": "file_read" }
++      ],
++      "model": "generated-model-1", "stop_reason": "tool_use",
++      "token_usage": { "input_tokens": 50, "output_tokens": 15, "cache_read_tokens": 15, "cache_write_tokens": 5,
++                       "breakdowns": { "output": { "reasoning": 4 } } },
++      "file_mutations": [
++        { "path": "notes.md", "tool_id": "call-write", "operation": "write", "before": "", "after": "first line\n",
++          "raw_diff": "--- a/notes.md\n+++ b/notes.md\n@@ -0,0 +1 @@\n+first line\n" }
++      ],
++      "delegations": [
++        { "agent_id": "sub-1", "prompt": "Count the lines in notes.md.", "result": "1",
++          "turns": [
++            { "id": "s1", "parent_id": null, "role": "Assistant", "timestamp": "2026-10-19T12:00:04Z",
++              "text": "1", "thinking": null, "tool_uses": [], "model": "generated-model-1", "stop_reason": "end_turn", "token_usage": null }
++          ] }
++      ]
++    },
++    {
++      "id": "t4", "parent_id": "t3", "group_id": "msg-3", "role": "Assistant", "timestamp": "2026-10-19T12:00:09Z",
++      "text": "Done: notes.md written; does-not-exist.txt is missing.",
++      "thinking": null, "tool_uses": [], "model": "generated-model-1", "stop_reason": "end_turn",
++      "token_usage": { "input_tokens": 10, "output_tokens": 10, "breakdowns": { "output": { "reasoning": 2 } } }
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/writer@claude.snap b/crates/toolpath-goldens/snapshots/writer@claude.snap
+new file mode 100644
+index 00000000..4b9fad34
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/writer@claude.snap
+@@ -0,0 +1,49 @@
++---
++source: crates/toolpath-goldens/tests/writers.rs
++expression: trip
++---
++{
++  "outcome": "compared",
++  "before": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 63
++  },
++  "after": {
++    "steps": 5,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 47
++  },
++  "lost": [
++    "paths[].meta.producer.name",
++    "paths[].meta.producer.version",
++    "paths[].meta.vcs_remote",
++    "paths[].path.base.ref",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.notes.md.structural.before"
++  ],
++  "gained": [
++    "paths[].steps[].change.<artifact>.structural.entry_type",
++    "paths[].steps[].change.<artifact>.structural.event_source_id",
++    "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
++    "paths[].steps[].change.<artifact>.structural.raw.sessionId",
++    "paths[].steps[].change.<artifact>.structural.raw.type"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/writer@codex.snap b/crates/toolpath-goldens/snapshots/writer@codex.snap
+new file mode 100644
+index 00000000..b4c8e050
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/writer@codex.snap
+@@ -0,0 +1,78 @@
++---
++source: crates/toolpath-goldens/tests/writers.rs
++expression: trip
++---
++{
++  "outcome": "compared",
++  "before": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 63
++  },
++  "after": {
++    "steps": 16,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 72
++  },
++  "lost": [
++    "paths[].meta.files_changed[]",
++    "paths[].meta.vcs_remote",
++    "paths[].path.base.branch",
++    "paths[].path.base.ref",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++    "paths[].steps[].change.<artifact>.structural.stop_reason",
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
++    "paths[].steps[].change.notes.md.structural.before",
++    "paths[].steps[].change.notes.md.structural.operation"
++  ],
++  "gained": [
++    "paths[].steps[].change.<artifact>.structural.aggregated_output",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
++    "paths[].steps[].change.<artifact>.structural.call_id",
++    "paths[].steps[].change.<artifact>.structural.cli_version",
++    "paths[].steps[].change.<artifact>.structural.command[]",
++    "paths[].steps[].change.<artifact>.structural.cwd",
++    "paths[].steps[].change.<artifact>.structural.duration.nanos",
++    "paths[].steps[].change.<artifact>.structural.duration.secs",
++    "paths[].steps[].change.<artifact>.structural.entry_type",
++    "paths[].steps[].change.<artifact>.structural.event_data_type",
++    "paths[].steps[].change.<artifact>.structural.event_source_id",
++    "paths[].steps[].change.<artifact>.structural.exit_code",
++    "paths[].steps[].change.<artifact>.structural.formatted_output",
++    "paths[].steps[].change.<artifact>.structural.id",
++    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.cached_input_tokens",
++    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.input_tokens",
++    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.output_tokens",
++    "paths[].steps[].change.<artifact>.structural.memory_citation",
++    "paths[].steps[].change.<artifact>.structural.message",
++    "paths[].steps[].change.<artifact>.structural.model",
++    "paths[].steps[].change.<artifact>.structural.model_provider",
++    "paths[].steps[].change.<artifact>.structural.originator",
++    "paths[].steps[].change.<artifact>.structural.parsed_cmd[].cmd",
++    "paths[].steps[].change.<artifact>.structural.parsed_cmd[].type",
++    "paths[].steps[].change.<artifact>.structural.phase",
++    "paths[].steps[].change.<artifact>.structural.rate_limits",
++    "paths[].steps[].change.<artifact>.structural.source",
++    "paths[].steps[].change.<artifact>.structural.status",
++    "paths[].steps[].change.<artifact>.structural.stderr",
++    "paths[].steps[].change.<artifact>.structural.stdout",
++    "paths[].steps[].change.<artifact>.structural.timestamp",
++    "paths[].steps[].change.<artifact>.structural.turn_id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/writer@copilot.snap b/crates/toolpath-goldens/snapshots/writer@copilot.snap
+new file mode 100644
+index 00000000..090e272c
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/writer@copilot.snap
+@@ -0,0 +1,45 @@
++---
++source: crates/toolpath-goldens/tests/writers.rs
++expression: trip
++---
++{
++  "outcome": "compared",
++  "before": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 63
++  },
++  "after": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 45
++  },
++  "lost": [
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
++    "paths[].steps[].change.<artifact>.structural.group_id",
++    "paths[].steps[].change.<artifact>.structural.stop_reason",
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
++    "paths[].steps[].change.notes.md.structural.before"
++  ],
++  "gained": [
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/writer@cursor.snap b/crates/toolpath-goldens/snapshots/writer@cursor.snap
+new file mode 100644
+index 00000000..0fac9704
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/writer@cursor.snap
+@@ -0,0 +1,49 @@
++---
++source: crates/toolpath-goldens/tests/writers.rs
++expression: trip
++---
++{
++  "outcome": "compared",
++  "before": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 63
++  },
++  "after": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 2,
++    "key_paths": 41
++  },
++  "lost": [
++    "paths[].meta.vcs_remote",
++    "paths[].path.base.branch",
++    "paths[].path.base.ref",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++    "paths[].steps[].change.<artifact>.structural.group_id",
++    "paths[].steps[].change.<artifact>.structural.stop_reason",
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
++    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens"
++  ],
++  "gained": [
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/writer@gemini.snap b/crates/toolpath-goldens/snapshots/writer@gemini.snap
+new file mode 100644
+index 00000000..71db3a76
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/writer@gemini.snap
+@@ -0,0 +1,46 @@
++---
++source: crates/toolpath-goldens/tests/writers.rs
++expression: trip
++---
++{
++  "outcome": "compared",
++  "before": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 63
++  },
++  "after": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 39
++  },
++  "lost": [
++    "paths[].meta.producer.version",
++    "paths[].meta.vcs_remote",
++    "paths[].path.base.branch",
++    "paths[].path.base.ref",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++    "paths[].steps[].change.<artifact>.structural.group_id",
++    "paths[].steps[].change.<artifact>.structural.stop_reason",
++    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
++    "paths[].steps[].change.notes.md.structural.before"
++  ],
++  "gained": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/writer@opencode.snap b/crates/toolpath-goldens/snapshots/writer@opencode.snap
+new file mode 100644
+index 00000000..38e66d29
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/writer@opencode.snap
+@@ -0,0 +1,52 @@
++---
++source: crates/toolpath-goldens/tests/writers.rs
++expression: trip
++---
++{
++  "outcome": "compared",
++  "before": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 63
++  },
++  "after": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 44
++  },
++  "lost": [
++    "paths[].meta.vcs_remote",
++    "paths[].path.base.branch",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++    "paths[].steps[].change.<artifact>.structural.group_id",
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
++    "paths[].steps[].change.notes.md.raw",
++    "paths[].steps[].change.notes.md.structural.after",
++    "paths[].steps[].change.notes.md.structural.before"
++  ],
++  "gained": [
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath",
++    "paths[].steps[].change.does-not-exist.txt.structural.operation",
++    "paths[].steps[].change.does-not-exist.txt.structural.tool",
++    "paths[].steps[].change.does-not-exist.txt.structural.tool_id",
++    "paths[].steps[].change.does-not-exist.txt.structural.type"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/writer@pi.snap b/crates/toolpath-goldens/snapshots/writer@pi.snap
+new file mode 100644
+index 00000000..4ee6b55f
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/writer@pi.snap
+@@ -0,0 +1,47 @@
++---
++source: crates/toolpath-goldens/tests/writers.rs
++expression: trip
++---
++{
++  "outcome": "compared",
++  "before": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 63
++  },
++  "after": {
++    "steps": 4,
++    "text_chars": 198,
++    "tool_uses": 3,
++    "key_paths": 38
++  },
++  "lost": [
++    "paths[].meta.producer.name",
++    "paths[].meta.producer.version",
++    "paths[].meta.vcs_remote",
++    "paths[].path.base.branch",
++    "paths[].path.base.ref",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++    "paths[].steps[].change.<artifact>.structural.group_id",
++    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++    "paths[].steps[].change.notes.md.structural.before",
++    "paths[].steps[].change.notes.md.structural.operation"
++  ],
++  "gained": []
++}
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index 4993c158..7ec62b07 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -16,3 +16,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:48.240684Z","id":"1bca87fd8af4880a2661d3ab9fc2324f35984821b17ff4a18a0ff4139ce104a5","body":{"kind":"resolve","summary":"Not a defect. path resume --harness codex -C <dir> (cmd_resume -> projection::codex::project_codex) and path export codex --project <dir> write the -C/--project directory into session_meta.cwd, every turn_context.cwd and the state_5.sqlite thread row; export -o without --project uses the shell's cwd. That is what codex needs: codex resume's picker lists only sessions whose cwd is the directory it runs in (--all disables the cwd filter), so the source cwd would hide a resumed session from the picker in the directory the user resumed in, and is usually a path that does not exist on the resuming machine. The goldens wrote / because the hermetic harness runs from / (CALLER_CWD); the pin compared against the source cwd, so a change to write the source cwd would have been judged FIXED while breaking resume. Pin and Finding::CallerCwd removed; contract pinned by path-cli projection::codex::tests::project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd. pr/22.","supersedes":"90e64df3125f4d1524949c2e13fb9e19b7c31d40018941fb8df9a61d419d8298","tags":["known-defect","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:invalid"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:48.259994Z","id":"b839958fe42d822f01f5667e1e873da8cce97aa34e4f89fbb635e4e6bb7133c5","body":{"detail":"Not a defect. path resume --harness codex -C <dir> (cmd_resume -> projection::codex::project_codex) and path export codex --project <dir> write the -C/--project directory into session_meta.cwd, every turn_context.cwd and the state_5.sqlite thread row; export -o without --project uses the shell's cwd. That is what codex needs: codex resume's picker lists only sessions whose cwd is the directory it runs in (--all disables the cwd filter), so the source cwd would hide a resumed session from the picker in the directory the user resumed in, and is usually a path that does not exist on the resuming machine. The goldens wrote / because the hermetic harness runs from / (CALLER_CWD); the pin compared against the source cwd, so a change to write the source cwd would have been judged FIXED while breaking resume. Pin and Finding::CallerCwd removed; contract pinned by path-cli projection::codex::tests::project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd. pr/22.","kind":"comment","span":{"start":{"line":35},"end":{"line":35},"content_hash":"0beee873aef40908b4e7e97e085fcd88e7802bd043a4260b138f92949e0799bd"},"summary":"CALLER_CWD is the directory a projection is resumed in, not a stand-in for a defect: the caller's cwd is the contract for codex, pi, copilot and gemini","tags":["goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/defects.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:58.510877Z","id":"122da212472671c8e0d215332a5fda04abd602a91ace0a60d6cc56bd40efe017","body":{"detail":"The old tool's judge functions (Fixed vs Worse) classified a changed body; here the classification is the reviewer's, guided by tests/goldens.rs's doc comment. An accounting defect that goes to an empty mismatches list is fixed: accept the snapshot, delete the Defect, and the invariant in tests/goldens.rs tightens by itself. Resolve this record when every defect is fixed and its snapshot accepted. claude-to-codex-caller-cwd was retired 2026-10-19 as not a defect (pr/22): a pin's reference value is itself a claim to check.","kind":"concern","span":{"start":{"line":54},"end":{"line":54},"content_hash":"2e1040b296bb70b5e4614fe3f886af2ddb83174dab983c22fda92737fc98ffe0"},"summary":"Five defects pinned as expected current behaviour (three of them accounting gaps that also exempt their set from the accounting invariant); a diff in known_defects@<set>.snap is FIXED or WORSE and must be read, insta cannot tell the two apart","supersedes":"2ac0a1e747def033b9a72aa0296d25d88184ef7c48ef1f5456f2fedb42f0fa00","tags":["goldens","known-defect","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:56:32.678152Z","id":"cf4e2d360d37040594dddc82c2217bc51f4a62bec0651d7db679168935f12d90","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":496},"end":{"line":496},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"c62500a0424141c0245c783c7fb7344dea0c045c097071b3eb279373cc61dea7","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index bf327d1e..90f8dd42 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -464,6 +464,21 @@ fn project(path: &Document, target: Agent) -> Result<String, String> {
+     }
+ }
+ 
++/// Stage `writer`: one writer on its own. The document is projected for
++/// `target` alone, read back by that agent's adapter and derived again, and
++/// compared to the document it came from. Fed the same generated document for
++/// every agent (`fixtures/full-view.json`), it names what each writer, with
++/// its reader, drops, renames or invents, independent of which agent wrote
++/// the source.
++pub fn writer(document_json: &str, target: Agent, scratch: &Path) -> Result<RoundTrip, StageError> {
++    let document: Value = serde_json::from_str(document_json)
++        .map_err(|e| StageError::new(Stage::Derive, format!("document is not JSON: {e}")))?;
++    let path = single_path(document_json).map_err(|e| StageError::new(Stage::Derive, e))?;
++    let text = project(&path, target)
++        .map_err(|e| StageError::new(Stage::Project, format!("-> {target}: {e}")))?;
++    Ok(round_trip(&document, target, &text, scratch).0)
++}
++
+ /// One JSON object per line, newline-terminated.
+ fn jsonl<T: Serialize>(items: &[T]) -> Result<String, String> {
+     let mut out = String::new();
+diff --git a/crates/toolpath-goldens/tests/writers.rs b/crates/toolpath-goldens/tests/writers.rs
+new file mode 100644
+index 00000000..dbe2aa5a
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/writers.rs
+@@ -0,0 +1,43 @@
++//! Each writer on its own. The goldens measure losses end to end on real
++//! sessions, where a loss could come from the source agent's reader or from
++//! the target agent's writer. Here every writer gets the same generated
++//! document, built from `fixtures/full-view.json`, which fills every field
++//! the conversation view carries (thinking, tool results including an error,
++//! token usage with cache and breakdowns, file mutations, a delegation,
++//! environment, base and producer). One snapshot per writer,
++//! `writer@<agent>`: what that writer, read back by its own adapter, drops,
++//! renames or invents from an input that is identical for all seven.
++
++use toolpath::v1::Graph;
++use toolpath_convo::{ConversationView, DeriveConfig, derive_path};
++use toolpath_goldens::model::Agent;
++use toolpath_goldens::pipeline::writer;
++
++const VIEW: &str = include_str!("../fixtures/full-view.json");
++
++#[test]
++fn each_writer_on_the_same_generated_document() {
++    let home = tempfile::tempdir().expect("temp HOME");
++    let view: ConversationView =
++        serde_json::from_str(VIEW).expect("fixtures/full-view.json is a ConversationView");
++    let cfg = DeriveConfig {
++        include_thinking: true,
++        include_tool_uses: true,
++        ..DeriveConfig::default()
++    };
++    let document_json = Graph::from_path(derive_path(&view, &cfg))
++        .to_json()
++        .expect("document serializes");
++
++    let mut settings = insta::Settings::clone_current();
++    settings.set_snapshot_path("../snapshots");
++    settings.set_prepend_module_to_snapshot(false);
++    settings.set_sort_maps(true);
++    settings.bind(|| {
++        for agent in Agent::ALL {
++            let trip = writer(&document_json, agent, home.path())
++                .unwrap_or_else(|e| panic!("writer {}: {e}", agent.name()));
++            insta::assert_json_snapshot!(format!("writer@{}", agent.name()), trip);
++        }
++    });
++}
+diff --git a/pr/26-writer-isolation.md b/pr/26-writer-isolation.md
+new file mode 100644
+index 00000000..5f97624c
+--- /dev/null
++++ b/pr/26-writer-isolation.md
+@@ -0,0 +1,43 @@
++# test(goldens): each writer on its own — one generated document, one snapshot per writer
++
++Status: planned (asked 2026-10-19 on the goldens demo deck: "can we prove it?", gap "each writer on its own") · Base: the goldens stack once merged
++
++## Why
++The goldens measure losses end to end on real sessions: a loss in `round_trip@<set>@<agent>` can come from the source
++agent's reader or from the target agent's writer, and every source carries different fields. Nothing said which
++writer drops what on the same input.
++
++## What changes
++- `crates/toolpath-goldens/fixtures/full-view.json`: a generated conversation view that fills every field the view
++  carries: thinking, three tool calls (one failed), token usage with cache and a reasoning breakdown, attributed usage,
++  a file mutation with before/after/diff, a delegation with its own turn, environment, base, producer, group ids.
++  It lives outside `goldens/` so the real-session glob does not pick it up.
++- `pipeline::writer`: project a document for one agent, read it back with that agent's adapter, derive again, compare.
++- `tests/writers.rs`: derives the document from the fixture (`toolpath_convo::derive_path`, thinking and tool uses
++  included) and pins `writer@<agent>` for all seven agents. Existing snapshots are untouched.
++
++## What it shows (2026-10-19, document of 63 key paths)
++| writer | lost | gained | text | tool calls |
++|---|---|---|---|---|
++| claude | 21 | 5 | kept | 3/3 |
++| codex | 23 | 32 | kept | 3/3 |
++| pi | 25 | 0 | kept | 3/3 |
++| copilot | 20 | 2 | kept | 3/3 |
++| gemini | 24 | 0 | kept | 3/3 |
++| opencode | 24 | 5 | kept | 3/3 |
++| cursor | 24 | 2 | kept | **2/3** |
++
++Every writer keeps the conversation text. Cursor drops one of three tool calls. No writer keeps a delegation's own
++turns; only copilot keeps the delegation itself (agent id, prompt, result). Codex invents the most (32 gained key
++paths: its session_meta/turn_context defaults read back as fields).
++
++## Verification
++- `cargo test -p toolpath-goldens --test writers` passes against the committed snapshots; the full gates pass.
++
++## Paths
++```
++crates/toolpath-goldens/fixtures/full-view.json
++crates/toolpath-goldens/src/pipeline.rs
++crates/toolpath-goldens/tests/writers.rs
++crates/toolpath-goldens/snapshots/writer@*.snap
++```
+-- 
+2.55.0
+

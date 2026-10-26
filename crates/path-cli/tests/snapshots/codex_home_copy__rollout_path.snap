@@ -1,0 +1,9 @@
+---
+source: crates/path-cli/tests/codex_home_copy.rs
+expression: "serde_json::to_string_pretty(&measured).unwrap()"
+---
+{
+  "copied_row_equals_original": true,
+  "copied_row_points_into": "the original CODEX_HOME",
+  "original_row_is_absolute": true
+}

@@ -54,6 +54,48 @@ impl std::fmt::Display for Role {
     }
 }
 
+/// A provider's signature over a turn's thinking text, and who issued it. It is the agent-tagged
+/// form of a value only one provider can use: a writer for that provider emits it when the
+/// thinking text is the text that was signed, every other writer leaves it out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThinkingSignature {
+    /// Who signed it: `"anthropic"` for Claude's thinking blocks.
+    pub provider: String,
+    /// The signature, verbatim.
+    pub value: String,
+    /// SHA-256 (hex) of the thinking text that was signed. A writer emits the signature only
+    /// when the turn's thinking still hashes to this: a signature over other text is invalid.
+    pub text_sha256: String,
+}
+
+impl ThinkingSignature {
+    /// The provider name for Claude's thinking signatures.
+    pub const ANTHROPIC: &'static str = "anthropic";
+
+    /// A signature over `text`, as `provider` issued it.
+    pub fn new(provider: &str, value: &str, text: &str) -> Self {
+        ThinkingSignature {
+            provider: provider.to_string(),
+            value: value.to_string(),
+            text_sha256: sha256_hex(text),
+        }
+    }
+
+    /// The signature value, when `provider` issued it and `text` is the text it signed.
+    pub fn value_for(&self, provider: &str, text: &str) -> Option<&str> {
+        (self.provider == provider && self.text_sha256 == sha256_hex(text))
+            .then_some(self.value.as_str())
+    }
+}
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Token usage for a single turn.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
@@ -72,6 +114,8 @@ pub struct TokenUsage {
     /// {"reasoning": 450} or {"text": 300, "image": 500}). INFORMATIONAL ONLY:
     /// breakdowns are never summed into the total — the parent class already
     /// counts these tokens. Invariant: Σ(inner) ≤ the parent class's value.
+    /// (A session total's breakdowns are the per-turn breakdowns added together,
+    /// class by class; that is a sum of breakdowns, not into the counters.)
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub breakdowns: BTreeMap<String, BTreeMap<String, u32>>,
 }
@@ -275,11 +319,26 @@ pub struct Turn {
     /// Internal reasoning (chain-of-thought, thinking blocks).
     pub thinking: Option<String>,
 
+    /// The provider's signature over `thinking`, tagged with who signed it. Anthropic signs
+    /// each thinking block and checks the signature when a session is resumed, so a claude ->
+    /// claude round trip must return it. Only the provider that issued it can use it: every
+    /// other writer drops it (a declared loss: the signature is only valid for that API).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_signature: Option<ThinkingSignature>,
+
     /// Tool invocations in this turn.
     pub tool_uses: Vec<ToolInvocation>,
 
     /// Model identifier (e.g. "claude-opus-4-6", "gpt-4o").
     pub model: Option<String>,
+
+    /// Who served `model` (e.g. "anthropic", "openai", "ollama"), when the
+    /// source records it. Derive writes it to the RFC's existing slot,
+    /// `meta.actors["agent:<model>"].provider`; extract reads it back.
+    /// Distinct from the harness (`meta.source`): pi can run `gemma4` on
+    /// `ollama`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 
     /// Why the turn ended (e.g. "end_turn", "tool_use", "max_tokens").
     pub stop_reason: Option<String>,
@@ -319,6 +378,52 @@ pub struct Turn {
     /// the entry links back to that `ToolInvocation::id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub file_mutations: Vec<FileMutation>,
+}
+
+impl ToolInvocation {
+    /// The delegation this call stands for, when it is a delegation-type tool call
+    /// (`category == Some(ToolCategory::Delegation)`): the call's id is the agent id,
+    /// its `prompt` input is the prompt, and its result, when the same turn has one, is the
+    /// result. `None` for every other tool.
+    ///
+    /// Every source reader builds a turn's `delegations` from its tool calls through this one
+    /// function, so a harness that dispatches sub-agents by tool call (Claude's `Task`,
+    /// Gemini's `invoke_agent`, Cursor's `task_v2`, Codex's `spawn_agent`, ...) reads the same
+    /// way as one that records them separately. A reader that also has the sub-agent's own
+    /// turns replaces `turns` afterwards.
+    pub fn as_delegation(&self) -> Option<DelegatedWork> {
+        if self.category != Some(ToolCategory::Delegation) {
+            return None;
+        }
+        Some(DelegatedWork {
+            agent_id: self.id.clone(),
+            prompt: self
+                .input
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            turns: vec![],
+            result: self.result.as_ref().map(|r| r.content.clone()),
+        })
+    }
+}
+
+impl Turn {
+    /// True when the turn carries no renderable content of its own — no
+    /// visible text (ignoring whitespace), thinking, tool uses,
+    /// delegations, or file mutations. Such turns are streaming "seeds"
+    /// or placeholders that projectors may safely drop. Note this is
+    /// intrinsic to the turn; a caller that also tracks attached events
+    /// (e.g. tool-result entries keyed by parent) must check those
+    /// separately.
+    pub fn is_content_empty(&self) -> bool {
+        self.text.trim().is_empty()
+            && self.thinking.is_none()
+            && self.tool_uses.is_empty()
+            && self.delegations.is_empty()
+            && self.file_mutations.is_empty()
+    }
 }
 
 /// A complete conversation from any provider.
@@ -568,6 +673,46 @@ pub use project::{AnyProjector, ConversationProjector};
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_delegation_tool_call_is_a_delegation_and_no_other_tool_is() {
+        let call = ToolInvocation {
+            id: "call-1".into(),
+            name: "task_v2".into(),
+            input: serde_json::json!({"prompt": "count the words"}),
+            result: Some(ToolResult {
+                content: "42".into(),
+                is_error: false,
+            }),
+            category: Some(ToolCategory::Delegation),
+        };
+        let d = call.as_delegation().expect("a delegation");
+        assert_eq!(d.agent_id, "call-1");
+        assert_eq!(d.prompt, "count the words");
+        assert_eq!(d.result.as_deref(), Some("42"));
+        assert!(d.turns.is_empty());
+
+        let no_prompt = ToolInvocation {
+            input: serde_json::json!({}),
+            result: None,
+            ..call.clone()
+        };
+        let d = no_prompt.as_delegation().expect("a delegation");
+        assert_eq!(d.prompt, "");
+        assert_eq!(d.result, None);
+
+        for category in [
+            None,
+            Some(ToolCategory::Shell),
+            Some(ToolCategory::FileRead),
+        ] {
+            let other = ToolInvocation {
+                category,
+                ..call.clone()
+            };
+            assert!(other.as_delegation().is_none(), "{category:?}");
+        }
+    }
+
     fn sample_view() -> ConversationView {
         ConversationView {
             id: "sess-1".into(),
@@ -575,6 +720,7 @@ mod tests {
             last_activity: None,
             turns: vec![
                 Turn {
+                    provider: None,
                     id: "t1".into(),
                     parent_id: None,
                     group_id: None,
@@ -582,6 +728,7 @@ mod tests {
                     timestamp: "2026-01-01T00:00:00Z".into(),
                     text: "Fix the authentication bug in login.rs".into(),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,
@@ -592,6 +739,7 @@ mod tests {
                     file_mutations: Vec::new(),
                 },
                 Turn {
+                    provider: None,
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
                     group_id: None,
@@ -599,6 +747,7 @@ mod tests {
                     timestamp: "2026-01-01T00:00:01Z".into(),
                     text: "I'll fix that for you.".into(),
                     thinking: Some("The bug is in the token validation".into()),
+                    thinking_signature: None,
                     tool_uses: vec![ToolInvocation {
                         id: "tool-1".into(),
                         name: "Read".into(),
@@ -624,6 +773,7 @@ mod tests {
                     file_mutations: Vec::new(),
                 },
                 Turn {
+                    provider: None,
                     id: "t3".into(),
                     parent_id: Some("t2".into()),
                     group_id: None,
@@ -631,6 +781,7 @@ mod tests {
                     timestamp: "2026-01-01T00:00:02Z".into(),
                     text: "Thanks!".into(),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,
@@ -964,6 +1115,7 @@ mod tests {
     #[test]
     fn test_turn_with_environment_and_delegations() {
         let turn = Turn {
+            provider: None,
             id: "t1".into(),
             parent_id: None,
             group_id: None,
@@ -971,6 +1123,7 @@ mod tests {
             timestamp: "2026-01-01T00:00:00Z".into(),
             text: "Delegating...".into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -1152,5 +1305,73 @@ mod tests {
         let json = r#"{"id":"s1","started_at":null,"last_activity":null,"turns":[]}"#;
         let view: ConversationView = serde_json::from_str(json).unwrap();
         assert!(view.events.is_empty());
+    }
+
+    #[test]
+    fn test_turn_is_content_empty() {
+        // Turn has no Default; build a whitespace-only base and clone it.
+        let base = Turn {
+            provider: None,
+            id: "t1".into(),
+            parent_id: None,
+            group_id: None,
+            role: Role::Assistant,
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            text: "   ".into(), // whitespace-only counts as empty
+            thinking: None,
+            thinking_signature: None,
+            tool_uses: vec![],
+            model: None,
+            stop_reason: None,
+            token_usage: None,
+            attributed_token_usage: None,
+            environment: None,
+            delegations: vec![],
+            file_mutations: vec![],
+        };
+        assert!(base.is_content_empty());
+
+        // Any one kind of content makes it non-empty.
+        assert!(
+            !Turn {
+                text: "hi".into(),
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                thinking: Some("…".into()),
+                thinking_signature: None,
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                tool_uses: vec![ToolInvocation::default()],
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                delegations: vec![DelegatedWork {
+                    agent_id: "a".into(),
+                    prompt: "p".into(),
+                    turns: vec![],
+                    result: None,
+                }],
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
+        assert!(
+            !Turn {
+                file_mutations: vec![FileMutation::default()],
+                ..base.clone()
+            }
+            .is_content_empty()
+        );
     }
 }

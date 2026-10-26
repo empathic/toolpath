@@ -1,0 +1,58 @@
+{
+  "adapter": "pi",
+  "gained": [
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type",
+    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.stop_reason"
+  ],
+  "ir1": {
+    "key_paths": 70,
+    "steps": 14,
+    "text_chars": 29685,
+    "tool_uses": 11
+  },
+  "ir2": {
+    "key_paths": 50,
+    "steps": 13,
+    "text_chars": 29685,
+    "tool_uses": 11
+  },
+  "lost": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].steps[].change.<artifact>.structural.contextTier",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.newModel",
+    "paths[].steps[].change.<artifact>.structural.reasoningEffort",
+    "paths[].steps[].change.count.sh.raw",
+    "paths[].steps[].change.count.sh.structural.after",
+    "paths[].steps[].change.count.sh.structural.operation",
+    "paths[].steps[].change.count.sh.structural.tool",
+    "paths[].steps[].change.count.sh.structural.tool_id",
+    "paths[].steps[].change.count.sh.structural.type",
+    "paths[].steps[].change.notes.md.raw",
+    "paths[].steps[].change.notes.md.structural.after",
+    "paths[].steps[].change.notes.md.structural.operation",
+    "paths[].steps[].change.notes.md.structural.tool",
+    "paths[].steps[].change.notes.md.structural.tool_id",
+    "paths[].steps[].change.notes.md.structural.type"
+  ],
+  "set": "copilot"
+}

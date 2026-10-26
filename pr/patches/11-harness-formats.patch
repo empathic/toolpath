@@ -1,0 +1,1197 @@
+From 30e2c0a36748a6a7cef14b53bd17611d05e60474 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 15:30:26 -0400
+Subject: [PATCH] docs(formats): draft format references for droid, goose,
+ qwen-code, cline, hermes
+
+Credential-free groundwork for the next toolpath adapters, in the shape of
+opencode.md: install route and version, store path and layout, record
+shapes (observed, read from source/binary, or reconstructed), resume by
+id, headless flags, the ConversationView mapping, costs, open questions.
+Droid and Cline stores were observed from credential-less headless runs;
+Goose from a GOOSE_PATH_ROOT run plus v1.49.0 source; Qwen Code and Hermes
+from upstream source at the exact versions.
+---
+ docs/agents/formats/cline.md     | 225 ++++++++++++++++++++++++
+ docs/agents/formats/droid.md     | 288 +++++++++++++++++++++++++++++++
+ docs/agents/formats/goose.md     | 202 ++++++++++++++++++++++
+ docs/agents/formats/hermes.md    | 222 ++++++++++++++++++++++++
+ docs/agents/formats/qwen-code.md | 201 +++++++++++++++++++++
+ 5 files changed, 1138 insertions(+)
+ create mode 100644 docs/agents/formats/cline.md
+ create mode 100644 docs/agents/formats/droid.md
+ create mode 100644 docs/agents/formats/goose.md
+ create mode 100644 docs/agents/formats/hermes.md
+ create mode 100644 docs/agents/formats/qwen-code.md
+
+diff --git a/docs/agents/formats/cline.md b/docs/agents/formats/cline.md
+new file mode 100644
+index 0000000..f25bda3
+--- /dev/null
++++ b/docs/agents/formats/cline.md
+@@ -0,0 +1,225 @@
++# Cline CLI session format (draft)
++
++Reference for the on-disk format produced by the Cline **CLI**
++(`cline`, repo [`cline/cline`](https://github.com/cline/cline), Apache-2.0),
++as intended input for a future `toolpath-cline` provider. The VS Code
++extension keeps a different store
++(`globalStorage/saoudrizwan.claude-dev/tasks/<id>/…`) that is out of
++scope here. Compiled from:
++
++1. **Observed**: `cline` `3.0.68` from `nixpkgs#cline`, run as
++   `cline --json -t 30 "say hi"` under a temporary `HOME` on 2026-10-15.
++   Auth failed (no Cline account), but the CLI wrote a complete session
++   directory, both SQLite databases and the provider settings.
++2. **Read from the binary**: the bundled Bun executable's strings
++   (`libexec/cline/bin/cline`) for file naming and content-block types.
++   Marked *binary*.
++3. **Read**: `cline --help`, `cline history --help`, `cline history --json`.
++
++Date: **2026-10-15**.
++
++## Install route and version
++
++- `nix shell nixpkgs#cline` → `cline 3.0.68` (a Bun single-file binary;
++  honours `HOME`, observed).
++- Vendor: `npm i -g @cline/cli` (survey).
++- `--config <dir>` (default `~/.cline`) and `--data-dir <dir>` (default
++  `~/.cline/data`) relocate state without touching `HOME` (read: `--help`).
++
++## Storage root
++
++Observed after one failed headless run:
++
++```
++~/.cline/
++  data/
++    settings/providers.json          { version: 1, lastUsedProvider, providers: { <id>: { settings: { provider, model }, updatedAt, tokenSource } } }
++    sessions/
++      <id>/
++        <id>.json                    session manifest (whole-file JSON)
++        <id>.messages.json           conversation (whole-file JSON)
++        <id>.compaction.json         (binary: name only; not observed)
++        <stem>.messages.json         subagent transcripts beside the root's (binary)
++    db/sessions.db                   SQLite index: sessions, subagent_spawn_queue, schedules, schedule_executions
++    db/teams.db                      SQLite: team_events, team_runtime_snapshot, team_tasks, …
++    cache/feature-flags.json
++    locks/hub/…
++    logs/{cline.log,hub-daemon.log}
++  hooks/                             (default --hooks-dir; not created)
++  worktrees/                         (--worktree; not created)
++```
++
++Sessions are **not** grouped by project; `cwd`/`workspace_root` live in
++the manifest and the index.
++
++### Identifiers
++
++Session id = `${Date.now()}_${nanoid(5, "0-9a-z")}` (binary), e.g.
++`1792091853538_a1oo2` (observed). Conversation id inside the run is
++`conv_<ms>_<rand>` (binary; appears in `--json` events as `taskId`, not
++in the files). Message ids are UUIDv4; error placeholders are
++`error_<uuid>` (observed).
++
++## `<id>.json` — session manifest
++
++Observed:
++
++```json
++{
++  "version": 1,
++  "session_id": "1792091853538_a1oo2",
++  "source": "cli",
++  "pid": 41791,
++  "started_at": "2026-10-15T19:17:33.540Z",
++  "ended_at": "2026-10-15T19:17:33.807Z",
++  "exit_code": 1,
++  "status": "failed",
++  "interactive": false,
++  "provider": "cline",
++  "model": "apodex/apodex-1.1-mini:free",
++  "cwd": "/…/harness-cline/proj",
++  "workspace_root": "/…/harness-cline/proj",
++  "team_name": "team-L7pqp",
++  "enable_tools": true, "enable_spawn": true, "enable_teams": true,
++  "prompt": "say hi",
++  "metadata": {
++    "sessionHistoryOrigin": { "mode": "user", "version": "3.0.68" },
++    "title": "say hi",
++    "totalCost": 0,
++    "aggregatedAgentsCost": 0,
++    "usage":          { "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalCost": 0 },
++    "aggregateUsage": { …same shape… }
++  }
++}
++```
++
++`status` values seen in the binary: `idle`, `running`, `failed`
++(observed), presumably `completed`. `usage` is the root agent;
++`aggregateUsage` includes spawned subagents.
++
++## `<id>.messages.json` — conversation
++
++Observed:
++
++```json
++{
++  "version": 1,
++  "updated_at": "2026-10-15T19:17:33.793Z",
++  "agent": "lead",
++  "sessionId": "1792091853538_a1oo2",
++  "origin": { "source": "cli", "mode": "user", "sessionId": "1792091853538_a1oo2", "version": "3.0.68" },
++  "messages": [
++    { "id": "f2bd4651-…", "role": "user",
++      "content": [ { "type": "text", "text": "<user_input mode=\"act\">say hi</user_input>" } ],
++      "ts": 1792091853572 },
++    { "id": "error_26c7dbe3-…", "role": "assistant",
++      "content": [ { "type": "text", "text": "Unauthorized: …" } ],
++      "ts": 1792091853791,
++      "metadata": { "displayOnly": true, "displayRole": "error" },
++      "modelInfo": { "id": "apodex/apodex-1.1-mini:free", "provider": "cline" } }
++  ],
++  "system_prompt": "You are Cline, an AI coding agent. …"
++}
++```
++
++Notes:
++
++- User text is wrapped in `<user_input mode="act|plan|yolo">…</user_input>`
++  (observed; the system prompt documents it). A derive should unwrap it
++  and keep `mode` as an attribute.
++- `ts` is epoch milliseconds.
++- `metadata.displayOnly: true` marks rows never sent to the model (error
++  placeholders); skip them for turns, keep as `ConversationEvent`.
++- Content block types in the binary: `text`, `reasoning`, `thinking`,
++  `redacted_thinking`, `image`, `tool_use`, `tool_result`, `tool_call`.
++  Result correlation keys present: `tool_use_id`, `toolUseId`,
++  `isError`/`is_error`. The exact assistant `tool_use` block and the
++  per-message `metrics` object (survey, 3p) were **not observed** —
++  the run never reached a model.
++- The whole file is rewritten on each update (`writeFileSync`, binary);
++  there is no append-only log.
++
++## `db/sessions.db`
++
++Observed `.schema` (abridged):
++
++```sql
++CREATE TABLE sessions (
++  session_id TEXT PRIMARY KEY, source TEXT NOT NULL, pid INTEGER NOT NULL,
++  started_at TEXT NOT NULL, ended_at TEXT, exit_code INTEGER,
++  status TEXT NOT NULL, status_lock INTEGER NOT NULL DEFAULT 0,
++  interactive INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL,
++  cwd TEXT NOT NULL, workspace_root TEXT NOT NULL, team_name TEXT,
++  enable_tools INTEGER NOT NULL, enable_spawn INTEGER NOT NULL, enable_teams INTEGER NOT NULL,
++  parent_session_id TEXT, parent_agent_id TEXT, agent_id TEXT, conversation_id TEXT,
++  is_subagent INTEGER NOT NULL DEFAULT 0, prompt TEXT, metadata_json TEXT,
++  transcript_path TEXT NOT NULL DEFAULT '', hook_path TEXT NOT NULL,
++  messages_path TEXT,                  -- ABSOLUTE path to <id>.messages.json
++  updated_at TEXT NOT NULL
++);
++CREATE TABLE subagent_spawn_queue (…);  CREATE TABLE schedules (…);  CREATE TABLE schedule_executions (…);
++```
++
++`cline history --json` is a straight dump of this table (observed), with
++`messagesPath` absolute. The manifest and the row carry the same fields
++(snake_case in files, camelCase in `history --json`).
++
++## Session resolution / resume
++
++- `cline --id <session-id> [prompt]` resumes by id; `cline history` lists
++  (`--json`, `--limit`, `--page`); `cline history export <id>` writes a
++  standalone HTML (read: `--help`).
++- What resume reads (inferred): the `sessions` row (or manifest) for
++  provider/model/cwd and `messages_path` → `<id>.messages.json` for the
++  conversation. Because `messages_path` is absolute, moving `~/.cline`
++  breaks resume unless the row is rewritten.
++
++## Headless mode
++
++Default invocation is headless act-mode with auto-approve:
++`cline [--json] [-p] [--auto-approve false] [-c <cwd>] [-m <model>]
++[-P <provider>] [-k <key>] [-s <system>] [-t <seconds>] "<prompt>"`.
++`--json` streams NDJSON events: `hook_event` (`agent_start`,
++`agent_error`, …), `agent_event` (`iteration_start`, `error`),
++`run_result` (`finishReason`, `iterations`, `usage`, `aggregateUsage`,
++`durationMs`, `text`, `model`), `error` (observed). `--acp` for editors,
++`-i/--tui` interactive, `-z/--zen` background hub.
++
++## What a `toolpath-cline` provider needs
++
++| Cline construct | `toolpath-convo` mapping |
++|---|---|
++| `session_id` | `ConversationView.id` |
++| manifest `cwd` / `workspace_root` | `SessionBase.working_dir` |
++| manifest `provider`/`model`, `origin.version` | `ProducerInfo { name: "cline", version }`, default `Turn.model` |
++| `parent_session_id` / `is_subagent` (index) | delegation links |
++| message role user (unwrapped `<user_input>`) | `Turn { role: User }` |
++| message role assistant | `Turn { role: Assistant, model: modelInfo.id }`; `thinking`/`reasoning` → `thinking`; `text` → `text`; `tool_use` → `tool_uses[]` |
++| `tool_result` block | `ToolInvocation.result` by `tool_use_id` |
++| `metadata.displayOnly` rows | `ConversationEvent { event_type: "display." + displayRole }` |
++| manifest `metadata.usage` | `ConversationView.total_usage`; per-turn from `metrics` if present (unverified) |
++| `system_prompt` | `Turn { role: System }` or event |
++
++Derive cost: **easy** (two JSON files; Anthropic-style blocks). Project
++cost: **medium-hard**: write manifest + messages file **and** upsert the
++`sessions` row with an absolute `messages_path`, matching `status`
++semantics (`status_lock`), or resume will not find it. `teams.db` can be
++left alone (inferred: only team features read it).
++
++## Open questions
++
++1. Assistant `tool_use` block shape and whether `tool_result` sits in a
++   user-role message (Anthropic layout) — needs one authenticated run.
++2. Per-message `metrics` / token fields (survey claims them; not seen).
++3. `<id>.compaction.json` contents.
++4. Whether `cline --id` consults the DB row or the manifest first.
++
++Needs credentials to go further: a Cline account **or** any provider key
++via `-P <provider> -k <key>` (e.g. `-P anthropic`), for one real turn.
++
++## References
++
++- CLI reference: <https://docs.cline.bot/cline-cli/cli-reference>
++- Repo (CLI under `cli/`): <https://github.com/cline/cline/tree/v3.0.68/cli>
++- Local evidence: `<scratchpad>/harness-cline/home/.cline/data/`,
++  `<scratchpad>/harness-cline/strings.txt`
+diff --git a/docs/agents/formats/droid.md b/docs/agents/formats/droid.md
+new file mode 100644
+index 0000000..2ca6f0e
+--- /dev/null
++++ b/docs/agents/formats/droid.md
+@@ -0,0 +1,288 @@
++# Factory Droid session format (draft)
++
++Reference for the on-disk format produced by Factory's `droid` CLI
++(<https://docs.factory.ai/cli>), as intended input for a future
++`toolpath-droid` provider. Compiled from:
++
++1. **Observed**: one credential-less `droid exec --output-format json
++   "say hi"` under a temporary `HOME`, droid `0.242.0` (darwin/arm64
++   release binary, SHA-256 verified against the vendor checksum),
++   2026-10-15. Auth failed, but droid still created a session file, a
++   settings sidecar and the session index.
++2. **Read from the binary**: zod schemas and SQL migration text embedded in
++   the `droid` executable (`strings` output). Droid is closed source;
++   there is no public schema. Claims from here are marked *binary*.
++3. **Read from docs/help**: `droid --help`, `droid exec --help`,
++   `droid search --help`.
++
++Nothing below has been checked against a session that contains real
++model turns. Shapes for `message` lines are from the binary's own
++validators, not from a sample. Date: **2026-10-15**.
++
++## Install route and version
++
++- Vendor: `curl -fsSL https://app.factory.ai/cli | sh` downloads
++  `https://downloads.factory.ai/factory-cli/releases/<VER>/<platform>/<arch>[-baseline]/droid`
++  plus `droid.sha256`, installs to `~/.local/bin/droid`. `VER` is pinned
++  inside the script (`0.242.0` on 2026-10-15). (read: install script)
++- Not in nixpkgs (`droid`, `factory`, `factory-droid` absent). The survey
++  says `nix-ai-tools` has a `droid` package; not verified here.
++- For a credential-free probe, download the release binary directly into
++  a scratch dir and run it with `HOME=<tmp>`; droid honours `HOME`
++  (observed).
++
++## Storage root
++
++```
++~/.factory/
++  host.json                         { schemaVersion: 1, hostId: <uuid>, createdAt: <ms> }
++  settings.json                     user settings (not created by exec; named in --help)
++  sessions/
++    <project-key>/                  cwd with "/" → "-", so it always starts with "-"
++      <uuid>.jsonl                  transcript, one JSON object per line
++      <uuid>.settings.json          per-session settings + token totals (whole-file JSON)
++    btw/<uuid>.jsonl                "btw" forks (binary: SQL comment)
++    <uuid>.jsonl                    global root (binary: SQL comment; not observed)
++  cache/session-index/index.db      SQLite search/listing index (derived, rebuildable)
++  state/{background-tasks,task-invocations,background-processes}.json
++  logs/droid-log-single.log         JSON-ish lines with sessionId, traceId
++  droids/*.md                       bundled subagent definitions
++  telemetry/droid-installation-id
++  bin/libsqlite3-*.dylib            droid pins its own SQLite (needs jsonb(), 3.45+)
++```
++
++(observed, except where marked)
++
++### Project key
++
++The transcript directory is `sanitizePathToDirectoryName(cwd)`: the
++absolute, **realpath'd** cwd with every `/` replaced by `-`. Example
++(observed):
++
++```
++/private/tmp/…/scratchpad/harness-droid/proj
++  ──▶  -private-tmp-…-scratchpad-harness-droid-proj
++```
++
++The index's SQL comment (binary) says the key is stored rather than
++recomputed because `realpathSync` makes it non-pure: a symlinked or
++moved cwd sanitizes differently later. Lossy for paths containing `-`,
++exactly like Pi's encoder. A reader that resolves `<id>` should scan all
++project dirs (and `btw/`, and the root) rather than recompute the key.
++
++## Transcript JSONL
++
++### Line 1: `session_start`
++
++Observed:
++
++```json
++{"type":"session_start","id":"14d8c814-f277-4d6f-867a-682e616776ee","title":"say hi","owner":"bobby","version":2,"cwd":"/private/tmp/…/harness-droid/proj","hostId":"14f819ce-b20f-40b2-9d50-99208744b4e7"}
++```
++
++Full writer shape (binary):
++
++```ts
++{
++  type: "session_start",
++  id: string,                 // session uuid == file stem
++  title: string,
++  isSessionTitleManuallySet?: true,
++  owner: string,              // OS user
++  organizationId?: string,
++  parent?: string,            // forked-from session id
++  callingSessionId?: string,  // parent session for subagents
++  callingToolUseId?: string,  // the tool_use that spawned this session
++  version: 2,
++  cwd: string,
++  hostId?: string,
++  privacyLevel?: "private" | …
++}
++```
++
++The binary rejects a file whose first line is not `session_start`
++("Invalid session file: first line is not session_start event").
++
++### `message` lines (binary; not observed)
++
++Two validators exist in the binary. The permissive one (used by the
++session index) is:
++
++```ts
++{
++  type: "message",
++  timestamp?: string | number,
++  message: {
++    role: "user" | "assistant" | …,
++    content: string | ContentBlock[],
++    visibility?: …, isUserVisible?: boolean, hiddenFromUserViews?: boolean,
++    hookEventName?: string          // hook-injected messages
++  }
++  // .passthrough(): other keys preserved
++}
++```
++
++The strict one (used by the daemon/turn machinery) adds the id chain:
++
++```ts
++{
++  type: "message",
++  id: string,                 // required
++  parentId?: string,
++  seq?: number,
++  timestamp: string,          // required, non-empty
++  message: { role: "user" | "assistant", content: string | ContentBlock[] },
++  tokens?: number,
++  compactionSummaryId?: string
++}
++```
++
++Content blocks (binary, Anthropic-style):
++
++| `type` | Fields |
++|---|---|
++| `text` | `text` |
++| `thinking` | `thinking` |
++| `tool_use` | `id`, `name`, `input` (search index reads `id`/`name`) |
++| `tool_result` | `tool_use_id` (inferred from the Anthropic shape; the validator only requires `content`), `content: string | object[]` |
++| `document` | `source: { type: "text", data }` |
++
++Tool call ↔ result: both live inside `message.content` blocks, so the
++pairing is Claude-Code-style (`tool_use.id` ↔ `tool_result.tool_use_id`)
++rather than Pi-style separate entries. **Inferred** from the block
++shapes; needs a real session to confirm which message carries the
++`tool_result` (a `user`-role message, as in Claude Code, is the likely
++answer).
++
++### Other line types
++
++- `agent_turn_outcome` (binary): `{ type, turnId, reason, resultKind:
++  "structured" | "text" | "null", result?, schemaFingerprint? }` —
++  closes a turn; `structured` carries `--json-schema` output.
++- The binary also counts `"span"`, `"summary"`, `"compaction"` and
++  `"settings"` literals, but no transcript-line validator for them was
++  found; `compactionSummaryId` on `message` says compaction summaries
++  are referenced by id. **Open.**
++
++## `<uuid>.settings.json`
++
++Observed (whole-file JSON, rewritten on change):
++
++```json
++{
++  "assistantActiveTimeMs": 0,
++  "model": "gpt-6-sol",
++  "reasoningEffort": "high",
++  "interactionMode": "auto",
++  "autonomyLevel": "off",
++  "autonomyMode": "normal",
++  "compactionThresholdCheckEnabled": true,
++  "allowSubagentsInScripts": false,
++  "tags": [ { "name": "exec" } ],
++  "toolExecutionMode": "direct_only",
++  "toolExecutionModeModelId": "gpt-6-sol",
++  "tokenUsage": { "inputTokens": 0, "outputTokens": 0, "cacheCreationTokens": 0,
++                  "cacheReadTokens": 0, "thinkingTokens": 0, "factoryCredits": 0 },
++  "childInclusiveTokenUsageBySessionId": {},
++  "inclusiveTokenUsage": { …same shape… }
++}
++```
++
++Token usage is **session-level only** here. Whether `message` lines carry
++per-turn usage is unknown (`tokens?: number` on the strict validator is a
++single integer). `childInclusiveTokenUsageBySessionId` rolls subagent
++sessions up into `inclusiveTokenUsage`.
++
++## `cache/session-index/index.db`
++
++SQLite, droid-pinned build, migrations 1–6 (`baseline`,
++`transcript-summary-fingerprint`, `tags-role-key`, `daemon-session-fields`,
++`schema-version`, `spans-and-search`). Tables (observed `.schema`):
++
++- `sessions(session_id PK, project_key NOT NULL, cwd, title, org_id, owner,
++  parent, calling_session_id, calling_tool_use_id, mission, tags JSONB,
++  has_user_visible_messages, archived_at, first_event_at, last_event_at,
++  messages_count, host_id, worktree, artifacts, settings_write_seq)`.
++  `_at` columns are epoch **milliseconds**.
++- `session_ingest(session_id PK, transcript_mtime_ms, transcript_size,
++  transcript_offset, …)` — incremental ingest cursor per transcript.
++- `session_spans(session_id, span_index, line_start, line_end, text,
++  vector BLOB, …)` — chunked text + int8 embeddings for `droid search`.
++- `session_term_filters(session_id, filter BLOB)` — bloom filters.
++
++It is a **derived cache**: the SQL comments say every row is written by
++something that was looking at the transcript. A reader should treat the
++JSONL + settings as truth and the index as an optional accelerator; a
++projector does **not** need to write it (`droid search --reindex`
++rebuilds it; the picker's behaviour on an unindexed file is untested).
++
++## Session resolution / resume
++
++- `droid --resume [sessionId]` / `droid resume [sessionId] [prompt…]` —
++  picker without an id; `--last` resumes the most recent in the current
++  folder; "session link" is also accepted (read: `--help`).
++- `droid exec -s <id> "<prompt>"` continues a session headlessly
++  (`--session-id` *requires* a prompt); `--fork <id>` copies into a new
++  session.
++- `droid exec` prints `session_id` in its JSON result even on failure
++  (observed), so a caller can learn the id without parsing the store.
++- What resume reads: the transcript (first line must be `session_start`)
++  plus the settings sidecar (model, autonomy). **Inferred** from the
++  validators; not exercised (needs auth).
++
++## Headless mode
++
++`droid exec [prompt]` — `-o text|json|stream-json|stream-jsonrpc|acp`,
++`--input-format stream-json|stream-jsonrpc`, `-f <file>`, `--auto
++low|medium|high` (read-only by default), `--skip-permissions-unsafe`,
++`-m <model>`, `-r <effort>`, `--only-tools/--add-tools/--remove-tools`,
++`--cwd`, `--tag`, `--mission`, `--json-schema`-style structured output via
++`agent_turn_outcome.resultKind: structured`. Observed failure result:
++
++```json
++{"type":"result","subtype":"failure","is_error":true,"duration_ms":1,"num_turns":0,
++ "result":"Authentication failed. Please log in using /login or set a valid FACTORY_API_KEY environment variable.",
++ "session_id":"14d8c814-…","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"factory_credits":0}}
++```
++
++## What a `toolpath-droid` provider needs
++
++| Droid construct | `toolpath-convo` mapping |
++|---|---|
++| `session_start.id` | `ConversationView.id` |
++| `session_start.cwd` (+ `hostId`, `owner`) | `SessionBase.working_dir`; `ProducerInfo { name: "droid", version: ? }` — the CLI version is in `logs/`, not the transcript |
++| `session_start.parent` | predecessor link |
++| `callingSessionId` / `callingToolUseId` | `DelegatedWork` back-link from the parent's `tool_use` |
++| `message` role user | `Turn { role: User }` |
++| `message` role assistant | `Turn { role: Assistant }`; `thinking` blocks → `thinking`; `text` → `text`; `tool_use` → `tool_uses[]` |
++| `tool_result` block | `ToolInvocation.result`, paired by `tool_use_id` |
++| `agent_turn_outcome` | `stop_reason` / `ConversationEvent` |
++| `*.settings.json.tokenUsage` | `ConversationView.total_usage` (session-level; per-turn stays `None`) |
++| `*.settings.json.model` | default `Turn.model` when the message carries none |
++
++Derive cost: **easy** once a real transcript confirms block placement.
++Project cost: **medium** — write `session_start` + `message` lines, the
++settings sidecar with the right `model`/`tags`, and either skip the index
++(preferred) or run `droid search --reindex`. Per-turn token usage is
++lossy on round-trip (session-level totals only).
++
++## Open questions
++
++1. Real `message` line sample: which keys the CLI actually writes
++   (`id`/`parentId`/`timestamp`?), and where `tool_result` blocks live.
++2. Do `span`/`summary`/`compaction` appear as transcript lines?
++3. Does the picker list a hand-written session that is absent from
++   `index.db`?
++4. Does resume require the cloud (`syncSessionCreate` exists in the
++   binary; the local run worked offline up to auth)?
++5. `nix-ai-tools#droid` currency.
++
++Needs credentials to go further: a Factory account or `FACTORY_API_KEY`
++for one real exec run (that would answer 1–4 in a minute).
++
++## References
++
++- Local evidence: `<scratchpad>/harness-droid/home/.factory/` (observed
++  tree), `<scratchpad>/harness-droid/strings.txt` (binary strings).
++- Install script: <https://app.factory.ai/cli>
++- CLI reference: <https://docs.factory.com/droid-cli/cli-reference>
+diff --git a/docs/agents/formats/goose.md b/docs/agents/formats/goose.md
+new file mode 100644
+index 0000000..630c73f
+--- /dev/null
++++ b/docs/agents/formats/goose.md
+@@ -0,0 +1,202 @@
++# Goose session format (draft)
++
++Reference for the on-disk format produced by Block's
++[goose](https://block.github.io/goose) CLI (repo
++[`block/goose`](https://github.com/block/goose), Apache-2.0), as intended
++input for a future `toolpath-goose` provider. Compiled from:
++
++1. **Observed**: `goose` `1.49.0` from `nixpkgs#goose-cli`, run with
++   `GOOSE_PATH_ROOT=<scratch>` on 2026-10-15: `goose info`, `goose session
++   list -f json`, `goose run -t "say hi"` (no provider configured, so no
++   model call). The `sessions.db` it created is the schema source below.
++2. **Read**: `crates/goose/src/config/paths.rs` at tag `v1.49.0` (path
++   resolution), `goose --help`, `goose session --help`, `goose run --help`,
++   `goose session import --help`.
++3. **Not read**: the message JSON (`messages.content_json`) — the Rust
++   `Message`/`MessageContent` types in `crates/goose/src/conversation/`.
++   Shapes for that column are marked *inferred* or *3p* (survey).
++
++Date: **2026-10-15**, schema_version **16**.
++
++## Install route and version
++
++- `nix shell nixpkgs#goose-cli` → `goose 1.49.0` (the plain `nixpkgs#goose`
++  is an unrelated package, 3.28.0).
++- Vendor: `curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash`, or brew.
++
++**Isolation warning.** goose does **not** derive its directories from
++`$HOME` on macOS: with `HOME` pointed at a temp dir it still created
++`~/.config/goose`, `~/.local/share/goose/sessions/sessions.db` and
++`~/.local/state/goose/logs` in the real home (observed; `etcetera`
++strategy). Set `GOOSE_PATH_ROOT=<dir>` instead (read: `paths.rs` line 41);
++then config, data and state live under `<dir>/config`, `<dir>/data`,
++`<dir>/state` (observed).
++
++## Storage root
++
++Default (macOS/Linux, read: `goose info`):
++
++```
++~/.config/goose/config.yaml                      provider, model, extensions
++~/.local/share/goose/sessions/sessions.db        SQLite, WAL mode (+ -shm, -wal)
++~/.local/state/goose/logs/cli/<YYYY-MM-DD>/<YYYYMMDD_HHMMSS>.log
++```
++
++With `GOOSE_PATH_ROOT=R`: `R/config/config.yaml`, `R/data/sessions/sessions.db`,
++`R/state/logs/…` (observed). Legacy `*.jsonl` session files in the
++sessions dir are auto-imported into the DB since 1.10 (survey, 3p;
++`crates/goose/src/session/legacy.rs` exists at v1.49.0 — read: file
++listing only).
++
++## `sessions.db` — SQLite layout
++
++Observed `.schema` (schema_version 16):
++
++```sql
++CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
++
++CREATE TABLE sessions (
++  id TEXT PRIMARY KEY,                 -- "YYYYMMDD_HHMMSS" style (3p; see Identifiers)
++  name TEXT NOT NULL DEFAULT '',
++  description TEXT NOT NULL DEFAULT '',
++  user_set_name BOOLEAN DEFAULT FALSE,
++  session_type TEXT NOT NULL DEFAULT 'user',
++  working_dir TEXT NOT NULL,
++  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++  extension_data TEXT DEFAULT '{}',    -- JSON
++  total_tokens INTEGER, input_tokens INTEGER, output_tokens INTEGER,
++  cache_read_tokens INTEGER, cache_write_tokens INTEGER,   -- last-request snapshot (inferred)
++  accumulated_total_tokens INTEGER, accumulated_input_tokens INTEGER,
++  accumulated_output_tokens INTEGER, accumulated_cache_read_tokens INTEGER,
++  accumulated_cache_write_tokens INTEGER, accumulated_cost REAL,  -- session totals
++  schedule_id TEXT, recipe_json TEXT, user_recipe_values_json TEXT,
++  provider_name TEXT, model_config_json TEXT,
++  goose_mode TEXT NOT NULL DEFAULT 'auto',
++  archived_at TIMESTAMP, project_id TEXT, parent_session_id TEXT
++);
++
++CREATE TABLE messages (
++  id INTEGER PRIMARY KEY AUTOINCREMENT,
++  message_id TEXT,                     -- goose's own message id (nullable on old rows)
++  session_id TEXT NOT NULL REFERENCES sessions(id),
++  role TEXT NOT NULL,                  -- "user" | "assistant" (inferred)
++  content_json TEXT NOT NULL,          -- JSON MessageContent[]
++  created_timestamp INTEGER NOT NULL,  -- epoch seconds (inferred from name)
++  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
++  tokens INTEGER,
++  metadata_json TEXT
++);
++
++CREATE TABLE usage_ledger (            -- one row per model call
++  id INTEGER PRIMARY KEY AUTOINCREMENT,
++  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
++  created_timestamp INTEGER NOT NULL,
++  model TEXT, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER,
++  cache_read_tokens INTEGER, cache_write_tokens INTEGER,
++  cost REAL, cost_source TEXT, is_compaction INTEGER DEFAULT 0
++);
++
++CREATE INDEX idx_messages_session ON messages(session_id);
++CREATE INDEX idx_messages_timestamp ON messages(timestamp);
++CREATE INDEX idx_messages_message_id ON messages(message_id);
++CREATE INDEX idx_messages_session_created ON messages(session_id, created_timestamp, id);
++CREATE INDEX idx_sessions_updated ON sessions(updated_at DESC);
++CREATE INDEX idx_sessions_type ON sessions(session_type);
++CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
++CREATE INDEX idx_usage_ledger_session ON usage_ledger(session_id);
++-- plus provider_inventory_entries / provider_inventory_models (model catalogue cache)
++```
++
++Message order: `(created_timestamp ASC, id ASC)` per
++`idx_messages_session_created`.
++
++### `messages.content_json` (inferred / 3p)
++
++The survey's third-party readers match `LIKE '%toolRequest%'`, so the
++column is goose's `MessageContent` enum serialised with serde: a JSON
++array of tagged objects such as `{"type":"text","text":…}`,
++`{"type":"toolRequest","id":…,"toolCall":{…}}`,
++`{"type":"toolResponse","id":…,"toolResult":{…}}`, `{"type":"thinking",…}`.
++Tool request and response are **separate messages** (assistant then user),
++paired by `id`. **Not verified** — read
++`crates/goose/src/conversation/message.rs` before building types.
++
++### Identifiers
++
++Session ids: the CLI's `--path` help says a legacy filename
++`20250325_200615.jsonl` maps to id `20250325_200615`, so ids are
++`YYYYMMDD_HHMMSS` (read: `--help`). Whether newer sessions use a
++different generator is **open**. `message_id` format not seen.
++
++## Session resolution / resume
++
++- `goose session -r` resumes the most recent; `-r -n <name>` by name;
++  `-r --session-id <id>` by id; `--fork` copies into a new session;
++  `--edit` opens the conversation in `$EDITOR` before resuming (read:
++  `--help`).
++- `goose run -r --session-id <id> -t "<prompt>"` resumes headlessly;
++  `--no-session` runs without touching the DB.
++- Resume reads the `sessions` row (working_dir, provider/model config,
++  extension_data) and `messages` for the id (inferred).
++- `goose session list -f json [-w <cwd>]` lists; `goose session export
++  --session-id <id> --format json|yaml|markdown`.
++- **`goose session import <file>`** accepts a goose JSON export or a
++  **Claude Code / Codex / Pi `.jsonl` transcript** (read: `--help`;
++  `crates/goose/src/session/import_formats/{claude_code,codex,pi}.rs`
++  exist at v1.49.0).
++
++## Headless mode
++
++`goose run -t "<text>" | -i <file|->` with `-q/--quiet`,
++`--output-format text|json|stream-json`, `--max-turns N`,
++`--max-tool-repetitions N`, `--no-session`, `--provider`/`--model`
++overrides, `--recipe`, `--system`. Without a configured provider it exits
++with "No model configured. Run 'goose configure' first." and writes
++nothing but a log (observed). `goose acp` / `goose serve` expose ACP.
++
++## What a `toolpath-goose` provider needs
++
++| goose construct | `toolpath-convo` mapping |
++|---|---|
++| `sessions.id` | `ConversationView.id` |
++| `sessions.working_dir` | `SessionBase.working_dir` |
++| `sessions.provider_name` / `model_config_json` | `ProducerInfo { name: "goose" }`, default `Turn.model` |
++| `sessions.parent_session_id` | predecessor / fork link |
++| `messages` role user | `Turn { role: User }` |
++| `messages` role assistant | `Turn { role: Assistant }` with `text`/`thinking`/`toolRequest` → `tool_uses[]` |
++| `toolResponse` content in the following user message | `ToolInvocation.result`, paired by `id` |
++| `usage_ledger` rows between two assistant messages | `Turn.token_usage` (per call; sum per turn) |
++| `sessions.accumulated_*` | `ConversationView.total_usage` (cross-check) |
++| `extension_data` | `ConversationEvent` or ignore |
++
++Derive cost: **medium** (rusqlite like `toolpath-opencode`, plus a
++`MessageContent` type to read from upstream). Project cost: two options —
++**medium** by inserting rows (`sessions` + `messages` + optional
++`usage_ledger`; goose owns the DB and the schema moves, version 16 today),
++or **cheap** by writing a Claude Code / Pi JSONL that toolpath already
++projects and running `goose session import <file>`, then resuming by the
++id goose prints. The second route reuses existing projectors and keeps
++toolpath out of goose's schema; verify what id/working_dir import assigns.
++
++## Open questions
++
++1. `content_json` shape and the tool request/response pairing (read
++   `conversation/message.rs`).
++2. Session id generator for new sessions (still `YYYYMMDD_HHMMSS`?) and
++   `message_id` format.
++3. Does `goose session import` of a Pi/Claude JSONL preserve
++   `working_dir` and set a resumable id? (Credential-free to test: import
++   does not call a model.)
++4. `created_timestamp` unit (seconds vs millis).
++
++Needs credentials to go further: any provider key (or a local Ollama) for
++one `goose run` that produces real `messages` and `usage_ledger` rows.
++Import-based projection (3) can be tested without any.
++
++## References
++
++- Path resolution: <https://github.com/block/goose/blob/v1.49.0/crates/goose/src/config/paths.rs>
++- Session manager (DDL/migrations): <https://github.com/block/goose/blob/v1.49.0/crates/goose/src/session/session_manager.rs> (not read here)
++- Import formats: <https://github.com/block/goose/tree/v1.49.0/crates/goose/src/session/import_formats>
++- Local evidence: `<scratchpad>/harness-goose/root/data/sessions/sessions.db`
+diff --git a/docs/agents/formats/hermes.md b/docs/agents/formats/hermes.md
+new file mode 100644
+index 0000000..18c459e
+--- /dev/null
++++ b/docs/agents/formats/hermes.md
+@@ -0,0 +1,222 @@
++# Hermes Agent session format (draft)
++
++Reference for the on-disk format produced by Nous Research's
++[Hermes Agent](https://hermes-agent.nousresearch.com) (repo
++[`NousResearch/hermes-agent`](https://github.com/NousResearch/hermes-agent),
++MIT), as intended input for a future `toolpath-hermes` provider. Compiled
++**entirely from source** — the PyPI sdist `hermes_agent-0.19.0.tar.gz`
++(2026-10-15) — because the package is not in nixpkgs and installing its
++dependency tree was out of scope. No session was created or observed.
++Every claim below is *read* from the file named unless marked *inferred*.
++
++Date: **2026-10-15**, `SCHEMA_VERSION = 22` (`hermes_state.py:155`).
++
++## Install route and version
++
++- Not in nixpkgs (`hermes`, `hermes-agent` absent). PyPI `hermes-agent`
++  0.19.0; vendor route is `pip`/`uv tool install hermes-agent` (survey).
++- Source read from `<scratchpad>/harness-hermes/hermes_agent-0.19.0/`.
++- Isolation: `HERMES_HOME=<dir>` overrides the root
++  (`hermes_constants.py:get_hermes_home`, order: context override →
++  `HERMES_HOME` → `~/.hermes`).
++
++## Storage root
++
++```
++$HERMES_HOME/  (default ~/.hermes/)
++  state.db              SQLite, WAL (apply_wal_with_fallback) — sessions, messages, FTS
++  config.yaml           provider/model (hermes_cli/config.py)
++  .hermes_history       readline history
++  kanban.db             task board (hermes_cli/kanban_db.py)
++  checkpoints/          git-style checkpoints (cli.py)
++  errors.log
++```
++
++`DEFAULT_DB_PATH = get_hermes_home() / "state.db"` (`hermes_state.py:153`).
++
++## `state.db` — SQLite layout
++
++From `SCHEMA_SQL` (`hermes_state.py:757-909`), `DEFERRED_INDEX_SQL` and
++`FTS_SQL`:
++
++```sql
++CREATE TABLE schema_version (version INTEGER NOT NULL);
++
++CREATE TABLE sessions (
++  id TEXT PRIMARY KEY,                -- "YYYYMMDD_HHMMSS_<6 hex>" (cli.py:4100-4102)
++  source TEXT NOT NULL,               -- "cli" | gateway platform ("telegram", "discord", …)
++  user_id TEXT, session_key TEXT, chat_id TEXT, chat_type TEXT, thread_id TEXT,
++  display_name TEXT, origin_json TEXT,  -- gateway peer identity (record_gateway_session_peer)
++  expiry_finalized INTEGER DEFAULT 0,
++  model TEXT, model_config TEXT, system_prompt TEXT,
++  parent_session_id TEXT,             -- FK sessions(id): compression lineage / subagents
++  started_at REAL NOT NULL, ended_at REAL, end_reason TEXT,   -- epoch seconds, float
++  message_count INTEGER DEFAULT 0, tool_call_count INTEGER DEFAULT 0,
++  input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
++  cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
++  reasoning_tokens INTEGER DEFAULT 0,
++  cwd TEXT, git_branch TEXT, git_repo_root TEXT,
++  billing_provider TEXT, billing_base_url TEXT, billing_mode TEXT,
++  estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT, cost_source TEXT, pricing_version TEXT,
++  title TEXT, api_call_count INTEGER DEFAULT 0,
++  handoff_state TEXT, handoff_platform TEXT, handoff_error TEXT,
++  compression_failure_cooldown_until REAL, compression_failure_error TEXT,
++  compression_fallback_streak INTEGER NOT NULL DEFAULT 0,
++  profile_name TEXT, rewind_count INTEGER NOT NULL DEFAULT 0,
++  archived INTEGER NOT NULL DEFAULT 0
++);
++
++CREATE TABLE messages (
++  id INTEGER PRIMARY KEY AUTOINCREMENT,  -- insertion order IS the read order (get_messages ORDER BY id)
++  session_id TEXT NOT NULL REFERENCES sessions(id),
++  role TEXT NOT NULL,                    -- "user" | "assistant" | "tool" | "system" (OpenAI style; inferred from tool_call_id/tool_name)
++  content TEXT,                          -- text, or JSON for multipart (decoded by _decode_content)
++  tool_call_id TEXT,                     -- on role="tool": the call this answers
++  tool_calls TEXT,                       -- JSON on assistant rows (see below)
++  tool_name TEXT,
++  effect_disposition TEXT,
++  timestamp REAL NOT NULL,
++  token_count INTEGER, finish_reason TEXT,
++  reasoning TEXT, reasoning_content TEXT, reasoning_details TEXT,   -- provider-specific thinking
++  codex_reasoning_items TEXT, codex_message_items TEXT,              -- OpenAI Responses passthrough
++  platform_message_id TEXT, observed INTEGER DEFAULT 0,
++  active INTEGER NOT NULL DEFAULT 1,     -- 0 = soft-deleted by rewind
++  compacted INTEGER NOT NULL DEFAULT 0,
++  api_content TEXT                       -- exact bytes sent to the API when != content
++);
++
++CREATE TABLE session_model_usage (      -- per (session, model, billing, task) token/cost rollup
++  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
++  model TEXT NOT NULL, billing_provider TEXT NOT NULL DEFAULT '', billing_base_url TEXT NOT NULL DEFAULT '',
++  billing_mode TEXT NOT NULL DEFAULT '', task TEXT NOT NULL DEFAULT '',
++  api_call_count INTEGER NOT NULL DEFAULT 0,
++  input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
++  estimated_cost_usd REAL NOT NULL DEFAULT 0, actual_cost_usd REAL NOT NULL DEFAULT 0,
++  cost_status TEXT, cost_source TEXT, first_seen REAL, last_seen REAL,
++  PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
++);
++
++CREATE TABLE state_meta (key TEXT PRIMARY KEY, value TEXT);
++CREATE TABLE gateway_routing (scope, session_key, entry_json, updated_at, PRIMARY KEY (scope, session_key));
++CREATE TABLE compression_locks (session_id PK, holder, acquired_at, expires_at);
++CREATE TABLE async_delegations (delegation_id PK, origin_session, parent_session_id, state, …, task_json, result_json, …);
++
++CREATE VIRTUAL TABLE messages_fts USING fts5(content);             -- + insert/delete/update triggers
++CREATE VIRTUAL TABLE messages_fts_trigram USING fts5(content, tokenize='trigram');
++```
++
++Indexes: `idx_sessions_source`, `idx_sessions_parent`,
++`idx_sessions_started (started_at DESC)`, `idx_messages_session
++(session_id, timestamp)`, `idx_messages_session_active`,
++`idx_sessions_session_key`, `idx_sessions_gateway_peer`, and the FTS
++triggers — **the triggers maintain the FTS tables automatically** on
++plain `INSERT INTO messages`, so a projector that inserts rows does not
++have to touch `messages_fts*`.
++
++### `messages.tool_calls` JSON
++
++Written by `run_agent.py:2019-2026`: for SDK objects,
++`[{"name": tc.function.name, "arguments": tc.function.arguments}, …]`;
++for dict messages the raw OpenAI `tool_calls` list
++(`[{"id", "type": "function", "function": {"name", "arguments"}}]`) is
++stored as is. So the column has **two shapes**; the first lacks the call
++`id`, which means pairing a `role="tool"` row (`tool_call_id`) back to its
++call can be positional rather than by id. `get_messages` json-decodes it
++and falls back to `[]` on error (`hermes_state.py:4505-4560`).
++
++### Reconstructed example
++
++```sql
++INSERT INTO sessions (id, source, model, cwd, started_at) VALUES
++  ('20261015_151730_a1b2c3', 'cli', 'anthropic/claude-sonnet-4.6', '/Users/me/proj', 1792091850.1);
++INSERT INTO messages (session_id, role, content, timestamp) VALUES
++  ('20261015_151730_a1b2c3', 'user', 'list the files', 1792091851.0);
++INSERT INTO messages (session_id, role, content, tool_calls, finish_reason, timestamp) VALUES
++  ('20261015_151730_a1b2c3', 'assistant', NULL,
++   '[{"id":"call_1","type":"function","function":{"name":"terminal","arguments":"{\"command\":\"ls\"}"}}]',
++   'tool_calls', 1792091852.0);
++INSERT INTO messages (session_id, role, content, tool_call_id, tool_name, timestamp) VALUES
++  ('20261015_151730_a1b2c3', 'tool', 'a.rs\nb.rs\n', 'call_1', 'terminal', 1792091852.5);
++INSERT INTO messages (session_id, role, content, finish_reason, timestamp) VALUES
++  ('20261015_151730_a1b2c3', 'assistant', 'Two files: a.rs, b.rs.', 'stop', 1792091853.0);
++```
++
++(reconstructed from the DDL and `append_message`; tool name `terminal` is
++a guess — Hermes toolsets are not enumerated here.)
++
++## Session resolution / resume
++
++- `hermes [chat] -r/--resume <SESSION>` — by id **or title**
++  (`_parser.py:150`); `resolve_session_id` accepts a **unique prefix**
++  (`hermes_state.py:3260`). `-c/--continue [NAME]` resumes by name or the
++  most recent. `--no-restore-cwd` stops it `cd`-ing into `sessions.cwd`
++  (`cli.py:_restore_session_cwd`).
++- On resume the CLI reuses the id (`cli.py:4097`), loads `get_session`
++  (model, system prompt, cwd) and `get_messages(session_id)` (active rows
++  only, `ORDER BY id`); rewound rows (`active = 0`) are hidden.
++- `hermes sessions list [--source cli] [--limit N] [--workspace NEEDLE]
++  [--json]`, `hermes sessions export --session-id <id|prefix> --format
++  jsonl|md|qmd|html|trace -o <path|->` (JSONL = one JSON object per
++  session from `db.export_session`, `main.py:14724`).
++- Session creation (`run_agent.py:614`): `create_session(session_id,
++  source, model, model_config, system_prompt, user_id=None,
++  parent_session_id, cwd, profile_name)`.
++
++## Headless mode
++
++- `hermes -z/--oneshot "<prompt>"` — prints only the final text, no
++  session id line; `--usage-file PATH` writes a JSON usage report
++  (`_parser.py:102-128`). The run still goes through the agent, so it
++  creates a `sessions` row (inferred from `run_agent.py:614`).
++- `hermes chat -q "<query>" [-Q/--quiet]` — single query, quiet mode
++  prints final response **and session info**.
++- `--accept-hooks`, `-m/--model`, `--provider`, `-t/--toolsets`,
++  `-w/--worktree`.
++
++## What a `toolpath-hermes` provider needs
++
++| Hermes construct | `toolpath-convo` mapping |
++|---|---|
++| `sessions.id` | `ConversationView.id` |
++| `sessions.cwd`, `git_branch`, `git_repo_root` | `SessionBase { working_dir, vcs_branch }` |
++| `sessions.model` | default `Turn.model`; `ProducerInfo { name: "hermes" }` (version not stored — open) |
++| `sessions.source` + `user_id`/`chat_id`/`display_name` | `DeriveConfig.user_actor` → `human:<source>/<user_id>` (reuse PR #127's channel actor) |
++| `sessions.parent_session_id` | predecessor (compression lineage) or delegation parent |
++| `messages` role user | `Turn { role: User }` |
++| `messages` role assistant | `Turn { role: Assistant }`; `reasoning*` → `thinking`; `tool_calls` → `tool_uses[]`; `finish_reason` → `stop_reason` |
++| `messages` role tool | `ToolInvocation.result` by `tool_call_id` (fallback: positional) |
++| `messages` role system | `Turn { role: System }` |
++| `active = 0` rows | `ConversationEvent { event_type: "rewind" }` |
++| `session_model_usage` / `sessions.*_tokens` | `ConversationView.total_usage` (session-level; per-turn only via `token_count`) |
++| `async_delegations` | `DelegatedWork` |
++
++Derive cost: **medium** — SQLite, OpenAI-style rows, two `tool_calls`
++shapes, multi-channel actors. Project cost: **medium** — insert
++`sessions` + `messages`; FTS is trigger-maintained; keep `message_count`
++/`tool_call_count` consistent (`append_message` increments them); write
++`schema_version` = 22 or let Hermes migrate (`_reconcile_columns` adds
++missing columns on open, `hermes_state.py:1509`).
++
++## Open questions
++
++1. Role vocabulary and `content` JSON for multipart/image messages
++   (`_decode_content`).
++2. Which `tool_calls` shape the CLI path produces in practice (SDK
++   objects → no `id`).
++3. Hermes version is not recorded per session; where to get
++   `ProducerInfo.version`.
++4. Whether `--oneshot` persists a session (inferred yes).
++5. Per-turn token usage: `messages.token_count` only.
++
++Needs credentials to go further: a provider key (OpenRouter/Anthropic/…)
++and a working `pip`/`uv` install, for one `hermes chat -q` run to observe
++rows. Everything above is derivable from source without either.
++
++## References
++
++- Sdist: <https://pypi.org/project/hermes-agent/0.19.0/>
++- `hermes_state.py` (schema, `append_message`, `get_messages`,
++  `resolve_session_id`), `hermes_cli/_parser.py` (flags), `cli.py`
++  (session id, resume), `run_agent.py` (`create_session`, `tool_calls`
++  serialisation), `hermes_constants.py` (`HERMES_HOME`).
++- Docs: <https://hermes-agent.nousresearch.com/docs/>
+diff --git a/docs/agents/formats/qwen-code.md b/docs/agents/formats/qwen-code.md
+new file mode 100644
+index 0000000..e2c6fa6
+--- /dev/null
++++ b/docs/agents/formats/qwen-code.md
+@@ -0,0 +1,201 @@
++# Qwen Code session format (draft)
++
++Reference for the on-disk format produced by Alibaba's
++[Qwen Code](https://github.com/QwenLM/qwen-code) CLI (Apache-2.0, a
++Gemini CLI fork), as intended input for a future `toolpath-qwen` provider.
++Compiled from:
++
++1. **Observed**: `qwen` `0.23.4` from `nixpkgs#qwen-code`, run as
++   `qwen -o json "say hi"` under a temporary `HOME` on 2026-10-15. With no
++   auth type configured it exits with a JSON `result` carrying a
++   `session_id`, and writes **no** chat file — only `~/.qwen/` bootstrap
++   files (`installation_id`, `extension-store/`, `extensions/`, `skills/`).
++2. **Read**: upstream source at tag `v0.23.4`:
++   `packages/core/src/config/storage.ts`,
++   `packages/core/src/utils/paths.ts`,
++   `packages/core/src/services/chatRecordingService.ts` (the `ChatRecord`
++   type), plus `qwen --help`, `qwen sessions --help`.
++3. Field-level shapes of `message`/`usageMetadata` are Gemini SDK types
++   (`Content`, `GenerateContentResponseUsageMetadata`) and transfer from
++   `docs/agents/formats/gemini.md` / `toolpath-gemini`.
++
++No record has been observed on this machine. Date: **2026-10-15**.
++
++## Install route and version
++
++- `nix shell nixpkgs#qwen-code` → `qwen 0.23.4` (Node bundle under
++  `share/qwen-code/`; honours `HOME`, observed).
++- Vendor: `npm i -g @qwen-code/qwen-code`.
++- Isolation: `QWEN_HOME=<dir>` moves config **and** runtime data;
++  `QWEN_RUNTIME_DIR=<dir>` moves only runtime output (sessions, temp,
++  debug logs) (read: `storage.ts:169-200`).
++
++## Storage root
++
++```
++$QWEN_HOME (default ~/.qwen/)
++  settings.json, oauth_creds.json, installation_id, …
++  projects/                                   PROJECT_DIR_NAME (storage.ts:20)
++    <sanitizeCwd(projectRoot)>/               every non-[a-zA-Z0-9] char → "-"  (paths.ts:388)
++      chats/
++        <sessionId>.jsonl                     one ChatRecord per line, append-only
++        <sessionId>.runtime.json              live-status sidecar for external observers (storage.ts:734)
++      workflows/                              workflow run snapshots/journals
++  tmp/<sha256(projectRoot)>/                  getProjectTempDir: tool-results/, checkpoints/, shell_history
++```
++
++The survey's alternative `~/.qwen/sessions/<hash>/<id>.json` does not
++exist in 0.23.4 (read).
++
++### Project id
++
++`sanitizeCwd` replaces every character outside `[a-zA-Z0-9]` with `-`
++(lowercased first on Windows), so
++
++```
++/Users/ben/empathic/oss/toolpath  ──▶  -Users-ben-empathic-oss-toolpath
++```
++
++Unlike Pi's encoder it also maps `.`, `_` and ` ` to `-`, so it is lossy
++for more paths; there is no `--…--` wrapper. The sibling `tmp/` tree uses
++`sha256(projectRoot)` instead (`getProjectHash`).
++
++### Session id
++
++UUIDv4 (observed in the headless result; `--session-id <id>` lets the
++caller choose). The chat file is created with `wx` (exclusive) on first
++write and then appended (read: `chatRecordingService.ts:1130-1145`).
++
++## `ChatRecord` lines
++
++From `chatRecordingService.ts:279-422`:
++
++```ts
++{
++  uuid: string,                     // this record
++  parentUuid: string | null,        // previous record; null for the root
++  sessionId: string,
++  timestamp: string,                // ISO-8601
++  type: "user" | "assistant" | "tool_result" | "system",
++  subtype?: "chat_compression" | "slash_command" | "ui_telemetry" | "at_command"
++          | "attribution_snapshot" | "notification" | "cron" | "mid_turn_user_message"
++          | "custom_title" | "parent_session" | "session_source" | "session_model"
++          | "rewind" | "agent_bootstrap" | "agent_launch_prompt" | "agent_retry"
++          | "agent_session_ready" | "file_history_snapshot" | "user_text_elements"
++          | "session_artifact_event" | "session_artifact_snapshot" | "session_sources_snapshot"
++          | "branch_checkpoint" | "goal_state" | "goal_runtime" | "realtime_message" | "turn_result",
++  provenance?: "real_user" | "assistant_output" | "tool_result" | "goal_control" | "goal_runtime" | "system",
++  goalContext?: { goalId, revision, turnId },
++  cwd: string,
++  version: string,                  // CLI version
++  gitBranch?: string,
++  daemonPromptId?: string,
++
++  message?: Content,                // Gemini { role: "user"|"model", parts: [{text}|{functionCall}|{functionResponse}|{thought…}] }
++  usageMetadata?: GenerateContentResponseUsageMetadata,   // promptTokenCount, candidatesTokenCount, thoughtsTokenCount, cachedContentTokenCount, totalTokenCount
++  model?: string,
++  contextWindowSize?: number,
++  toolCallResult?: Partial<ToolCallResponseInfo> & { status?: Status },  // UI-enriched result for type: "tool_result"
++  systemPayload?: …,                // per-subtype payload for type: "system"
++
++  agentId?, agentName?, agentColor?, isSidechain?, agentRunId?, agentRound?,   // subagent records
++  externalInputKind?: "message" | "notification",
++  forkedFrom?: { sessionId, messageUuid }   // set on every record of a /branch copy
++}
++```
++
++### Reconstructed example
++
++```jsonl
++{"uuid":"a1","parentUuid":null,"sessionId":"04b00b54-d411-44aa-8797-ee0b4fee9d18","timestamp":"2026-10-15T19:20:00.000Z","type":"user","cwd":"/Users/me/proj","version":"0.23.4","gitBranch":"main","message":{"role":"user","parts":[{"text":"list the files"}]}}
++{"uuid":"a2","parentUuid":"a1","sessionId":"04b00b54-…","timestamp":"2026-10-15T19:20:01.200Z","type":"assistant","cwd":"/Users/me/proj","version":"0.23.4","model":"qwen3-coder-plus","message":{"role":"model","parts":[{"thought":true,"text":"…"},{"functionCall":{"id":"call-1","name":"run_shell_command","args":{"command":"ls"}}}]},"usageMetadata":{"promptTokenCount":1200,"candidatesTokenCount":40,"thoughtsTokenCount":12,"cachedContentTokenCount":0,"totalTokenCount":1252}}
++{"uuid":"a3","parentUuid":"a2","sessionId":"04b00b54-…","timestamp":"2026-10-15T19:20:01.400Z","type":"tool_result","cwd":"/Users/me/proj","version":"0.23.4","message":{"role":"user","parts":[{"functionResponse":{"id":"call-1","name":"run_shell_command","response":{"output":"a.rs\nb.rs\n"}}}]},"toolCallResult":{"callId":"call-1","status":"success"}}
++{"uuid":"a4","parentUuid":"a3","sessionId":"04b00b54-…","timestamp":"2026-10-15T19:20:02.000Z","type":"assistant","cwd":"/Users/me/proj","version":"0.23.4","model":"qwen3-coder-plus","message":{"role":"model","parts":[{"text":"Two files: a.rs and b.rs."}]},"usageMetadata":{"promptTokenCount":1300,"candidatesTokenCount":15,"totalTokenCount":1315}}
++```
++
++(Reconstructed from the type; part shapes follow the Gemini SDK as in
++`gemini.md`. Exact tool names, the `functionResponse.response` envelope
++and whether `thought` parts carry `thoughtSignature` are to be confirmed
++on a real file.)
++
++Tool call ↔ result: the call is a `functionCall` part inside an
++`assistant` record's `message`; the result is a separate `tool_result`
++record whose `message.parts[].functionResponse.id` (or
++`toolCallResult.callId`) matches. Pi-style separate entries, Gemini-style
++parts.
++
++## Session resolution / resume
++
++- `qwen -r/--resume <id>` (picker without an id), `-c/--continue` (most
++  recent for the project), `--session-id <id>` (pin a new id),
++  `--fork-session` with either; all work with a positional prompt in
++  headless mode (read: `--help`).
++- `--chat-recording false` disables writing; then `--continue/--resume`
++  cannot work (read: `--help`). Default appears to be on (the headless
++  run was going to record; **inferred**).
++- Resume reads `projects/<slug>/chats/<id>.jsonl` for the **current
++  project's** slug and rebuilds `Content[]` from the `message` fields,
++  honouring `system` records (`chat_compression`, `rewind`,
++  `branch_checkpoint`) (read: `ChatRecord` doc comments;
++  `sessionStorageUtils.ts` not read in full).
++- `qwen sessions list` / `sessions ps` (running) / `sessions controllers`.
++
++## Headless mode
++
++`qwen [-o text|json|stream-json] [--include-partial-messages]
++[--json-schema <schema|@file>] [--max-session-turns N] [--max-wall-time
++30s] [--max-tool-calls N] [--approval-mode plan|default|auto-edit|auto|yolo]
++[-y] [--auth-type openai|openai-responses|anthropic|qwen-oauth|gemini|vertex-ai]
++"<prompt>"`; `--input-format stream-json` for multi-turn drive;
++`--json-fd`/`--json-file` for dual output; `--acp`; `qwen serve` daemon.
++Observed failure result (JSON array, one `result` object):
++
++```json
++[{"type":"result","subtype":"error_during_execution","uuid":"326bcf8a-…","session_id":"04b00b54-…","is_error":true,"duration_ms":0,"duration_api_ms":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"permission_denials":[],"error":{"message":"No auth type is selected. …"}}]
++```
++
++## What a `toolpath-qwen` provider needs
++
++| Qwen construct | `toolpath-convo` mapping |
++|---|---|
++| `sessionId` | `ConversationView.id` |
++| first record's `cwd`, `gitBranch`, `version` | `SessionBase { working_dir, vcs_branch }`, `ProducerInfo { name: "qwen-code", version }` |
++| `uuid` / `parentUuid` | `Turn.id` / `Turn.parent_id` |
++| `type: user` | `Turn { role: User }` (text parts joined) |
++| `type: assistant` | `Turn { role: Assistant, model }`; `thought` parts → `thinking`; `text` → `text`; `functionCall` → `tool_uses[]` |
++| `type: tool_result` | `ToolInvocation.result` by `functionResponse.id`; `toolCallResult.status` → `is_error` |
++| `usageMetadata` | `Turn.token_usage` (per call; `thoughtsTokenCount` folded into output as for Gemini) |
++| `type: system` + `subtype` | `ConversationEvent { event_type: "system." + subtype, data: systemPayload }`; `chat_compression` → compaction marker, `rewind` → drop later turns from the active chain |
++| `isSidechain` / `agentId` records | `DelegatedWork` turns grouped by `agentRunId` |
++| `forkedFrom` | predecessor link |
++
++Derive cost: **easy–medium**: reuse `toolpath-gemini`'s part modelling;
++new work is the JSONL envelope, the uuid chain and ~25 system subtypes
++(preserve unknown ones verbatim). Project cost: **medium**: write
++`projects/<sanitizeCwd(cwd)>/chats/<id>.jsonl` with a consistent chain
++and `version`; optionally the `.runtime.json` sidecar (shape not read).
++The survey's "repeated uuids across resumed sessions" report should be
++checked against `forkedFrom` semantics (a `/branch` copy keeps the same
++`uuid`s by design — read: doc comment on `forkedFrom`).
++
++## Open questions
++
++1. A real `.jsonl` sample: part shapes, `toolCallResult` fields,
++   `thoughtSignature`.
++2. `<sessionId>.runtime.json` contents.
++3. Whether chat recording is on by default in headless mode.
++4. How `--resume <id>` finds a session recorded under a different
++   project slug (same cwd, different realpath).
++
++Needs credentials to go further: any `--auth-type openai --openai-api-key
++… --openai-base-url …` endpoint (an OpenAI-compatible local server would
++do) for one recorded session.
++
++## References
++
++- Storage paths: <https://github.com/QwenLM/qwen-code/blob/v0.23.4/packages/core/src/config/storage.ts>
++- `sanitizeCwd` / `getProjectHash`: <https://github.com/QwenLM/qwen-code/blob/v0.23.4/packages/core/src/utils/paths.ts>
++- `ChatRecord`: <https://github.com/QwenLM/qwen-code/blob/v0.23.4/packages/core/src/services/chatRecordingService.ts>
++- Local copies: `<scratchpad>/harness-qwen/src/`, temp home
++  `<scratchpad>/harness-qwen/home/`
++- Gemini part shapes: `docs/agents/formats/gemini.md`
+-- 
+2.55.0
+

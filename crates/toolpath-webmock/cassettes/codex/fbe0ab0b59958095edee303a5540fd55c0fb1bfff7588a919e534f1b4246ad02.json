@@ -1,0 +1,51 @@
+{
+ "agent": "codex",
+ "recorded_at": "2026-10-15T19:21:09.769Z",
+ "key": "fbe0ab0b59958095edee303a5540fd55c0fb1bfff7588a919e534f1b4246ad02",
+ "loose_key": "8c2ca11f4c60ab017652365bea629811ab6e3c341157cc58e03c4c77f1a8c1a6",
+ "model": "",
+ "request": {
+  "method": "GET",
+  "url": "/backend-api/wham/settings/user",
+  "upstream": "https://chatgpt.com",
+  "headers": {
+   "accept": "*/*",
+   "authorization": "<redacted>",
+   "cache-control": "no-cache, no-store",
+   "chatgpt-account-id": "<redacted>",
+   "user-agent": "codex_exec/0.162.1 (Mac OS 26.6.2; arm64) unknown (codex_exec; 0.162.1)"
+  },
+  "body": "",
+  "body_encoding": "identity",
+  "normalized": ""
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a4b12f6c4fd79988-EWR",
+   "content-type": "application/json",
+   "cross-origin-opener-policy": "same-origin-allow-popups",
+   "date": "Thu, 15 Oct 2026 19:21:09 GMT",
+   "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+   "referrer-policy": "strict-origin-when-cross-origin",
+   "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=5ewGrjOvTlnDjeHpcESnS3To1ws3kkN%2BeLJt9r420Jjs2yOcbkgotnld3xO9G3xt2txdSccSFx8qqLrrtRdUSr100lWzoLr0daJnb7fYpXlQbYe%2BrL4rrK0n5I36\"}]}",
+   "server": "cloudflare",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "x-content-type-options": "nosniff",
+   "x-oai-request-id": "d44d9b3b-11bb-412d-849c-3ce0e91d97e1",
+   "x-openai-proxy-wasm": "v0.1",
+   "set-cookie": "<redacted>"
+  },
+  "chunks": [
+   {
+    "t_ms": 191,
+    "b64": "ewogICJ1c2VyX2lkIjogInVzZXItYU1FdmF1NTVvSVFMZDU0M1dYSktJWExYX19kN2RiYzViMy0xNjczLTQ0ZjAtODIzMC1mMDY5ZTM3OGVhMDUiLAogICJnaXRfZGlmZl9tb2RlIjogInVuaWZpZWQiLAogICJicmFuY2hfZm9ybWF0IjogImNvZGV4L3tmZWF0dXJlfSIsCiAgImN1c3RvbV9pbnN0cnVjdGlvbnMiOiBudWxsLAogICJwcmVmZXJyZWRfZ2l0aHViX2Nvbm5lY3Rvcl9pZCI6IG51bGwsCiAgInByZWZlcnJlZF9naXRsYWJfY29ubmVjdG9yX2lkIjogbnVsbCwKICAiY29kZV9yZXZpZXdfcHJlZmVyZW5jZSI6ICJyZXBvX2RlZmF1bHQiLAogICJjb2RlX3Jldmlld190cmlnZ2VyX3BvbGljeSI6ICJwcl9vcGVuIiwKICAiZXhoYXVzdGl2ZV9jb2RlX3JldmlldyI6IGZhbHNlLAogICJzZWN1cml0eV9yZXZpZXciOiB7CiAgICAicHJlZmVyZW5jZSI6ICJyZXBvX2RlZmF1bHQiLAogICAgInRyaWdnZXJfcG9saWN5IjogImNvZGVfcmV2aWV3IiwKICAgICJzZXZlcml0eV90aHJlc2hvbGQiOiAiaGlnaCIsCiAgICAibWFudWFsX3NldmVyaXR5X3RocmVzaG9sZCI6ICJtZWRpdW0iCiAgfSwKICAiYWxwaGFfb3B0X2luIjogZmFsc2UsCiAgImFsbG93X2NyZWRpdHNfZm9yX2NvZGVfcmV2aWV3cyI6IGZhbHNlLAogICJhbGxvd19jcmVkaXRzX2Zvcl9zZWN1cml0eV9yZXZpZXdzIjogZmFsc2UsCiAgImNvbW1pdF9hdHRyaWJ1dGlvbl9lbmFibGVkIjogZmFsc2UsCiAgImNvZGVfYXR0cmlidXRpb25fY29uc29sZV9lbmFibGVkIjogZmFsc2UsCiAgImNvZGV4X25vdGlmaWNhdGlvbnNfY29uc29sZV9lbmFibGVkIjogZmFsc2UKfQ=="
+   }
+  ],
+  "bytes": 811,
+  "duration_ms": 191,
+  "sse": false,
+  "text_preview": "{\n  \"user_id\": \"user-aMEvau55oIQLd543WXJKIXLX__d7dbc5b3-1673-44f0-8230-f069e378ea05\",\n  \"git_diff_mode\": \"unified\",\n  \"branch_format\": \"codex/{feature}\",\n  \"custom_instructions\": null,\n  \"preferred_github_connector_id\": null,\n  \"preferred_gitlab_connector_id\": null,\n  \"code_review_preference\": \"repo_default\",\n  \"code_review_trigger_policy\": \"pr_open\",\n  \"exhaustive_code_review\": false,\n  \"security"
+ }
+}

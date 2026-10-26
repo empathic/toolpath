@@ -1,0 +1,171 @@
+{
+  "writer": "cursor-agent",
+  "ops": [
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.provider", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.value", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {
+      "op": "drop",
+      "path": "paths[].meta.actors.<actor>.model",
+      "why": "the store's ModelMessages carry no model; meta.lastUsedModel (one per chat) is not written"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.files_changed[]",
+      "why": "follows from the file mutations, which do not come back",
+      "defect": "the reader does not rebuild file mutations from the tool-call args it keeps"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.producer.version",
+      "why": "toolpath's own producer stamp; the target format has no place for it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.vcs_remote",
+      "why": "the cursor-agent store records no vcs remote"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.branch",
+      "why": "the store records no working directory, only its md5 in the chat directory's name"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.ref",
+      "why": "the store records no working directory, only its md5 in the chat directory's name"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+      "why": "the writer writes no usage; ModelMessages carry none"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+      "why": "the writer writes no usage; ModelMessages carry none"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+      "why": "the writer records no delegation (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+      "why": "the writer records no delegation (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
+      "why": "the writer records no delegation (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
+      "why": "the writer records no sub-agent turns (the root's subagent_states, field 16, is not written)"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+      "why": "the store records no per-turn environment"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+      "why": "the store records no per-turn environment"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+      "why": "the store records no per-turn environment"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.group_id",
+      "why": "an accounting grouping key the target format does not store"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
+      "why": "ModelMessages record no stop reason"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+      "why": "the writer writes no usage: ModelMessages carry none and the root's token_details (field 5) is not written"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+      "why": "the writer writes no usage: ModelMessages carry none and the root's token_details (field 5) is not written"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
+      "why": "the writer writes no usage: ModelMessages carry none and the root's token_details (field 5) is not written"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+      "why": "the writer writes no usage: ModelMessages carry none and the root's token_details (field 5) is not written"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens",
+      "why": "the writer writes no usage: ModelMessages carry none and the root's token_details (field 5) is not written"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.before",
+      "why": "the file write's own artifact: only the tool call's args come back",
+      "defect": "the reader does not rebuild file mutations from the tool-call args it keeps"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.operation",
+      "why": "the file write's own artifact: only the tool call's args come back",
+      "defect": "the reader does not rebuild file mutations from the tool-call args it keeps"
+    }
+  ]
+}

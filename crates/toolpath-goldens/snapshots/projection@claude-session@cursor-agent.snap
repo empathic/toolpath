@@ -1,0 +1,52 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
+input_file: goldens/claude-session/input.jsonl
+---
+{
+  "meta": {
+    "agentId": "08f8ca74-56bc-441d-8922-cb3637991ef5",
+    "latestRootBlobId": "84a5ddf55a8e5346227cdf9c42a21ce6699239827ebbd50c8dc0437d6f9ed279",
+    "name": "Run the shell command `ls` exactly, with no arguments or fla",
+    "mode": "default",
+    "isRunEverything": false,
+    "createdAt": 1791489144852,
+    "blobEncryptionKey": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "blobs": {
+    "29982553ff1ee2bd15f5781999f1aa854db0a7eb8128c550347c2a8c3c951959": {
+      "text": "{\"content\":[{\"isError\":false,\"result\":\"1\\tfirst line of the notes\",\"toolCallId\":\"toolu_01GjqjxW9tnUh9qzsRWnoEWW\",\"toolName\":\"Read\",\"type\":\"tool-result\"}],\"role\":\"tool\"}"
+    },
+    "62bdff8ee0c522944082aa72ffed3dc4c73f585ff792a0fc0f002c1d34fb1128": {
+      "text": "{\"content\":[{\"text\":\"The directory contains two files: `notes.txt` and `other.txt`.\\n\\nThe first line of notes.txt is: **first line of the notes**\",\"type\":\"text\"}],\"id\":\"0ab64e1b-9c25-4aef-8b54-f004e25bda06\",\"role\":\"assistant\"}"
+    },
+    "84a5ddf55a8e5346227cdf9c42a21ce6699239827ebbd50c8dc0437d6f9ed279": {
+      "hex": "0a20ee4ad89903ffb313c75402f3f0f59dcfd5c537833fe3fc4942d68fc6af1c8b0c0a20cc40c842201bececb50396707b8ab6ead6237c0a465d5e8b8d5fc08a260fdaa20a20c3817827d84aeb5296ba2661ee7dd8e3594b976f7657a32a4e2f272239ffe15d0a20af30965715c0cac9168d7e250d5d955c24c91cb50acb88efeff4fdbb0a4cc10b0a2029982553ff1ee2bd15f5781999f1aa854db0a7eb8128c550347c2a8c3c9519590a2062bdff8ee0c522944082aa72ffed3dc4c73f585ff792a0fc0f002c1d34fb11284220f79ddadc64914494adff8156978708b161e00d26e203495a07ed4cbe4fb13aae"
+    },
+    "af30965715c0cac9168d7e250d5d955c24c91cb50acb88efeff4fdbb0a4cc10b": {
+      "text": "{\"content\":[{\"args\":{\"file_path\":\"/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt\",\"limit\":1},\"toolCallId\":\"toolu_01GjqjxW9tnUh9qzsRWnoEWW\",\"toolName\":\"Read\",\"type\":\"tool-call\"}],\"id\":\"9b188e5d-72e1-45c3-a3fa-e23ef1b02421\",\"role\":\"assistant\"}"
+    },
+    "b75c237dedf1a7f951ad33ed7d26c25b04a60733b65a220332700a122c7c7fd2": {
+      "hex": "0aa90152756e20746865207368656c6c20636f6d6d616e6420606c73602065786163746c792c2077697468206e6f20617267756d656e7473206f7220666c6167732c20746f206c697374207468652066696c65206e616d657320696e207468652063757272656e74206469726563746f72792e205468656e2072656164207468652066696c65206e6f7465732e74787420616e642074656c6c206d6520697473206669727374206c696e652e122439343663333332302d653632652d343938622d613031322d636161353762346235313564"
+    },
+    "c3817827d84aeb5296ba2661ee7dd8e3594b976f7657a32a4e2f272239ffe15d": {
+      "text": "{\"content\":[{\"isError\":false,\"result\":\"notes.txt\\nother.txt\",\"toolCallId\":\"toolu_016Jcqs5U6qdvMJZjjrcRFvq\",\"toolName\":\"Bash\",\"type\":\"tool-result\"}],\"role\":\"tool\"}"
+    },
+    "cc40c842201bececb50396707b8ab6ead6237c0a465d5e8b8d5fc08a260fdaa2": {
+      "text": "{\"content\":[{\"args\":{\"command\":\"ls\",\"description\":\"List files in current directory\"},\"toolCallId\":\"toolu_016Jcqs5U6qdvMJZjjrcRFvq\",\"toolName\":\"Bash\",\"type\":\"tool-call\"}],\"id\":\"06090cc1-61b2-4e7a-8a88-eb870ff05877\",\"role\":\"assistant\"}"
+    },
+    "ee4ad89903ffb313c75402f3f0f59dcfd5c537833fe3fc4942d68fc6af1c8b0c": {
+      "text": "{\"content\":[{\"text\":\"Run the shell command `ls` exactly, with no arguments or flags, to list the file names in the current directory. Then read the file notes.txt and tell me its first line.\",\"type\":\"text\"}],\"role\":\"user\"}"
+    },
+    "f79ddadc64914494adff8156978708b161e00d26e203495a07ed4cbe4fb13aae": {
+      "hex": "0a440a20b75c237dedf1a7f951ad33ed7d26c25b04a60733b65a220332700a122c7c7fd21220fa445e5def6886487c4baca0194cd2b513e8eb6de60e28f5050b20471c8aaafe"
+    },
+    "fa445e5def6886487c4baca0194cd2b513e8eb6de60e28f5050b20471c8aaafe": {
+      "text": "\n}\n{The directory contains two files: `notes.txt` and `other.txt`.\n\nThe first line of notes.txt is: **first line of the notes**"
+    }
+  }
+}

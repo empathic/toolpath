@@ -1,0 +1,11 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: "transcript(\"list bundled kinds\", &[\"kind\"], &list, None)"
+---
+$ path kind
+exit: 0
+--- stdout
+agent-coding-session	v1.0.0, v1.1.0
+--- stderr
+
+# list bundled kinds

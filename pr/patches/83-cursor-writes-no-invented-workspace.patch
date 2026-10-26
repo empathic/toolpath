@@ -1,0 +1,239 @@
+From fdc3da4e61c688b570bf51623fd3fa9cf48481dd Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 17:50:01 -0400
+Subject: [PATCH] fix(cursor): the IDE writer names no workspace the document
+ never named (pr/83)
+
+CursorProjector fell back to workspace `/` when neither the caller nor
+the view named a directory, so gemini -> cursor read back with
+`paths[].path.base.uri` and `environment.working_dir` it never had.
+With no directory the head now carries no workspaceIdentifier (a
+caller-given id keeps the id with no uri). Sources with a cwd and
+callers that pass a project directory write as before.
+
+round_trip@gemini@cursor: both gained keys gone, after key_paths 54 -> 52.
+---
+ crates/toolpath-cursor/src/project.rs         | 62 +++++++++++++------
+ .../snapshots/projection@gemini@cursor.snap   | 12 +---
+ .../snapshots/round_trip@gemini@cursor.snap   |  4 +-
+ .../snapshots/shed@gemini.snap                |  6 +-
+ docs/agents/formats/cursor.md                 |  4 ++
+ pr/82-no-invented-resume-dir.md               |  2 +-
+ pr/83-cursor-writes-no-invented-workspace.md  | 24 +++++++
+ 7 files changed, 78 insertions(+), 36 deletions(-)
+ create mode 100644 pr/83-cursor-writes-no-invented-workspace.md
+
+diff --git a/crates/toolpath-cursor/src/project.rs b/crates/toolpath-cursor/src/project.rs
+index fbc336d0..bd8fa9c0 100644
+--- a/crates/toolpath-cursor/src/project.rs
++++ b/crates/toolpath-cursor/src/project.rs
+@@ -111,15 +111,17 @@ fn project_view(
+                 .as_ref()
+                 .and_then(|b| b.working_dir.clone())
+                 .map(PathBuf::from)
+-        })
+-        .unwrap_or_else(|| PathBuf::from("/"));
+-    let workspace_path_str = workspace_path.to_string_lossy().into_owned();
++        });
++    // No directory named by the caller or the view: write none, never `/`.
++    let workspace_path_str = workspace_path
++        .as_ref()
++        .map(|p| p.to_string_lossy().into_owned());
+ 
+     let workspace_id = cfg
+         .workspace_id
+         .clone()
+         .filter(|s| !s.is_empty())
+-        .unwrap_or_else(|| workspace_hash(&workspace_path_str));
++        .or_else(|| workspace_path_str.as_deref().map(workspace_hash));
+ 
+     let title = cfg.title.clone().or_else(|| view.title(80));
+ 
+@@ -185,23 +187,20 @@ fn project_view(
+         }
+     }
+ 
+-    let workspace_identifier = if workspace_path_str.starts_with('/') {
+-        Some(WorkspaceIdentifier {
+-            id: workspace_id.clone(),
+-            uri: Some(WorkspaceUri {
++    // Cursor tolerates a head with no `workspaceIdentifier`, and one with an
++    // id but no `uri` (a remote or folderless window).
++    let workspace_identifier = workspace_id.map(|id| WorkspaceIdentifier {
++        id,
++        uri: workspace_path_str
++            .filter(|p| p.starts_with('/'))
++            .map(|p| WorkspaceUri {
+                 mid: Some(1),
+-                fs_path: Some(workspace_path_str.clone()),
+-                external: Some(format!("file://{}", workspace_path_str)),
+-                path: Some(workspace_path_str.clone()),
++                fs_path: Some(p.clone()),
++                external: Some(format!("file://{p}")),
++                path: Some(p),
+                 scheme: Some("file".into()),
+             }),
+-        })
+-    } else {
+-        Some(WorkspaceIdentifier {
+-            id: workspace_id.clone(),
+-            uri: None,
+-        })
+-    };
++    });
+ 
+     let head = ComposerHead {
+         kind: Some("head".into()),
+@@ -1356,6 +1355,33 @@ mod tests {
+         assert!(ws.uri.is_none());
+     }
+ 
++    #[test]
++    fn no_working_dir_writes_no_workspace() {
++        let mut turn = user_turn("u1", "hi");
++        turn.environment = None;
++        let mut view = view_with(vec![turn]);
++        view.base = None;
++
++        let s = CursorProjector::new().project(&view).unwrap();
++        assert!(s.head.as_ref().unwrap().workspace_identifier.is_none());
++        assert_eq!(s.workspace_path(), None);
++
++        // A caller-given id with no directory keeps the id and names no folder.
++        let s = CursorProjector::new()
++            .with_workspace_id("workspaceid")
++            .project(&view)
++            .unwrap();
++        let ws = s
++            .head
++            .as_ref()
++            .unwrap()
++            .workspace_identifier
++            .as_ref()
++            .unwrap();
++        assert_eq!(ws.id, "workspaceid");
++        assert!(ws.uri.is_none());
++    }
++
+     #[test]
+     fn every_canonical_tool_name_resolves_to_its_canonical_id() {
+         use crate::types::{TOOL_TABLE, TOOL_UNSPECIFIED};
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap b/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
+index 6436ef9c..0c12ba88 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
+@@ -1366,16 +1366,6 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "name": "You're going to walk through a small set of tasks designed to exercise every com...",
+     "numSubComposers": 0,
+     "type": "head",
+-    "unifiedMode": "agent",
+-    "workspaceIdentifier": {
+-      "id": "8a5edab282632443219e051e4ade2d1d",
+-      "uri": {
+-        "$mid": 1,
+-        "external": "file:///",
+-        "fsPath": "/",
+-        "path": "/",
+-        "scheme": "file"
+-      }
+-    }
++    "unifiedMode": "agent"
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
+index 3a83f9f7..1844d4fb 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 54
++    "key_paths": 52
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+@@ -32,8 +32,6 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.pattern"
+   ],
+   "gained": [
+-    "paths[].path.base.uri",
+-    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.globPattern",
+diff --git a/crates/toolpath-goldens/snapshots/shed@gemini.snap b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+index c10113c0..9b022277 100644
+--- a/crates/toolpath-goldens/snapshots/shed@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+@@ -70,9 +70,9 @@ input_file: test-fixtures/gemini/convo.jsonl
+       }
+     },
+     "cursor": {
+-      "lines": 1372,
+-      "bytes": 65272,
+-      "string_chars": 25619,
++      "lines": 1362,
++      "bytes": 65045,
++      "string_chars": 25573,
+       "by_type": {
+         "?": 1
+       }
+diff --git a/docs/agents/formats/cursor.md b/docs/agents/formats/cursor.md
+index fec18b3d..55f490b9 100644
+--- a/docs/agents/formats/cursor.md
++++ b/docs/agents/formats/cursor.md
+@@ -281,6 +281,10 @@ Notable bits:
+ - `workspaceIdentifier.uri.$mid: 1` is the VS Code `URI` tag — the
+   fields are reserialized verbatim from `URI.toJSON()` and round-trip
+   through `URI.from(…)`.
++- `workspaceIdentifier` may be absent, and `uri` may be `{}` (an
++  untitled or remote window). toolpath's IDE writer leaves it out when
++  neither the caller nor the document names a directory, rather than
++  writing `/`.
+ - The list contains composers that have **no `bubbleId:` rows** —
+   drafts the user opened and abandoned. Always cross-check with the
+   bubble keyspace before assuming a session has body.
+diff --git a/pr/82-no-invented-resume-dir.md b/pr/82-no-invented-resume-dir.md
+index 9588e3d2..15a98da7 100644
+--- a/pr/82-no-invented-resume-dir.md
++++ b/pr/82-no-invented-resume-dir.md
+@@ -24,4 +24,4 @@ are unchanged. Sources with a cwd read back as in pr/76.
+ 
+ ## Not fixed here
+ gemini -> cursor (the IDE writer) still gains `paths[].path.base.uri` and `environment.working_dir`: `CursorProjector` falls
+-back to workspace `/` when the view has none. A writer change, separate from this read-back.
++back to workspace `/` when the view has none. A writer change, separate from this read-back; fixed in pr/83.
+diff --git a/pr/83-cursor-writes-no-invented-workspace.md b/pr/83-cursor-writes-no-invented-workspace.md
+new file mode 100644
+index 00000000..bfce6da1
+--- /dev/null
++++ b/pr/83-cursor-writes-no-invented-workspace.md
+@@ -0,0 +1,24 @@
++# fix(cursor): the IDE writer names no workspace the document never named
++
++Status: draft · Base: pr/82 · Code (toolpath-cursor project.rs) + docs/agents/formats/cursor.md + 3 snapshots
++
++## Why (plain words)
++`CursorProjector` took its workspace from the caller, then the view's turns, then the view's base, and otherwise fell back to
++`/`. gemini names no working directory, so gemini -> cursor wrote a `file:///` workspace and read back with
++`paths[].path.base.uri` and `environment.working_dir` it never had (pr/82's "Not fixed here"). That directory was invented.
++
++## What
++With no directory from the caller or the view, the writer leaves `workspaceIdentifier` out of the composer head. A caller-given
++workspace id with no directory keeps the id and writes no `uri` (as for an untitled or remote window). Cursor's own heads carry
++both shapes, and the reader already reads them as "no workspace". Sources with a cwd, and every caller that passes a project
++directory (`path export cursor --project`, `p resume`), write as before. docs/agents/formats/cursor.md: the writer rule.
++
++## Snapshots
++- `round_trip@gemini@cursor`: `gained` loses `paths[].path.base.uri` and `...structural.environment.working_dir`; after
++  key_paths 54 -> 52. Steps, text and tool uses unchanged.
++- `projection@gemini@cursor`: the head has no `workspaceIdentifier` (was id `8a5e…` with `file:///`).
++- `shed@gemini`: the cursor projection's size shrinks by those lines (1372 -> 1362 lines, 65272 -> 65045 bytes).
++- Nothing else moved: every other cursor source has a cwd; `twice_around@gemini@cursor` stays empty.
++
++## Verification
++Unit test `no_working_dir_writes_no_workspace`. `INSTA_UPDATE=always` workspace test run, then the gates as for pr/81.
+-- 
+2.55.0
+

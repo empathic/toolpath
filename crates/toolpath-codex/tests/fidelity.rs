@@ -316,8 +316,15 @@ fn patch_apply_files_all_surface_as_artifacts() {
                 continue;
             }
             for file_path in patch.changes.keys() {
+                // Keys are relative to the session's working directory when inside it.
+                let wd = path
+                    .path
+                    .base
+                    .as_ref()
+                    .and_then(|b| b.uri.strip_prefix("file://"));
+                let key = toolpath_convo::derive::normalize_artifact_path(file_path, wd);
                 assert!(
-                    artifact_keys.contains(file_path.as_str()),
+                    artifact_keys.contains(key.as_str()),
                     "file {} from successful patch_apply_end not found in derived artifacts",
                     file_path
                 );

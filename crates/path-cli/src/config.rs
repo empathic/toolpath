@@ -49,6 +49,8 @@ pub(crate) struct Config {
     pub(crate) appdata: Option<PathBuf>,
     /// `$CLAUDE_CONFIG_DIR`: Claude Code config root override; session
     /// transcripts live under `<dir>/projects` instead of `~/.claude/projects`.
+    /// May be a `:`-separated list (see [`Config::claude_config_dirs`]);
+    /// only cache sync reads more than the first entry.
     pub(crate) claude_config_dir: Option<PathBuf>,
     /// `$COPILOT_HOME`: Copilot CLI session root override.
     pub(crate) copilot_home: Option<PathBuf>,
@@ -155,6 +157,22 @@ impl Config {
     pub(crate) fn home_dir(&self) -> Option<&PathBuf> {
         self.home.as_ref().or(self.userprofile.as_ref())
     }
+
+    /// The Claude config roots named by `$CLAUDE_CONFIG_DIR`, split on
+    /// the platform path-list separator (`:` on unix), empty entries
+    /// dropped. A value without a separator yields exactly one root,
+    /// so the single-dir behavior is unchanged; unset yields none
+    /// (the resolver then defaults to `~/.claude`).
+    pub(crate) fn claude_config_dirs(&self) -> Vec<PathBuf> {
+        self.claude_config_dir
+            .as_ref()
+            .map(|v| {
+                std::env::split_paths(v)
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// The configured toolpath config directory (default `~/.toolpath`,
@@ -196,6 +214,41 @@ pub(crate) fn home_relative(path: &std::path::Path, home: Option<&std::path::Pat
 /// other's directories.
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A test's own config dir holding a fake `credentials.json`, so a test never reads the real
+/// `~/.toolpath`. Holds `TEST_ENV_LOCK` and points `$TOOLPATH_CONFIG_DIR` at the temp dir until dropped.
+#[cfg(test)]
+pub(crate) struct FakeCredentials {
+    _dir: tempfile::TempDir,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl FakeCredentials {
+    pub(crate) fn new() -> Self {
+        let lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(CREDENTIALS_FILE_NAME),
+            r#"{"url":"http://127.0.0.1:1","token":"fake-not-a-token","user":{"id":"u1","username":"nobody"}}"#,
+        )
+        .unwrap();
+        // SAFETY: serialized by TEST_ENV_LOCK, which every env-mutating test module holds.
+        unsafe { std::env::set_var(CONFIG_DIR_ENV, dir.path()) };
+        Self {
+            _dir: dir,
+            _lock: lock,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for FakeCredentials {
+    fn drop(&mut self) {
+        // SAFETY: still holding TEST_ENV_LOCK (fields drop after this).
+        unsafe { std::env::remove_var(CONFIG_DIR_ENV) };
+    }
+}
 
 #[cfg(test)]
 mod tests {

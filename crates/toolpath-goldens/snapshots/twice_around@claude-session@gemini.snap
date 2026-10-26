@@ -1,0 +1,15 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.twice_around[agent]"
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
+input_file: goldens/claude-session/input.jsonl
+---
+{
+  "outcome": "compared",
+  "lost": [],
+  "gained": [],
+  "changed": []
+}

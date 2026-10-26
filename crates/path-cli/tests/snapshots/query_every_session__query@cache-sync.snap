@@ -1,0 +1,46 @@
+---
+source: crates/path-cli/tests/query_every_session.rs
+expression: "pretty(&serde_json::json!({\n    \"first_sync\": first, \"second_sync\": second, \"query\": result\n}))"
+---
+{
+  "first_sync": "claude 1 new, 0 updated, 0 unchanged\ncodex 1 new, 0 updated, 0 unchanged\ncopilot 1 new, 0 updated, 0 unchanged\ngemini 1 new, 0 updated, 0 unchanged\npi 1 new, 0 updated, 0 unchanged",
+  "query": [
+    {
+      "actor": "agent:claude-haiku-4-5-20251001",
+      "output_tokens": 332
+    },
+    {
+      "actor": "agent:claude-haiku-4.5",
+      "output_tokens": 3141
+    },
+    {
+      "actor": "agent:gemini-3-flash-preview",
+      "output_tokens": 1080
+    },
+    {
+      "actor": "agent:gemma4",
+      "output_tokens": 1555
+    },
+    {
+      "actor": "agent:gpt-5.5",
+      "output_tokens": 2365
+    },
+    {
+      "actor": "human:user",
+      "output_tokens": 0
+    },
+    {
+      "actor": "tool:claude-code",
+      "output_tokens": 0
+    },
+    {
+      "actor": "tool:codex",
+      "output_tokens": 0
+    },
+    {
+      "actor": "tool:copilot",
+      "output_tokens": 0
+    }
+  ],
+  "second_sync": "claude 0 new, 0 updated, 1 unchanged\ncodex 0 new, 0 updated, 1 unchanged\ncopilot 0 new, 0 updated, 1 unchanged\ngemini 0 new, 0 updated, 1 unchanged\npi 0 new, 0 updated, 1 unchanged"
+}

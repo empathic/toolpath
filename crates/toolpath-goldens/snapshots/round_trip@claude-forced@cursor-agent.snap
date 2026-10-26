@@ -1,0 +1,101 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: 578c79666bff7c4570fa919975859bc0ef1d564f24c5a0ffc928f8c25b1d4b15
+input_file: test-fixtures/claude/convo-compacted.jsonl
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 61,
+    "text_chars": 12194,
+    "tool_uses": 10,
+    "key_paths": 112
+  },
+  "after": {
+    "steps": 25,
+    "text_chars": 12194,
+    "tool_uses": 10,
+    "key_paths": 41
+  },
+  "lost": [
+    "paths[].meta.actors.<actor>.model",
+    "paths[].meta.actors.<actor>.provider",
+    "paths[].meta.files_changed[]",
+    "paths[].meta.producer.version",
+    "paths[].path.base.branch",
+    "paths[].steps[].change.<artifact>.structural.cwd",
+    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedTypes[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content.file.content",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content.file.filePath",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content.file.numLines",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content.file.startLine",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content.file.totalLines",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content.type",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.displayPath",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.filename",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.isInitial",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.itemCount",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.names[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.showConcurrencyNote",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.skillCount",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.type",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.durationMs",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.postTokens",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preservedMessages.allUuids[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preservedMessages.anchorUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preservedMessages.uuids[]",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preservedSegment.anchorUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preservedSegment.headUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preservedSegment.tailUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.content",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.entrypoint",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.isMeta",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.level",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.slug",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.subtype",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.git_branch",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.raw.aiTitle",
+    "paths[].steps[].change.<artifact>.structural.raw.content",
+    "paths[].steps[].change.<artifact>.structural.raw.lastPrompt",
+    "paths[].steps[].change.<artifact>.structural.raw.leafUuid",
+    "paths[].steps[].change.<artifact>.structural.raw.mode",
+    "paths[].steps[].change.<artifact>.structural.raw.operation",
+    "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+    "paths[].steps[].change.<artifact>.structural.raw.timestamp",
+    "paths[].steps[].change.<artifact>.structural.raw.type",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.thinking",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.provider",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.value",
+    "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.user_type",
+    "paths[].steps[].change.<artifact>.structural.version",
+    "paths[].steps[].change.count.sh.structural.operation",
+    "paths[].steps[].change.notes.md.structural.operation"
+  ],
+  "gained": [
+    "paths[].steps[].change.notes.md.structural.before"
+  ]
+}

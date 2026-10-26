@@ -1,0 +1,143 @@
+{
+ "agent": "codex",
+ "recorded_at": "2026-10-15T19:21:13.442Z",
+ "key": "a7f5fd73982b8922f12a90628ec094f4cb09147084a0662736c5d3044251a926",
+ "loose_key": "384ce2d2cafd22af42ff88272cac19bec682dc8e87975a0cc89ebc9675236738",
+ "model": "",
+ "request": {
+  "method": "POST",
+  "url": "/backend-api/codex/analytics-events/events",
+  "upstream": "https://chatgpt.com",
+  "headers": {
+   "accept": "*/*",
+   "authorization": "<redacted>",
+   "chatgpt-account-id": "<redacted>",
+   "content-type": "application/json",
+   "originator": "codex_exec",
+   "user-agent": "codex_exec/0.162.1 (Mac OS 26.6.2; arm64) unknown (codex_exec; 0.162.1)"
+  },
+  "body": "{\"events\":[{\"event_type\":\"codex_turn_event\",\"event_params\":{\"thread_id\":\"08f8ca74-56bc-441d-8922-cb3637991ef5\",\"session_id\":\"08f8ca74-56bc-441d-8922-cb3637991ef5\",\"turn_id\":\"01a14102-df76-7a73-8314-148c9991496c\",\"active_plugin_ids_at_turn_start\":[\"plugin_connector_1p_2330815c823c8191941e5dc465bb899f\",\"plugin_connector_1p_4a72ddeef4c481918f92d8e8df18fb2c\",\"plugin_connector_1p_689987207de08191979cf68eca2941c6\",\"plugin_connector_1p_ab21a553bfbc81919ea8fd1858e3ffa7\",\"plugin_connector_1p_b3438d6beb9081918fba3625bc988128\",\"plugin_connector_1p_bccf6c8660c08191ae4470d9ae4877fa\"],\"voice_session_id\":null,\"root_turn_id\":\"01a14102-df76-7a73-8314-148c9991496c\",\"turn_trigger\":\"exec\",\"codex_turn_source\":null,\"submission_type\":null,\"app_server_client\":{\"product_client_id\":\"codex-toolpath\",\"client_name\":\"codex_exec\",\"client_version\":\"0.162.1\",\"rpc_transport\":\"in_process\",\"experimental_api_enabled\":true},\"runtime\":{\"codex_rs_version\":\"0.162.1\",\"runtime_os\":\"macos\",\"runtime_os_version\":\"26.6.2\",\"runtime_arch\":\"aarch64\"},\"ephemeral\":false,\"thread_source\":null,\"initialization_mode\":\"resumed\",\"subagent_source\":null,\"parent_thread_id\":null,\"model\":\"gpt-5.6-terra\",\"model_provider\":\"openai\",\"sandbox_policy\":\"read_only\",\"reasoning_effort\":\"medium\",\"reasoning_summary\":\"concise\",\"service_tier\":\"fast\",\"approval_policy\":\"on-request\",\"approvals_reviewer\":\"auto_review\",\"guardian_v2_enabled\":false,\"multi_agent_version\":\"v1\",\"sandbox_network_access\":false,\"collaboration_mode\":\"default\",\"personality\":null,\"workspace_kind\":null,\"num_input_images\":0,\"image_preparations\":[],\"is_first_turn\":false,\"status\":\"completed\",\"explicit_client_interrupt_requested_at_ms\":null,\"turn_error\":null,\"codex_error_kind\":null,\"codex_error_http_status_code\":null,\"usage_limit_window_minutes\":null,\"steer_count\":0,\"total_tool_call_count\":0,\"shell_command_count\":0,\"file_change_count\":0,\"mcp_tool_call_count\":0,\"dynamic_tool_call_count\":0,\"subagent_tool_call_count\":0,\"web_search_count\":0,\"image_generation_count\":0,\"input_tokens\":15445,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":44,\"reasoning_output_tokens\":30,\"total_tokens\":15489,\"before_first_sampling_ms\":210,\"sampling_ms\":3415,\"compaction_ms\":0,\"between_sampling_overhead_ms\":0,\"tool_blocking_ms\":0,\"after_last_sampling_ms\":61,\"sampling_request_count\":1,\"sampling_retry_count\":0,\"tools_change_count\":0,\"duration_ms\":3686,\"started_at\":1792092069,\"completed_at\":1792092073}}]}",
+  "body_encoding": "identity",
+  "normalized": {
+   "events": [
+    {
+     "event_params": {
+      "active_plugin_ids_at_turn_start": [
+       "plugin_connector_1p_2330815c823c8191941e5dc465bb899f",
+       "plugin_connector_1p_4a72ddeef4c481918f92d8e8df18fb2c",
+       "plugin_connector_1p_689987207de08191979cf68eca2941c6",
+       "plugin_connector_1p_ab21a553bfbc81919ea8fd1858e3ffa7",
+       "plugin_connector_1p_b3438d6beb9081918fba3625bc988128",
+       "plugin_connector_1p_bccf6c8660c08191ae4470d9ae4877fa"
+      ],
+      "after_last_sampling_ms": 61,
+      "app_server_client": {
+       "client_name": "codex_exec",
+       "client_version": "0.162.1",
+       "experimental_api_enabled": true,
+       "product_client_id": "codex-toolpath",
+       "rpc_transport": "in_process"
+      },
+      "approval_policy": "on-request",
+      "approvals_reviewer": "auto_review",
+      "before_first_sampling_ms": 210,
+      "between_sampling_overhead_ms": 0,
+      "cache_write_input_tokens": 0,
+      "cached_input_tokens": 0,
+      "codex_error_http_status_code": null,
+      "codex_error_kind": null,
+      "codex_turn_source": null,
+      "collaboration_mode": "default",
+      "compaction_ms": 0,
+      "completed_at": 1792092073,
+      "duration_ms": 3686,
+      "dynamic_tool_call_count": 0,
+      "ephemeral": false,
+      "explicit_client_interrupt_requested_at_ms": null,
+      "file_change_count": 0,
+      "guardian_v2_enabled": false,
+      "image_generation_count": 0,
+      "image_preparations": [],
+      "initialization_mode": "resumed",
+      "input_tokens": 15445,
+      "is_first_turn": false,
+      "mcp_tool_call_count": 0,
+      "model": "gpt-5.6-terra",
+      "model_provider": "openai",
+      "multi_agent_version": "v1",
+      "num_input_images": 0,
+      "output_tokens": 44,
+      "parent_thread_id": null,
+      "personality": null,
+      "reasoning_effort": "medium",
+      "reasoning_output_tokens": 30,
+      "reasoning_summary": "concise",
+      "root_turn_id": "01a14102-df76-7a73-8314-148c9991496c",
+      "runtime": {
+       "codex_rs_version": "0.162.1",
+       "runtime_arch": "aarch64",
+       "runtime_os": "macos",
+       "runtime_os_version": "26.6.2"
+      },
+      "sampling_ms": 3415,
+      "sampling_request_count": 1,
+      "sampling_retry_count": 0,
+      "sandbox_network_access": false,
+      "sandbox_policy": "read_only",
+      "service_tier": "fast",
+      "session_id": "08f8ca74-56bc-441d-8922-cb3637991ef5",
+      "shell_command_count": 0,
+      "started_at": 1792092069,
+      "status": "completed",
+      "steer_count": 0,
+      "subagent_source": null,
+      "subagent_tool_call_count": 0,
+      "submission_type": null,
+      "thread_id": "08f8ca74-56bc-441d-8922-cb3637991ef5",
+      "thread_source": null,
+      "tool_blocking_ms": 0,
+      "tools_change_count": 0,
+      "total_tokens": 15489,
+      "total_tool_call_count": 0,
+      "turn_error": null,
+      "turn_trigger": "exec",
+      "usage_limit_window_minutes": null,
+      "voice_session_id": null,
+      "web_search_count": 0,
+      "workspace_kind": null
+     },
+     "event_type": "codex_turn_event"
+    }
+   ]
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a4b12f833bb99988-EWR",
+   "content-type": "application/json",
+   "cross-origin-opener-policy": "same-origin-allow-popups",
+   "date": "Thu, 15 Oct 2026 19:21:13 GMT",
+   "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+   "referrer-policy": "strict-origin-when-cross-origin",
+   "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=yUzLhjxL2c3%2BClWXWZFatTtQA0wdP%2BfsACC3HQNmqXNhNc8Cdxd3wkekWkRe%2BDGiz5B8H0QC0M6LYj%2BdLDuEi3IXIgQXpLrH9752GSMEp6nSeYDzDHE0yP1WKBAz\"}]}",
+   "server": "cloudflare",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "x-content-type-options": "nosniff",
+   "x-oai-request-id": "req_939b06bf35dd4fa08c42324b91ea9f26",
+   "x-openai-proxy-wasm": "v0.1",
+   "set-cookie": "<redacted>"
+  },
+  "chunks": [
+   {
+    "t_ms": 187,
+    "b64": "ewogICJzdGF0dXMiOiAib2siLAogICJ0b3RhbF9ldmVudHMiOiAxLAogICJhY2NlcHRlZF9ldmVudHMiOiAxLAogICJza2lwcGVkX2V2ZW50cyI6IDAKfQ=="
+   }
+  ],
+  "bytes": 88,
+  "duration_ms": 187,
+  "sse": false,
+  "text_preview": "{\n  \"status\": \"ok\",\n  \"total_events\": 1,\n  \"accepted_events\": 1,\n  \"skipped_events\": 0\n}"
+ }
+}

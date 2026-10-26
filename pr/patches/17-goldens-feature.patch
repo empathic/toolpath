@@ -1,0 +1,225 @@
+From 08c6a6b7055609296eb0fab32d16239277435752 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 13:13:16 -0400
+Subject: [PATCH] feat(path-cli): `path goldens` behind a `goldens` feature,
+ off by default
+
+The goldens tool shipped in the release binary (gated only off emscripten).
+It is now a Cargo feature like resume-remote; the goldens tests declare
+required-features, and every gate (quality_gates.sh, justfile, pr/cut.sh,
+pr/gate-piece.sh) builds with --features path-cli/goldens so they still run
+on every PR instead of skipping. scripts/goldens.sh enables it. A unit test
+asserts the subcommand exists exactly when the feature is on. pr/17 records
+the piece.
+---
+ crates/path-cli/Cargo.toml | 13 ++++++++++++
+ crates/path-cli/src/lib.rs | 17 +++++++++++++---
+ justfile                   |  2 +-
+ pr/17-goldens-feature.md   | 41 ++++++++++++++++++++++++++++++++++++++
+ pr/cut.sh                  |  6 +++---
+ pr/gate-piece.sh           |  6 +++---
+ scripts/goldens.sh         |  4 ++--
+ scripts/quality_gates.sh   |  6 +++---
+ 8 files changed, 80 insertions(+), 15 deletions(-)
+ create mode 100644 pr/17-goldens-feature.md
+
+diff --git a/crates/path-cli/Cargo.toml b/crates/path-cli/Cargo.toml
+index 2acfccf3..fa341feb 100644
+--- a/crates/path-cli/Cargo.toml
++++ b/crates/path-cli/Cargo.toml
+@@ -101,6 +101,19 @@ embedded-picker = ["dep:skim", "dep:regex"]
+ # `--cwd`, `path resume --remote`, `--dry-run`, and the ssh transport
+ # module. Pulls in the in-process SSH client.
+ resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:url", "dep:typed-path"]
++# Hermetic goldens (`path goldens`, scripts/goldens.sh): a development
++# tool, off by default so the release binary does not carry it. The
++# quality gates build with `--features path-cli/goldens`, so the goldens
++# tests run on every gate rather than skipping.
++goldens = []
++
++[[test]]
++name = "goldens"
++required-features = ["goldens"]
++
++[[test]]
++name = "goldens_producer"
++required-features = ["goldens"]
+ 
+ [dev-dependencies]
+ assert_cmd = "2"
+diff --git a/crates/path-cli/src/lib.rs b/crates/path-cli/src/lib.rs
+index e52650dd..f9b14b7f 100644
+--- a/crates/path-cli/src/lib.rs
++++ b/crates/path-cli/src/lib.rs
+@@ -34,7 +34,7 @@ mod config;
+ mod derive;
+ #[cfg(not(target_os = "emscripten"))]
+ mod fuzzy;
+-#[cfg(not(target_os = "emscripten"))]
++#[cfg(all(not(target_os = "emscripten"), feature = "goldens"))]
+ pub mod goldens;
+ #[cfg(not(target_os = "emscripten"))]
+ pub mod harness;
+@@ -138,7 +138,7 @@ enum Commands {
+         command: cmd_p::PCommand,
+     },
+     /// Capture, check and diff hermetic goldens for cross-harness transformations
+-    #[cfg(not(target_os = "emscripten"))]
++    #[cfg(all(not(target_os = "emscripten"), feature = "goldens"))]
+     Goldens {
+         #[command(flatten)]
+         args: goldens::GoldensArgs,
+@@ -178,8 +178,19 @@ pub fn run() -> Result<()> {
+         Commands::Auth { op } => cmd_auth::run(op),
+         #[cfg(not(target_os = "emscripten"))]
+         Commands::Config { op } => cmd_config::run(op),
+-        #[cfg(not(target_os = "emscripten"))]
++        #[cfg(all(not(target_os = "emscripten"), feature = "goldens"))]
+         Commands::Goldens { args } => goldens::run(args),
+         Commands::P { command } => cmd_p::run(command, cli.pretty, &config),
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use clap::CommandFactory;
++
++    #[test]
++    fn goldens_subcommand_only_with_the_goldens_feature() {
++        let has = super::Cli::command().find_subcommand("goldens").is_some();
++        assert_eq!(has, cfg!(feature = "goldens"));
++    }
++}
+diff --git a/justfile b/justfile
+index d22d701d..7361ce36 100644
+--- a/justfile
++++ b/justfile
+@@ -4,7 +4,7 @@ help:
+ 
+ # Run clippy lints across the workspace
+ clippy:
+-    cargo clippy --workspace -- -D warnings
++    cargo clippy --workspace --features path-cli/goldens -- -D warnings
+ 
+ # Format all code (Rust + site)
+ fmt:
+diff --git a/pr/17-goldens-feature.md b/pr/17-goldens-feature.md
+new file mode 100644
+index 00000000..a2947206
+--- /dev/null
++++ b/pr/17-goldens-feature.md
+@@ -0,0 +1,41 @@
++# feat(path-cli): `path goldens` behind a `goldens` feature, off by default
++
++Status: planned (asked 2026-10-19 on the demo deck: "goldens only under a development flag") · Base: the goldens stack once merged
++
++## Why
++`path goldens` (capture, check, diff) is a development tool, but it ships in the release `path` binary: it was gated
++only off emscripten, and release.yml builds `-p path-cli --bin path` with default features. This answers the open
++qualifier concern on lib.rs ("goldens machinery lives inside path-cli, the shipped binary") the way the repo already
++does experimental surface: `resume-remote` is a Cargo feature, off by default.
++
++The goldens tests are not made skippable. They require the feature (`required-features`), and every gate passes
++`--features path-cli/goldens`, so the per-PR gate (decided 2026-10-16) still runs them. A gate without the feature
++is the silent-pass failure mode, which is why the flag is a build feature and not an environment variable.
++
++## What changes
++- `crates/path-cli/Cargo.toml`: `goldens = []` feature; `tests/goldens.rs` and `tests/goldens_producer.rs` declare
++  `required-features = ["goldens"]`.
++- `crates/path-cli/src/lib.rs`: `mod goldens`, the `Goldens` subcommand and its dispatch are
++  `cfg(all(not(emscripten), feature = "goldens"))`; a unit test asserts the subcommand exists exactly when the
++  feature is on.
++- `scripts/quality_gates.sh`, `justfile`, `pr/cut.sh`, `pr/gate-piece.sh`: clippy, test and doc pass
++  `--features path-cli/goldens`.
++- `scripts/goldens.sh`: `cargo run -p path-cli --features goldens -- goldens ...`.
++- No golden content changes: `goldens` and `goldens_producer` pass unchanged (the moved harness/producer pins are
++  info rows for a dev build, not failures).
++
++## Verification
++- Default build: `path --help` lists no `goldens`; `cargo test -p path-cli --lib goldens_subcommand` passes (absent).
++- With the feature: the same unit test passes (present); `cargo test -p path-cli --features goldens --test goldens
++  --test goldens_producer` passes (1 + 5 tests, 2026-10-19).
++
++## Paths
++```
++crates/path-cli/Cargo.toml
++crates/path-cli/src/lib.rs
++scripts/quality_gates.sh
++scripts/goldens.sh
++justfile
++```
++(`pr/cut.sh` and `pr/gate-piece.sh` change on wip only; PR branches never carry `pr/`.)
++```
+diff --git a/pr/cut.sh b/pr/cut.sh
+index 017297f0..c15f0ca0 100755
+--- a/pr/cut.sh
++++ b/pr/cut.sh
+@@ -101,9 +101,9 @@ if [ "${PR_GATES:-1}" != 0 ]; then
+     res=""
+     for g in "metadata:cargo metadata --format-version 1 --offline" \
+              "fmt:cargo fmt --all --check" \
+-             "clippy:cargo clippy --workspace --all-targets --offline -- -D warnings" \
+-             "test:env RUSTFLAGS=-D\ warnings cargo test --workspace --offline" \
+-             "doc:env RUSTDOCFLAGS=-D\ warnings cargo doc --workspace --no-deps --offline"; do
++             "clippy:cargo clippy --workspace --all-targets --features path-cli/goldens --offline -- -D warnings" \
++             "test:env RUSTFLAGS=-D\ warnings cargo test --workspace --features path-cli/goldens --offline" \
++             "doc:env RUSTDOCFLAGS=-D\ warnings cargo doc --workspace --features path-cli/goldens --no-deps --offline"; do
+       name=${g%%:*}; cmd=${g#*:}
+       if (cd "$gate_wt" && eval "$cmd" >"$gate_wt.$name.log" 2>&1); then res+=" $name=ok"; else res+=" $name=FAIL($gate_wt.$name.log)"; failed=1; fi
+     done
+diff --git a/pr/gate-piece.sh b/pr/gate-piece.sh
+index cfa598df..5682074e 100755
+--- a/pr/gate-piece.sh
++++ b/pr/gate-piece.sh
+@@ -14,7 +14,7 @@ t0=$SECONDS
+ if cargo metadata --format-version 1 --offline >/dev/null 2>"$logdir/$n.meta.log"; then res+=" metadata=ok"; else res+=" metadata=FAIL"; fi
+ # fmt = the CI format gate: cargo fmt plus prettier over site/ (scripts/quality_gates.sh gate_format)
+ if cargo fmt --all --check >"$logdir/$n.fmt.log" 2>&1 && { [ ! -d site ] || (cd site && nix run nixpkgs#prettier -- --check --no-color '**/*.{md,css,json,js}' >>"$logdir/$n.fmt.log" 2>&1); }; then res+=" fmt=ok"; else res+=" fmt=FAIL"; fi
+-if cargo clippy --workspace --all-targets --offline -- -D warnings >"$logdir/$n.clippy.log" 2>&1; then res+=" clippy=ok"; else res+=" clippy=FAIL"; fi
+-if RUSTFLAGS="-D warnings" cargo test --workspace --offline >"$logdir/$n.test.log" 2>&1; then res+=" test=ok($(grep -c '^test result' "$logdir/$n.test.log")suites)"; else res+=" test=FAIL"; fi
+-if RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --offline >"$logdir/$n.doc.log" 2>&1; then res+=" doc=ok"; else res+=" doc=FAIL"; fi
++if cargo clippy --workspace --all-targets --features path-cli/goldens --offline -- -D warnings >"$logdir/$n.clippy.log" 2>&1; then res+=" clippy=ok"; else res+=" clippy=FAIL"; fi
++if RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/goldens --offline >"$logdir/$n.test.log" 2>&1; then res+=" test=ok($(grep -c '^test result' "$logdir/$n.test.log")suites)"; else res+=" test=FAIL"; fi
++if RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/goldens --no-deps --offline >"$logdir/$n.doc.log" 2>&1; then res+=" doc=ok"; else res+=" doc=FAIL"; fi
+ echo "$bm ${c:0:8}$res ($((SECONDS-t0))s)"
+diff --git a/scripts/goldens.sh b/scripts/goldens.sh
+index a6661ecf..889a6c18 100755
+--- a/scripts/goldens.sh
++++ b/scripts/goldens.sh
+@@ -6,6 +6,6 @@ cd "$(dirname "$0")/.."
+ # The dev shell is a flake on wip only (main moved nix packaging off in #332);
+ # without one, the pinned rustup toolchain runs cargo directly.
+ if [ -f flake.nix ] && command -v nix >/dev/null 2>&1; then
+-    exec nix develop --command cargo run -q -p path-cli -- goldens "${@:-check}"
++    exec nix develop --command cargo run -q -p path-cli --features goldens -- goldens "${@:-check}"
+ fi
+-exec cargo run -q -p path-cli -- goldens "${@:-check}"
++exec cargo run -q -p path-cli --features goldens -- goldens "${@:-check}"
+diff --git a/scripts/quality_gates.sh b/scripts/quality_gates.sh
+index 7e47aa41..2dc121c5 100755
+--- a/scripts/quality_gates.sh
++++ b/scripts/quality_gates.sh
+@@ -70,17 +70,17 @@ gate_shellcheck() {
+ 
+ # shellcheck disable=SC2329
+ gate_clippy() {
+-    cargo clippy --workspace -- -D warnings 2>&1
++    cargo clippy --workspace --features path-cli/goldens -- -D warnings 2>&1
+ }
+ 
+ # shellcheck disable=SC2329
+ gate_test() {
+-    RUSTFLAGS="-D warnings" cargo test --workspace 2>&1
++    RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/goldens 2>&1
+ }
+ 
+ # shellcheck disable=SC2329
+ gate_doc() {
+-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps 2>&1
++    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/goldens --no-deps 2>&1
+ }
+ 
+ # shellcheck disable=SC2329
+-- 
+2.55.0
+

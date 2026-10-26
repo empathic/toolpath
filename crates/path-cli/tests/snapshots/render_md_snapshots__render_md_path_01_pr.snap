@@ -6,11 +6,10 @@ expression: "render_md(\"path-01-pr.path.json\")"
 # Add email validation
 
 **Base:** `github:myorg/myrepo` @ `abc123def456789` (`main`)
-**Head:** `step-004`
+**Head:** `step-005`
 **Source:** `github:myorg/myrepo/pull/42`
-- **fixes:** `issue://github/myorg/myrepo/issues/42`
-**Changes:** +3 −3 across 2 files
-**Steps:** 5 | **Artifacts:** 2 | **Dead ends:** 1
+**Changes:** +23 −6 across 1 files
+**Steps:** 5 | **Artifacts:** 1 | **Dead ends:** 1
 
 ## Timeline
 
@@ -18,46 +17,50 @@ expression: "render_md(\"path-01-pr.path.json\")"
 
 **Timestamp:** 2026-01-29T10:00:00Z
 
-- `src/main.rs` (+1 -1)
+> Scaffold the validator
 
-### step-002a — agent:claude-code/session-abc123 [dead end]
+- **fixes:** `issue://github/myorg/myrepo/issues/42`
+
+- `src/auth/validator.rs` (+3 -0)
+
+### step-002 — agent:claude-code/session-abc123 [dead end]
 
 **Timestamp:** 2026-01-29T10:03:00Z
 **Parents:** `step-001`
 
 > Regex-based validation (abandoned)
 
-- `src/auth/validator.rs` (+1 -0)
+- `src/auth/validator.rs` (+3 -1)
 
-### step-002 — agent:claude-code/session-abc123
+### step-003 — agent:claude-code/session-abc123
 
 **Timestamp:** 2026-01-29T10:05:00Z
 **Parents:** `step-001`
 
 > Add email validation with custom error type
 
-- `src/auth/validator.rs` (+1 -0)
+- `src/auth/validator.rs` (+6 -2)
 
-### step-003 — tool:rustfmt/1.7.0
+### step-004 — tool:rustfmt/1.7.0
 
 **Timestamp:** 2026-01-29T10:05:30Z
-**Parents:** `step-002`
+**Parents:** `step-003`
 
 > Auto-format
 
-- `src/auth/validator.rs` (+0 -1)
+- `src/auth/validator.rs` (+10 -2)
 
-### step-004 — human:alex [head]
+### step-005 — human:alex [head]
 
 **Timestamp:** 2026-01-29T10:15:00Z
-**Parents:** `step-003`
+**Parents:** `step-004`
 
 > Refine error messages
 
-- `src/auth/validator.rs` (+0 -1)
+- `src/auth/validator.rs` (+1 -1)
 
 ## Dead Ends
 
 These steps were attempted but did not contribute to the final result.
 
-- **step-002a** (agent:claude-code/session-abc123) — Regex-based validation (abandoned) | Parent: `step-001`
+- **step-002** (agent:claude-code/session-abc123) — Regex-based validation (abandoned) | Parent: `step-001`

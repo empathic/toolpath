@@ -20,41 +20,59 @@ pub enum Harness {
     Codex,
     Opencode,
     Cursor,
+    // The Cursor CLI (`cursor-agent`). A resume target only: its chat store
+    // is written, not yet read for `share`, so its sessions have no artifact
+    // type of their own. (A `//` comment: a doc comment would turn clap's
+    // one-line `[possible values: …]` into a list.)
+    #[value(name = "cursor-agent")]
+    CursorAgent,
     Pi,
     Copilot,
 }
 
 impl Harness {
     /// Every harness, in presentation order.
-    pub(crate) const ALL: [Harness; 7] = [
+    pub(crate) const ALL: [Harness; 8] = [
         Harness::Claude,
         Harness::Gemini,
         Harness::Codex,
         Harness::Opencode,
         Harness::Cursor,
+        Harness::CursorAgent,
         Harness::Pi,
         Harness::Copilot,
     ];
 
-    /// The artifact type this harness's sessions ingest as.
-    pub(crate) fn artifact_type(&self) -> ArtifactType {
+    /// Width of the name column in the harness picker: the longest
+    /// `name()` ("cursor-agent").
+    const NAME_COLUMN_WIDTH: usize = 12;
+
+    /// The artifact type this harness's sessions ingest as. `cursor-agent`
+    /// has none: [`Harness::CursorAgent`] is a resume target only.
+    pub(crate) fn artifact_type(&self) -> Option<ArtifactType> {
         match self {
-            Harness::Claude => ArtifactType::Claude,
-            Harness::Gemini => ArtifactType::Gemini,
-            Harness::Codex => ArtifactType::Codex,
-            Harness::Opencode => ArtifactType::Opencode,
-            Harness::Cursor => ArtifactType::Cursor,
-            Harness::Pi => ArtifactType::Pi,
-            Harness::Copilot => ArtifactType::Copilot,
+            Harness::Claude => Some(ArtifactType::Claude),
+            Harness::Gemini => Some(ArtifactType::Gemini),
+            Harness::Codex => Some(ArtifactType::Codex),
+            Harness::Opencode => Some(ArtifactType::Opencode),
+            Harness::Cursor => Some(ArtifactType::Cursor),
+            Harness::Pi => Some(ArtifactType::Pi),
+            Harness::Copilot => Some(ArtifactType::Copilot),
+            Harness::CursorAgent => None,
         }
     }
 
+    /// The name `--harness` takes, which is also the binary resumed into
+    /// (Cursor's IDE aside: see `harness_available`).
     pub(crate) fn name(&self) -> &'static str {
-        self.artifact_type().name()
+        match self.artifact_type() {
+            Some(t) => t.name(),
+            None => "cursor-agent",
+        }
     }
 
     pub(crate) fn padded_name(&self) -> String {
-        self.artifact_type().padded_name()
+        format!("{:<width$}", self.name(), width = Self::NAME_COLUMN_WIDTH)
     }
 }
 
@@ -81,6 +99,9 @@ impl ArtifactType {
 #[derive(Default)]
 pub(crate) struct HarnessBundle {
     pub(crate) claude: Option<toolpath_claude::ClaudeConvo>,
+    /// Additional Claude config roots (`$CLAUDE_CONFIG_DIR` entries
+    /// after the first); consulted by cache sync only.
+    pub(crate) claude_extra: Vec<toolpath_claude::ClaudeConvo>,
     pub(crate) gemini: Option<toolpath_gemini::GeminiConvo>,
     pub(crate) codex: Option<toolpath_codex::CodexConvo>,
     pub(crate) copilot: Option<toolpath_copilot::CopilotConvo>,
@@ -96,6 +117,7 @@ impl HarnessBundle {
     pub(crate) fn from_environment() -> Self {
         Self {
             claude: Some(toolpath_claude::ClaudeConvo::new()),
+            claude_extra: Vec::new(),
             gemini: Some(toolpath_gemini::GeminiConvo::new()),
             codex: Some(toolpath_codex::CodexConvo::new()),
             copilot: Some(toolpath_copilot::CopilotConvo::new()),
@@ -154,4 +176,26 @@ pub(crate) fn is_not_found_cursor(err: &toolpath_cursor::CursorError) -> bool {
         || matches!(err, CursorError::NoHomeDirectory)
         || matches!(err, CursorError::CursorDataDirectoryNotFound(_))
         || matches!(err, CursorError::DatabaseNotFound(_))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_harness_name_parses_back_and_fits_the_picker_column() {
+        for h in Harness::ALL {
+            assert_eq!(
+                <Harness as clap::ValueEnum>::from_str(h.name(), false),
+                Ok(h)
+            );
+            assert_eq!(h.padded_name().len(), Harness::NAME_COLUMN_WIDTH);
+            assert_eq!(
+                h.artifact_type().and_then(|t| t.harness()),
+                h.artifact_type().map(|_| h)
+            );
+        }
+        assert_eq!(Harness::CursorAgent.name(), "cursor-agent");
+        assert_eq!(Harness::CursorAgent.artifact_type(), None);
+    }
 }

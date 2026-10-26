@@ -1,0 +1,703 @@
+From 3ea94f169a89d857bdbec6ab9af31fbb7be4800b Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 13:30:17 -0400
+Subject: [PATCH] fix(claude): a projected session keeps its attachments on the
+ resume chain (pr/110)
+
+---
+ crates/toolpath-claude/src/project.rs         | 101 +++++++++++++++++-
+ crates/toolpath-claude/src/provider.rs        |  16 ++-
+ crates/toolpath-claude/tests/resume_chain.rs  |  73 +++++++++++++
+ .../snapshots/document@claude-forced.snap     |   4 +-
+ .../snapshots/document@claude-session.snap    |   2 +-
+ .../snapshots/document@claude.snap            |   6 +-
+ .../snapshots/ir@claude-forced.snap           |   4 +-
+ .../snapshots/ir@claude-session.snap          |   2 +-
+ .../toolpath-goldens/snapshots/ir@claude.snap |   6 +-
+ goldens/manifest.json                         |  98 ++++++++---------
+ 10 files changed, 249 insertions(+), 63 deletions(-)
+ create mode 100644 crates/toolpath-claude/tests/resume_chain.rs
+
+diff --git a/crates/toolpath-claude/src/project.rs b/crates/toolpath-claude/src/project.rs
+index 96d41b47..3d1e238f 100644
+--- a/crates/toolpath-claude/src/project.rs
++++ b/crates/toolpath-claude/src/project.rs
+@@ -295,10 +295,26 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
+             convo.add_entry(entry);
+             continue;
+         }
+-        let entry = project_event(event, &view.id);
++        let mut entry = project_event(event, &view.id);
++        // An event that hung off an assistant turn hangs off that turn's last tool-result entry.
++        if let Some(rewritten) = entry
++            .parent_uuid
++            .as_deref()
++            .and_then(|p| parent_rewrites.get(p))
++        {
++            entry.parent_uuid = Some(rewritten.clone());
++        }
+         convo.add_entry(entry);
+     }
+ 
++    if view
++        .provider_id
++        .as_deref()
++        .is_some_and(|p| p.starts_with("claude"))
++    {
++        chain_attachments(&mut convo.entries);
++    }
++
+     if !dropped.is_empty() {
+         for entry in &mut convo.entries {
+             let mut parent = entry.parent_uuid.clone();
+@@ -316,6 +332,89 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
+     Ok(convo)
+ }
+ 
++/// Put the `attachment` lines back ON the chain Claude walks when it resumes.
++///
++/// Claude Code loads a session by following `parentUuid` from the last message. In a native
++/// session the attachments (environment, skill listing, session context, ...) sit between the
++/// messages on that chain: message -> attachment -> ... -> next message. The document keeps the
++/// turn-to-turn parent (it splices events out), so the projection hung the attachments on a side
++/// branch the leaf never reaches, and a resumed session lost their context (about 3,000 tokens
++/// in the recorded session, deck v52 item 9).
++///
++/// An attachment chain is rooted on a written message entry (its first attachment's parent). The
++/// message entries that were children of that root become children of the chain's last
++/// attachment. Only message entries and attachments move.
++fn chain_attachments(entries: &mut Vec<ConversationEntry>) {
++    let is_message = |e: &ConversationEntry| e.message.is_some() && !e.is_sidechain;
++    let message_ids: std::collections::HashSet<String> = entries
++        .iter()
++        .filter(|e| is_message(e))
++        .map(|e| e.uuid.clone())
++        .collect();
++    let attachment_ids: std::collections::HashSet<String> = entries
++        .iter()
++        .filter(|e| e.entry_type == "attachment")
++        .map(|e| e.uuid.clone())
++        .collect();
++    // parent attachment -> next attachment; (message root, first attachment of its chain)
++    let mut child_of: HashMap<String, String> = HashMap::new();
++    let mut roots: Vec<(String, String)> = Vec::new();
++    for a in entries.iter().filter(|e| e.entry_type == "attachment") {
++        let Some(p) = a.parent_uuid.as_deref() else {
++            continue;
++        };
++        if attachment_ids.contains(p) {
++            child_of
++                .entry(p.to_string())
++                .or_insert_with(|| a.uuid.clone());
++        } else if message_ids.contains(p) {
++            roots.push((p.to_string(), a.uuid.clone()));
++        }
++    }
++    // The chain after each root, in order; the messages that hung off the root hang off its tail.
++    let mut chains: HashMap<String, Vec<String>> = HashMap::new();
++    for (root, first) in roots {
++        let mut chain = vec![first];
++        while let Some(next) = child_of.get(chain.last().expect("non-empty")) {
++            if chain.len() > entries.len() {
++                break;
++            }
++            chain.push(next.clone());
++        }
++        let tail = chain.last().expect("non-empty").clone();
++        for e in entries.iter_mut() {
++            if is_message(e) && e.parent_uuid.as_deref() == Some(root.as_str()) {
++                e.parent_uuid = Some(tail.clone());
++            }
++        }
++        chains.insert(root, chain);
++    }
++    // A parent comes before its child in the file (the parent-chain contract): write each chain
++    // right after its root, ahead of the messages that now hang off it. Nothing else moves.
++    let chained: std::collections::HashSet<&str> =
++        chains.values().flatten().map(String::as_str).collect();
++    let mut moved: HashMap<String, Vec<ConversationEntry>> = HashMap::new();
++    let mut rest: Vec<ConversationEntry> = Vec::new();
++    for e in std::mem::take(entries) {
++        if e.entry_type == "attachment" && chained.contains(e.uuid.as_str()) {
++            moved.entry(e.uuid.clone()).or_default().push(e);
++        } else {
++            rest.push(e);
++        }
++    }
++    for e in rest {
++        let root = e.uuid.clone();
++        entries.push(e);
++        if let Some(chain) = chains.get(&root) {
++            for a in chain {
++                if let Some(list) = moved.remove(a) {
++                    entries.extend(list);
++                }
++            }
++        }
++    }
++}
++
+ /// Rebuild a Claude tool-result user entry verbatim from a preserved event.
+ ///
+ /// The event was emitted by [`crate::derive::derive_path`] when reading the
+diff --git a/crates/toolpath-claude/src/provider.rs b/crates/toolpath-claude/src/provider.rs
+index 96669f2e..277bb4ec 100644
+--- a/crates/toolpath-claude/src/provider.rs
++++ b/crates/toolpath-claude/src/provider.rs
+@@ -339,13 +339,26 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
+     // chain intact for `derive_path`. The original UUID is preserved
+     // via the `tool_result_user` event.
+     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
++    // The tool-result-only entries alone (absorbed into the assistant turn): an attachment that
++    // followed one hangs off that turn, not off the nearest turn-bearing entry.
++    let mut absorbed_results: HashMap<String, String> = HashMap::new();
+     let mut last_turn_uuid: Option<String> = None;
+ 
+     for entry in &convo.entries {
+         let Some(msg) = &entry.message else {
+             // Message-less entries (attachments, snapshots) survive as
+             // events so the projector can re-emit them.
+-            events.push(entry_to_event(entry));
++            let mut event = entry_to_event(entry);
++            // An attachment that followed an absorbed tool-result entry hangs off the turn that
++            // result belongs to (the writer puts it after that turn's tool results again).
++            if let Some(real) = event
++                .parent_id
++                .as_deref()
++                .and_then(|p| absorbed_results.get(p))
++            {
++                event.parent_id = Some(real.clone());
++            }
++            events.push(event);
+             if let Some(prev) = &last_turn_uuid {
+                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
+             }
+@@ -365,6 +378,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
+             merge_tool_results(&mut turns, msg);
+             if let Some(prev) = &last_turn_uuid {
+                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
++                absorbed_results.insert(entry.uuid.clone(), prev.clone());
+             }
+             continue;
+         }
+diff --git a/crates/toolpath-claude/tests/resume_chain.rs b/crates/toolpath-claude/tests/resume_chain.rs
+new file mode 100644
+index 00000000..acd32dfe
+--- /dev/null
++++ b/crates/toolpath-claude/tests/resume_chain.rs
+@@ -0,0 +1,73 @@
++//! What Claude Code loads when it resumes a session: the uuid chain from the leaf (last message)
++//! back through `parentUuid`. A native session's chain runs through its `attachment` lines
++//! (environment, skill listing, session context, ... about 3,000 tokens of context in the
++//! recorded session); a session projected from a toolpath document must keep them on that chain,
++//! not on a side branch the leaf never reaches.
++//!
++//! Deck v52 item 9: resuming the native session gave the model ~3,371 tokens of history, the same
++//! session through toolpath ~326.
++
++use std::collections::HashMap;
++use std::path::{Path, PathBuf};
++
++use toolpath::v1::Graph;
++use toolpath_claude::{ClaudeProjector, ConversationReader};
++use toolpath_convo::{ConversationProjector, DeriveConfig, derive_path, extract_conversation};
++
++fn golden() -> PathBuf {
++    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../goldens/claude-session/input.jsonl")
++}
++
++/// The entry types along the chain from the last message back to the root, leaf first.
++fn chain(convo: &toolpath_claude::Conversation) -> Vec<String> {
++    let by_uuid: HashMap<&str, &toolpath_claude::ConversationEntry> =
++        convo.entries.iter().map(|e| (e.uuid.as_str(), e)).collect();
++    let leaf = convo
++        .entries
++        .iter()
++        .rev()
++        .find(|e| e.message.is_some())
++        .expect("a message entry");
++    let mut out = Vec::new();
++    let mut at = Some(leaf);
++    let mut guard = 0;
++    while let Some(e) = at {
++        out.push(e.entry_type.clone());
++        guard += 1;
++        assert!(guard < 1000, "parent chain loops");
++        at = e
++            .parent_uuid
++            .as_deref()
++            .and_then(|p| by_uuid.get(p).copied());
++    }
++    out
++}
++
++fn count(chain: &[String], ty: &str) -> usize {
++    chain.iter().filter(|t| t.as_str() == ty).count()
++}
++
++#[test]
++fn the_resumed_chain_reaches_the_same_attachments_as_the_native_one() {
++    let native = ConversationReader::read_conversation(golden()).expect("read the golden");
++    let view = toolpath_claude::provider::to_view(&native);
++    let path = derive_path(&view, &DeriveConfig::default());
++    let json = Graph::from_path(path).to_json().expect("serialize");
++    let path = Graph::from_json(&json)
++        .expect("parse")
++        .into_single_path()
++        .expect("one path");
++    let projected = ClaudeProjector
++        .project(&extract_conversation(&path))
++        .expect("project");
++
++    let (n, p) = (chain(&native), chain(&projected));
++    assert_eq!(count(&n, "attachment"), 12, "native chain: {n:?}");
++    assert_eq!(
++        count(&p, "attachment"),
++        count(&n, "attachment"),
++        "the projected chain skips attachments the native chain carries.\n native:    {n:?}\n projected: {p:?}"
++    );
++    assert_eq!(count(&p, "user"), count(&n, "user"));
++    assert_eq!(count(&p, "assistant"), count(&n, "assistant"));
++}
+diff --git a/crates/toolpath-goldens/snapshots/document@claude-forced.snap b/crates/toolpath-goldens/snapshots/document@claude-forced.snap
+index b022c2da..3d718378 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude-forced.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude-forced.snap
+@@ -1816,7 +1816,7 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+             "actor": "tool:claude-code",
+             "id": "ab3f8c76-d7d2-4925-b64b-6ee6e0a3678d",
+             "parents": [
+-              "5fcf4cd0-01fa-4214-8bb4-04bc14897100"
++              "7e9875c5-e173-45ba-b79c-2d103900b0d3"
+             ],
+             "timestamp": "2026-06-10T18:41:04.718Z"
+           }
+@@ -1847,7 +1847,7 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+             "actor": "tool:claude-code",
+             "id": "c6a924aa-1d70-4fac-b53c-c5c2b3e22bca",
+             "parents": [
+-              "ab3f8c76-d7d2-4925-b64b-6ee6e0a3678d"
++              "db5079de-82cc-4c4f-8ece-9190ed2529a3"
+             ],
+             "timestamp": "2026-06-10T18:41:20.945Z"
+           }
+diff --git a/crates/toolpath-goldens/snapshots/document@claude-session.snap b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+index 26491946..46aab3bf 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+@@ -1564,7 +1564,7 @@ input_file: goldens/claude-session/input.jsonl
+             "actor": "tool:claude-code",
+             "id": "4cb5eef7-2e12-4f0c-abcb-4ea3131e70e6",
+             "parents": [
+-              "37d4433e-ddb8-4789-bec8-92a418c22527"
++              "9b188e5d-72e1-45c3-a3fa-e23ef1b02421"
+             ],
+             "timestamp": "2026-10-08T19:52:28.111Z"
+           }
+diff --git a/crates/toolpath-goldens/snapshots/document@claude.snap b/crates/toolpath-goldens/snapshots/document@claude.snap
+index 086d122b..a4ebdd66 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude.snap
+@@ -2137,7 +2137,7 @@ input_file: test-fixtures/claude/convo.jsonl
+             "actor": "tool:claude-code",
+             "id": "768a7ebf-8e58-4e65-9c23-7580885091ba",
+             "parents": [
+-              "af5ba8c6-3a52-4b30-956c-374b962a8cb4"
++              "4935ab4c-d8ad-4504-adb7-81541095e110"
+             ],
+             "timestamp": "2026-05-07T18:25:34.229Z"
+           }
+@@ -2168,7 +2168,7 @@ input_file: test-fixtures/claude/convo.jsonl
+             "actor": "tool:claude-code",
+             "id": "e797831d-21b7-4319-abe7-05b546a05678",
+             "parents": [
+-              "768a7ebf-8e58-4e65-9c23-7580885091ba"
++              "259dbb77-bd91-48f3-8a85-a6be5eaa26f4"
+             ],
+             "timestamp": "2026-05-07T18:26:17.197Z"
+           }
+@@ -2199,7 +2199,7 @@ input_file: test-fixtures/claude/convo.jsonl
+             "actor": "tool:claude-code",
+             "id": "3eb41279-e974-4886-9964-48362eb83615",
+             "parents": [
+-              "e797831d-21b7-4319-abe7-05b546a05678"
++              "52e249ff-70d2-43f7-8ffa-eb3062af309c"
+             ],
+             "timestamp": "2026-05-07T18:26:50.878Z"
+           }
+diff --git a/crates/toolpath-goldens/snapshots/ir@claude-forced.snap b/crates/toolpath-goldens/snapshots/ir@claude-forced.snap
+index fd72b342..bb2ccbb6 100644
+--- a/crates/toolpath-goldens/snapshots/ir@claude-forced.snap
++++ b/crates/toolpath-goldens/snapshots/ir@claude-forced.snap
+@@ -1220,7 +1220,7 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+     {
+       "id": "ab3f8c76-d7d2-4925-b64b-6ee6e0a3678d",
+       "timestamp": "2026-06-10T18:41:04.718Z",
+-      "parent_id": "4838cfe4-26a1-4106-b915-00fb2296a581",
++      "parent_id": "7e9875c5-e173-45ba-b79c-2d103900b0d3",
+       "event_type": "attachment",
+       "data": {
+         "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/claude",
+@@ -1257,7 +1257,7 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+     {
+       "id": "c6a924aa-1d70-4fac-b53c-c5c2b3e22bca",
+       "timestamp": "2026-06-10T18:41:20.945Z",
+-      "parent_id": "6d9249b5-08b8-4d04-b075-595c6bbcd899",
++      "parent_id": "db5079de-82cc-4c4f-8ece-9190ed2529a3",
+       "event_type": "attachment",
+       "data": {
+         "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/claude",
+diff --git a/crates/toolpath-goldens/snapshots/ir@claude-session.snap b/crates/toolpath-goldens/snapshots/ir@claude-session.snap
+index 943ff5ba..b757a55d 100644
+--- a/crates/toolpath-goldens/snapshots/ir@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/ir@claude-session.snap
+@@ -666,7 +666,7 @@ input_file: goldens/claude-session/input.jsonl
+     {
+       "id": "4cb5eef7-2e12-4f0c-abcb-4ea3131e70e6",
+       "timestamp": "2026-10-08T19:52:28.111Z",
+-      "parent_id": "df9f93a7-9919-43b0-bddc-3daa3d3d3ce3",
++      "parent_id": "9b188e5d-72e1-45c3-a3fa-e23ef1b02421",
+       "event_type": "attachment",
+       "data": {
+         "cwd": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project",
+diff --git a/crates/toolpath-goldens/snapshots/ir@claude.snap b/crates/toolpath-goldens/snapshots/ir@claude.snap
+index 6b88f19c..e75b910b 100644
+--- a/crates/toolpath-goldens/snapshots/ir@claude.snap
++++ b/crates/toolpath-goldens/snapshots/ir@claude.snap
+@@ -1531,7 +1531,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     {
+       "id": "768a7ebf-8e58-4e65-9c23-7580885091ba",
+       "timestamp": "2026-05-07T18:25:34.229Z",
+-      "parent_id": "92dbe3eb-50e1-4ff8-8f63-674bd438c920",
++      "parent_id": "4935ab4c-d8ad-4504-adb7-81541095e110",
+       "event_type": "attachment",
+       "data": {
+         "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude",
+@@ -1551,7 +1551,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     {
+       "id": "e797831d-21b7-4319-abe7-05b546a05678",
+       "timestamp": "2026-05-07T18:26:17.197Z",
+-      "parent_id": "16e683ad-2543-4d06-8f14-23fd8b1612bc",
++      "parent_id": "259dbb77-bd91-48f3-8a85-a6be5eaa26f4",
+       "event_type": "attachment",
+       "data": {
+         "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude",
+@@ -1571,7 +1571,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     {
+       "id": "3eb41279-e974-4886-9964-48362eb83615",
+       "timestamp": "2026-05-07T18:26:50.878Z",
+-      "parent_id": "b367ba38-8c3d-468a-8fd8-ed76d7534d8a",
++      "parent_id": "52e249ff-70d2-43f7-8ffa-eb3062af309c",
+       "event_type": "attachment",
+       "data": {
+         "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude",
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 323fce5e..37201228 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++          "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++          "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++          "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++          "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++          "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++          "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++          "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++          "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++          "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++          "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++          "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++          "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++    "toolpath_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "672642ad4e48652f8e2341dd837fd051e56421db9ca51bdb20e8462a9b99f9f6",
++        "binary_sha256": "ddcc66799da23c7f83ff63855957a2ff10f8bdab557ccbd524568679819783d7",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "60d8b504f4a382ea8a727162944019896c913de8"
++        "repo_rev": "10e054ec82e4f35b32f7f2ee9632ef06b8a231b2"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+-- 
+2.55.0
+

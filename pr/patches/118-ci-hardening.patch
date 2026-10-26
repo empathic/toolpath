@@ -1,0 +1,258 @@
+From 7f4ea1e655b233325f2a444578aa678905a933f2 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 26 Oct 2026 14:43:19 -0400
+Subject: [PATCH] ci: gate matrix in parallel, release gated on the full gates,
+ concurrency, timeouts, clippy --all-targets, gitleaks in CI
+
+gates.yml (workflow_call): the quality gates as four parallel jobs (lint: format shellcheck
+clippy secrets | test | doc examples | plugin quickstart site), 20 min timeout each, one cargo
+cache per group; pinned qualifier (test group) and gitleaks 8.30.1 (lint group), both sha256-checked.
+deploy-site.yml calls it; deploy needs all groups, 15 min timeout, and is skipped for forked PRs.
+release.yml runs the same gates on the tagged commit before any build; build and release 30 min.
+Concurrency: PR runs cancel superseded ones; main and tags are never cancelled or superseded.
+quality_gates.sh: clippy --all-targets; the secrets gate fails closed under CI without gitleaks.
+just ci is unchanged.
+---
+ .github/workflows/deploy-site.yml | 53 +++++--------------
+ .github/workflows/gates.yml       | 86 +++++++++++++++++++++++++++++++
+ .github/workflows/release.yml     | 15 ++++++
+ scripts/quality_gates.sh          | 12 +++--
+ 4 files changed, 122 insertions(+), 44 deletions(-)
+ create mode 100644 .github/workflows/gates.yml
+
+diff --git a/.github/workflows/deploy-site.yml b/.github/workflows/deploy-site.yml
+index 9fc2eab6..26397b6f 100644
+--- a/.github/workflows/deploy-site.yml
++++ b/.github/workflows/deploy-site.yml
+@@ -5,53 +5,24 @@ on:
+     branches: [main]
+   pull_request:
+ 
++# A newer push to a PR cancels that PR's older run; main is never cancelled or superseded (its
++# group carries the sha, so every push to main runs the full gates and its deploy).
++concurrency:
++  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
++  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
++
+ jobs:
++  # The quality gates as a parallel matrix of gate groups (gates.yml; release.yml calls the same).
+   ci:
+-    runs-on: ubuntu-latest
+-    steps:
+-      - uses: actions/checkout@v4
+-
+-      - name: Install Rust
+-        run: rustup show # installs toolchain from rust-toolchain.toml
+-
+-      - name: Cache cargo
+-        uses: actions/cache@v4
+-        with:
+-          path: |
+-            ~/.cargo/registry
+-            ~/.cargo/git
+-            target
+-          key: cargo-test-${{ hashFiles('Cargo.lock') }}
+-          restore-keys: cargo-test-
+-
+-      - uses: pnpm/action-setup@v4
+-        with:
+-          version: 10
+-
+-      - uses: actions/setup-node@v4
+-        with:
+-          node-version: 22
+-          cache: pnpm
+-          cache-dependency-path: site/pnpm-lock.yaml
+-
+-      # The goldens' qualifier review needs the binary; without it the tests fail closed under CI.
+-      # Pinned release asset, checked against its sha256 before it runs.
+-      - name: Install qualifier 0.8.0
+-        run: |
+-          curl -fsSL -o /tmp/qualifier.tgz \
+-            https://github.com/empathic/qualifier/releases/download/v0.8.0/qualifier-x86_64-unknown-linux-musl.tar.gz
+-          echo "f39f525234cc7e473d20d88b5fca64b6b9c514de248cb7b7efe8958a8796f1ec  /tmp/qualifier.tgz" | sha256sum -c -
+-          mkdir -p "$HOME/.local/bin"
+-          tar -xzf /tmp/qualifier.tgz -C "$HOME/.local/bin" qualifier
+-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+-          echo "TOOLPATH_GOLDENS_QUALIFIER=$HOME/.local/bin/qualifier" >> "$GITHUB_ENV"
+-
+-      - name: Quality gates # same gates as `just ci`
+-        run: scripts/quality_gates.sh --verbose
++    uses: ./.github/workflows/gates.yml
+ 
++  # Forked PRs skip the deploy: they get no Cloudflare secrets, so it could only fail. Same-repo
++  # PRs deploy a preview; pushes to main deploy production.
+   deploy:
+     needs: ci
++    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+     runs-on: ubuntu-latest
++    timeout-minutes: 15
+     permissions:
+       contents: read
+       deployments: write
+diff --git a/.github/workflows/gates.yml b/.github/workflows/gates.yml
+new file mode 100644
+index 00000000..76eb7737
+--- /dev/null
++++ b/.github/workflows/gates.yml
+@@ -0,0 +1,86 @@
++name: Gates
++
++# The quality gates as a matrix of independent jobs, one per gate group, each running
++# `scripts/quality_gates.sh <gate>…`. Called by deploy-site.yml (every PR and every push to main)
++# and by release.yml (the tagged commit, before any binary is built), so a release runs exactly
++# the CI a merge does. `just ci` still runs every gate in one process locally; the groups below
++# must together name every gate in quality_gates.sh's `_all_gates`.
++on:
++  workflow_call:
++
++permissions:
++  contents: read
++
++jobs:
++  gates:
++    name: gates (${{ matrix.name }})
++    runs-on: ubuntu-latest
++    timeout-minutes: 20
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - name: lint
++            gates: format shellcheck clippy secrets
++          - name: test
++            gates: test
++          - name: doc
++            gates: doc examples
++          - name: plugin-site
++            gates: plugin quickstart site
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install Rust
++        run: rustup show # installs toolchain from rust-toolchain.toml
++
++      # One cache per group: clippy, test, doc and the quickstart's `cargo install` build
++      # different artifacts, and a shared key would let whichever job saves first win.
++      - name: Cache cargo
++        uses: actions/cache@v4
++        with:
++          path: |
++            ~/.cargo/registry
++            ~/.cargo/git
++            target
++          key: cargo-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}
++          restore-keys: cargo-${{ matrix.name }}-
++
++      - uses: pnpm/action-setup@v4
++        with:
++          version: 10
++
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 22
++          cache: pnpm
++          cache-dependency-path: site/pnpm-lock.yaml
++
++      # The goldens' qualifier review needs the binary; without it the tests fail closed under CI.
++      # Pinned release asset, checked against its sha256 before it runs.
++      - name: Install qualifier 0.8.0
++        if: matrix.name == 'test'
++        run: |
++          curl -fsSL -o /tmp/qualifier.tgz \
++            https://github.com/empathic/qualifier/releases/download/v0.8.0/qualifier-x86_64-unknown-linux-musl.tar.gz
++          echo "f39f525234cc7e473d20d88b5fca64b6b9c514de248cb7b7efe8958a8796f1ec  /tmp/qualifier.tgz" | sha256sum -c -
++          mkdir -p "$HOME/.local/bin"
++          tar -xzf /tmp/qualifier.tgz -C "$HOME/.local/bin" qualifier
++          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
++          echo "TOOLPATH_GOLDENS_QUALIFIER=$HOME/.local/bin/qualifier" >> "$GITHUB_ENV"
++
++      # The secrets gate: gitleaks over the tree with .gitleaks.toml (the same version the flake's
++      # dev shell has). Pinned release asset, checked against its sha256 before it runs; under CI
++      # the gate fails rather than skips when the binary is missing.
++      - name: Install gitleaks 8.30.1
++        if: matrix.name == 'lint'
++        run: |
++          curl -fsSL -o /tmp/gitleaks.tgz \
++            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
++          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c -
++          mkdir -p "$HOME/.local/bin"
++          tar -xzf /tmp/gitleaks.tgz -C "$HOME/.local/bin" gitleaks
++          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
++
++      - name: Quality gates (${{ matrix.gates }}) # the same gates `just ci` runs, this group only
++        run: scripts/quality_gates.sh --verbose ${{ matrix.gates }}
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 4d76c797..f3d055bb 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -8,13 +8,27 @@ on:
+ permissions:
+   contents: write
+ 
++# Never cancelled: one group per tag (or dispatched ref) and sha, so a release run always finishes.
++concurrency:
++  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
++  cancel-in-progress: false
++
+ env:
+   CARGO_TERM_COLOR: always
+ 
+ jobs:
++  # The full quality gates on the tagged commit, the same matrix CI runs (gates.yml): a tag never
++  # publishes binaries built from a tree that did not pass them.
++  gates:
++    uses: ./.github/workflows/gates.yml
++    permissions:
++      contents: read
++
+   build:
+     name: Build ${{ matrix.target }}
++    needs: gates
+     runs-on: ${{ matrix.os }}
++    timeout-minutes: 30
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -76,6 +90,7 @@ jobs:
+     name: Create Release
+     needs: build
+     runs-on: ubuntu-latest
++    timeout-minutes: 30
+     steps:
+       - uses: actions/checkout@v4
+ 
+diff --git a/scripts/quality_gates.sh b/scripts/quality_gates.sh
+index 5f977594..39c4e49e 100755
+--- a/scripts/quality_gates.sh
++++ b/scripts/quality_gates.sh
+@@ -70,7 +70,8 @@ gate_shellcheck() {
+ 
+ # shellcheck disable=SC2329
+ gate_clippy() {
+-    cargo clippy --workspace --features path-cli/develop,toolpath/verify -- -D warnings 2>&1
++    # --all-targets: tests, benches and examples too, not only the library and binary code.
++    cargo clippy --workspace --all-targets --features path-cli/develop,toolpath/verify -- -D warnings 2>&1
+ }
+ 
+ # shellcheck disable=SC2329
+@@ -119,9 +120,14 @@ gate_site() {
+ gate_secrets() {
+     # The whole tree, with gitleaks' default rules plus the custom rules and the allowlist in
+     # .gitleaks.toml. The same file drives crates/toolpath-webmock/tests/no_secrets.rs, which
+-    # runs under the test gate everywhere (CI on main has no flake and no gitleaks); this gate
+-    # is the wider sweep for a machine that has the binary (the wip flake's dev shell does).
++    # runs under the test gate everywhere; this gate is the wider sweep, wherever the binary is:
++    # CI (gates.yml installs a pinned release) and the wip flake's dev shell.
+     if ! command -v gitleaks >/dev/null 2>&1; then
++        # CI installs a pinned gitleaks (gates.yml); missing there is a broken install, not a skip.
++        if [[ -n "${CI:-}" ]]; then
++            echo "gitleaks not on PATH under CI; the secrets gate fails closed" >&2
++            return 1
++        fi
+         echo "gitleaks not on PATH; skipped (crates/toolpath-webmock/tests/no_secrets.rs covers the fixture surfaces under the test gate)"
+         return 0
+     fi
+-- 
+2.55.0
+

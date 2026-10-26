@@ -1,0 +1,379 @@
+From ba8a9cd1e3b060dfe070790b62fb63817d06358d Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:02:05 -0400
+Subject: [PATCH] fix(convo): path.head keeps the conversation in its ancestry
+
+derive_path took the last emitted step as path.head, which is the last
+event step. A Claude Code session's attachment events are parented to
+the first user turn, so they formed a side chain off it and the head
+landed at its tip: every assistant turn sat outside ancestors(head), so
+by the format's rule the conversation itself was a dead end (drawn that
+way in toolpath.net's visualizer). pick_head takes the latest step whose
+ancestry holds the last turn. The claude and claude-session goldens now
+head at claude-preamble-8; no other set has an event side chain. pr/34.
+---
+ crates/toolpath-convo/src/.qual               |  3 +
+ crates/toolpath-convo/src/derive.rs           | 68 ++++++++++++++++++-
+ .../snapshots/document@claude-session.snap    |  2 +-
+ .../snapshots/document@claude.snap            |  2 +-
+ .../snapshots/shed@claude-session.snap        |  4 +-
+ .../snapshots/shed@claude.snap                |  4 +-
+ goldens/manifest.json                         |  4 +-
+ goldens/shed/claude-session.json              |  6 +-
+ goldens/shed/claude.json                      |  4 +-
+ pr/34-head-keeps-the-conversation.md          | 38 +++++++++++
+ 10 files changed, 119 insertions(+), 16 deletions(-)
+ create mode 100644 pr/34-head-keeps-the-conversation.md
+
+diff --git a/crates/toolpath-convo/src/.qual b/crates/toolpath-convo/src/.qual
+index 44c1bd58..6c8c4016 100644
+--- a/crates/toolpath-convo/src/.qual
++++ b/crates/toolpath-convo/src/.qual
+@@ -1 +1,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-convo/src/derive.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-15T15:15:28.126410Z","id":"0fcd68ea81c0957af03068d01dd85dff547723b4bbcb8de082b0b1b48b64d7a4","body":{"detail":"Seen as +34 $.events[].parent_id on the codex set (pathbase roundtrip.json). By design, but undeclared: either declare it as an intended loss or mark synthetic parents so extract drops them. Bobby's call.","kind":"concern","span":{"start":{"line":396},"end":{"line":396},"content_hash":"8ab02b464849aba0cf4f1c9fd18ccf6d065c91902182938d90063cbbd4a5912a"},"summary":"derive_path chains a parentless event to the previous step; extract reads it back as a parent_id the IR never had","tags":["review","shed","defect-candidate","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-convo/src/derive.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:42:33.382654Z","id":"7d9edc9413f65e80cf8c16ac5ad24a5bb643f2645c43cf78dd465af37c591c1e","body":{"detail":"Found drawing document@claude-session in toolpath.net's visualizer (2026-10-19): attachment events parented to the first user turn formed a side chain that took the head (steps.last()), so every assistant turn sat outside ancestors(head). Test: test_head_stays_on_the_conversation_when_events_branch_off_an_earlier_turn; claude and claude-session documents now head at claude-preamble-8, the tip after the last turn.","kind":"pass","span":{"start":{"line":427},"end":{"line":427},"content_hash":"af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"},"summary":"path.head is the latest step whose ancestry holds the last turn: an event side chain off an earlier turn no longer takes the head and turns the conversation into a dead end","tags":["goldens","dead-end","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-convo/src/derive.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:42:44.245438Z","id":"d1218b87605b0765b55b6e17cb80a2cf7aaad202483616b29732f0c68c15d689","body":{"detail":"Seen as +34 $.events[].parent_id on the codex set (pathbase roundtrip.json). By design, but undeclared: either declare it as an intended loss or mark synthetic parents so extract drops them. Bobby's call.","kind":"concern","span":{"start":{"line":400},"end":{"line":400},"content_hash":"8ab02b464849aba0cf4f1c9fd18ccf6d065c91902182938d90063cbbd4a5912a"},"summary":"derive_path chains a parentless event to the previous step; extract reads it back as a parent_id the IR never had","supersedes":"0fcd68ea81c0957af03068d01dd85dff547723b4bbcb8de082b0b1b48b64d7a4","tags":["review","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-convo/src/derive.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:42:44.263639Z","id":"0fd09c64160a5cdf6e6723216a71c9d6076df3481958fa8ad276c040d1be55a2","body":{"detail":"Found drawing document@claude-session in toolpath.net's visualizer (2026-10-19): attachment events parented to the first user turn formed a side chain that took the head (steps.last()), so every assistant turn sat outside ancestors(head). Test: test_head_stays_on_the_conversation_when_events_branch_off_an_earlier_turn; the claude and claude-session documents now head at claude-preamble-8, the tip after the last turn.","kind":"pass","span":{"start":{"line":428},"end":{"line":428},"content_hash":"d0bc87ba465f1c3b84f49a6b76b0fbfa751d7597292f4f82bc90680770922a39"},"summary":"path.head is the latest step whose ancestry holds the last turn: an event side chain off an earlier turn no longer takes the head and turns the conversation into a dead end","supersedes":"7d9edc9413f65e80cf8c16ac5ad24a5bb643f2645c43cf78dd465af37c591c1e","tags":["goldens","dead-end","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-convo/src/derive.rs b/crates/toolpath-convo/src/derive.rs
+index 290166f9..2cab698e 100644
+--- a/crates/toolpath-convo/src/derive.rs
++++ b/crates/toolpath-convo/src/derive.rs
+@@ -107,6 +107,9 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+     let mut by_id: HashMap<String, usize> = HashMap::new();
+     let mut turn_to_step: HashMap<String, String> = HashMap::new();
+     let mut actors: HashMap<String, ActorDefinition> = HashMap::new();
++    // The step of the conversation's last turn: `path.head` must keep it in
++    // its ancestry, or the conversation itself reads as a dead end.
++    let mut last_turn_step: Option<String> = None;
+ 
+     for (idx, turn) in view.turns.iter().enumerate() {
+         // Step id: use the turn's native id when set so it round-trips
+@@ -334,7 +337,8 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+         }
+ 
+         let final_id = push_step_and_dedup(&mut steps, &mut by_id, step);
+-        turn_to_step.insert(turn.id.clone(), final_id);
++        turn_to_step.insert(turn.id.clone(), final_id.clone());
++        last_turn_step = Some(final_id);
+     }
+ 
+     // Emit `view.events` as `conversation.event` steps so that attachments,
+@@ -421,7 +425,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+         last_step_id = Some(push_step_and_dedup(&mut steps, &mut by_id, step));
+     }
+ 
+-    let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
++    let head = pick_head(&steps, last_turn_step.as_deref());
+ 
+     // Meta
+     let title = config
+@@ -475,6 +479,43 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
+     }
+ }
+ 
++/// The path's head: the latest step whose ancestry holds the last turn, so
++/// events that chain after the conversation (parentless ones fall through to
++/// the step before them) extend it, while an event side chain that hangs off
++/// an earlier turn never takes the head and turns the conversation into a dead
++/// end. Without turns, the last step.
++fn pick_head(steps: &[Step], last_turn: Option<&str>) -> String {
++    let Some(last_turn) = last_turn else {
++        return steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
++    };
++    let parents: HashMap<&str, &[String]> = steps
++        .iter()
++        .map(|s| (s.step.id.as_str(), s.step.parents.as_slice()))
++        .collect();
++    let descends = |from: &str| {
++        let mut stack = vec![from];
++        let mut seen = std::collections::HashSet::new();
++        while let Some(id) = stack.pop() {
++            if id == last_turn {
++                return true;
++            }
++            if seen.insert(id)
++                && let Some(ps) = parents.get(id)
++            {
++                stack.extend(ps.iter().map(String::as_str));
++            }
++        }
++        false
++    };
++    steps
++        .iter()
++        .rev()
++        .map(|s| s.step.id.as_str())
++        .find(|id| descends(id))
++        .unwrap_or(last_turn)
++        .to_string()
++}
++
+ /// Push `step` into `steps`, resolving an id collision with an already-emitted
+ /// step so the path's step ids stay unique. A byte-identical re-emission (same
+ /// serialized step) is dropped — keeping it would only duplicate a step that
+@@ -715,7 +756,10 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolInvocation, ToolResult};
++    use crate::{
++        ConversationEvent, DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolInvocation,
++        ToolResult,
++    };
+ 
+     fn base_turn(id: &str, role: Role) -> Turn {
+         Turn {
+@@ -1546,6 +1590,24 @@ mod tests {
+         assert_eq!(path.path.head, "t3");
+     }
+ 
++    #[test]
++    fn test_head_stays_on_the_conversation_when_events_branch_off_an_earlier_turn() {
++        // An event parented to the first turn (an attachment) must not take the
++        // head: the conversation would read as a dead end (all_steps − ancestors(head)).
++        let mut t2 = base_turn("t2", Role::Assistant);
++        t2.parent_id = Some("t1".into());
++        let mut view = view_with(vec![base_turn("t1", Role::User), t2]);
++        view.events.push(ConversationEvent {
++            id: "e1".into(),
++            timestamp: "2026-01-01T00:00:00Z".into(),
++            parent_id: Some("t1".into()),
++            event_type: "attachment".into(),
++            data: HashMap::new(),
++        });
++        let path = derive_path(&view, &DeriveConfig::default());
++        assert_eq!(path.path.head, "t2");
++    }
++
+     #[test]
+     fn test_token_usage_in_extras() {
+         let mut turn = base_turn("t1", Role::Assistant);
+diff --git a/crates/toolpath-goldens/snapshots/document@claude-session.snap b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+index 3be22dec..e06a0f0c 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+@@ -41,7 +41,7 @@ input_file: goldens/claude-session/input.jsonl
+           "branch": "HEAD",
+           "uri": "file:///private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project"
+         },
+-        "head": "457e0d3d-f385-432e-8b0e-00ee0415cd18",
++        "head": "claude-preamble-8",
+         "id": "path-claude-code-08f8ca74"
+       },
+       "steps": [
+diff --git a/crates/toolpath-goldens/snapshots/document@claude.snap b/crates/toolpath-goldens/snapshots/document@claude.snap
+index ca38ac62..e6e7304a 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude.snap
+@@ -46,7 +46,7 @@ input_file: goldens/claude/input.jsonl
+           "branch": "HEAD",
+           "uri": "file:///private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude"
+         },
+-        "head": "3eb41279-e974-4886-9964-48362eb83615",
++        "head": "claude-preamble-8",
+         "id": "path-claude-code-89f4d66a"
+       },
+       "steps": [
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-session.snap b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+index dd4b54fb..a9b655e5 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+@@ -23,8 +23,8 @@ input_file: goldens/claude-session/input.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 175887,
+-    "string_chars": 158008,
++    "bytes": 175868,
++    "string_chars": 157989,
+     "steps": 27,
+     "text_chars": 292,
+     "tool_uses": 2
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude.snap b/crates/toolpath-goldens/snapshots/shed@claude.snap
+index d61c76b4..6b09da3d 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude.snap
+@@ -22,8 +22,8 @@ input_file: test-fixtures/claude/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 58337,
+-    "string_chars": 36242,
++    "bytes": 58318,
++    "string_chars": 36223,
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 629c5862..fe21adab 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -593,11 +593,11 @@
+     },
+     {
+       "file": "goldens/shed/claude-session.json",
+-      "sha256": "b37918572db2642a69c72b30357e6ab4bf528bde7d7826ca7da93308a20863d7"
++      "sha256": "c6490d29e9d40322899209c802bc9de4da77d96b473c28c91ef4db8c7e0a5bcd"
+     },
+     {
+       "file": "goldens/shed/claude.json",
+-      "sha256": "327fd67956fa086ed2082ac1361acd59985d940b582ab8c723a6ddcf8d0f25bb"
++      "sha256": "8d2cc85c6f497e35b183ab6a62927ebf4fe30a91c93ad075bc804fd26eeaeb60"
+     },
+     {
+       "file": "goldens/shed/codex.json",
+diff --git a/goldens/shed/claude-session.json b/goldens/shed/claude-session.json
+index 68bf5a2e..c6f0b7e2 100644
+--- a/goldens/shed/claude-session.json
++++ b/goldens/shed/claude-session.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "claude",
+   "ir": {
+-    "bytes": 175866,
++    "bytes": 175869,
+     "steps": 27,
+-    "string_chars": 158008,
++    "string_chars": 157989,
+     "text_chars": 292,
+     "tool_uses": 2
+   },
+@@ -52,7 +52,7 @@
+     }
+   ],
+   "same_format": {
+-    "bytes": 172431,
++    "bytes": 172453,
+     "dropped": [
+       {
+         "example": "0",
+diff --git a/goldens/shed/claude.json b/goldens/shed/claude.json
+index 4375c4e0..be6d5001 100644
+--- a/goldens/shed/claude.json
++++ b/goldens/shed/claude.json
+@@ -1,9 +1,9 @@
+ {
+   "harness": "claude",
+   "ir": {
+-    "bytes": 58338,
++    "bytes": 58319,
+     "steps": 61,
+-    "string_chars": 36242,
++    "string_chars": 36223,
+     "text_chars": 4563,
+     "tool_uses": 19
+   },
+diff --git a/pr/34-head-keeps-the-conversation.md b/pr/34-head-keeps-the-conversation.md
+new file mode 100644
+index 00000000..998b4a16
+--- /dev/null
++++ b/pr/34-head-keeps-the-conversation.md
+@@ -0,0 +1,38 @@
++# fix(convo): path.head keeps the conversation in its ancestry
++
++Status: planned (found 2026-10-19 drawing the claude-session golden in toolpath.net's visualizer) · Base: the goldens stack once merged · Independent code (toolpath-convo derive); recaptures the claude and claude-session goldens
++
++## Why
++`derive_path` set `path.head` to the last step it emitted (`steps.last()`), which is the last *event* step. Claude
++Code sessions carry attachment events whose `parent_id` is the first user turn, so the events formed a side chain
++off that turn, and the head landed at its tip. Every assistant turn then sat outside `ancestors(head)`: by the
++format's own rule (dead ends = `all_steps − ancestors(head)`), the conversation itself was a dead end. The
++visualizer drew it that way (the assistant column dashed red), and any consumer walking back from the head lost
++the conversation.
++
++## What changes
++- `toolpath-convo/src/derive.rs`: `pick_head` chooses the latest step whose ancestry holds the last turn's step.
++  Events that chain after the conversation (parentless ones fall through to the step before them) still extend
++  it; a side chain off an earlier turn no longer takes the head. Without turns, the last step as before.
++- Test `test_head_stays_on_the_conversation_when_events_branch_off_an_earlier_turn`.
++- Goldens recaptured: `document@claude.snap` and `document@claude-session.snap` now head at `claude-preamble-8`
++  (the tip after the last turn); `shed@claude*.snap` and `goldens/shed/claude*.json` change only by the head id's
++  length (IR `string_chars` −19). No other set has an event side chain, so nothing else moves.
++- Qualifier: a pass on `pick_head`'s call; the parentless-event concern on line 400 re-anchored with `--supersedes`.
++
++## Verification
++- `cargo test -p toolpath-convo` (125 ok), `cargo test -p toolpath-goldens`, `path goldens check` (0 problems), and the full gate list (fmt, clippy -D warnings, test --workspace, doc) with `--features
++  path-cli/goldens`.
++
++## Paths
++```
++crates/toolpath-convo/src/derive.rs
++crates/toolpath-convo/src/.qual
++crates/toolpath-goldens/snapshots/document@claude.snap
++crates/toolpath-goldens/snapshots/document@claude-session.snap
++crates/toolpath-goldens/snapshots/shed@claude.snap
++crates/toolpath-goldens/snapshots/shed@claude-session.snap
++goldens/manifest.json
++goldens/shed/claude.json
++goldens/shed/claude-session.json
++```
+-- 
+2.55.0
+
+From e299e60a0ea0a13539bebd391a8b9bb43fd73ae6 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:17:29 -0400
+Subject: [PATCH] =?UTF-8?q?claims:=20the=20quickstart=20gate=20landed=20?=
+ =?UTF-8?q?=E2=80=94=20install,=20sync,=20query,=20share=20and=20resume=20?=
+ =?UTF-8?q?records=20re-pointed;=20the=20piece=20is=20pr/34?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .qual                                                   | 2 ++
+ pr/{32-claims-as-records.md => 34-claims-as-records.md} | 5 ++---
+ site/.qual                                              | 4 ++++
+ 3 files changed, 8 insertions(+), 3 deletions(-)
+ rename pr/{32-claims-as-records.md => 34-claims-as-records.md} (92%)
+
+diff --git a/.qual b/.qual
+index 27b4a26f..372901cc 100644
+--- a/.qual
++++ b/.qual
+@@ -84,3 +84,5 @@
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:09:42.881020Z","id":"2dee8b5e28650765cc5296a408ee89233d7ff4a0f299bb2d1112cf97b87eb757","body":{"detail":"toolpath::v1::sign implements JCS, SHA-256 digests and the step/path author and path reviewer inputs; crates/toolpath/tests/signatures.rs (signed_step_and_path_verify, tampered_change_fails, moved_head_fails_both_path_signatures, missing_required_scope_fails, gpg_and_sigstore_are_not_verified, scopes_without_a_canonical_form_are_refused) and tests/jcs.rs (RFC 8785 reference vectors), feature 'verify' (810a58b). gpg and sigstore are refused, not verified; RFC.md:719's UTF-8 key ordering is recorded false by that piece (RFC 8785 orders by UTF-16).","kind":"pass","ref":"git:810a58b","span":{"start":{"line":712},"end":{"line":712},"content_hash":"dfd7d6d839139a01c93c727b2af1f8fd7f8a3c7d57ee39adf6db4782c331969a"},"summary":"RFC: signatures over JCS canonical form — backed for ssh Ed25519 (author and reviewer)","supersedes":"64f644fa36c165ab3db5b7101a93b141350ee377e4ee41f2eb5a0de5e56802dc","tags":["claim:rfc-jcs-signatures","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:09:42.882231Z","id":"ad4488864d32f1f5aada4a6eb1a9c37fe96f0b0370f37ed4a9b3ae6e74228d3e","body":{"detail":"crates/toolpath/tests/signatures.rs (signed_step_and_path_verify, tampered_change_fails, moved_head_fails_both_path_signatures, missing_required_scope_fails, gpg_and_sigstore_are_not_verified, scopes_without_a_canonical_form_are_refused) and tests/jcs.rs (RFC 8785 reference vectors), feature 'verify' (810a58b). No producer signs documents.","kind":"concern","ref":"git:810a58b","span":{"start":{"line":941},"end":{"line":941},"content_hash":"6599929dc630a0f354e17dfd1e086e97639199135bb95cb90bb21cc1c8090666"},"summary":"RFC beyond-VCS 5, multi-party signatures — author and reviewer verify (ssh); CI attestation has no canonical form","supersedes":"959be1227fcd26b03d93cd271507dceecfd02b15813b25c54f45414ab56a48f8","tags":["claim:rfc-beyond-vcs-signatures","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:09:42.884918Z","id":"977e34e47e2b3a65bbfcdc058c39ce15b3dc8cf0d3dd83e489a23fd984bf5c5e","body":{"detail":"crates/path-cli/tests/cli_surface.rs help_tree_is_pinned walks path --help recursively and snapshots every command (242861e).","kind":"pass","ref":"git:810a58b","span":{"start":{"line":284},"end":{"line":284},"content_hash":"2bcf44f7b83086d48de5516b7ef34278bffe82647c1193d55e4cab4b3917bdc8"},"summary":"README CLI reference: the subcommand tree matches the binary — backed","supersedes":"eef8c403e0f9f115088515c69f0c5f8b0518e988dea2e0cbbdcb90a0bb239111","tags":["claim:readme-cli-reference","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.654092Z","id":"ff2ac9f3ceba31ab18bbdf617d818b731140495f22209bacd648c43ca5b85805","body":{"detail":"scripts/test-quickstart.sh, a quality gate (0464020).","kind":"concern","ref":"git:0464020","span":{"start":{"line":74},"end":{"line":74},"content_hash":"647bc6d32783440d4f11ad8ff594c808d643affb37b7974508e66abc9ad5bcc6"},"summary":"README install: install.sh backed against a stub; cargo install tested from the checkout, not crates.io","supersedes":"003b0b63340a4ab128efd59ab71c2c33879576a764dbbb23aa9096ca6193a963","tags":["claim:readme-install","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.654600Z","id":"34962083b54ff39d8faeba80aa9dee226a685e4f7640662c0712417a7ed8ece8","body":{"detail":"scripts/test-plugin.sh and scripts/test-quickstart.sh, a quality gate (0464020).","kind":"pass","ref":"git:0464020","span":{"start":{"line":84},"end":{"line":85},"content_hash":"30bcf0e27cdb32dd3de75f746b77fa775cb48a4caa30e7ff5b571eb26611d14c"},"summary":"README: the plugin installs the CLI on first use and adds two slash commands — backed offline","supersedes":"8937db0c630aab995a6bec4d327a6bd908ac5e4050fbe3aa9203acda323fd895","tags":["claim:readme-plugin","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/pr/32-claims-as-records.md b/pr/34-claims-as-records.md
+similarity index 92%
+rename from pr/32-claims-as-records.md
+rename to pr/34-claims-as-records.md
+index faa94e4b..646c2abb 100644
+--- a/pr/32-claims-as-records.md
++++ b/pr/34-claims-as-records.md
+@@ -27,15 +27,14 @@ without a record and a test fails.
+ - `crates/toolpath-model/tests/claims.rs`: every claim's quote is in its file and a live record tagged with it
+   covers those lines, read from the working tree (no regeneration needed).
+ 
+-## Status at 810a58b (after pr/27, pr/28, the core-type, query and VCS tests, signatures and the CLI surface)
++## Status at 1474580 (after pr/27, pr/28, the core-type, query and VCS tests, signatures, the CLI surface and the quickstart gate)
+ 172 claims: 100 pinned (pass), 66 partly (concern), 6 false (blocker), plus the blocker for main's RFC line.
+ - Blockers (false on wip today): v1.1.0 `meta.source` lists six harnesses but copilot documents carry `"copilot"`;
+   README's harness table says gemini, opencode and cursor have no golden (all have), and that the gemini reader
+   does not see 0.47 `.jsonl` (it does since pr/19); README says goldens cover four harnesses (all seven); README
+   says there is no test workflow on GitHub Actions (deploy-site.yml runs quality_gates.sh on every PR).
+ - Concerns, by theme: projection gains and invented values; resume shown live for 19 of 28 cells, not committed;
+-  `path query` across every harness and the home page's exact query never run; quickstart, install.sh and
+-  `cargo install` untested; agent sessions carry no `meta.intent` and no producer emits dead ends or AST ops;
++  the page's resume URL example cannot resolve and `cargo install` from crates.io is untested; agent sessions carry no `meta.intent` and no producer emits dead ends or AST ops;
+   signatures verify for ssh author/reviewer only (no CI scope, no gpg/sigstore) and no producer signs; IDs and `$ref` targets not enforced; the v1.1.0 group rule (last step of a
+   run carries the total) untested; the `.path.jsonl` examples not schema-checked; unsourced positioning lines;
+   FAQ open questions practice already answered (step ids, format evolution) or not (privacy); `toolpath:` bases
+diff --git a/site/.qual b/site/.qual
+index 1efa2cba..7f04def1 100644
+--- a/site/.qual
++++ b/site/.qual
+@@ -36,3 +36,7 @@
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:53:27.451652Z","id":"cf4bdaadfab9c957ad437610115c1a16b5947a3f810d58ba87b8ca86b04f769d","body":{"detail":"query@site-example runs one filter over documents from all seven harnesses (8813140); validate_transforms@<set> checks every transform's document against the base and v1.1.0 schemas.","kind":"pass","ref":"git:26ad6b4","span":{"start":{"line":118},"end":{"line":119},"content_hash":"e5cc2a765172a43cab6d1c078129eb6e18b80af312bdf99384b1500612ef0c6b"},"summary":"Claim: build against the format and it works with sessions from every supported harness — backed for path query","supersedes":"57513f566111d5e0bfdc6187d4d35c975eb5a97f589460fd92054674b9e859d1","tags":["claim:one-schema","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:53:27.451812Z","id":"dc96e843847b5256e7a84355f09b9774c24da68bed1058c430c4e5432818709f","body":{"detail":"query_every_session.rs (8813140): one filter, seven harnesses. Other consumers (render, share) are not run over all seven.","kind":"pass","ref":"git:26ad6b4","span":{"start":{"line":14},"end":{"line":14},"content_hash":"c53419b87615c3b1ad79d7703056337341b60bfe881851e1bcd33668c62aaa13"},"summary":"Claim: build your tools once for all of them — backed by path query over all seven harnesses","supersedes":"0222a64753a4d659626f052cc10eacb2008293095a723c32937bfc50468027bc","tags":["claim:build-tools-once","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:53:27.451969Z","id":"d3d7bcf119561a3f63a9664bfc8fe17c7f29d7f048bf14cca276420f194b4e23","body":{"detail":"query@site-example runs the exact output-tokens filter; cache_sync_then_query_over_real_session_files covers sync then query (8813140). path share and path resume <pathbase url> --harness codex have no end-to-end test.","kind":"concern","ref":"git:26ad6b4","span":{"start":{"line":238},"end":{"line":238},"content_hash":"5b937b262fd07c05376b8b98598cc3fe97c5574cbb9f032785a942cf1c08dcbe"},"summary":"Claim: the quickstart flow — sync and the output-tokens query now tested; share and resume from a Pathbase URL are not","supersedes":"463cd5b89619a3240272e696cd7e9a3f123f8695444eb4257f20ca3d42300d47","tags":["claim:quickstart-flow","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.652475Z","id":"31abc7900f3d5a6878a5c61ad41d53b93288dfe207ca070584c1b2879cd6e24a","body":{"detail":"scripts/test-quickstart.sh, a quality gate (0464020): install.sh piped from a stubbed curl, its platform table, the Intel refusal and a tampered tarball. The real GitHub release is not fetched.","kind":"pass","ref":"git:0464020","span":{"start":{"line":210},"end":{"line":210},"content_hash":"ef09eed7e8b2d1db1620ff45699d3a3e9f8d4f14e36a51216931d9b0206d2dc2"},"summary":"Claim: curl … install.sh | bash installs path — backed against a stubbed release","supersedes":"0b8966fc959c6471434d0f8942c49783db92788b17141c46b57d4ff4f95db386","tags":["claim:quick-install","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.653128Z","id":"c006903c62c4a17912a4c7d07045f45677cd2b4e1a986172a4c454e1db559d3c","body":{"detail":"scripts/test-quickstart.sh, a quality gate (0464020) runs cargo install from the checkout; installing the published crate from crates.io is not tested.","kind":"concern","ref":"git:0464020","span":{"start":{"line":220},"end":{"line":220},"content_hash":"d7433311a6a8cef23a0ac938f8d722a4af262a22dbc797259ea70a447d267751"},"summary":"Claim: cargo install path-cli — installs from this checkout in the gate; crates.io is not exercised","supersedes":"47acb254a2562f14ccbe7927c1621e21b9406a911a2f08be2e4165307f1da7f1","tags":["claim:cargo-install","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.653846Z","id":"3c79454a66d2dbe750ae59de89b42c83b37095cc4e0ffd0c120d8c4826bf6263","body":{"detail":"scripts/test-quickstart.sh, a quality gate (0464020): cache sync over all seven harnesses (incremental), the site's query filter verbatim, path share against a stateful Pathbase stub, path resume --harness codex into a codex stub. The page's example URL pathbase.dev/alex/pathstash/path-pr-42 is a slug, not a graph id, and cannot resolve (concern 8f4d6db1).","kind":"concern","ref":"git:0464020","span":{"start":{"line":238},"end":{"line":238},"content_hash":"5b937b262fd07c05376b8b98598cc3fe97c5574cbb9f032785a942cf1c08dcbe"},"summary":"Claim: the quickstart flow — sync, query, share, resume all run offline; the page's resume URL cannot resolve","supersedes":"d3d7bcf119561a3f63a9664bfc8fe17c7f29d7f048bf14cca276420f194b4e23","tags":["claim:quickstart-flow","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:23.654317Z","id":"67a883ca10b2aa5d639027f243200794ae8c0e6c8f4602bbc478367cad50a304","body":{"detail":"scripts/test-plugin.sh and scripts/test-quickstart.sh, a quality gate (0464020) (the plugin's /path:share and /path:query through ensure-path.sh). Not run inside a real Claude Code.","kind":"pass","ref":"git:0464020","span":{"start":{"line":267},"end":{"line":268},"content_hash":"2c4ebe780e1e05a8ab845d789fb96560fecd1b5b7734e5910afd57baabf03d4d"},"summary":"Claim: /plugin install path@toolpath adds /path:share and /path:query and installs the CLI on first use — backed offline","supersedes":"054f8275f693c9f4b3643f33bd714c64e46c9bb55a81ccadb73defc38a608273","tags":["claim:claude-plugin","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+-- 
+2.55.0
+

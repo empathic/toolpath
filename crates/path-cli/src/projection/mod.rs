@@ -7,6 +7,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod copilot;
 pub(crate) mod cursor;
+pub(crate) mod cursor_agent;
 pub(crate) mod gemini;
 pub(crate) mod opencode;
 pub(crate) mod pi;

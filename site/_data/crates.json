@@ -45,7 +45,7 @@
     "description": "Derive from Gemini CLI conversation logs",
     "docs": "https://docs.rs/toolpath-gemini",
     "crate": "https://crates.io/crates/toolpath-gemini",
-    "role": "Reads Gemini CLI conversation data from ~/.gemini/tmp/ and maps messages, tool calls, and sub-agent delegations to Toolpath documents. Sub-agent chat files are folded into the parent conversation as populated DelegatedWork."
+    "role": "Reads Gemini CLI conversation data from ~/.gemini/tmp/ and maps messages, tool calls, and sub-agent delegations to Toolpath documents. Sub-agent chat files are folded into the parent conversation as populated DelegatedWork (unit-tested on synthetic fixtures). Reads the `.json` chat files of gemini-cli up to 0.46; 0.47 writes `.jsonl`, which the reader does not see yet."
   },
   {
     "name": "toolpath-codex",
@@ -53,7 +53,7 @@
     "description": "Derive from Codex CLI rollout files",
     "docs": "https://docs.rs/toolpath-codex",
     "crate": "https://crates.io/crates/toolpath-codex",
-    "role": "Reads Codex CLI rollout JSONL from ~/.codex/sessions/ and maps session_meta, response_item, event_msg, and turn_context records to Toolpath documents. File changes from patch_apply_end preserve the real unified diff as the raw perspective. Sessions are global (date-bucketed), not project-keyed."
+    "role": "Reads Codex CLI rollout JSONL from ~/.codex/sessions/ and maps session_meta, response_item, event_msg, and turn_context records to Toolpath documents. File changes from patch_apply_end preserve the real unified diff as the raw perspective (crate fixture; the codex golden has no file change). Sessions are global (date-bucketed), not project-keyed."
   },
   {
     "name": "toolpath-copilot",
@@ -61,7 +61,7 @@
     "description": "Derive from GitHub Copilot CLI session logs (preview)",
     "docs": "https://docs.rs/toolpath-copilot",
     "crate": "https://crates.io/crates/toolpath-copilot",
-    "role": "Reads the GitHub Copilot CLI (@github/copilot) events.jsonl stream from ~/.copilot/session-state/<id>/ and maps its session/user/assistant/tool/subagent events to Toolpath documents. Preview: the events.jsonl schema is undocumented, so the parser is tolerant and the on-disk reference (docs/agents/formats/copilot-cli/) tags every claim with a confidence level pending first-hand samples."
+    "role": "Reads the GitHub Copilot CLI (@github/copilot) events.jsonl stream from ~/.copilot/session-state/<id>/ and maps its session/user/assistant/tool/subagent events to Toolpath documents. Preview: the events.jsonl schema is undocumented, so the parser is tolerant; the on-disk reference (docs/agents/formats/copilot-cli/) tags every claim with a confidence level and is grounded in sessions captured at copilotVersion 1.0.67. A projected session resumed in copilot CLI 1.0.61 on 2026-10-15."
   },
   {
     "name": "toolpath-opencode",
@@ -69,7 +69,7 @@
     "description": "Derive from opencode SQLite databases",
     "docs": "https://docs.rs/toolpath-opencode",
     "crate": "https://crates.io/crates/toolpath-opencode",
-    "role": "Reads opencode's `~/.local/share/opencode/opencode.db` SQLite database, implements `ConversationProvider`, and derives Toolpath `Path` documents. File diffs come from opencode's sibling bare git snapshot repositories via `git2` tree-to-tree comparisons; gitignored paths fall back to tool-input-derived structural changes. Respects opencode's project-id semantics (SHA of the repo's first root commit)."
+    "role": "Reads opencode's SQLite database under `~/.local/share/opencode/` (`opencode-stable.db` for 1.18 and later, `opencode.db` for older releases), implements `ConversationProvider`, and derives Toolpath `Path` documents. It can read file diffs from opencode's sibling bare git snapshot repositories via `git2` tree-to-tree comparisons when a snapshot repo is on disk, with gitignored paths falling back to tool-input-derived structural changes; no fixture exercises the snapshot path yet. Respects opencode's project-id semantics (SHA of the repo's first root commit)."
   },
   {
     "name": "toolpath-pi",
@@ -77,7 +77,7 @@
     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
     "docs": "https://docs.rs/toolpath-pi",
     "crate": "https://crates.io/crates/toolpath-pi",
-    "role": "Reads Pi (pi.dev) coding-agent session JSONL from `~/.pi/agent/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Preserves Pi's in-file conversation tree (id/parentId) as a DAG and follows `parentSession` links across files."
+    "role": "Reads Pi (pi.dev) coding-agent session JSONL from `~/.pi/agent/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Preserves Pi's in-file conversation tree (id/parentId) as a DAG and follows `parentSession` links across files (both unit-tested on synthetic sessions; the captured sessions are linear)."
   },
   {
     "name": "toolpath-cursor",
@@ -85,7 +85,7 @@
     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",
     "docs": "https://docs.rs/toolpath-cursor",
     "crate": "https://crates.io/crates/toolpath-cursor",
-    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) \u2014 composers, bubbles, content-addressed blobs \u2014 and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Round-trips back to a loadable composer via `CursorProjector` with full TOOL_TABLE coverage."
+    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) \u2014 composers, bubbles, content-addressed blobs \u2014 and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. `CursorProjector` writes a composer back that Cursor.app 3.24 adopts and lists by title (whether its body renders is not yet verified), and every TOOL_TABLE id round-trips (unit-tested). The reader reads both header layouts: Cursor 3.6's ItemTable key and 3.24's `composerHeaders` table."
   },
   {
     "name": "toolpath-dot",
@@ -113,7 +113,7 @@
   },
   {
     "name": "path-cli",
-    "version": "0.29.0",
+    "version": "0.30.0",
     "description": "Unified CLI (binary: path)",
     "docs": "https://docs.rs/path-cli",
     "crate": "https://crates.io/crates/path-cli",
@@ -121,7 +121,7 @@
   },
   {
     "name": "toolpath-cli",
-    "version": "0.29.0",
+    "version": "0.30.0",
     "description": "Deprecated alias for path-cli",
     "docs": "https://docs.rs/toolpath-cli",
     "crate": "https://crates.io/crates/toolpath-cli",

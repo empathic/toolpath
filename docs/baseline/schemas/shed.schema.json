@@ -1,0 +1,244 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "DocumentStats": {
+      "description": "Bytes and content of a toolpath document.",
+      "properties": {
+        "bytes": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "steps": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "string_chars": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "text_chars": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "tool_uses": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bytes",
+        "steps",
+        "string_chars",
+        "text_chars",
+        "tool_uses"
+      ],
+      "type": "object"
+    },
+    "Dropped": {
+      "description": "A field of the transcript the same-format round trip does not write back, with one example value (withheld when it looks like an identifier or a secret).",
+      "properties": {
+        "example": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "example",
+        "path"
+      ],
+      "type": "object"
+    },
+    "Kept": {
+      "description": "How many lines of one event type the same-format round trip kept.",
+      "properties": {
+        "after": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "source": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "after",
+        "source"
+      ],
+      "type": "object"
+    },
+    "KeyPathTally": {
+      "description": "Leaf key paths of a transcript before and after the same-format round trip.",
+      "properties": {
+        "after": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "gained": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "lost": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "source": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "after",
+        "gained",
+        "lost",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Rename": {
+      "description": "A field the same-format round trip writes under another spelling.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "SameFormat": {
+      "description": "The transcript projected back to its own format and compared field by field with the original.",
+      "properties": {
+        "bytes": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "dropped": {
+          "items": {
+            "$ref": "#/definitions/Dropped"
+          },
+          "type": "array"
+        },
+        "event_types_shed": {
+          "additionalProperties": {
+            "$ref": "#/definitions/Kept"
+          },
+          "description": "Event types with fewer lines after than before.",
+          "type": "object"
+        },
+        "gained": {
+          "description": "Paths the projection wrote that the transcript did not have (the same shape as `dropped`, the example taken from the projection).",
+          "items": {
+            "$ref": "#/definitions/Dropped"
+          },
+          "type": "array"
+        },
+        "key_paths": {
+          "$ref": "#/definitions/KeyPathTally"
+        },
+        "lines": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "renamed": {
+          "items": {
+            "$ref": "#/definitions/Rename"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "bytes",
+        "dropped",
+        "event_types_shed",
+        "gained",
+        "key_paths",
+        "lines",
+        "renamed"
+      ],
+      "type": "object"
+    },
+    "TranscriptStats": {
+      "description": "Lines, bytes and event types of a transcript.",
+      "properties": {
+        "by_type": {
+          "additionalProperties": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "description": "Count per event type (`type`, or `type/payload.type`), per JSON value: per line of a JSONL transcript, once for a whole-document session.",
+          "type": "object"
+        },
+        "bytes": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "lines": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "string_chars": {
+          "description": "Characters in every string value, summed.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "by_type",
+        "bytes",
+        "lines",
+        "string_chars"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "What each stage sheds for one recording: transcript, document, every projection, and the same-format round trip field by field.",
+  "properties": {
+    "ir": {
+      "$ref": "#/definitions/DocumentStats"
+    },
+    "projections": {
+      "additionalProperties": {
+        "$ref": "#/definitions/TranscriptStats"
+      },
+      "type": "object"
+    },
+    "same_format": {
+      "$ref": "#/definitions/SameFormat"
+    },
+    "source": {
+      "$ref": "#/definitions/TranscriptStats"
+    }
+  },
+  "required": [
+    "ir",
+    "projections",
+    "same_format",
+    "source"
+  ],
+  "title": "shed snapshot",
+  "type": "object"
+}

@@ -1,0 +1,103 @@
+From 54a84dc392d2ce8c4d252c761d78463864155910 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 13:55:46 -0400
+Subject: [PATCH] fix(codex): the written session's model_provider is the
+ view's, else openai (pr/66)
+
+The module doc already said so; the code hard-coded openai. pi on ollama now
+projects to codex as ollama. One snapshot re-recorded; goldens/pi/to-codex.jsonl
+needs capture in the nix dev shell.
+---
+ crates/toolpath-codex/src/project.rs          | 15 ++++++++++--
+ .../snapshots/projection@pi@codex.snap        |  4 ++--
+ pr/66-codex-model-provider-from-the-view.md   | 24 +++++++++++++++++++
+ 3 files changed, 39 insertions(+), 4 deletions(-)
+ create mode 100644 pr/66-codex-model-provider-from-the-view.md
+
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index c6bb1c6f..814ea2f3 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -37,12 +37,16 @@ use crate::types::{
+ /// carry them, as `(key, value)` in the written rollout. The baseline checks
+ /// each is really written, and that a round trip gains nothing else
+ /// (`crates/toolpath-goldens/fixtures/contract/codex.json`).
++/// `model_provider` is only invented when no turn of the view names a provider.
+ pub const SYNTHESIZED: &[(&str, &str)] = &[
+     ("originator", "codex-toolpath"),
+     ("cli_version", "0.0.0-projected"),
+-    ("model_provider", "openai"),
++    ("model_provider", DEFAULT_MODEL_PROVIDER),
+ ];
+ 
++/// The `model_provider` Codex itself writes for OpenAI-served sessions.
++const DEFAULT_MODEL_PROVIDER: &str = "openai";
++
+ /// Project a [`ConversationView`] into a Codex [`crate::types::Session`].
+ ///
+ /// Config fields are optional. Defaults match what Codex itself would
+@@ -243,7 +247,14 @@ fn make_session_meta_line(
+         agent_nickname: None,
+         agent_role: None,
+         agent_path: None,
+-        model_provider: Some("openai".to_string()),
++        // Who served the session's model, when the view says (the first turn that names one);
++        // else the default Codex itself writes.
++        model_provider: Some(
++            view.turns
++                .iter()
++                .find_map(|t| t.provider.clone().filter(|p| !p.is_empty()))
++                .unwrap_or_else(|| DEFAULT_MODEL_PROVIDER.to_string()),
++        ),
+         base_instructions: None,
+         dynamic_tools: None,
+         memory_mode: None,
+diff --git a/crates/toolpath-goldens/snapshots/projection@pi@codex.snap b/crates/toolpath-goldens/snapshots/projection@pi@codex.snap
+index 50526c6b..1f378723 100644
+--- a/crates/toolpath-goldens/snapshots/projection@pi@codex.snap
++++ b/crates/toolpath-goldens/snapshots/projection@pi@codex.snap
+@@ -5,9 +5,9 @@ info:
+   adapter: toolpath_pi
+   agent: pi
+   input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
+-input_file: goldens/pi/input.jsonl
++input_file: test-fixtures/pi/convo.jsonl
+ ---
+-{"timestamp":"2026-05-07T18:36:14.689Z","type":"session_meta","payload":{"cli_version":"0.0.0-projected","cwd":"/","id":"019e03b9-e360-7719-8359-7b45425da299","model_provider":"openai","originator":"codex-toolpath","source":"cli","timestamp":"2026-05-07T18:36:14.689Z"}}
++{"timestamp":"2026-05-07T18:36:14.689Z","type":"session_meta","payload":{"cli_version":"0.0.0-projected","cwd":"/","id":"019e03b9-e360-7719-8359-7b45425da299","model_provider":"ollama","originator":"codex-toolpath","source":"cli","timestamp":"2026-05-07T18:36:14.689Z"}}
+ {"timestamp":"2026-05-07T18:36:14.689Z","type":"turn_context","payload":{"cwd":"/","model":"gemma4","turn_id":"019e03b9-e360-7719-8359-7b45425da299-t1"}}
+ {"timestamp":"2026-05-07T18:36:14.689Z","type":"response_item","payload":{"content":[{"text":"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.","type":"input_text"}],"role":"user","type":"message"}}
+ {"timestamp":"2026-05-07T18:36:14.689Z","type":"event_msg","payload":{"images":[],"local_images":[],"message":"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.","text_elements":[],"type":"user_message"}}
+diff --git a/pr/66-codex-model-provider-from-the-view.md b/pr/66-codex-model-provider-from-the-view.md
+new file mode 100644
+index 00000000..f8ad33f7
+--- /dev/null
++++ b/pr/66-codex-model-provider-from-the-view.md
+@@ -0,0 +1,24 @@
++# fix(codex): the written session's model_provider is the view's, not always openai
++
++Status: draft · Base: pr/65-stop-reason-defaults · Code + one recorded snapshot
++
++## Why
++Asked from the deck's "gains" slide. `toolpath-codex/src/project.rs` wrote `model_provider: "openai"` for every session. The
++module doc (lines 17-19) says "`openai` unless the view names one", and the view does name one: each turn carries `provider`
++(who served its model; pr/40). A pi session served by `ollama` was projected to codex as `openai`. Bug on the write side; the
++code contradicted its own doc comment.
++
++## What changes
++- `project.rs`: `session_meta.model_provider` is the first turn's non-empty `provider`, else the default `openai`
++  (`DEFAULT_MODEL_PROVIDER`, also the value in `SYNTHESIZED`, whose comment now says it is only invented when no turn names one).
++- Snapshot re-recorded (INSTA_UPDATE=always, reviewed): `projection@pi@codex` only, `openai` -> `ollama` (the pi recording ran
++  gemma on ollama). Its header `input_file` also moved from the stale `goldens/pi/input.jsonl` to `test-fixtures/pi/convo.jsonl`
++  because the snapshot is rewritten from what the test passes now. No other snapshot changes: claude, codex, copilot, cursor,
++  gemini and opencode turns carry no provider or the same one.
++
++## Open: output golden needs the dev shell
++`goldens/pi/to-codex.jsonl` now differs (`openai` -> `ollama`, intended). Same remedy as pr/64 and pr/65, one run for all:
++`path d baseline capture --all` in `nix develop`.
++
++## Not changed
++- Nothing run unsandboxed: gitleaks, qualifier gate, `just baseline`, the pinned toolchain.
+-- 
+2.55.0
+

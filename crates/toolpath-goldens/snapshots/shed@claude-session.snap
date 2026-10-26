@@ -1,0 +1,265 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
+input_file: goldens/claude-session/input.jsonl
+---
+{
+  "source": {
+    "lines": 29,
+    "bytes": 178273,
+    "string_chars": 159249,
+    "by_type": {
+      "assistant": 5,
+      "atis-latch": 3,
+      "attachment": 12,
+      "cost-state": 1,
+      "last-prompt": 3,
+      "queue-operation": 2,
+      "user": 3
+    }
+  },
+  "ir": {
+    "bytes": 177431,
+    "string_chars": 159436,
+    "steps": 27,
+    "text_chars": 292,
+    "tool_uses": 2
+  },
+  "projections": {
+    "codex": {
+      "lines": 16,
+      "bytes": 4269,
+      "string_chars": 2424,
+      "by_type": {
+        "event_msg/agent_message": 1,
+        "event_msg/exec_command_end": 1,
+        "event_msg/token_count": 2,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 2,
+        "response_item/function_call_output": 2,
+        "response_item/message": 4,
+        "session_meta": 1,
+        "turn_context": 2
+      }
+    },
+    "copilot": {
+      "lines": 21,
+      "bytes": 6365,
+      "string_chars": 3845,
+      "by_type": {
+        "assistant.message": 5,
+        "assistant.turn_end": 5,
+        "assistant.turn_start": 5,
+        "session.start": 1,
+        "tool.execution_complete": 2,
+        "tool.execution_start": 2,
+        "user.message": 1
+      }
+    },
+    "cursor": {
+      "lines": 835,
+      "bytes": 27414,
+      "string_chars": 4299,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 43,
+      "bytes": 4018,
+      "string_chars": 2686,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 125,
+      "bytes": 3929,
+      "string_chars": 1607,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 452,
+      "bytes": 14079,
+      "string_chars": 4023,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 9,
+      "bytes": 4175,
+      "string_chars": 1892,
+      "by_type": {
+        "message": 8,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 29,
+    "bytes": 173795,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 281,
+      "after": 247,
+      "lost": 35,
+      "gained": 1
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "apiBlockIndex",
+        "example": "0"
+      },
+      {
+        "path": "message.container",
+        "example": "null"
+      },
+      {
+        "path": "message.content[].caller.type",
+        "example": "direct"
+      },
+      {
+        "path": "message.context_management",
+        "example": "null"
+      },
+      {
+        "path": "message.diagnostics",
+        "example": "null"
+      },
+      {
+        "path": "message.stop_details",
+        "example": "null"
+      },
+      {
+        "path": "message.stop_sequence",
+        "example": "null"
+      },
+      {
+        "path": "message.type",
+        "example": "message"
+      },
+      {
+        "path": "message.usage.cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.fallback_credit",
+        "example": "null"
+      },
+      {
+        "path": "message.usage.inference_geo",
+        "example": "not_available"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation.ephemeral_1h_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation.ephemeral_5m_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_creation_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].cache_read_input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].input_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].output_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.iterations[].type",
+        "example": "message"
+      },
+      {
+        "path": "message.usage.output_tokens_details.thinking_tokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.usage.server_tool_use.web_fetch_requests",
+        "example": "0"
+      },
+      {
+        "path": "message.usage.server_tool_use.web_search_requests",
+        "example": "0"
+      },
+      {
+        "path": "message.usage.speed",
+        "example": "standard"
+      },
+      {
+        "path": "perTurnEffort",
+        "example": "null"
+      },
+      {
+        "path": "permissionMode",
+        "example": "default"
+      },
+      {
+        "path": "promptId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "promptSource",
+        "example": "sdk"
+      },
+      {
+        "path": "requestId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "turnOrigin",
+        "example": "sdk"
+      },
+      {
+        "path": "turnPosition.promptIndex",
+        "example": "0"
+      },
+      {
+        "path": "turnPosition.turnIndex",
+        "example": "1"
+      },
+      {
+        "path": "wireToolInputs.toolu_016Jcqs5U6qdvMJZjjrcRFvq.command",
+        "example": "ls"
+      },
+      {
+        "path": "wireToolInputs.toolu_016Jcqs5U6qdvMJZjjrcRFvq.description",
+        "example": "List files in current directory"
+      },
+      {
+        "path": "wireToolInputs.toolu_01GjqjxW9tnUh9qzsRWnoEWW.file_path",
+        "example": "<withheld>"
+      },
+      {
+        "path": "wireToolInputs.toolu_01GjqjxW9tnUh9qzsRWnoEWW.limit",
+        "example": "1"
+      }
+    ],
+    "gained": [
+      {
+        "path": "message.usage.cache_creation",
+        "example": "null"
+      }
+    ]
+  }
+}

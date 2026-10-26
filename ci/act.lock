@@ -1,0 +1,26 @@
+# What `cargo xtask act` may run. Every PENDING is a source or hash Bobby has not approved yet;
+# nothing is downloaded or guessed. `cargo xtask act` refuses to run while any is PENDING.
+
+[act]
+# the `nektos/act` binary, fetched by cargo xtask pins like any pinned tool (same cache by hash).
+# Approved by Bobby 2026-10-26 ("lets do it" on the act thread). sha256 is act_Darwin_arm64.tar.gz
+# from the v0.2.89 release's checksums.txt; nixpkgs#act is the same version, built from source.
+version = "0.2.89"
+sha256 = "48ae218af96725f7635a66de2b87e1e346893b02add0f16b92f560296b2151fc"
+
+[runner]
+# the workflow's `runs-on` image, by digest only (never a tag). catthehacker/ubuntu rust-24.04
+# (rustup and cargo preinstalled, like GitHub's ubuntu-24.04), multi-arch index digest resolved
+# 2026-10-26; arm64 is sha256:dee1594f9b895d7c7e9f72d8a9e3caec1b094e30717383f44c4a4b2c7ce1b395.
+image = "ghcr.io/catthehacker/ubuntu"
+digest = "sha256:1d8114fb9c1fa5de85c79a31dc6d24d2128753486e46e1cbad0de98d3f9ae966"
+
+[secrets]
+# Replay and the key-free tests need none. act gets no secret file and no host environment.
+pass = []
+
+[egress]
+# The squid allowlist (ci/squid.conf) the VM's proxy enforces; everything else is refused.
+# GUESS (UNVERIFIED, not approved by Bobby): the crates.io index and download hosts, to confirm
+# against a real cargo fetch before anyone relies on this list.
+hosts =["index.crates.io", "static.crates.io"]
