@@ -3134,6 +3134,7 @@ dependencies = [
  "jaq-json",
  "jaq-std",
  "jsonschema",
+ "libc",
  "pathbase-client",
  "percent-encoding",
  "predicates",

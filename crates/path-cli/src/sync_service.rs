@@ -21,6 +21,9 @@ pub(crate) struct Job<'a> {
     pub(crate) binary: &'a Path,
     pub(crate) config_dir: &'a Path,
     pub(crate) interval_secs: u64,
+    /// More environment for the pass, after `TOOLPATH_CONFIG_DIR`:
+    /// the harness locations set where `install` ran.
+    pub(crate) env: &'a [(&'a str, String)],
 }
 
 impl Scheduler {
@@ -108,6 +111,14 @@ impl Scheduler {
             ])],
         }
     }
+
+    /// The commands that tell the scheduler its files are gone.
+    pub(crate) fn after_remove_commands(self) -> Vec<Vec<String>> {
+        match self {
+            Scheduler::Launchd => Vec::new(),
+            Scheduler::Systemd => vec![argv(&["systemctl", "--user", "daemon-reload"])],
+        }
+    }
 }
 
 fn argv(words: &[&str]) -> Vec<String> {
@@ -144,7 +155,16 @@ pub(crate) fn launchd_plist(job: &Job) -> Result<String> {
     let binary = xml_escape(absolute_utf8(job.binary)?);
     let config_dir = xml_escape(absolute_utf8(job.config_dir)?);
     let log = xml_escape(absolute_utf8(&log_file(job))?);
-    let env = crate::config::CONFIG_DIR_ENV;
+    let mut env = format!(
+        "\t\t<key>{}</key>\n\t\t<string>{config_dir}</string>\n",
+        crate::config::CONFIG_DIR_ENV
+    );
+    for (key, value) in job.env {
+        let value = xml_escape(absolute_utf8(Path::new(value))?);
+        env.push_str(&format!(
+            "\t\t<key>{key}</key>\n\t\t<string>{value}</string>\n"
+        ));
+    }
     let seconds = job.interval_secs;
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -160,9 +180,7 @@ pub(crate) fn launchd_plist(job: &Job) -> Result<String> {
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
-		<key>{env}</key>
-		<string>{config_dir}</string>
-	</dict>
+{env}	</dict>
 	<key>StartInterval</key>
 	<integer>{seconds}</integer>
 	<key>RunAtLoad</key>
@@ -195,14 +213,19 @@ fn systemd_quote(value: &str, exec: bool) -> String {
 
 pub(crate) fn systemd_service(job: &Job) -> Result<String> {
     let binary = systemd_quote(absolute_utf8(job.binary)?, true);
-    let env = systemd_quote(
-        &format!(
-            "{}={}",
-            crate::config::CONFIG_DIR_ENV,
-            absolute_utf8(job.config_dir)?
-        ),
-        false,
+    let mut env = String::new();
+    let config_dir = (
+        crate::config::CONFIG_DIR_ENV,
+        absolute_utf8(job.config_dir)?,
     );
+    let extra = job.env.iter().map(|(k, v)| (*k, v.as_str()));
+    for (key, value) in std::iter::once(config_dir).chain(extra) {
+        absolute_utf8(Path::new(value))?;
+        env.push_str(&format!(
+            "Environment={}\n",
+            systemd_quote(&format!("{key}={value}"), false)
+        ));
+    }
     // `append:` takes the path unquoted and expands specifiers.
     let log = absolute_utf8(&log_file(job))?.replace('%', "%%");
     if log.contains(char::is_whitespace) {
@@ -214,7 +237,7 @@ pub(crate) fn systemd_service(job: &Job) -> Result<String> {
          \n\
          [Service]\n\
          Type=oneshot\n\
-         Environment={env}\n\
+         {env}\
          ExecStart={binary} sync\n\
          StandardOutput=append:{log}\n\
          StandardError=append:{log}\n"
@@ -236,27 +259,102 @@ pub(crate) fn systemd_timer(interval_secs: u64) -> String {
     )
 }
 
-/// The interval an installed job runs at, read back from its files.
-pub(crate) fn installed_interval(scheduler: Scheduler, home: &Path) -> Option<u64> {
+/// What an installed job runs, read back from its files.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Installed {
+    pub(crate) binary: Option<PathBuf>,
+    pub(crate) config_dir: Option<PathBuf>,
+    pub(crate) interval_secs: Option<u64>,
+}
+
+/// The job installed under `home`, or `None` when none is.
+pub(crate) fn installed_job(scheduler: Scheduler, home: &Path) -> Option<Installed> {
     let files = scheduler.files(home);
-    let text = std::fs::read_to_string(&files[0]).ok()?;
-    match scheduler {
-        Scheduler::Launchd => {
-            let after = text.split("<key>StartInterval</key>").nth(1)?;
-            let value = after
-                .split("<integer>")
-                .nth(1)?
-                .split("</integer>")
-                .next()?;
-            value.trim().parse().ok()
-        }
-        Scheduler::Systemd => text
-            .lines()
-            .find_map(|l| l.strip_prefix("OnUnitActiveSec="))?
-            .strip_suffix('s')?
-            .parse()
-            .ok(),
+    if !files.iter().any(|f| f.exists()) {
+        return None;
     }
+    let read = |f: &PathBuf| std::fs::read_to_string(f).unwrap_or_default();
+    Some(match scheduler {
+        Scheduler::Launchd => parse_plist(&read(&files[0])),
+        Scheduler::Systemd => parse_units(&read(&files[0]), &read(&files[1])),
+    })
+}
+
+fn parse_plist(text: &str) -> Installed {
+    let string_after = |key: &str| {
+        let after = text.split(key).nth(1)?;
+        let value = after.split("<string>").nth(1)?.split("</string>").next()?;
+        Some(xml_unescape(value))
+    };
+    let interval = || {
+        let after = text.split("<key>StartInterval</key>").nth(1)?;
+        let value = after
+            .split("<integer>")
+            .nth(1)?
+            .split("</integer>")
+            .next()?;
+        value.trim().parse().ok()
+    };
+    Installed {
+        binary: string_after("<key>ProgramArguments</key>").map(PathBuf::from),
+        config_dir: string_after(&format!("<key>{}</key>", crate::config::CONFIG_DIR_ENV))
+            .map(PathBuf::from),
+        interval_secs: interval(),
+    }
+}
+
+fn xml_unescape(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+fn parse_units(timer: &str, service: &str) -> Installed {
+    let interval = timer
+        .lines()
+        .find_map(|l| l.strip_prefix("OnUnitActiveSec="))
+        .and_then(|v| v.strip_suffix('s'))
+        .and_then(|v| v.parse().ok());
+    let binary = service
+        .lines()
+        .find_map(|l| l.strip_prefix("ExecStart="))
+        .and_then(|v| systemd_unquote(v, true));
+    let prefix = format!("{}=", crate::config::CONFIG_DIR_ENV);
+    let config_dir = service
+        .lines()
+        .filter_map(|l| l.strip_prefix("Environment="))
+        .filter_map(|v| systemd_unquote(v, false))
+        .find_map(|v| v.strip_prefix(&prefix).map(String::from));
+    Installed {
+        binary: binary.map(PathBuf::from),
+        config_dir: config_dir.map(PathBuf::from),
+        interval_secs: interval,
+    }
+}
+
+/// The first word of a directive value as [`systemd_quote`] wrote it.
+fn systemd_unquote(value: &str, exec: bool) -> Option<String> {
+    let mut chars = value.strip_prefix('"')?.chars();
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => break,
+            '\\' => out.push(chars.next()?),
+            '%' => {
+                chars.next()?;
+                out.push('%');
+            }
+            '$' if exec => {
+                chars.next()?;
+                out.push('$');
+            }
+            c => out.push(c),
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -268,6 +366,7 @@ mod tests {
             binary: Path::new(binary),
             config_dir: Path::new(config_dir),
             interval_secs: 300,
+            env: &[],
         }
     }
 
@@ -396,15 +495,68 @@ mod tests {
     }
 
     #[test]
-    fn the_interval_reads_back_from_the_rendered_files() {
+    fn extra_environment_reaches_both_schedulers() {
+        let env = [
+            ("COPILOT_HOME", "/home/me/.cop".to_string()),
+            ("XDG_DATA_HOME", "/home/me/data".to_string()),
+        ];
+        let j = Job {
+            env: &env,
+            ..job("/bin/path", "/cfg")
+        };
+        let plist = launchd_plist(&j).unwrap();
+        assert!(
+            plist.contains(
+                "\t<dict>\n\t\t<key>TOOLPATH_CONFIG_DIR</key>\n\t\t<string>/cfg</string>\n\
+             \t\t<key>COPILOT_HOME</key>\n\t\t<string>/home/me/.cop</string>\n\
+             \t\t<key>XDG_DATA_HOME</key>\n\t\t<string>/home/me/data</string>\n\t</dict>"
+            ),
+            "{plist}"
+        );
+        let service = systemd_service(&j).unwrap();
+        assert!(
+            service.contains(
+                "Environment=\"TOOLPATH_CONFIG_DIR=/cfg\"\n\
+             Environment=\"COPILOT_HOME=/home/me/.cop\"\n\
+             Environment=\"XDG_DATA_HOME=/home/me/data\"\n\
+             ExecStart="
+            ),
+            "{service}"
+        );
+    }
+
+    #[test]
+    fn an_installed_job_reads_back_from_its_files() {
+        let env = [("COPILOT_HOME", "/c".to_string())];
         for scheduler in [Scheduler::Launchd, Scheduler::Systemd] {
             let home = tempfile::TempDir::new().unwrap();
-            let j = job("/bin/path", "/cfg");
+            assert_eq!(installed_job(scheduler, home.path()), None);
+            let j = Job {
+                env: &env,
+                ..job("/a b/$x%y\"&<", "/cfg/%d&")
+            };
             for (path, content) in scheduler.render(home.path(), &j).unwrap() {
                 std::fs::create_dir_all(path.parent().unwrap()).unwrap();
                 std::fs::write(path, content).unwrap();
             }
-            assert_eq!(installed_interval(scheduler, home.path()), Some(300));
+            assert_eq!(
+                installed_job(scheduler, home.path()),
+                Some(Installed {
+                    binary: Some(PathBuf::from("/a b/$x%y\"&<")),
+                    config_dir: Some(PathBuf::from("/cfg/%d&")),
+                    interval_secs: Some(300),
+                }),
+                "{scheduler:?}"
+            );
         }
+    }
+
+    #[test]
+    fn only_systemd_is_told_its_files_are_gone() {
+        assert!(Scheduler::Launchd.after_remove_commands().is_empty());
+        assert_eq!(
+            Scheduler::Systemd.after_remove_commands(),
+            [["systemctl", "--user", "daemon-reload"]]
+        );
     }
 }
