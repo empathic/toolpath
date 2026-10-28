@@ -8,12 +8,12 @@
 use std::collections::HashMap;
 
 use crate::ClaudeConvo;
-use crate::types::{Conversation, ConversationEntry, Message, MessageContent, MessageRole};
+use crate::types::{Conversation, ConversationEntry, Line, Message, MessageContent, MessageRole};
 #[cfg(any(feature = "watcher", test))]
 use toolpath_convo::WatcherEvent;
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError, DelegatedWork,
-    EnvironmentSnapshot, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
+    EnvironmentSnapshot, Item, Role, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
 // ── Conversion helpers ───────────────────────────────────────────────
@@ -309,6 +309,40 @@ fn merge_tool_results(turns: &mut [Turn], msg: &Message) -> bool {
     merged
 }
 
+/// Mutable accessor for the turn inside an [`Item`], if it is one.
+fn item_turn_mut(item: &mut Item) -> Option<&mut Turn> {
+    match item {
+        Item::Turn(t) => Some(t),
+        _ => None,
+    }
+}
+
+/// Merge a tool-result-only message into the turns already pushed onto
+/// `items`. Equivalent to [`merge_tool_results`] but operating on the
+/// interleaved item stream — non-turn items (events, compaction) are skipped.
+/// Each result walks the items backwards and stops at the first turn with
+/// a matching open tool use, so a carrier normally touches one or two turns.
+fn merge_tool_results_into_items(items: &mut [Item], msg: &Message) -> bool {
+    let mut merged = false;
+    for tr in msg.tool_results() {
+        for turn in items.iter_mut().rev().filter_map(item_turn_mut) {
+            if let Some(invocation) = turn
+                .tool_uses
+                .iter_mut()
+                .find(|tu| tu.id == tr.tool_use_id && tu.result.is_none())
+            {
+                invocation.result = Some(ToolResult {
+                    content: tr.content.text(),
+                    is_error: tr.is_error,
+                });
+                merged = true;
+                break;
+            }
+        }
+    }
+    merged
+}
+
 fn entry_to_turn(entry: &ConversationEntry) -> Option<Turn> {
     entry
         .message
@@ -316,53 +350,110 @@ fn entry_to_turn(entry: &ConversationEntry) -> Option<Turn> {
         .map(|msg| message_to_turn(entry, msg))
 }
 
+/// Returns true if this entry is Claude's inline compaction boundary marker.
+///
+/// Claude writes the boundary either as a top-level `type: "compact_boundary"`
+/// entry or as `type: "system"` with `subtype: "compact_boundary"`. The
+/// `subtype` field isn't in [`ConversationEntry`]'s typed fields, so it lands
+/// in `extra`.
+pub(crate) fn is_compact_boundary(entry: &ConversationEntry) -> bool {
+    entry.entry_type == "compact_boundary"
+        || entry
+            .extra
+            .get("subtype")
+            .and_then(|v| v.as_str())
+            .map(|s| s == "compact_boundary")
+            .unwrap_or(false)
+}
+
 /// Convert a full conversation to a view with cross-entry tool result assembly.
 ///
 /// Tool-result-only user entries are absorbed into the preceding assistant
 /// turn's `ToolInvocation.result` fields rather than emitted as separate turns.
+///
 fn conversation_to_view(convo: &Conversation) -> ConversationView {
-    let mut turns: Vec<Turn> = Vec::new();
-    let mut events: Vec<toolpath_convo::ConversationEvent> = Vec::new();
+    // Items are built in file order, so a compaction boundary or a
+    // headerless line lands at its true position between the entries it
+    // separates.
+    let mut items: Vec<Item> = Vec::new();
 
-    // Headerless preamble lines (ai-title, last-prompt, queue-operation,
+    // Headerless lines (ai-title, last-prompt, queue-operation,
     // permission-mode, file-history-snapshot, etc.) become events so they
-    // round-trip back to JSONL.
-    for (idx, raw) in convo.preamble.iter().enumerate() {
-        events.push(preamble_to_event(idx, raw));
-    }
+    // round-trip back to JSONL. They carry no uuid, so nothing on the wire
+    // chains through them; here each one chains onto the item before it,
+    // and the uuid-bearing entry that follows a run chains onto the run's
+    // last event when its wire parent is the item the run hangs from (the
+    // projector resolves that link back past the run). A run that a
+    // rewind branches away from stays a dead end, like the entries it
+    // followed. Nothing already emitted is ever re-parented: each item's
+    // linkage is fixed when it is read, so a derived step list only grows
+    // as the session file does.
+    let mut headerless_idx = 0usize;
+    let mut last_item_id: Option<String> = None;
+    // `Some(anchor)` while a headerless run is open: the id of the item
+    // before the run, `None` when the run opens the file.
+    let mut run_anchor: Option<Option<String>> = None;
 
-    // Map from "absorbed-or-skipped entry UUID" → "the previous
-    // turn-bearing entry's UUID". Used so that an assistant turn whose
-    // wire parentUuid points at a tool-result-only entry (or any other
-    // absorbed entry that didn't become a Turn) gets a Turn.parent_id
-    // that still maps onto a real Turn — keeping the IR's turn-to-turn
-    // chain intact for `derive_path`. The original UUID is preserved
-    // via the `tool_result_user` event.
+    // Map from "absorbed entry UUID" → "the previous turn's UUID". A
+    // tool-result-only entry is folded into the assistant turn before it,
+    // so any later entry whose wire parentUuid names the absorbed entry gets
+    // a `parent_id` that still maps onto a real Item. Every other entry
+    // becomes an item under its own uuid, so the wire chain through it
+    // stands as recorded.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
+    // The UUID of the last turn emitted into `items`.
     let mut last_turn_uuid: Option<String> = None;
 
-    for entry in &convo.entries {
-        let Some(msg) = &entry.message else {
-            // Message-less entries (attachments, snapshots) survive as
-            // events so the projector can re-emit them.
-            events.push(entry_to_event(entry));
-            if let Some(prev) = &last_turn_uuid {
-                parent_rewrites.insert(entry.uuid.clone(), prev.clone());
+    for line in convo.lines() {
+        let entry = match line {
+            Line::Headerless(raw) => {
+                let mut event = headerless_to_event(headerless_idx, raw);
+                headerless_idx += 1;
+                if run_anchor.is_none() {
+                    run_anchor = Some(last_item_id.clone());
+                }
+                event.parent_id = last_item_id.replace(event.id.clone());
+                items.push(Item::Event(event));
+                continue;
             }
+            Line::Entry(entry) => entry,
+        };
+
+        let Some(msg) = &entry.message else {
+            // Message-less entries (attachments, snapshots, compaction
+            // boundaries) survive as events so the projector can re-emit
+            // them. A compact_boundary writes `parentUuid: null` and names
+            // the real prior entry in `logicalParentUuid`; the projector
+            // restores the null on the way out.
+            let mut event = entry_to_event(entry);
+            if event.parent_id.is_none() && is_compact_boundary(entry) {
+                event.parent_id = entry
+                    .extra
+                    .get("logicalParentUuid")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+            }
+            if let Some(pid) = event.parent_id.as_ref()
+                && let Some(real) = parent_rewrites.get(pid)
+            {
+                event.parent_id = Some(real.clone());
+            }
+            chain_past_headerless(&mut event.parent_id, &mut run_anchor, &last_item_id);
+            last_item_id = Some(event.id.clone());
+            items.push(Item::Event(event));
             continue;
         };
 
         // Tool-result-only user entries get merged into the preceding
         // assistant's tool_uses[i].result and dropped from the turn
-        // stream. The next assistant entry's wire parentUuid points at
-        // this entry; we record a rewrite so the IR's turn-to-turn chain
-        // stays connected. (The projector re-synthesizes the wire-level
-        // tool-result entries on the way out from tool_uses[i].result —
-        // their original UUIDs aren't preserved across the roundtrip,
-        // but the Claude UI walks the chain by parentUuid, not by
-        // specific UUIDs, so that's fine.)
+        // stream. The next entry's wire parentUuid points at this entry;
+        // we record a rewrite so the IR's chain stays connected. (The
+        // projector re-synthesizes the wire-level tool-result entries on
+        // the way out from tool_uses[i].result — their original UUIDs
+        // aren't preserved across the roundtrip, but the Claude UI walks
+        // the chain by parentUuid, not by specific UUIDs, so that's fine.)
         if is_tool_result_only(entry) {
-            merge_tool_results(&mut turns, msg);
+            merge_tool_results_into_items(&mut items, msg);
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
             }
@@ -375,14 +466,18 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         {
             turn.parent_id = Some(real.clone());
         }
+        chain_past_headerless(&mut turn.parent_id, &mut run_anchor, &last_item_id);
         last_turn_uuid = Some(turn.id.clone());
-        turns.push(turn);
+        last_item_id = Some(turn.id.clone());
+        items.push(Item::Turn(turn));
     }
 
-    canonicalize_message_usage(&mut turns);
+    let mut turn_refs: Vec<&mut Turn> = items.iter_mut().filter_map(item_turn_mut).collect();
+    canonicalize_message_usage(&mut turn_refs);
+    drop(turn_refs);
 
     // Re-derive delegation results now that tool results are merged
-    for turn in &mut turns {
+    for turn in items.iter_mut().filter_map(item_turn_mut) {
         for delegation in &mut turn.delegations {
             if delegation.result.is_none()
                 && let Some(tu) = turn
@@ -395,8 +490,8 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         }
     }
 
-    let total_usage = sum_usage(&turns);
-    let files_changed = extract_files_changed(&turns);
+    let total_usage = sum_usage(items.iter().filter_map(Item::as_turn));
+    let files_changed = extract_files_changed(items.iter().filter_map(Item::as_turn));
 
     // Pull path-level base/producer from the first entry that carries the
     // metadata (Claude records cwd / git_branch / version on every
@@ -442,31 +537,45 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         id: convo.session_id.clone(),
         started_at: convo.started_at,
         last_activity: convo.last_activity,
-        turns,
+        items,
         total_usage,
         provider_id: Some("claude-code".into()),
         files_changed,
         session_ids: vec![],
-        events,
         base: view_base,
         producer,
     }
 }
 
-/// Build an event from a headerless preamble JSON line (`ai-title`,
-/// `last-prompt`, `queue-operation`, `permission-mode`, `file-history-snapshot`,
-/// or anything else above `entries` in Claude's JSONL).
+/// Closes an open headerless run at a uuid-bearing item: when the item's
+/// wire parent is the item the run hangs from, the item chains onto the
+/// run's last event instead, so the run sits on the head's ancestry.
+fn chain_past_headerless(
+    parent_id: &mut Option<String>,
+    run_anchor: &mut Option<Option<String>>,
+    last_item_id: &Option<String>,
+) {
+    if let Some(anchor) = run_anchor.take()
+        && *parent_id == anchor
+    {
+        *parent_id = last_item_id.clone();
+    }
+}
+
+/// Build an event from a headerless JSON line (`ai-title`, `last-prompt`,
+/// `queue-operation`, `permission-mode`, `file-history-snapshot`, or
+/// anything else without a `uuid` in Claude's JSONL).
 ///
 /// The whole line is preserved verbatim under `data["raw"]`; the projector
-/// dumps it straight back onto `convo.preamble`. We don't model the shape —
+/// writes it back at the event's item position. We don't model the shape —
 /// a headerless line is identified by the presence of `data["raw"]`, not by
 /// an enumerated `type` list. `event_type` carries the line's `type`, purely
 /// informational.
-fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::ConversationEvent {
+fn headerless_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::ConversationEvent {
     let event_type = raw
         .get("type")
         .and_then(|v| v.as_str())
-        .unwrap_or("preamble")
+        .unwrap_or("headerless")
         .to_string();
     let timestamp = raw
         .get("timestamp")
@@ -476,7 +585,7 @@ fn preamble_to_event(idx: usize, raw: &serde_json::Value) -> toolpath_convo::Con
     let mut data: HashMap<String, serde_json::Value> = HashMap::new();
     data.insert("raw".to_string(), raw.clone());
     toolpath_convo::ConversationEvent {
-        id: format!("claude-preamble-{idx}"),
+        id: format!("claude-headerless-{idx}"),
         timestamp,
         parent_id: None,
         event_type,
@@ -568,7 +677,7 @@ pub(crate) fn max_usage(a: &TokenUsage, b: &TokenUsage) -> TokenUsage {
 /// **final** turn to the field-wise **maximum** across the run (the message
 /// total — never under-counts whatever the stream order) and clears it from
 /// the others, so summing `token_usage` over turns yields session totals.
-fn canonicalize_message_usage(turns: &mut [Turn]) {
+fn canonicalize_message_usage(turns: &mut [&mut Turn]) {
     let mut i = 0;
     while i < turns.len() {
         let Some(mid) = turns[i].group_id.clone() else {
@@ -603,7 +712,8 @@ fn canonicalize_message_usage(turns: &mut [Turn]) {
 }
 
 /// Sum token usage across all turns.
-fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
+fn sum_usage<'a>(turns: impl IntoIterator<Item = &'a Turn>) -> Option<TokenUsage> {
+    let turns: Vec<&Turn> = turns.into_iter().collect();
     let mut total = TokenUsage::default();
     let mut any = false;
     for (idx, turn) in turns.iter().enumerate() {
@@ -640,7 +750,7 @@ fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
 }
 
 /// Extract deduplicated file paths from file-write tool invocations.
-fn extract_files_changed(turns: &[Turn]) -> Vec<String> {
+fn extract_files_changed<'a>(turns: impl IntoIterator<Item = &'a Turn>) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut files = Vec::new();
     for turn in turns {
@@ -881,7 +991,8 @@ mod tests {
         // (55) is NOT per-block attribution — it's where generation happened
         // to be when the line was flushed — so we never record it.
         let mut turns = vec![grp_turn("t1", "msg_A", 55), grp_turn("t2", "msg_A", 164)];
-        canonicalize_message_usage(&mut turns);
+        let mut refs: Vec<&mut Turn> = turns.iter_mut().collect();
+        canonicalize_message_usage(&mut refs);
 
         assert!(turns[0].token_usage.is_none(), "total only on final turn");
         assert_eq!(
@@ -902,8 +1013,9 @@ mod tests {
         // Defensive: the complete total arrives FIRST (out of order). We
         // must still report 164 as the message total — the field-wise max,
         // not the last line's snapshot.
-        let mut turns = vec![grp_turn("t1", "msg_A", 164), grp_turn("t2", "msg_A", 55)];
-        canonicalize_message_usage(&mut turns);
+        let mut turns = [grp_turn("t1", "msg_A", 164), grp_turn("t2", "msg_A", 55)];
+        let mut refs: Vec<&mut Turn> = turns.iter_mut().collect();
+        canonicalize_message_usage(&mut refs);
 
         assert_eq!(
             turns[1].token_usage.as_ref().unwrap().output_tokens,
@@ -921,7 +1033,8 @@ mod tests {
             grp_turn("t2", "msg_A", 997),
             grp_turn("t3", "msg_A", 997),
         ];
-        canonicalize_message_usage(&mut turns);
+        let mut refs: Vec<&mut Turn> = turns.iter_mut().collect();
+        canonicalize_message_usage(&mut refs);
 
         assert!(turns[0].token_usage.is_none());
         assert!(turns[1].token_usage.is_none());
@@ -991,12 +1104,13 @@ mod tests {
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
             .unwrap();
 
-        assert_eq!(view.turns.len(), 5);
-        assert!(view.turns[0].group_id.is_none(), "user lines carry no ID");
-        for turn in &view.turns[1..=3] {
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 5);
+        assert!(turns[0].group_id.is_none(), "user lines carry no ID");
+        for turn in &turns[1..=3] {
             assert_eq!(turn.group_id.as_deref(), Some("msg_A"));
         }
-        assert_eq!(view.turns[4].group_id.as_deref(), Some("msg_B"));
+        assert_eq!(turns[4].group_id.as_deref(), Some("msg_B"));
     }
 
     #[test]
@@ -1008,14 +1122,15 @@ mod tests {
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-2")
             .unwrap();
 
-        assert!(view.turns[1].token_usage.is_none());
-        assert!(view.turns[2].token_usage.is_none());
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert!(turns[1].token_usage.is_none());
+        assert!(turns[2].token_usage.is_none());
         assert_eq!(
-            view.turns[3].token_usage.as_ref().unwrap().output_tokens,
+            turns[3].token_usage.as_ref().unwrap().output_tokens,
             Some(997)
         );
         assert_eq!(
-            view.turns[4].token_usage.as_ref().unwrap().output_tokens,
+            turns[4].token_usage.as_ref().unwrap().output_tokens,
             Some(11)
         );
     }
@@ -1042,52 +1157,50 @@ mod tests {
             .unwrap();
 
         assert_eq!(view.id, "session-1");
+        let turns: Vec<&Turn> = view.turns().collect();
         // 7 entries collapse to 5 turns (2 tool-result-only entries absorbed)
-        assert_eq!(view.turns.len(), 5);
+        assert_eq!(turns.len(), 5);
 
         // Turn 0: user "Fix the bug"
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "Fix the bug");
-        assert!(view.turns[0].parent_id.is_none());
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "Fix the bug");
+        assert!(turns[0].parent_id.is_none());
 
         // Turn 1: assistant with tool use + assembled result
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "I'll fix that.");
-        assert_eq!(
-            view.turns[1].thinking.as_deref(),
-            Some("The bug is in auth")
-        );
-        assert_eq!(view.turns[1].tool_uses.len(), 1);
-        assert_eq!(view.turns[1].tool_uses[0].name, "Read");
-        assert_eq!(view.turns[1].tool_uses[0].id, "t1");
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "I'll fix that.");
+        assert_eq!(turns[1].thinking.as_deref(), Some("The bug is in auth"));
+        assert_eq!(turns[1].tool_uses.len(), 1);
+        assert_eq!(turns[1].tool_uses[0].name, "Read");
+        assert_eq!(turns[1].tool_uses[0].id, "t1");
         // Key assertion: result is populated from the next entry
-        let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        let result = turns[1].tool_uses[0].result.as_ref().unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("fn main()"));
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-6"));
-        assert_eq!(view.turns[1].stop_reason.as_deref(), Some("tool_use"));
-        assert_eq!(view.turns[1].parent_id.as_deref(), Some("uuid-1"));
+        assert_eq!(turns[1].model.as_deref(), Some("claude-opus-4-6"));
+        assert_eq!(turns[1].stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(turns[1].parent_id.as_deref(), Some("uuid-1"));
 
         // Token usage
-        let usage = view.turns[1].token_usage.as_ref().unwrap();
+        let usage = turns[1].token_usage.as_ref().unwrap();
         assert_eq!(usage.input_tokens, Some(100));
         assert_eq!(usage.output_tokens, Some(50));
 
         // Turn 2: second assistant with tool use + assembled result
-        assert_eq!(view.turns[2].role, Role::Assistant);
-        assert_eq!(view.turns[2].text, "I see the issue. Let me fix it.");
-        assert_eq!(view.turns[2].tool_uses[0].name, "Edit");
-        let result2 = view.turns[2].tool_uses[0].result.as_ref().unwrap();
+        assert_eq!(turns[2].role, Role::Assistant);
+        assert_eq!(turns[2].text, "I see the issue. Let me fix it.");
+        assert_eq!(turns[2].tool_uses[0].name, "Edit");
+        let result2 = turns[2].tool_uses[0].result.as_ref().unwrap();
         assert_eq!(result2.content, "File written successfully");
 
         // Turn 3: final assistant (no tools)
-        assert_eq!(view.turns[3].role, Role::Assistant);
-        assert_eq!(view.turns[3].text, "Done! The bug is fixed.");
-        assert!(view.turns[3].tool_uses.is_empty());
+        assert_eq!(turns[3].role, Role::Assistant);
+        assert_eq!(turns[3].text, "Done! The bug is fixed.");
+        assert!(turns[3].tool_uses.is_empty());
 
         // Turn 4: user "Thanks!"
-        assert_eq!(view.turns[4].role, Role::User);
-        assert_eq!(view.turns[4].text, "Thanks!");
+        assert_eq!(turns[4].role, Role::User);
+        assert_eq!(turns[4].text, "Thanks!");
     }
 
     #[test]
@@ -1097,7 +1210,7 @@ mod tests {
             .unwrap();
 
         // No turns should have empty text with User role (phantom turns)
-        for turn in &view.turns {
+        for turn in view.turns() {
             if turn.role == Role::User {
                 assert!(
                     !turn.text.is_empty(),
@@ -1127,8 +1240,9 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2); // user + assistant (tool-result absorbed)
-        let result = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2); // user + assistant (tool-result absorbed)
+        let result = turns[1].tool_uses[0].result.as_ref().unwrap();
         assert!(result.is_error);
         assert_eq!(result.content, "File not found");
     }
@@ -1152,13 +1266,14 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[1].tool_uses.len(), 2);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].tool_uses.len(), 2);
 
-        let r1 = view.turns[1].tool_uses[0].result.as_ref().unwrap();
+        let r1 = turns[1].tool_uses[0].result.as_ref().unwrap();
         assert_eq!(r1.content, "file a contents");
 
-        let r2 = view.turns[1].tool_uses[1].result.as_ref().unwrap();
+        let r2 = turns[1].tool_uses[1].result.as_ref().unwrap();
         assert_eq!(r2.content, "file b contents");
     }
 
@@ -1180,9 +1295,10 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].text, "Hello");
-        assert_eq!(view.turns[1].text, "Hi there!");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].text, "Hello");
+        assert_eq!(turns[1].text, "Hi there!");
     }
 
     #[test]
@@ -1204,8 +1320,9 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert!(view.turns[1].tool_uses[0].result.is_none());
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert!(turns[1].tool_uses[0].result.is_none());
     }
 
     #[test]
@@ -1240,7 +1357,7 @@ mod tests {
             .read_conversation("/test/project", "session-1")
             .unwrap();
         let view = to_view(&convo);
-        assert_eq!(view.turns.len(), 5);
+        assert_eq!(view.turns().count(), 5);
         assert_eq!(view.title(20).unwrap(), "Fix the bug");
     }
 
@@ -1543,14 +1660,12 @@ mod tests {
         let view = ConversationProvider::load_conversation(&provider, "/test/project", "session-1")
             .unwrap();
 
+        let turns: Vec<&Turn> = view.turns().collect();
         // Turn 1 (assistant) has a Read tool
-        assert_eq!(
-            view.turns[1].tool_uses[0].category,
-            Some(ToolCategory::FileRead)
-        );
+        assert_eq!(turns[1].tool_uses[0].category, Some(ToolCategory::FileRead));
         // Turn 2 (assistant) has an Edit tool
         assert_eq!(
-            view.turns[2].tool_uses[0].category,
+            turns[2].tool_uses[0].category,
             Some(ToolCategory::FileWrite)
         );
     }
@@ -1573,14 +1688,15 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
+        let turns: Vec<&Turn> = view.turns().collect();
         // User turn has environment (entry has cwd and gitBranch)
-        let env = view.turns[0].environment.as_ref().unwrap();
+        let env = turns[0].environment.as_ref().unwrap();
         assert_eq!(env.working_dir.as_deref(), Some("/project/path"));
         assert_eq!(env.vcs_branch.as_deref(), Some("feat/auth"));
         assert!(env.vcs_revision.is_none());
 
         // Assistant turn has no environment (entry has no cwd/gitBranch)
-        assert!(view.turns[1].environment.is_none());
+        assert!(turns[1].environment.is_none());
     }
 
     #[test]
@@ -1601,7 +1717,7 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
-        let usage = view.turns[1].token_usage.as_ref().unwrap();
+        let usage = view.turns().nth(1).unwrap().token_usage.as_ref().unwrap();
         assert_eq!(usage.cache_read_tokens, Some(500));
         assert_eq!(usage.cache_write_tokens, Some(200));
     }
@@ -1671,8 +1787,9 @@ mod tests {
             ConversationProvider::load_conversation(&provider, "/test/project", "s1").unwrap();
 
         // Assistant turn should have one delegation
-        assert_eq!(view.turns[1].delegations.len(), 1);
-        let d = &view.turns[1].delegations[0];
+        let turn1 = view.turns().nth(1).unwrap();
+        assert_eq!(turn1.delegations.len(), 1);
+        let d = &turn1.delegations[0];
         assert_eq!(d.agent_id, "task-1");
         assert_eq!(d.prompt, "Find the authentication bug");
         assert!(d.turns.is_empty()); // Sub-agent turns are in separate files
@@ -1731,7 +1848,7 @@ mod tests {
             .unwrap();
 
         // No turns should have delegations (none use Task tool)
-        for turn in &view.turns {
+        for turn in view.turns() {
             assert!(turn.delegations.is_empty());
         }
     }
@@ -1776,11 +1893,12 @@ mod tests {
         // Should have turns from both segments (minus the bridge entry)
         // session-a: a1 (user), a2 (assistant)
         // session-b: b1 (user), b2 (assistant) — b0 is bridge, filtered
-        assert_eq!(view.turns.len(), 4);
-        assert_eq!(view.turns[0].text, "Fix the bug");
-        assert_eq!(view.turns[1].text, "I'll fix that.");
-        assert_eq!(view.turns[2].text, "What about the tests?");
-        assert_eq!(view.turns[3].text, "Tests pass now.");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 4);
+        assert_eq!(turns[0].text, "Fix the bug");
+        assert_eq!(turns[1].text, "I'll fix that.");
+        assert_eq!(turns[2].text, "What about the tests?");
+        assert_eq!(turns[3].text, "Tests pass now.");
 
         // Session IDs should be set
         assert_eq!(view.session_ids, vec!["session-a", "session-b"]);
@@ -1794,7 +1912,7 @@ mod tests {
             .unwrap();
 
         // Bridge entry text "Continue the fix" should NOT appear
-        for turn in &view.turns {
+        for turn in view.turns() {
             assert_ne!(turn.text, "Continue the fix");
         }
     }
@@ -1817,9 +1935,10 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&provider, "/test/project", "solo").unwrap();
 
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].text, "Hello");
-        assert_eq!(view.turns[1].text, "Hi there!");
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].text, "Hello");
+        assert_eq!(turns[1].text, "Hi there!");
         // Single segment — session_ids should be empty
         assert!(view.session_ids.is_empty());
     }
@@ -1909,6 +2028,110 @@ mod tests {
                 assert_ne!(t.id, "b0", "Bridge entry should not appear as a Turn");
             }
         }
+    }
+
+    #[test]
+    fn test_headerless_line_between_turns_keeps_its_position_and_chains() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("sess-h.jsonl");
+        fs::write(
+            &file,
+            concat!(
+                r#"{"uuid":"u1","type":"user","parentUuid":null,"timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#,
+                "\n",
+                r#"{"type":"last-prompt","lastPrompt":"hi","sessionId":"sess-h"}"#,
+                "\n",
+                r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"yo"}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let convo = crate::ConversationReader::read_conversation(&file).unwrap();
+        let view = to_view(&convo);
+
+        let shape: Vec<String> = view
+            .items
+            .iter()
+            .map(|item| match item {
+                Item::Turn(t) => {
+                    format!("turn:{}<-{}", t.id, t.parent_id.as_deref().unwrap_or("-"))
+                }
+                Item::Event(e) => format!(
+                    "event:{}<-{}",
+                    e.event_type,
+                    e.parent_id.as_deref().unwrap_or("-")
+                ),
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                "turn:u1<--",
+                "event:last-prompt<-u1",
+                "turn:a1<-claude-headerless-0"
+            ]
+        );
+        let event = view.events().next().unwrap();
+        assert_eq!(event.data["raw"]["type"], "last-prompt");
+
+        let path = toolpath_convo::derive_path(&view, &toolpath_convo::DeriveConfig::default());
+        let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+            .iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        assert!(dead.is_empty(), "unexpected dead ends: {dead:?}");
+
+        let projected =
+            toolpath_convo::ConversationProjector::project(&crate::ClaudeProjector, &view).unwrap();
+        let lines: Vec<String> = projected
+            .lines()
+            .map(|line| match line {
+                Line::Headerless(raw) => raw["type"].as_str().unwrap().to_string(),
+                Line::Entry(e) => {
+                    format!("{}<-{}", e.uuid, e.parent_uuid.as_deref().unwrap_or("-"))
+                }
+            })
+            .collect();
+        assert_eq!(lines, vec!["u1<--", "last-prompt", "a1<-u1"]);
+    }
+
+    #[test]
+    fn test_headerless_run_a_rewind_branches_from_stays_off_the_chain() {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join("sess-r.jsonl");
+        fs::write(
+            &file,
+            concat!(
+                r#"{"uuid":"u1","type":"user","parentUuid":null,"timestamp":"2024-01-01T00:00:00Z","message":{"role":"user","content":"hi"}}"#,
+                "\n",
+                r#"{"uuid":"a1","type":"assistant","parentUuid":"u1","timestamp":"2024-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"yo"}]}}"#,
+                "\n",
+                r#"{"type":"last-prompt","lastPrompt":"again","sessionId":"sess-r"}"#,
+                "\n",
+                r#"{"uuid":"u2","type":"user","parentUuid":"u1","timestamp":"2024-01-01T00:00:02Z","message":{"role":"user","content":"again"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let convo = crate::ConversationReader::read_conversation(&file).unwrap();
+        let view = to_view(&convo);
+
+        let event = view.events().next().unwrap();
+        assert_eq!(event.parent_id.as_deref(), Some("a1"));
+        let u2 = view.turns().find(|t| t.id == "u2").unwrap();
+        assert_eq!(u2.parent_id.as_deref(), Some("u1"));
+
+        let path = toolpath_convo::derive_path(&view, &toolpath_convo::DeriveConfig::default());
+        let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+            .iter()
+            .map(|s| s.step.id.as_str())
+            .collect();
+        assert_eq!(dead, vec!["a1", "claude-headerless-0"]);
+
+        let projected =
+            toolpath_convo::ConversationProjector::project(&crate::ClaudeProjector, &view).unwrap();
+        let u2 = projected.entries.iter().find(|e| e.uuid == "u2").unwrap();
+        assert_eq!(u2.parent_uuid.as_deref(), Some("u1"));
     }
 
     #[test]

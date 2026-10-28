@@ -197,6 +197,7 @@ pub fn make_convo_path(actor: &str, artifact_key: &str) -> toolpath::v1::Path {
             base: None,
             head: "s1".to_string(),
             graph_ref: None,
+            parent: None,
         },
         steps: vec![step],
         meta: None,

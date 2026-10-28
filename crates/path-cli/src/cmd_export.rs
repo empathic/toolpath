@@ -212,6 +212,11 @@ pub enum ExportTarget {
     /// Use `--repo`/`--name`/`--public` to override the pathstash default
     /// when authenticated. Use `--anon` to force the anonymous endpoint
     /// even when credentials are present.
+    ///
+    /// The upload is a one-off dump of the whole document, unsettled
+    /// steps included, and writes no remote record: `path share` never
+    /// appends to the graph it makes. To share a session incrementally,
+    /// use `path share`.
     Pathbase {
         /// Input: cache id (e.g. `claude-abc`) or path to a toolpath JSON file
         #[arg(short, long)]
@@ -428,7 +433,7 @@ fn run_claude(args: ClaudeExportArgs) -> Result<()> {
                 eprintln!(
                     "Exported session {} ({} entries) → {}",
                     session_id,
-                    conversation.preamble.len() + conversation.entries.len(),
+                    conversation.lines().count(),
                     out_path.display()
                 );
                 eprintln!();
@@ -879,7 +884,8 @@ fn run_pathbase(args: PathbaseExportArgs) -> Result<()> {
             public: args.public,
         };
         let base_url = resolve_upload_base_url(&upload);
-        let needs_auth = upload.repo.is_some() || upload.public || upload.name.is_some();
+        let needs_auth = (upload.repo.is_some() || upload.public || upload.name.is_some())
+            .then_some(crate::cmd_share::AUTH_FLAGS);
         let auth = preflight_auth(&base_url, upload.anon, needs_auth)?;
         let summary_source = file.display().to_string();
         run_pathbase_inner(auth, base_url, upload, &body, &summary_source)
@@ -904,6 +910,10 @@ pub(crate) fn resolve_upload_base_url(args: &PathbaseUploadArgs) -> String {
     resolve_url(None)
 }
 
+/// Upload `body` as a new graph: anonymously, or to the repo `args`
+/// names (the user's `pathstash` by default). Nothing records where it
+/// went: it is a one-off dump of the whole document, so nothing appends
+/// to it later.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn run_pathbase_inner(
     auth: crate::cmd_pathbase::AuthMode,
@@ -912,7 +922,7 @@ pub(crate) fn run_pathbase_inner(
     body: &str,
     summary_source: &str,
 ) -> Result<()> {
-    use crate::cmd_pathbase::{AuthMode, anon_graphs_post, graphs_post, repos_post};
+    use crate::cmd_pathbase::{AuthMode, anon_graphs_post, create_graph, repos_post};
     use pathbase_client::types::Visibility;
 
     // Validate locally so we give a clean error rather than relying on
@@ -956,12 +966,13 @@ pub(crate) fn run_pathbase_inner(
     };
 
     let name = args.name.or_else(|| Some(derive_name(&doc)));
-    let created = graphs_post(
+    let created = create_graph(
         &base_url,
         &token,
         &owner,
         &repo,
         name.as_deref(),
+        &doc,
         body,
         args.public,
     )?;
@@ -1004,7 +1015,7 @@ pub(crate) fn run_pathbase_inner(
 /// hash the canonical JSON and use a short hex prefix so re-uploads
 /// of the same content produce the same display label.
 #[cfg(not(target_os = "emscripten"))]
-fn derive_name(doc: &toolpath::v1::Graph) -> String {
+pub(crate) fn derive_name(doc: &toolpath::v1::Graph) -> String {
     let raw = match doc.single_path() {
         Some(p) => p.path.id.as_str(),
         None => doc.graph.id.as_str(),
@@ -1097,6 +1108,7 @@ mod tests {
                 base: None,
                 head: "step-002".to_string(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![init_step, append_step],
             meta: None,
@@ -1138,6 +1150,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![Step {
                 step: StepIdentity {
@@ -1235,6 +1248,7 @@ mod tests {
                 base: None,
                 head: "step-001".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -1305,6 +1319,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![Step {
                 step: StepIdentity {
@@ -1384,6 +1399,7 @@ mod tests {
                 base: None,
                 head: "step-001".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -1608,6 +1624,7 @@ mod tests {
                 base: None,
                 head: "step-001".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -1734,6 +1751,7 @@ mod tests {
                 base: None,
                 head: "step-001".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -1799,6 +1817,7 @@ mod tests {
                 base: None,
                 head: "step-001".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -1880,6 +1899,7 @@ mod tests {
                 base: None,
                 head: "step-001".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![step],
             meta: None,
@@ -2008,6 +2028,194 @@ mod tests {
         );
     }
 
+    fn authed_upload(base_url: String, doc: &toolpath::v1::Graph) -> Result<()> {
+        run_pathbase_inner(
+            crate::cmd_pathbase::AuthMode::Authed {
+                token: "tok".to_string(),
+                username: "alex".to_string(),
+            },
+            base_url,
+            PathbaseUploadArgs {
+                url: None,
+                anon: false,
+                repo: Some(RepoSpec {
+                    owner: "alex".to_string(),
+                    name: "pathstash".to_string(),
+                }),
+                name: None,
+                public: false,
+            },
+            &serde_json::to_string(doc).unwrap(),
+            "test",
+        )
+    }
+
+    /// Run `f` with the config directory pinned to a fresh tempdir,
+    /// which `f` receives. Holds `TEST_ENV_LOCK` for the duration.
+    fn with_config_dir<R>(f: impl FnOnce(&std::path::Path) -> R) -> R {
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let prior = std::env::var_os(crate::config::CONFIG_DIR_ENV);
+        unsafe {
+            std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path());
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(temp.path())));
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var(crate::config::CONFIG_DIR_ENV, v),
+                None => std::env::remove_var(crate::config::CONFIG_DIR_ENV),
+            }
+        }
+        match result {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
+
+    /// The manifest record of Claude session `sess` naming cache entry
+    /// `claude-sess`, stamped `2026-03-01T00:00:00Z/<size>`.
+    fn record_sess(size: u64) {
+        let artifact = crate::artifact::ArtifactRef {
+            artifact_type: crate::artifact::ArtifactType::Claude,
+            id: "sess".into(),
+            path: Some("/p".into()),
+            modified: Some("2026-03-01T00:00:00Z".parse().unwrap()),
+            size: Some(size),
+        };
+        let config = crate::config::Config::load().unwrap();
+        crate::sync::record_artifact(&config, &artifact, "claude-sess").unwrap();
+    }
+
+    /// The remote records of Claude session `sess`.
+    fn remotes_of_sess(config_dir: &std::path::Path) -> crate::sync::SessionRemotes {
+        crate::sync::load_remotes(config_dir)
+            .unwrap()
+            .sessions
+            .get_mut("claude")
+            .and_then(|sessions| sessions.remove("sess"))
+            .unwrap_or_default()
+    }
+
+    /// `p export pathbase <input>` to `alex/pathstash` on `base`.
+    fn export_to(config_dir: &std::path::Path, input: &str, base: &str) -> Result<()> {
+        crate::cmd_pathbase::tests::write_credentials(config_dir, base);
+        run_pathbase(PathbaseExportArgs {
+            input: input.to_string(),
+            url: Some(base.to_string()),
+            anon: false,
+            repo: Some(RepoSpec {
+                owner: "alex".to_string(),
+                name: "pathstash".to_string(),
+            }),
+            name: None,
+            public: false,
+        })
+    }
+
+    /// `p export pathbase` is a full dump, unsettled steps included:
+    /// it records nothing, so no later share appends to it, and a
+    /// session's share record is left as it was.
+    #[test]
+    fn pathbase_export_writes_no_remote_record() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_created_json, me_response_body};
+        with_config_dir(|config_dir| {
+            crate::cache::write_cached("claude-sess", &make_path_doc(), true).unwrap();
+            record_sess(99);
+            let server = MockServer::start_sequence(vec![
+                ("HTTP/1.1 200 OK", me_response_body("alex")),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[("test-path", "22222222-2222-2222-2222-222222222222")]),
+                ),
+            ]);
+            export_to(config_dir, "claude-sess", &server.base()).unwrap();
+            assert!(remotes_of_sess(config_dir).is_empty());
+            assert!(!config_dir.join(crate::config::REMOTES_FILE_NAME).exists());
+        });
+    }
+
+    fn pad_first_step(doc: &mut toolpath::v1::Graph, bytes: usize) {
+        let toolpath::v1::PathOrRef::Path(path) = &mut doc.paths[0] else {
+            panic!("expected an inline path");
+        };
+        let change = path.steps[0].change.values_mut().next().unwrap();
+        change.raw = Some("x".repeat(bytes));
+    }
+
+    #[test]
+    fn pathbase_small_document_uploads_in_one_request() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_document_json};
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            Box::leak(graph_document_json().into_boxed_str()),
+        );
+        authed_upload(server.base(), &make_path_doc()).unwrap();
+
+        let req = String::from_utf8(server.request()).unwrap();
+        assert!(
+            req.starts_with("POST /api/v1/u/alex/repos/pathstash/graphs "),
+            "got: {req}"
+        );
+        assert!(req.contains(r#""id":"step-001""#), "got: {req}");
+    }
+
+    #[test]
+    fn pathbase_over_budget_document_is_streamed() {
+        use crate::cmd_pathbase::tests::{
+            MockServer, graph_document_json, path_opened, steps_appended,
+        };
+        let mut doc = make_path_doc();
+        pad_first_step(&mut doc, crate::cmd_pathbase::BATCH_BUDGET);
+        let server = MockServer::start_sequence(vec![
+            ("HTTP/1.1 201 Created", graph_document_json()),
+            ("HTTP/1.1 201 Created", path_opened(1, None)),
+            ("HTTP/1.1 200 OK", steps_appended(1, Some("step-002"))),
+        ]);
+        authed_upload(server.base(), &doc).unwrap();
+
+        let reqs = server.requests();
+        let first_line = |i: usize| {
+            let text = String::from_utf8_lossy(&reqs[i]);
+            text.lines().next().unwrap().to_string()
+        };
+        assert_eq!(
+            first_line(0),
+            "POST /api/v1/u/alex/repos/pathstash/graphs HTTP/1.1"
+        );
+        assert!(
+            first_line(1).ends_with("/paths HTTP/1.1"),
+            "{}",
+            first_line(1)
+        );
+        assert!(
+            first_line(2).ends_with("/paths/11111111-1111-1111-1111-111111111111/steps HTTP/1.1"),
+            "{}",
+            first_line(2)
+        );
+    }
+
+    #[test]
+    fn pathbase_over_budget_document_with_ref_uploads_in_one_request() {
+        use crate::cmd_pathbase::tests::{MockServer, graph_document_json};
+        let mut doc = make_path_doc();
+        pad_first_step(&mut doc, crate::cmd_pathbase::BATCH_BUDGET);
+        doc.paths
+            .push(toolpath::v1::PathOrRef::Ref(toolpath::v1::PathRef {
+                ref_url: "https://example.com/other.path.json".to_string(),
+            }));
+        let server = MockServer::start(
+            "HTTP/1.1 201 Created",
+            Box::leak(graph_document_json().into_boxed_str()),
+        );
+        authed_upload(server.base(), &doc).unwrap();
+
+        let req = server.request();
+        assert!(req.len() > crate::cmd_pathbase::BATCH_BUDGET);
+        assert!(req.starts_with(b"POST /api/v1/u/alex/repos/pathstash/graphs "));
+    }
+
     #[test]
     fn derive_name_uses_path_id() {
         let doc = make_path_doc();
@@ -2023,6 +2231,7 @@ mod tests {
                 base: None,
                 head: "h".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![],
             meta: None,
@@ -2041,6 +2250,7 @@ mod tests {
                 base: None,
                 head: "h".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![],
             meta: None,
@@ -2066,6 +2276,7 @@ mod tests {
                     base: None,
                     head: head.into(),
                     graph_ref: None,
+                    parent: None,
                 },
                 steps: vec![],
                 meta: None,

@@ -65,19 +65,18 @@ fn roundtrip_claude_conversation() {
     // The extracted view comes from the toolpath Path which also emits
     // conversation.append steps only for real turns (not tool-result-only entries).
     assert_eq!(
-        extracted_view.turns.len(),
-        original_view.turns.len(),
+        extracted_view.turns().count(),
+        original_view.turns().count(),
         "turn count mismatch: extracted {} vs original {}",
-        extracted_view.turns.len(),
-        original_view.turns.len(),
+        extracted_view.turns().count(),
+        original_view.turns().count(),
     );
 
     // ── Assertions: turn content ────────────────────────────────────
 
     for (i, (ext, orig)) in extracted_view
-        .turns
-        .iter()
-        .zip(original_view.turns.iter())
+        .turns()
+        .zip(original_view.turns())
         .enumerate()
     {
         assert_eq!(
@@ -230,6 +229,7 @@ fn test_cli_project_command() {
             base: None,
             head: "step-002".to_string(),
             graph_ref: None,
+            parent: None,
         },
         steps: vec![init_step, append_step],
         meta: None,

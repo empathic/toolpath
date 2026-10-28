@@ -2,6 +2,219 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## Turns and events become one ordered item stream — 2026-10-13
+
+`ConversationView` replaces its parallel `turns`/`events` vecs with a
+single ordered `items` stream that preserves the source's exact
+interleaving, and `derive_path` emits `conversation.event` steps at
+their position in that stream.
+
+- **`toolpath-convo`** (0.12.0): **Breaking** —
+  `ConversationView.turns`/`.events` are replaced by
+  `items: Vec<Item>` (`Turn | Event`), with `turns()`/`events()`
+  iterators; `ConversationView::turns_since` is removed (it had no
+  callers). `derive_path` emits `conversation.event` steps at their
+  item position instead of after all turns, and resolves duplicate step
+  ids by renaming to `<id>#<n>`.
+  `extract_conversation` strips that suffix from item ids and parent
+  ids alike, so a rebuilt view carries the ids the source recorded (a
+  projector never writes `<uuid>#2` as an entry's own id) and a parent
+  always names an item of the view; `derive_path` resolves an id to the
+  latest step emitted under it, so the view derives to the same step
+  sequence again. For that to hold, a step byte-identical to a renamed
+  holder of its id is dropped like one identical to the first holder,
+  and a dropped duplicate no longer rebinds its id: the id keeps naming
+  the latest step pushed under it.
+  The stripper is public as `toolpath_convo::base_id`, which the gemini
+  reader now uses in place of its private copy.
+  Readers own linkage: a step's `parents` is the item's `parent_id`
+  resolved to the step it names (an event's id resolves like a
+  turn's). A turn whose `parent_id` is `None` or names nothing emitted
+  has no parents; an event in that position attaches to the step
+  emitted just before it, so an unchained trailing event cannot become
+  an orphan head that reports every turn as a dead end. `derive_path`
+  never rewires a recorded chain, and `extract_conversation` restores
+  `parent_id` from `parents[0]` for turns and events alike. No transform-recovery keys
+  ride in the document (`source_parent` and `event_source_id` are
+  gone). Readers whose harness records no linkage chain over the
+  ordered item stream, so events sit on the head's ancestry
+  naturally. Because a turn may chain onto an event, a projector whose
+  target drops events resolves parents with `KeptAncestors`: built from
+  the view and the target's rule for which items it keeps, it maps a
+  parent id to the nearest kept ancestor (`Item::id` and
+  `Item::parent_id` read either kind). New proptest suite pins unique
+  step ids, derive → extract → derive stability over randomized
+  interleavings with id collisions, that every turn of a chained stream
+  is an ancestor of the head however its events are linked, and that
+  the step ids and parents derived from any prefix of a stream start the
+  full stream's derive; generated turns carry message groups and token
+  usage.
+- **`toolpath-claude`** (0.14.0): the projector emits events inline at
+  their item position — real Claude interleaves attachments and system
+  entries with turns; the old trailing pass regrouped them at end of
+  file. `wire_order_roundtrip` pins the projected entry-type sequence
+  to the captured fixture. Linkage: uuid-bearing entries chain as
+  recorded (a `parentUuid` naming an absorbed tool-result carrier is
+  redirected to the assistant turn on the way in and to the
+  synthesized carrier on the way out); a `compact_boundary` takes its
+  `logicalParentUuid` as `parent_id` and the projector writes
+  `parentUuid: null` back. Headerless lines (`last-prompt`,
+  `ai-title`, `mode`, `permission-mode`, `file-history-snapshot`, …)
+  keep their file position end to end: **Breaking** —
+  `Conversation.preamble: Vec<Value>` is replaced by
+  `Conversation.headerless: Vec<HeaderlessLine>` (`before` = index of
+  the entry the line precedes, `raw` = the line), with
+  `Conversation::add_headerless`, `Conversation::lines()` (every line
+  in file order) and the `Line` enum; the reader, chain merge, writer,
+  `rename_session`/`reroot`, `to_view` and the projector all go
+  through that position. Previously every headerless line derived at
+  the front of the path, so each turn's `last-prompt`/`ai-title`/`mode`
+  group inserted steps before the first turn on every append; now the
+  derived step ids and parents only grow as the session file does
+  (`wire_order_roundtrip` pins this for every prefix of the fixture).
+  An already-derived assistant step's tool results still fill in when
+  the result line arrives.
+  Each headerless event chains onto the item before it, and the
+  uuid-bearing entry after a run chains onto the run's last event when
+  its wire parent is the item the run hangs from, so the run sits on the
+  head's ancestry; the projector resolves that link back past the run
+  (`claude-headerless-N` ids). Events of other harnesses (a Codex
+  `token_count`, `turn_context`, `agent_message`, …) have no Claude
+  form: the projector drops them and resolves parents past them with
+  `KeptAncestors`, so an exported session's entries name only user,
+  assistant and other Claude entries. One position the IR cannot express: a
+  headerless run between an assistant tool-use entry and its absorbed
+  tool-result carrier projects before the carrier. That order is a
+  guess: the one captured session in the repository records both of
+  its runs after the carrier, and they come back before it.
+- **`toolpath-codex`** (0.7.0): events interleave with turns at their
+  rollout position — a `compacted` marker now derives between its
+  surrounding turns instead of after them, pinned through
+  derive → extract. The synthesized chain runs over the merged
+  item stream, so events sit between the turns they separate. Whether
+  a turn is kept is decided when its line is read: an empty assistant
+  message stays dropped, and a function call after it opens a synthetic
+  assistant turn instead of reviving it, so the step ids and parents
+  derived from a growing rollout only grow (`tests/prefix_stability.rs`
+  pins every line prefix of the fixtures).
+- **`toolpath-gemini`** (0.7.0): split assistant messages group via
+  `group_id` with the snapshot counted once.
+- **`toolpath-opencode`** (0.6.0): `items` holds the turns followed by
+  the part and message events.
+- **`toolpath-cursor`** (0.3.0): builds `items` from its turns.
+- **`toolpath-copilot`** (0.2.0): `items` holds the turns followed by
+  the non-turn events, and the synthesized chain runs over that
+  stream.
+- **`toolpath-pi`** (0.7.0): builds `items` from its turns; compaction
+  stays a System turn. The projector drops events and resolves each
+  turn's parent past them, so a Claude or Codex session exported to Pi
+  never names a parent it did not write.
+- **`path-cli`** (0.30.0), **`toolpath-cli`** (0.30.0): dependency
+  bumps for all of the above.
+
+## path-cli 0.30.0 — 2026-10-07
+
+- **`path-cli`** (0.30.0): path-cli records where each session's path
+  lives remotely, in `$CONFIG_DIR/remotes.json` (`version` 1, then
+  harness → session id → path URL → record, keyed as the manifest is),
+  apart from the manifest, which older path-cli
+  builds rewrite without unknown fields. A record sits under the path's
+  API URL
+  (`<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`)
+  and holds how many steps of the derive the remote has, the id of the
+  last of them, the head the remote was last told, whether the remote
+  path carries a `path.parent` (`has_parent`: a continuation, whose
+  owned ids are read from the server; absent in older records, read as
+  false), and the local source's stamp at the time (`modified` and
+  `size`, typed as in the manifest, absent when the source provides
+  neither). An authed `path share` writes one after a successful push
+  (anonymous uploads write none; `p export pathbase`, a full dump with
+  unsettled steps, writes none; a server that lists no paths in its
+  create response leaves no record and warns). A session keeps one record per
+  destination (server, owner, repo): a repeat share replaces the
+  earlier entry. `path resume` writes none: a pulled path becomes a new
+  local session.
+- **`path-cli`** (0.30.0): path sync client. An authed `path share`
+  pushes every step. Each pass that reads the source (a known,
+  unchanged stamp sends nothing) re-sends what the last pass sent from
+  the first turn of its last message group on, so a step is re-sent
+  until a later message group follows it; a re-sent step replaces the
+  stored one while the remote path is mutable. When the
+  session already has a record on the destination, it appends the steps
+  it gained to that path instead of uploading another graph: by
+  position when the record still matches the derive, and then re-sends
+  as above; by step id when it does not, sending on that pass only the
+  steps the server lacks and leaving every stored step as it is; from
+  the next pass the open region follows the local derive again, so a
+  stored step newer than the local copy is overwritten then. A frozen
+  remote path is continued in a new graph holding the steps the
+  server lacks, whose path names the frozen graph as `parent` by the URL
+  the server reports for it; a remote path the server no longer has, or
+  one that refuses a step stored along its parents, is recreated. A
+  server without the sync routes (a page or a bare 404 where the API
+  should answer) fails the session, naming the route.
+  `path share --all` shares every session in scope through the same
+  code: new sessions are created, recorded ones whose source stamp is
+  unchanged are skipped without deriving, the rest are derived and then
+  sent where their recorded working directory's remote says (the user's
+  `pathstash` is created when a session first needs it).
+  `--project-under <dir>` and `--harness` narrow the scope; a plan
+  heading precedes the confirmation (`--yes` skips it, `--dry-run` stops
+  there); a summary of outcomes and failures ends the pass, which exits
+  non-zero if any session failed. Requires login, checked before
+  anything else; refuses `--no-cache`. `just acceptance` runs the sync
+  acceptance tests against a running Pathbase.
+- **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
+  whose `POST /graphs` answers `GraphCreatedResponse`: an empty
+  `document` and `paths[]` naming each stored path's `path.id` and
+  `server_id`, for the anonymous route too. `create_graph` and
+  `create_anon_graph` return that type instead of
+  `GraphDocumentResponse`, hence the minor bump. `build.rs` makes
+  `paths` and `TracePath.mutability` optional at generation time, as it
+  does `Graph.mutability`, so an older server's response still decodes,
+  and fails the build when the spec no longer lists one of them. The
+  spec also carries `path.parent` and the routes around it: the error
+  codes `invalid_parent`, `parent_not_frozen`, `parent_unavailable` and
+  `inherited_step_redefined` (and the `409` on `create_graph`), the
+  step-ids route with `truncated_at`, graph meta, freeze, the graph and
+  repo dependents routes, a path's children, branch, line, composed and
+  structure views.
+- **`toolpath-cli`** (0.30.0): lockstep bump of the deprecated shim.
+
+## toolpath 0.8.0 — 2026-10-07
+
+- **`toolpath`** (0.8.0): `PathIdentity.parent` names the step in
+  another path that a path descends from: the document `uri` and the
+  parent `path` and `step` ids, all required. Every root step of the
+  path has the parent step as its implicit parent. The path is a
+  continuation when `parent.step` is the parent path's head and a fork
+  when it is any other step; nothing is declared. `PathOpen` carries
+  it in JSONL. `Path::with_parent` and `Parent::new` build it. `base` keeps its
+  meaning as the project context the path runs against, the
+  `toolpath:<path-id>/<step-id>` form included; a path may carry both
+  `base` and `parent`. The RFC states the first-parent convention:
+  `step.parents[0]` is the main line and further parents are branches
+  merging in, which is how a delegated subagent appears inside its
+  parent path. `PathIdentity` struct literals must initialise the new
+  field.
+- **`toolpath-md`** (0.8.0): the path header, transcript header and
+  front matter print `path.parent` (document, path, step) after the
+  base, so a rendered continuation shows what it resumed from.
+- **`toolpath-dot`** (0.6.0): the path layout draws a `PARENT` node
+  into each root step the way it draws `BASE`.
+- **`toolpath-claude`** (0.14.0): `resolve_chain_with_map` and
+  `build_succession_map` are public. `build_succession_map` builds the
+  predecessor to successor map over `(stem, first sessionId)` pairs
+  under the rule the on-disk index applies: a dotted stem (a rotation
+  artifact) continues nothing. This change was prepared as 0.13.4,
+  never published, and ships here with the `toolpath 0.8` bump.
+- Cascading minor bumps for the dependency on the new `toolpath 0.8`
+  major, with no behaviour change: `toolpath-claude` 0.14.0,
+  `toolpath-convo` 0.12.0, `toolpath-git` 0.7.0, `toolpath-github`
+  0.7.0, `toolpath-gemini` 0.7.0, `toolpath-codex` 0.7.0,
+  `toolpath-copilot` 0.2.0, `toolpath-opencode` 0.6.0,
+  `toolpath-cursor` 0.3.0, `toolpath-pi` 0.7.0.
+
 ## path-cli 0.29.0 — 2026-09-29
 
 - **`path-cli`** (0.29.0): `path resume` with no input opens a
@@ -10,6 +223,46 @@ All notable changes to the Toolpath workspace are documented here.
   with lanes, filters on `/`, and resumes the chosen session in its
   source harness and its own directory.
 - **`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
+- **`path-cli`** (0.29.0): authenticated uploads (`path share`,
+  `p export pathbase`) of a document larger than 4 MiB are sent as
+  several requests instead of one. The CLI creates the graph with
+  `paths: []`, then sends each path as batches of RFC-jsonl lines of at
+  most 4 MiB: the first batch to `POST …/graphs/{id}/paths`, the rest to
+  `POST …/graphs/{id}/paths/{path_id}/steps`. The batches concatenate to
+  the document's RFC-jsonl serialization; the CLI adds no lines of its
+  own. A step's signatures travel with the step, a step larger than the
+  budget is sent alone, and steps are sent parents-first. A batch
+  that fails with a transport error or a 5xx is retried up to 3 times;
+  on any other failure the partly uploaded graph is deleted and the
+  error is reported (a 413 names the batch, its size, and its largest
+  step). Documents at or under 4 MiB, documents containing a `$ref`
+  path entry or a path with no steps, and anonymous uploads still use
+  the single request. When the server answers `404` or `405` to a
+  path's first batch it does not serve the batch routes: the CLI
+  deletes the empty graph, prints a note, and sends the whole document
+  in one request as before. A server older than this release's
+  Pathbase (no `Graph.mutability`) takes that fallback. The batch
+  requests are sent with reqwest directly (`Content-Type:
+  application/x-ndjson`, 30 s connect and 120 s read timeouts) so the
+  status of a response with an undecodable body is kept.
+- **`pathbase-client`** (0.2.1): regenerate from the Pathbase branch
+  that adds streamed upload. New operations `open_graph_path`
+  (`POST …/graphs/{id}/paths`) and `append_graph_path_steps`
+  (`POST …/graphs/{id}/paths/{path_id}/steps`, replacing the old
+  bare-steps body and full-path response), plus `get_graph_path_stats`,
+  `Graph.mutability` (`mutable` or `frozen`),
+  `User.kind`/`User.auth_methods`, `Repo.associated_url`, the
+  `write_to_frozen` and `invalid_document` error codes, and `409` on
+  path update/delete.
+  The committed spec keeps the server's `application/x-ndjson` bodies
+  and doc links; `build.rs` maps `x-ndjson` to `text/plain` (progenitor
+  cannot name `x-ndjson`; the batch handlers read the raw body without
+  checking the header) and strips rustdoc link brackets from
+  descriptions. `scripts/refresh-pathbase-openapi.sh` no longer drops
+  `x-ndjson` operations. `build.rs` makes `Graph.mutability` optional
+  at generation time so an older server's response decodes. New
+  `encode_segment` percent-encodes a path segment the way the generated
+  operations do.
 
 ## path-cli 0.28.0 — 2026-09-16
 
@@ -37,11 +290,6 @@ All notable changes to the Toolpath workspace are documented here.
   the local project directory and records the destination and the
   remote directory under `path.meta.remote`. `-C` is the remote project
   directory, defaulting as for `resume --remote`.
-- **`toolpath-claude`** (0.13.4): `resolve_chain_with_map` and
-  `build_succession_map` are public. `build_succession_map` builds the
-  predecessor to successor map over `(stem, first sessionId)` pairs
-  under the rule the on-disk index applies: a dotted stem (a rotation
-  artifact) continues nothing.
 - **`toolpath-cli`** (0.27.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.26.0 — 2026-09-16

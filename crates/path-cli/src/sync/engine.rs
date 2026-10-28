@@ -352,9 +352,10 @@ pub(crate) fn record_is_current(config: &Config, artifact: &ArtifactRef, cache_i
 
 /// The cache entry for an artifact, when the manifest says it is
 /// materialized and a fresh stat shows its source unchanged since —
-/// i.e. re-deriving would reproduce the cached doc byte-for-byte.
-/// Used by `share` to upload straight from the cache. The stat
-/// targets one artifact directly — no enumeration of its siblings.
+/// i.e. re-deriving would reproduce the cached doc byte-for-byte —
+/// with that stamp. Used by `share` to upload straight from the cache.
+/// The stat targets one artifact directly — no enumeration of its
+/// siblings.
 ///
 /// Transitional: loads a [`Config`] per call. New code takes the
 /// config directory as a parameter.
@@ -363,7 +364,7 @@ pub(crate) fn fresh_cache_id(
     artifact_type: ArtifactType,
     project: Option<&str>,
     id: &str,
-) -> Option<String> {
+) -> Option<(String, sources::Stamp)> {
     let config_dir = Config::load().ok()?.config_dir().ok()?;
     let manifest = load_manifest(&config_dir).ok()?;
     let rec = manifest.get(artifact_type.name())?.get(id)?;
@@ -375,7 +376,7 @@ pub(crate) fn fresh_cache_id(
         && rec.modified == modified
         && rec.size == size
         && crate::cache::cache_path(&cache_id).is_ok_and(|p| p.exists()))
-    .then_some(cache_id)
+    .then_some((cache_id, (modified, size)))
 }
 
 /// `p cache rm` eviction: the doc is gone, so any record pointing
@@ -403,7 +404,7 @@ fn manifest_path(config_dir: &Path) -> PathBuf {
 /// across processes (query auto-syncs and imports can run
 /// concurrently). A sibling lock file — never renamed, unlike the
 /// manifest itself — held until the returned handle drops.
-fn lock_manifest(config_dir: &Path) -> Result<std::fs::File> {
+pub(super) fn lock_manifest(config_dir: &Path) -> Result<std::fs::File> {
     let path = manifest_path(config_dir);
     let dir = path.parent().expect("manifest path has a parent");
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -422,9 +423,12 @@ fn lock_manifest(config_dir: &Path) -> Result<std::fs::File> {
 
 /// One locked read-modify-write cycle against the manifest. Every
 /// writer goes through here, so concurrent invocations merge their
-/// records instead of clobbering each other's.
+/// records instead of clobbering each other's. Remote records an
+/// earlier build left in the manifest move to the remotes file first;
+/// the save then writes the manifest without them.
 fn update_manifest(config_dir: &Path, mutate: impl FnOnce(&mut Manifest)) -> Result<()> {
     let _lock = lock_manifest(config_dir)?;
+    super::remotes::lift_from_manifest(config_dir)?;
     let mut manifest = load_manifest(config_dir)?;
     mutate(&mut manifest);
     save_manifest(config_dir, &manifest)
@@ -445,20 +449,29 @@ pub(crate) fn load_manifest(config_dir: &Path) -> Result<Manifest> {
     })
 }
 
-/// Write the manifest atomically (temp file + rename) with the same
-/// permissions as the rest of `$CONFIG_DIR`.
+/// Write the manifest atomically with the same permissions as the
+/// rest of `$CONFIG_DIR`.
 fn save_manifest(config_dir: &Path, manifest: &Manifest) -> Result<()> {
-    let path = manifest_path(config_dir);
-    let dir = path.parent().expect("manifest path has a parent");
-    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    write_config_file(
+        config_dir,
+        MANIFEST_FILE_NAME,
+        &serde_json::to_string_pretty(manifest)?,
+    )
+}
+
+/// Write `contents` to `$CONFIG_DIR/<name>` atomically (temp file +
+/// rename), the directory 0700 and the file 0600.
+pub(super) fn write_config_file(config_dir: &Path, name: &str, contents: &str) -> Result<()> {
+    std::fs::create_dir_all(config_dir)
+        .with_context(|| format!("create {}", config_dir.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::set_permissions(config_dir, std::fs::Permissions::from_mode(0o700));
     }
-    let json = serde_json::to_string_pretty(manifest)?;
-    let tmp = dir.join(format!("{MANIFEST_FILE_NAME}.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, json).with_context(|| format!("write {}", tmp.display()))?;
+    let path = config_dir.join(name);
+    let tmp = config_dir.join(format!("{name}.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, contents).with_context(|| format!("write {}", tmp.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1096,7 +1109,7 @@ mod tests {
             );
 
             sync_bundle(config_dir, &bundle, &[ArtifactType::Claude], None, &mut ()).unwrap();
-            let cache_id = fresh_cache_id(
+            let (cache_id, _) = fresh_cache_id(
                 &bundle,
                 ArtifactType::Claude,
                 Some("/test/project"),

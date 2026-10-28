@@ -394,6 +394,22 @@ fn merge_accepts_path_jsonl() {
         .stdout(predicate::str::contains("\"paths\":"));
 }
 
+#[test]
+fn continuation_example_jsonl_matches_json_parent() {
+    use toolpath::v1::{Graph, Path};
+
+    let jsonl =
+        std::fs::read_to_string(examples_dir().join("path-05-continuation.path.jsonl")).unwrap();
+    let from_jsonl = Path::from_jsonl_str(&jsonl).unwrap();
+
+    let json =
+        std::fs::read_to_string(examples_dir().join("path-05-continuation.path.json")).unwrap();
+    let from_json = Graph::from_json(&json).unwrap().into_single_path().unwrap();
+
+    assert!(from_json.path.parent.is_some());
+    assert_eq!(from_jsonl.path.parent, from_json.path.parent);
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────
 
 #[test]
@@ -1505,7 +1521,7 @@ fn share_explicit_args_uploads_via_anon() {
         use std::io::Read;
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc-123","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc-123","visibility":"unlisted","mutability":"mutable","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -1582,7 +1598,7 @@ fn share_anon_fixture() -> (
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","mutability":"mutable","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -1632,7 +1648,7 @@ fn one_shot_anon_server() -> (u16, std::thread::JoinHandle<()>) {
         let (mut stream, _) = listener.accept().unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
-        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
+        let body = r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/anon/abc","visibility":"unlisted","mutability":"mutable","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#;
         let resp = format!(
             "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}",
             body.len(),
@@ -2099,7 +2115,7 @@ fn authed_upload_server(requests: usize) -> (u16, std::thread::JoinHandle<Vec<St
             } else {
                 (
                     "201 Created",
-                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/u/team/repos/sessions/graphs/fe94b6f9","visibility":"unlisted","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
+                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"tp-1","document":{"graph":{"id":"g"},"paths":[]},"path_count":0,"url":"https://example.test/u/team/repos/sessions/graphs/fe94b6f9","visibility":"unlisted","mutability":"mutable","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#,
                 )
             };
             let resp = format!(
@@ -2244,4 +2260,37 @@ fn an_unresolvable_cache_ref_points_at_the_plumbing_spelling_of_cache_ls() {
         .failure()
         .stderr(predicate::str::contains("path p cache ls"))
         .stderr(predicate::str::contains("path cache ls").not());
+}
+
+// ── share --all ──────────────────────────────────────────────────────
+
+/// `share --all` uploads to the user's account: logged out, it says so
+/// and stops, without first announcing an anonymous upload.
+#[test]
+fn share_all_logged_out_is_refused_before_anything_else() {
+    let cfg = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let out = cmd()
+        .env("TOOLPATH_CONFIG_DIR", cfg.path())
+        .env("HOME", home.path())
+        .env_remove("PATHBASE_URL")
+        .args(["share", "--all", "--yes", "--url", "http://127.0.0.1:9"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("Not logged in") && stderr.contains("`share --all`"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("anonymous"), "{stderr}");
+}
+
+#[test]
+fn share_all_rejects_no_cache() {
+    cmd()
+        .args(["share", "--all", "--no-cache"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--no-cache").and(predicate::str::contains("--all")));
 }

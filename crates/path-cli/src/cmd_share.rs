@@ -57,7 +57,29 @@ pub struct ShareArgs {
     /// Skip writing the cache; derive in-memory only
     #[arg(long)]
     pub no_cache: bool,
+
+    /// Share every session in scope instead of picking one: new ones are
+    /// created, shared ones get the steps they gained since, unchanged
+    /// ones are left alone. Requires login.
+    #[arg(long, conflicts_with_all = ["session", "anon", "project", "name", "no_cache"])]
+    pub all: bool,
+
+    /// With --all: only sessions whose project directory is under this path
+    #[arg(long, requires = "all", value_name = "DIR")]
+    pub project_under: Option<PathBuf>,
+
+    /// With --all: print what would be shared and stop
+    #[arg(long, requires = "all")]
+    pub dry_run: bool,
+
+    /// With --all: skip the confirmation prompt
+    #[arg(long, short = 'y', requires = "all")]
+    pub yes: bool,
 }
+
+/// The flags that need an authenticated upload, for the preflight's
+/// messages.
+pub(crate) const AUTH_FLAGS: &str = "--repo / --public / --name";
 
 /// One artifact surfaced by a provider — today always an agent session.
 /// Rows feed both the unified `share` picker and `p cache sync`.
@@ -499,13 +521,37 @@ pub fn run(args: ShareArgs) -> Result<()> {
         public: args.public,
     };
     let base_url = crate::cmd_export::resolve_upload_base_url(&upload_args);
-    let needs_auth = upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some();
+    let needs_auth =
+        (upload_args.repo.is_some() || upload_args.public || upload_args.name.is_some())
+            .then_some(AUTH_FLAGS);
 
     if let (Some(h), Some(session)) = (harness, &args.session) {
         // Explicit-args: validate creds before derive so a credential
         // failure doesn't waste the derive/cache work.
         let auth = crate::cmd_pathbase::preflight_auth(&base_url, upload_args.anon, needs_auth)?;
         return share_explicit(h, session.as_str(), &args, auth, base_url);
+    }
+
+    if args.all {
+        let crate::cmd_pathbase::AuthMode::Authed { token, username } =
+            crate::cmd_pathbase::preflight_auth(&base_url, false, Some("`share --all`"))?
+        else {
+            unreachable!("an authentication preflight that requires auth never goes anonymous");
+        };
+        return crate::share_all::run(
+            crate::share_all::AllArgs {
+                harness,
+                project_under: args.project_under.clone(),
+                url: args.url.clone(),
+                repo: args.repo.clone(),
+                public: args.public,
+                dry_run: args.dry_run,
+                yes: args.yes,
+            },
+            base_url,
+            token,
+            username,
+        );
     }
 
     let cwd = std::env::current_dir()?;
@@ -579,6 +625,10 @@ pub fn run(args: ShareArgs) -> Result<()> {
             None
         },
         no_cache: args.no_cache,
+        all: false,
+        project_under: None,
+        dry_run: false,
+        yes: false,
     };
     // Show the conversation title in the confirmation line; the session id
     // is opaque and doesn't help the user verify they picked the right
@@ -777,84 +827,178 @@ fn share_explicit(
         (false, _) => None,
     };
 
-    // Fast path: when the manifest shows this exact source state is
-    // already in the cache, upload the cached doc instead of re-deriving
-    // — a derive would reproduce it byte-for-byte anyway.
-    if !args.no_cache
-        && let Some(cache_id) = crate::sync::fresh_cache_id(
+    // When the manifest shows this exact source state is already in the
+    // cache, read the cached doc instead of re-deriving: a derive would
+    // reproduce it byte for byte.
+    let cached = if args.no_cache {
+        None
+    } else {
+        crate::sync::fresh_cache_id(
             &HarnessBundle::from_environment(),
             harness,
             project.as_deref(),
             session,
         )
-    {
-        let doc_path = crate::cache::cache_path(&cache_id)?;
-        let body = std::fs::read_to_string(&doc_path)
-            .with_context(|| format!("Failed to read {}", doc_path.display()))?;
-        eprintln!(
-            "Cache is current for {} session {cache_id}; uploading without re-deriving",
-            harness.name()
-        );
-        let session_dir = project.as_deref().map(PathBuf::from).or_else(|| {
-            toolpath::v1::Graph::from_json(&body)
-                .ok()
-                .and_then(|doc| doc_session_dir(&doc))
-        });
-        let dest = resolve_destination(args, &auth, base_url, session_dir)?;
-        let summary = format!("{} session {}", harness.name(), cache_id);
-        let upload = crate::cmd_export::PathbaseUploadArgs {
-            url: args.url.clone(),
-            anon: args.anon,
-            repo: dest.repo,
-            name: args.name.clone(),
-            public: args.public,
-        };
-        return crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary);
-    }
-
-    let derived = derive_session(harness, project.as_deref(), session)?;
-    let summary = format!("{} session {}", harness.name(), derived.cache_id);
-
-    if !args.no_cache {
-        // The cache entry should always reflect what was just uploaded.
-        // `path share` is "ship the current state of this session"; if
-        // the conversation has grown since a prior share, the in-memory
-        // body has the new turns but a stale cache file would not — and
-        // the upload uses the fresh body, not the cache. Always
-        // overwrite so cache and upload agree (use `--no-cache` to skip
-        // the cache write entirely).
-        let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
-        // Transitional: `share` does not take `&Config` yet; load one
-        // for the engine. A load failure degrades like a manifest-write
-        // failure.
-        if let Some(stub) = &derived.provenance
-            && let Err(e) = crate::config::Config::load()
-                .and_then(|config| crate::sync::record_artifact(&config, stub, &derived.cache_id))
-        {
-            eprintln!("warning: sync manifest not updated: {e}");
+    };
+    // The session's records sit under the id sync enumerates (a Claude
+    // chain's head, a Codex rollout's full id), which the caller's
+    // `session` need not be; its stamp was taken before the source was
+    // read, so steps written meanwhile count as not yet sent.
+    let (doc, record_id, stamp, summary) = match cached {
+        Some((cache_id, stamp)) => {
+            let doc_path = crate::cache::cache_path(&cache_id)?;
+            let body = std::fs::read_to_string(&doc_path)
+                .with_context(|| format!("Failed to read {}", doc_path.display()))?;
+            let doc = toolpath::v1::Graph::from_json(&body)
+                .with_context(|| format!("Failed to parse {}", doc_path.display()))?;
+            eprintln!(
+                "Cache is current for {} session {cache_id}; uploading without re-deriving",
+                harness.name()
+            );
+            let summary = format!("{} session {}", harness.name(), cache_id);
+            (doc, session.to_string(), stamp, summary)
         }
-        eprintln!(
-            "Cached {} session → {} ({})",
-            harness.name(),
-            derived.cache_id,
-            path.display()
-        );
-    }
+        None => {
+            let derived = derive_session(harness, project.as_deref(), session)?;
+            if !args.no_cache {
+                cache_derived(harness, &derived)?;
+            }
+            let summary = format!("{} session {}", harness.name(), derived.cache_id);
+            let (record_id, stamp) = match &derived.provenance {
+                Some(source) => (source.id.clone(), (source.modified, source.size)),
+                None => (session.to_string(), (None, None)),
+            };
+            (derived.doc, record_id, stamp, summary)
+        }
+    };
 
     let session_dir = project
         .as_deref()
         .map(PathBuf::from)
-        .or_else(|| doc_session_dir(&derived.doc));
+        .or_else(|| doc_session_dir(&doc));
     let dest = resolve_destination(args, &auth, base_url, session_dir)?;
-    let body = derived.doc.to_json()?;
-    let upload = crate::cmd_export::PathbaseUploadArgs {
-        url: args.url.clone(),
-        anon: args.anon,
-        repo: dest.repo,
-        name: args.name.clone(),
-        public: args.public,
+    let (token, username) = match auth {
+        crate::cmd_pathbase::AuthMode::Authed { token, username } => (token, username),
+        // Nobody owns an anonymous graph, so nothing records it and
+        // nothing appends to it: the whole session goes up as it is.
+        crate::cmd_pathbase::AuthMode::Anon => {
+            let upload = crate::cmd_export::PathbaseUploadArgs {
+                url: args.url.clone(),
+                anon: true,
+                repo: None,
+                name: args.name.clone(),
+                public: args.public,
+            };
+            crate::cmd_export::run_pathbase_inner(
+                crate::cmd_pathbase::AuthMode::Anon,
+                dest.base_url,
+                upload,
+                &doc.to_json()?,
+                &summary,
+            )?;
+            return Ok(());
+        }
     };
-    crate::cmd_export::run_pathbase_inner(auth, dest.base_url, upload, &body, &summary)
+    let path = doc
+        .single_path()
+        .ok_or_else(|| anyhow::anyhow!("{summary} did not derive to a single path"))?;
+    let destination = authed_destination(&dest, token, username, args.name.clone(), args.public)?;
+    let config_dir = crate::config::config_dir()?;
+    let outcome = crate::share_append::push(
+        &config_dir,
+        &destination,
+        &crate::share_append::Session {
+            artifact_type: harness,
+            id: &record_id,
+            path,
+            stamp,
+        },
+        false,
+    )?;
+    if outcome == crate::share_append::Outcome::Empty {
+        eprintln!("{summary}: nothing to share yet: the session has no steps");
+        return Ok(());
+    }
+    eprintln!(
+        "{summary} → {}: {}",
+        destination.display(),
+        outcome.describe()
+    );
+    let url = match outcome.url() {
+        Some(url) => Some(url.to_string()),
+        None => recorded_graph_url(&config_dir, &destination, harness, &record_id),
+    };
+    if let Some(url) = url {
+        println!("{url}");
+    }
+    Ok(())
+}
+
+/// The page of the graph the session's record on `dest` points into, as
+/// the server names it; `None` (with a note) when it cannot be read.
+fn recorded_graph_url(
+    config_dir: &std::path::Path,
+    dest: &crate::share_append::Destination,
+    harness: ArtifactType,
+    id: &str,
+) -> Option<String> {
+    let remotes = crate::sync::load_remotes(config_dir).ok()?;
+    let (key, _) = remotes.at(harness, id, &dest.probe())?;
+    match crate::cmd_pathbase::graph_url(&dest.base_url, &dest.token, key) {
+        Ok(url) => Some(url),
+        Err(e) => {
+            eprintln!("note: could not read the graph's URL: {e}");
+            None
+        }
+    }
+}
+
+/// The authed destination `dest` names: its repo, or the user's
+/// `pathstash`, created on demand.
+pub(crate) fn authed_destination(
+    dest: &ShareDestination,
+    token: String,
+    username: String,
+    name: Option<String>,
+    public: bool,
+) -> Result<crate::share_append::Destination> {
+    let (owner, repo) = match &dest.repo {
+        Some(spec) => (spec.owner.clone(), spec.name.clone()),
+        None => {
+            crate::cmd_pathbase::repos_post(&dest.base_url, &token, &username, "pathstash")?;
+            (username, "pathstash".to_string())
+        }
+    };
+    Ok(crate::share_append::Destination {
+        base_url: dest.base_url.clone(),
+        token,
+        owner,
+        repo,
+        name,
+        public,
+    })
+}
+
+/// Write a fresh derive to the cache and the sync manifest. `path share`
+/// is "ship the current state of this session", so the cache entry
+/// always reflects what was just shared (`--no-cache` skips this).
+fn cache_derived(harness: ArtifactType, derived: &crate::derive::DerivedDoc) -> Result<()> {
+    let path = crate::cache::write_cached(&derived.cache_id, &derived.doc, true)?;
+    // Transitional: `share` does not take `&Config` yet; load one for
+    // the engine. A load failure degrades like a manifest-write failure.
+    if let Some(stub) = &derived.provenance
+        && let Err(e) = crate::config::Config::load()
+            .and_then(|config| crate::sync::record_artifact(&config, stub, &derived.cache_id))
+    {
+        eprintln!("warning: sync manifest not updated: {e}");
+    }
+    eprintln!(
+        "Cached {} session → {} ({})",
+        harness.name(),
+        derived.cache_id,
+        path.display()
+    );
+    Ok(())
 }
 
 /// The directory a derived session document belongs to: its single
@@ -862,7 +1006,7 @@ fn share_explicit(
 /// record the session's cwd there). This is how session-keyed harnesses
 /// (codex/opencode/copilot/cursor), which carry no `--project`, feed the
 /// configured-repo lookup.
-fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
+pub(crate) fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
     let base = doc.single_path()?.path.base.as_ref()?;
     let dir = base.uri.strip_prefix("file://")?;
     if dir.is_empty() {
@@ -874,9 +1018,9 @@ fn doc_session_dir(doc: &toolpath::v1::Graph) -> Option<PathBuf> {
 /// Where an upload goes: the repo (`None` = the pathstash default) and
 /// the server it lives on.
 #[derive(Debug)]
-struct ShareDestination {
-    repo: Option<RepoSpec>,
-    base_url: String,
+pub(crate) struct ShareDestination {
+    pub(crate) repo: Option<RepoSpec>,
+    pub(crate) base_url: String,
 }
 
 /// Apply the configured remote to the upload destination. `--repo` wins;
@@ -1408,6 +1552,10 @@ mod tests {
             session: None,
             project: None,
             no_cache: false,
+            all: false,
+            project_under: None,
+            dry_run: false,
+            yes: false,
         }
     }
 
@@ -1597,5 +1745,375 @@ mod tests {
             assert_eq!(status, HarnessStatus::unresolved());
             assert!(!status.exists);
         }
+    }
+
+    // ── Upload flows against a mock server ──────────────────────────
+    //
+    // Each test pins `$HOME` and `$TOOLPATH_CONFIG_DIR` under a tempdir,
+    // so the harness bundle, the derive, the cache and the manifest all
+    // land there.
+
+    use crate::cmd_pathbase::tests::{MockServer, graph_created_json};
+
+    const SERVER_PATH_ID: &str = "22222222-2222-2222-2222-222222222222";
+
+    /// `repos_post` ensuring `pathstash` exists: it already does.
+    fn repo_409() -> (&'static str, String) {
+        (
+            "HTTP/1.1 409 Conflict",
+            r#"{"code":"conflict","error":"already exists"}"#.to_string(),
+        )
+    }
+
+    /// Run `f` with the environment pinned under a fresh tempdir, which
+    /// `f` receives. Holds `TEST_ENV_LOCK` for the duration.
+    fn with_home<R>(f: impl FnOnce(&Path) -> R) -> R {
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = TempDir::new().unwrap();
+        let prior_home = std::env::var_os("HOME");
+        let prior_cfg = std::env::var_os(crate::config::CONFIG_DIR_ENV);
+        unsafe {
+            std::env::set_var("HOME", temp.path());
+            std::env::set_var(crate::config::CONFIG_DIR_ENV, temp.path().join(".toolpath"));
+        }
+        let result = f(temp.path());
+        unsafe {
+            match prior_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prior_cfg {
+                Some(v) => std::env::set_var(crate::config::CONFIG_DIR_ENV, v),
+                None => std::env::remove_var(crate::config::CONFIG_DIR_ENV),
+            }
+        }
+        result
+    }
+
+    fn run_single(session: &str, base_url: &str) -> Result<()> {
+        let args = ShareArgs {
+            harness: Some(Harness::Claude),
+            project: Some(PathBuf::from("/test/project")),
+            ..share_args()
+        };
+        share_explicit(
+            ArtifactType::Claude,
+            session,
+            &args,
+            authed(),
+            base_url.to_string(),
+        )
+    }
+
+    fn remotes_of(session: &str) -> crate::sync::SessionRemotes {
+        load_remotes_all()
+            .get_mut("claude")
+            .and_then(|sessions| sessions.remove(session))
+            .unwrap_or_default()
+    }
+
+    fn load_remotes_all() -> std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, crate::sync::SessionRemotes>,
+    > {
+        crate::sync::load_remotes(&crate::config::config_dir().unwrap())
+            .unwrap()
+            .sessions
+    }
+
+    fn manifest_record(session: &str) -> Option<crate::sync::SyncRecord> {
+        let manifest = crate::sync::load_manifest(&crate::config::config_dir().unwrap()).unwrap();
+        manifest.get("claude")?.get(session).cloned()
+    }
+
+    #[test]
+    fn share_records_where_the_path_landed() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            // The server lists the path under the document's own id.
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s1")
+                .unwrap()
+                .doc;
+            let path = doc.single_path().unwrap();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path.path.id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            let base = server.base();
+            run_single("s1", &base).unwrap();
+
+            let rec = manifest_record("s1").unwrap();
+            let remotes = remotes_of("s1");
+            assert_eq!(remotes.len(), 1, "{remotes:?}");
+            let (url, remote) = remotes.iter().next().unwrap();
+            assert_eq!(
+                *url,
+                format!(
+                    "{base}/api/v1/u/me/repos/pathstash/graphs/fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537/paths/{SERVER_PATH_ID}"
+                )
+            );
+            // Every step is sent, the open turn (the assistant's reply)
+            // included.
+            let n = path.steps.len();
+            assert_eq!(remote.steps, n);
+            assert_eq!(remote.last_step, path.steps[n - 1].step.id);
+            assert_eq!(remote.head, path.path.head);
+            let bundle = HarnessBundle::from_environment();
+            let stamp = crate::sync::sources::source_for(&bundle, ArtifactType::Claude)
+                .unwrap()
+                .stamp(Some("/test/project"), "s1")
+                .unwrap();
+            assert_eq!(remote.source_stamp, crate::sync::SourceStamp::known(stamp));
+            assert!(rec.cache_id.is_some(), "the share also cached the document");
+        });
+    }
+
+    /// A share named by a successor segment records on the chain head,
+    /// the entry the cache record sits under, and leaves no entry under
+    /// the segment id.
+    #[test]
+    fn share_by_a_successor_id_records_on_the_chain_head() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            // The successor's first entry carries the predecessor's
+            // sessionId (the bridge).
+            std::fs::write(
+                claude.join("projects/-test-project/s2.jsonl"),
+                concat!(
+                    r#"{"type":"user","uuid":"u-s2-0","timestamp":"2024-01-02T01:00:00Z","sessionId":"s1","cwd":"/test/project","message":{"role":"user","content":"bridge"}}"#,
+                    "\n",
+                    r#"{"type":"assistant","uuid":"a-s2-1","timestamp":"2024-01-02T01:00:01Z","sessionId":"s2","message":{"role":"assistant","content":"after rotation"}}"#,
+                    "\n",
+                ),
+            )
+            .unwrap();
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s2")
+                .unwrap()
+                .doc;
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s2", &server.base()).unwrap();
+
+            let manifest =
+                crate::sync::load_manifest(&crate::config::config_dir().unwrap()).unwrap();
+            let ids: Vec<&String> = manifest["claude"].keys().collect();
+            assert_eq!(ids, ["s1"], "{:?}", manifest["claude"]);
+            assert!(manifest["claude"]["s1"].cache_id.is_some());
+            let remotes = load_remotes_all();
+            let keys: Vec<&String> = remotes.keys().collect();
+            assert_eq!(keys, ["claude"], "{remotes:?}");
+            let sessions: Vec<&String> = remotes["claude"].keys().collect();
+            assert_eq!(sessions, ["s1"], "{remotes:?}");
+            assert_eq!(remotes["claude"]["s1"].len(), 1);
+            assert!(
+                remotes["claude"]["s1"]
+                    .keys()
+                    .next()
+                    .unwrap()
+                    .ends_with(SERVER_PATH_ID)
+            );
+        });
+    }
+
+    /// A share whose source is already current in the cache uploads the
+    /// cached document and records that upload too.
+    #[test]
+    fn share_from_the_cache_records_the_upload() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                ("HTTP/1.1 201 Created", graph_created_json(&[])),
+            ]);
+            run_single("s1", &server.base()).unwrap();
+            let rec = manifest_record("s1").unwrap();
+            assert!(
+                remotes_of("s1").is_empty(),
+                "an older server lists no paths"
+            );
+
+            let cache_id = rec.cache_id.unwrap();
+            let json =
+                std::fs::read_to_string(crate::cache::cache_path(&cache_id).unwrap()).unwrap();
+            let doc = toolpath::v1::Graph::from_json(&json).unwrap();
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s1", &server.base()).unwrap();
+            let remotes = remotes_of("s1");
+            assert_eq!(remotes.len(), 1);
+            assert!(remotes.keys().next().unwrap().ends_with(SERVER_PATH_ID));
+        });
+    }
+
+    /// An anonymous share writes no remote record, and leaves the
+    /// records already there as they were.
+    #[test]
+    fn anon_share_leaves_remotes_untouched() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            let doc = derive_session(ArtifactType::Claude, Some("/test/project"), "s1")
+                .unwrap()
+                .doc;
+            let path_id = doc.single_path().unwrap().path.id.clone();
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 201 Created",
+                    graph_created_json(&[(&path_id, SERVER_PATH_ID)]),
+                ),
+            ]);
+            run_single("s1", &server.base()).unwrap();
+            let remotes_file = crate::config::config_dir()
+                .unwrap()
+                .join(crate::config::REMOTES_FILE_NAME);
+            let before = std::fs::read(&remotes_file).unwrap();
+
+            let server = MockServer::start(
+                "HTTP/1.1 201 Created",
+                Box::leak(graph_created_json(&[(&path_id, SERVER_PATH_ID)]).into_boxed_str()),
+            );
+            let args = ShareArgs {
+                anon: true,
+                harness: Some(Harness::Claude),
+                project: Some(PathBuf::from("/test/project")),
+                ..share_args()
+            };
+            share_explicit(
+                ArtifactType::Claude,
+                "s1",
+                &args,
+                crate::cmd_pathbase::AuthMode::Anon,
+                server.base(),
+            )
+            .unwrap();
+            assert_eq!(std::fs::read(&remotes_file).unwrap(), before);
+        });
+    }
+
+    #[test]
+    fn failed_share_records_nothing() {
+        with_home(|home| {
+            let claude = home.join(".claude");
+            write_claude_session(&claude, "-test-project", "s1", "one");
+            let server = MockServer::start_sequence(vec![
+                repo_409(),
+                (
+                    "HTTP/1.1 500 Internal Server Error",
+                    r#"{"error":"no"}"#.to_string(),
+                ),
+            ]);
+            run_single("s1", &server.base()).unwrap_err();
+            assert!(remotes_of("s1").is_empty());
+        });
+    }
+
+    /// A Claude session of `turns` user/assistant exchanges, each reply
+    /// its own message: every step but the last reply is settled.
+    fn write_claude_turns(claude_dir: &Path, session: &str, turns: usize) {
+        let dir = claude_dir.join("projects").join("-test-project");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut lines = String::new();
+        let mut parent = serde_json::Value::Null;
+        for i in 0..turns {
+            let user = serde_json::json!({
+                "type": "user", "uuid": format!("u{i}"), "parentUuid": parent,
+                "sessionId": session, "timestamp": format!("2024-01-02T00:00:{:02}Z", 2 * i),
+                "cwd": "/test/project",
+                "message": {"role": "user", "content": format!("question {i}")},
+            });
+            let reply = serde_json::json!({
+                "type": "assistant", "uuid": format!("a{i}"), "parentUuid": format!("u{i}"),
+                "sessionId": session, "timestamp": format!("2024-01-02T00:00:{:02}Z", 2 * i + 1),
+                "message": {"id": format!("msg{i}"), "role": "assistant",
+                            "content": [{"type": "text", "text": format!("answer {i}")}]},
+            });
+            parent = serde_json::json!(format!("a{i}"));
+            lines.push_str(&format!("{user}\n{reply}\n"));
+        }
+        std::fs::write(dir.join(format!("{session}.jsonl")), lines).unwrap();
+    }
+
+    /// Sharing a recorded session again appends its new steps, and the
+    /// reply that was open, to the same graph instead of uploading a
+    /// second one.
+    #[test]
+    fn a_repeat_share_appends_to_the_recorded_path() {
+        use crate::fake_pathbase::FakePathbase;
+        with_home(|home| {
+            let fake = FakePathbase::start();
+            let claude = home.join(".claude");
+            write_claude_turns(&claude, "s1", 2);
+            run_single("s1", &fake.base()).unwrap();
+            let (key, first) = remotes_of("s1").into_iter().next().unwrap();
+            assert_eq!(first.steps, 4);
+            assert_eq!(
+                fake.path_at(&key).unwrap().step_ids(),
+                ["u0", "a0", "u1", "a1"]
+            );
+
+            write_claude_turns(&claude, "s1", 4);
+            fake.clear_log();
+            run_single("s1", &fake.base()).unwrap();
+            let remotes = remotes_of("s1");
+            assert_eq!(remotes.len(), 1);
+            assert_eq!(remotes[&key].steps, 8);
+            assert_eq!(fake.graphs().len(), 1, "no second graph");
+            let writes = fake.writes();
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0].step_ids(), ["a1", "u2", "a2", "u3", "a3"]);
+        });
+    }
+
+    /// An anonymous share sends the whole session, settled or not, and
+    /// records nothing.
+    #[test]
+    fn an_anonymous_share_sends_everything_and_records_nothing() {
+        with_home(|home| {
+            write_claude_turns(&home.join(".claude"), "s1", 2);
+            let server = MockServer::start_sequence(vec![(
+                "HTTP/1.1 201 Created",
+                                    r#"{"id":"fe94b6f9-b0af-4cdd-b9ca-3c9a2a697537","url":"/u/anon/pathstash/graphs/x","repo_id":"00000000-0000-0000-0000-000000000002","toolpath_id":"t","document":{},"path_count":1,"paths":[],"visibility":"unlisted","mutability":"mutable","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z"}"#
+                .to_string(),
+            )]);
+            let args = ShareArgs {
+                harness: Some(Harness::Claude),
+                project: Some(PathBuf::from("/test/project")),
+                anon: true,
+                ..share_args()
+            };
+            share_explicit(
+                ArtifactType::Claude,
+                "s1",
+                &args,
+                crate::cmd_pathbase::AuthMode::Anon,
+                server.base(),
+            )
+            .unwrap();
+            let req = String::from_utf8(server.request()).unwrap();
+            assert!(req.contains("/api/v1/u/anon/repos/pathstash/graphs"));
+            assert!(req.contains(r#""a1""#), "the open reply goes too");
+            assert!(load_remotes_all().is_empty());
+        });
     }
 }
