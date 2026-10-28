@@ -798,11 +798,20 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          {
+            "name": "heads",
+            "in": "query",
+            "description": "Only graphs with a path no child the caller can read continues\n(`head_paths` > 0) or with no paths, applied before `limit`; at most\nten times the maximum `limit` graphs are examined, so a page can\ncome back short.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Page of graphs in the repository, capped by `?limit=`. Each entry carries the graph row plus `path_count` and the `url` clients should link to. Owners see all graphs; other viewers see only public graphs.",
+            "description": "Page of graphs in the repository, capped by `?limit=`. Each entry carries the graph row plus `path_count`, `head_paths` (its paths that no child path the caller can read continues from the head) and the `url` clients should link to. Owners see all graphs; other viewers see only public graphs.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1443,7 +1452,7 @@
         },
         "responses": {
           "200": {
-            "description": "Retry of an earlier open: the path already existed; lines not yet stored were applied.",
+            "description": "Retry of an earlier open: the path already existed; lines not yet stored were applied and, while the path is mutable, stored steps re-sent with a different payload were replaced.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1956,7 +1965,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Each child's graph and path ids, the parent step as written, and whether that step is this path's head.",
+            "description": "Each child's graph and path ids, the owner and repo holding it, the parent step as written, and whether that step is this path's head.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1992,7 +2001,7 @@
         "tags": [
           "Graphs"
         ],
-        "summary": "The path as a self-contained Toolpath `Path`: the history inherited\nthrough its `parent` (the parent path's main line through the parent\nstep, recursively, in transcript order), then its own steps, with\nexplicit parent ids restored and `parent` removed. A path without a\nparent is returned as stored. A parent on another host, or one that\nwas deleted, is not followed: the inherited history stops there and\n`parent` names it as written. Every graph in the chain is checked for\nthe caller at read time; a parent the caller cannot read is\n`403 parent_unavailable` — a partial transcript is never served as\ncomplete. Conditional via `If-None-Match`.",
+        "summary": "The path as a self-contained Toolpath `Path` (`document`): the history\ninherited through its `parent` (the parent path's main line through the\nparent step, recursively, in transcript order), then its own steps,\nwith explicit parent ids restored and `parent` removed. A path without\na parent is returned as stored. A parent on another host, or one that\nwas deleted, is not followed: the inherited history stops there and\n`parent` names it as written. Every graph in the chain is checked for\nthe caller at read time; a parent the caller cannot read is\n`403 parent_unavailable` — a partial transcript is never served as\ncomplete. `forks` lists the paths the caller can read that fork off a\nstep of the transcript. Conditional via `If-None-Match`.",
         "operationId": "get_graph_path_composed",
         "parameters": [
           {
@@ -2032,7 +2041,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Toolpath `Path` JSON: `{path, meta?, steps}` with inherited history inlined.",
+            "description": "The composed Toolpath `Path` and the forks off it.",
             "headers": {
               "ETag": {
                 "schema": {
@@ -2042,7 +2051,11 @@
               }
             },
             "content": {
-              "application/json": {}
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposedPathResponse"
+                }
+              }
             }
           },
           "304": {
@@ -2995,10 +3008,12 @@
       },
       "ChildRef": {
         "type": "object",
-        "description": "A path whose `parent` names a step of the path being read. `graph_id`\nand `path_id` are the child's Pathbase UUIDs; `step` is the parent step\nas written; `at_head` is whether that step is the read path's head,\nwhich makes the child a continuation rather than a fork.",
+        "description": "A path whose `parent` names a step of the path being read. `graph_id`\nand `path_id` are the child's Pathbase UUIDs; `owner` and `repo` name\nthe repository holding it; `step` is the parent step as written;\n`at_head` is whether that step is the read path's head, which makes the\nchild a continuation rather than a fork.",
         "required": [
           "graph_id",
           "path_id",
+          "owner",
+          "repo",
           "step",
           "at_head"
         ],
@@ -3010,9 +3025,15 @@
             "type": "string",
             "format": "uuid"
           },
+          "owner": {
+            "type": "string"
+          },
           "path_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "repo": {
+            "type": "string"
           },
           "step": {
             "type": "string"
@@ -3035,6 +3056,35 @@
             "type": "integer",
             "format": "int64",
             "description": "Lifetime of the grant in seconds, set by the server."
+          }
+        }
+      },
+      "ComposedPathResponse": {
+        "type": "object",
+        "description": "`GET …/paths/{path_id}/composed`: the composed Toolpath `Path` and the\nforks off its transcript.",
+        "required": [
+          "document",
+          "forks",
+          "segments"
+        ],
+        "properties": {
+          "document": {
+            "type": "object",
+            "description": "Toolpath `Path` JSON: `{path, meta?, steps}` with inherited history\ninlined."
+          },
+          "forks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForkRef"
+            },
+            "description": "Paths the caller can read that diverge from a step of `document`, in\ntranscript order: children of any path on the chain, except the read\npath's own continuations and the chain's own paths."
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Segment"
+            },
+            "description": "The graphs on the chain that contributed steps to `document`, in\ntranscript order: the deepest ancestor first, the read path last."
           }
         }
       },
@@ -3093,6 +3143,36 @@
       "DependentPath": {
         "type": "object",
         "description": "A path whose parent is in a graph or repo about to be deleted:\n`graph_id` and `path_id` are the child's Pathbase UUIDs, `owner` and\n`repo` name the repository holding it, and `step` is the parent step as\nwritten.",
+        "required": [
+          "graph_id",
+          "path_id",
+          "owner",
+          "repo",
+          "step"
+        ],
+        "properties": {
+          "graph_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "path_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          }
+        }
+      },
+      "ForkRef": {
+        "type": "object",
+        "description": "A path that diverges from a step of a composed read: its parent step,\nas written, is in the composed transcript, and it is neither on the\nchain nor a continuation of the read path. `graph_id` and `path_id` are\nthe fork's Pathbase UUIDs; `owner` and `repo` name the repository\nholding it.",
         "required": [
           "graph_id",
           "path_id",
@@ -3342,9 +3422,15 @@
             "type": "object",
             "required": [
               "path_count",
+              "head_paths",
               "url"
             ],
             "properties": {
+              "head_paths": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Paths of this graph that no child path the caller can read\ncontinues from its head."
+              },
               "path_count": {
                 "type": "integer",
                 "format": "int32",
@@ -3392,13 +3478,17 @@
       },
       "ParentMeta": {
         "type": "object",
-        "description": "A path's parent as stored and as resolved on this host. `graph_id`,\n`server_path_id` and `server_step_id` are Pathbase UUIDs, null together\nwhen the parent is not a graph on this host or has been deleted; `path`\nand `step` are the Toolpath ids as written.",
+        "description": "A path's parent as stored and as resolved on this host. `graph_id`,\n`server_path_id` and `server_step_id` are Pathbase UUIDs, null together\nwhen the parent is not a graph on this host or has been deleted; `path`\nand `step` are the Toolpath ids as written. `at_head` is whether `step`\nis the resolved parent path's head, which makes this path a\ncontinuation rather than a fork; null when unresolved.",
         "required": [
           "uri",
           "path",
           "step"
         ],
         "properties": {
+          "at_head": {
+            "type": "boolean",
+            "nullable": true
+          },
           "graph_id": {
             "type": "string",
             "format": "uuid",
@@ -3580,6 +3670,54 @@
           "public",
           "private"
         ]
+      },
+      "Segment": {
+        "type": "object",
+        "description": "One graph's stretch of a composed transcript: the path on the chain it\ncame from, the repo holding it (`owner`, `repo`), the graph's display\nname (its `name`, else its `title`), its mutability, and the Toolpath id\nof its first step in the transcript with the number of steps it\ncontributed. `at_head` is whether its first step's parent is the head of\nthe previous path on the chain, which makes it a continuation rather\nthan a fork; null on the first segment, which follows no path.",
+        "required": [
+          "graph_id",
+          "path_id",
+          "owner",
+          "repo",
+          "mutability",
+          "first_step",
+          "step_count"
+        ],
+        "properties": {
+          "at_head": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "first_step": {
+            "type": "string"
+          },
+          "graph_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mutability": {
+            "$ref": "#/components/schemas/Mutability"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "owner": {
+            "type": "string"
+          },
+          "path_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "step_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "SessionSummary": {
         "type": "object",
