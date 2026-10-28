@@ -83,7 +83,7 @@ fn resolve_remote_from(
 /// which would leave a session dir with a deleted tail un-normalized
 /// while an existing rule dir normalizes (macOS: `/var` → `/private/var`)
 /// — and subtree matching needs both sides in the same form.
-fn canonicalize_prefix(p: &Path) -> PathBuf {
+pub(crate) fn canonicalize_prefix(p: &Path) -> PathBuf {
     for ancestor in p.ancestors() {
         if let Ok(canon) = std::fs::canonicalize(ancestor) {
             let rest = p.strip_prefix(ancestor).expect("ancestors are prefixes");

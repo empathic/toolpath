@@ -38,6 +38,9 @@ pub(crate) enum Plan {
     /// Records, none with a known stamp equal to the source's: derive,
     /// append.
     Update,
+    /// Its listing's directory is under a `sync = false` rule: nothing
+    /// to read.
+    Excluded,
 }
 
 /// The spec's table, over the session's records that can stand for the
@@ -136,14 +139,16 @@ pub(crate) fn gather<'a>(
                     if !seen.insert((artifact.artifact_type, artifact.id.clone())) {
                         return;
                     }
-                    if let (Some(rules), Some(d)) = (exclusions, dir.as_deref())
-                        && rules.sync_disabled_by_listing(|root| source.in_scope(d, root))
+                    let excluded = exclusions.zip(dir.as_deref()).is_some_and(|(rules, d)| {
+                        rules.sync_disabled_by_listing(|root| source.in_scope(d, root))
                             == Some(true)
-                    {
-                        return;
-                    }
-                    let stamps = scope.stamps(remotes, artifact.artifact_type, &artifact.id);
-                    let plan = plan(&stamps, (artifact.modified, artifact.size));
+                    });
+                    let plan = if excluded {
+                        Plan::Excluded
+                    } else {
+                        let stamps = scope.stamps(remotes, artifact.artifact_type, &artifact.id);
+                        plan(&stamps, (artifact.modified, artifact.size))
+                    };
                     items.push(Item {
                         artifact,
                         dir,
@@ -204,8 +209,13 @@ pub(crate) fn sources_for<'a>(
 #[derive(Debug)]
 pub(crate) enum SessionResult {
     Unchanged,
-    /// Its derived working directory is under a `sync = false` rule.
+    /// Under a `sync = false` rule, by its listing's directory or its
+    /// derived working directory.
     Excluded,
+    /// Its derived working directory is under none of the pass's
+    /// include roots, though its listing's directory is: a lossy
+    /// listing (a Claude project slug) matched a sibling.
+    OutOfScope,
     Pushed(Outcome),
     Failed(String),
 }
@@ -246,6 +256,7 @@ impl Report {
             match result {
                 SessionResult::Unchanged => bump("unchanged", 0, 0),
                 SessionResult::Excluded => bump("excluded", 0, 0),
+                SessionResult::OutOfScope => bump("out of scope", 0, 0),
                 SessionResult::Failed(_) => bump("failed", 0, 0),
                 SessionResult::Pushed(o) => {
                     match o {
@@ -296,7 +307,7 @@ impl Report {
     }
 
     /// Each kind of outcome in report order, and whether it moved steps.
-    const ORDER: [(&'static str, bool); 9] = [
+    const ORDER: [(&'static str, bool); 10] = [
         ("created", true),
         ("appended", true),
         ("continued", true),
@@ -304,6 +315,7 @@ impl Report {
         ("up to date", false),
         ("unchanged", false),
         ("excluded", false),
+        ("out of scope", false),
         ("empty", false),
         ("failed", false),
     ];
@@ -354,19 +366,48 @@ impl Report {
     }
 }
 
+/// Which sessions a pass may push, checked again once each is derived:
+/// its listing's directory can be a lossy decoding of the real one.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Filter<'a> {
+    /// Directory subtrees; empty is everywhere.
+    pub(crate) include: &'a [PathBuf],
+    /// The `sync = false` rules to honour.
+    pub(crate) exclusions: Option<&'a ProjectRules>,
+}
+
+impl Filter<'_> {
+    /// Why a session derived in `dir` is skipped, if it is.
+    fn skip(&self, dir: &Path) -> Option<SessionResult> {
+        if self
+            .exclusions
+            .is_some_and(|rules| rules.sync_disabled(dir))
+        {
+            return Some(SessionResult::Excluded);
+        }
+        if self.include.is_empty() {
+            return None;
+        }
+        let dir = crate::share_config::canonicalize_prefix(dir);
+        let under = |root: &PathBuf| {
+            dir.starts_with(root) || dir.starts_with(crate::share_config::canonicalize_prefix(root))
+        };
+        (!self.include.iter().any(under)).then_some(SessionResult::OutOfScope)
+    }
+}
+
 /// Run one pass over `items`: derive and push each that needs it,
 /// sequentially, reporting each as it finishes on stderr when
 /// `verbose`. A session whose derive, destination or push fails is
 /// reported and the pass goes on. `cached` returns a session's cached
 /// document when the cache is current for it, sparing the derive;
-/// `exclusions` skips a session whose derived working directory a
-/// `sync = false` rule covers; `destination` maps a session directory
-/// to where it goes.
+/// `filter` skips a session by its derived working directory;
+/// `destination` maps a session directory to where it goes.
 pub(crate) fn run_pass(
     config_dir: &Path,
     items: &[Item],
     cached: &dyn Fn(&ArtifactRef) -> Option<toolpath::v1::Graph>,
-    exclusions: Option<&ProjectRules>,
+    filter: Filter,
     destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
     verbose: bool,
 ) -> Report {
@@ -375,37 +416,30 @@ pub(crate) fn run_pass(
     for (n, item) in items.iter().enumerate() {
         let a = &item.artifact;
         let label = format!("[{}/{total}] {} {}", n + 1, a.artifact_type.name(), a.id);
-        if item.plan == Plan::Unchanged {
-            report.sessions.push((
-                a.artifact_type,
-                a.id.clone(),
-                String::new(),
-                SessionResult::Unchanged,
-            ));
-            continue;
-        }
-        let (dest, pushed) = push_item(config_dir, item, cached, exclusions, destination);
-        let dest = dest.unwrap_or_default();
-        let (line, result) = match pushed {
-            Ok(None) => (
-                format!("{label}: excluded by a `sync = false` rule"),
-                SessionResult::Excluded,
-            ),
-            Ok(Some(outcome)) => {
-                let url = outcome.url().map(|u| format!(" → {u}")).unwrap_or_default();
-                (
-                    format!("{label}{}: {}{url}", arrow(&dest), outcome.describe()),
-                    SessionResult::Pushed(outcome),
-                )
+        let (dest, result) = match item.plan {
+            Plan::Unchanged => (String::new(), SessionResult::Unchanged),
+            Plan::Excluded => (String::new(), SessionResult::Excluded),
+            Plan::Create | Plan::Update => {
+                let (dest, result) = push_item(config_dir, item, cached, filter, destination);
+                let dest = dest.unwrap_or_default();
+                if verbose {
+                    let line = match &result {
+                        SessionResult::Pushed(outcome) => {
+                            let url = outcome.url().map(|u| format!(" → {u}")).unwrap_or_default();
+                            format!("{}{url}", outcome.describe())
+                        }
+                        SessionResult::Failed(why) => format!("failed: {why}"),
+                        SessionResult::Excluded => "excluded by a `sync = false` rule".into(),
+                        SessionResult::OutOfScope => {
+                            "out of scope: its working directory is under no include".into()
+                        }
+                        SessionResult::Unchanged => "unchanged".into(),
+                    };
+                    eprintln!("{label}{}: {line}", arrow(&dest));
+                }
+                (dest, result)
             }
-            Err(e) => (
-                format!("{label}{}: failed: {e:#}", arrow(&dest)),
-                SessionResult::Failed(format!("{e:#}")),
-            ),
         };
-        if verbose {
-            eprintln!("{line}");
-        }
         report
             .sessions
             .push((a.artifact_type, a.id.clone(), dest, result));
@@ -424,42 +458,41 @@ fn arrow(dest: &str) -> String {
 
 /// Derive (or read from the cache) and push one session to the
 /// destination of the working directory its document records, or of
-/// its listing's directory when it records none; `Ok(None)` when
-/// `exclusions` covers that directory. The destination's display comes
-/// back whenever it was resolved, failure or not.
+/// its listing's directory when it records none, unless `filter` skips
+/// it by that directory. The destination's display comes back whenever
+/// it was resolved, failure or not.
 fn push_item(
     config_dir: &Path,
     item: &Item,
     cached: &dyn Fn(&ArtifactRef) -> Option<toolpath::v1::Graph>,
-    exclusions: Option<&ProjectRules>,
+    filter: Filter,
     destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
-) -> (Option<String>, Result<Option<Outcome>>) {
+) -> (Option<String>, SessionResult) {
+    let failed = |e: anyhow::Error| SessionResult::Failed(format!("{e:#}"));
     let a = &item.artifact;
     let doc = match cached(a) {
         Some(doc) => doc,
         None => match item.source.derive(a).context("derive") {
             Ok(derived) => derived.doc,
-            Err(e) => return (None, Err(e)),
+            Err(e) => return (None, failed(e)),
         },
     };
     let Some(path) = doc.single_path() else {
         return (
             None,
-            Err(anyhow::anyhow!(
+            failed(anyhow::anyhow!(
                 "the session did not derive to a single path"
             )),
         );
     };
     let dir =
         crate::cmd_share::doc_session_dir(&doc).or_else(|| item.dir.as_ref().map(PathBuf::from));
-    if let (Some(rules), Some(dir)) = (exclusions, dir.as_deref())
-        && rules.sync_disabled(dir)
-    {
-        return (None, Ok(None));
+    if let Some(skip) = dir.as_deref().and_then(|d| filter.skip(d)) {
+        return (None, skip);
     }
     let dest = match destination(dir.as_deref()).context("resolve the destination") {
         Ok(dest) => dest,
-        Err(e) => return (None, Err(e)),
+        Err(e) => return (None, failed(e)),
     };
     let outcome = share_append::push(
         config_dir,
@@ -472,7 +505,11 @@ fn push_item(
         },
         true,
     );
-    (Some(dest.display()), outcome.map(Some))
+    let result = match outcome {
+        Ok(outcome) => SessionResult::Pushed(outcome),
+        Err(e) => failed(e),
+    };
+    (Some(dest.display()), result)
 }
 
 /// The heading before a pass: how many sessions are in scope and what
@@ -483,8 +520,12 @@ pub(crate) fn render_plan(items: &[Item], project_under: Option<&Path>) -> Strin
         Some(p) => format!(" under {}", p.display()),
         None => String::new(),
     };
+    let excluded = match count(Plan::Excluded) {
+        0 => String::new(),
+        n => format!(", {n} excluded"),
+    };
     let mut out = format!(
-        "Found {}{scope}: {} new, {} to bring up to date, {} unchanged\n",
+        "Found {}{scope}: {} new, {} to bring up to date, {} unchanged{excluded}\n",
         plural(items.len(), "session"),
         count(Plan::Create),
         count(Plan::Update),
@@ -569,11 +610,15 @@ pub(crate) fn bulk(
     if !proceed(&items)? {
         return Ok(None);
     }
+    let filter = Filter {
+        include: b.include,
+        exclusions: b.exclusions,
+    };
     Ok(Some(run_pass(
         b.config_dir,
         &items,
         &|a| cached_doc(&manifest, a),
-        b.exclusions,
+        filter,
         destination,
         b.verbose,
     )))
@@ -620,7 +665,10 @@ pub(crate) fn run(args: AllArgs, base_url: String, token: String, username: Stri
     };
     let report = bulk(&pass, &destination, &mut |items| {
         eprint!("{}", render_plan(items, args.project_under.as_deref()));
-        let work = items.iter().filter(|i| i.plan != Plan::Unchanged).count();
+        let work = items
+            .iter()
+            .filter(|i| matches!(i.plan, Plan::Create | Plan::Update))
+            .count();
         if work == 0 {
             eprintln!("Nothing to share.");
             return Ok(false);
@@ -833,7 +881,14 @@ mod tests {
             let plans = items.iter().map(|i| i.plan).collect();
             (
                 plans,
-                run_pass(self.cfg(), &items, &|_| None, None, destination, true),
+                run_pass(
+                    self.cfg(),
+                    &items,
+                    &|_| None,
+                    Filter::default(),
+                    destination,
+                    true,
+                ),
             )
         }
 
@@ -919,6 +974,98 @@ mod tests {
         assert_eq!(plan(&[None], (None, None)), Plan::Update);
         assert_eq!(plan(&[known], (None, None)), Plan::Update);
         assert_eq!(plan(&[None], stamp), Plan::Update);
+    }
+
+    /// The Claude fixture is listed under `/test/project` (its slug)
+    /// but records another working directory, which is what an include
+    /// root or a `sync = false` rule is held to once it is derived.
+    #[test]
+    fn the_derived_directory_decides_include_and_exclusion() {
+        let h = Harnesses::new();
+        h.claude(CLAUDE_ID, 6);
+        let fake = FakePathbase::start();
+        let d = dest(&fake, "x");
+        let bundle = h.bundle();
+        let sources = sources_for(&bundle, &[ArtifactType::Claude]);
+        let remotes = crate::sync::load_remotes(h.cfg()).unwrap();
+        let pass = |include: &[PathBuf], rules: Option<&ProjectRules>| {
+            let items = gather(
+                &sources,
+                include,
+                rules,
+                &Manifest::default(),
+                &remotes,
+                &RecordScope::Any,
+            );
+            assert_eq!(items.len(), 1);
+            let filter = Filter {
+                include,
+                exclusions: rules,
+            };
+            run_pass(
+                h.cfg(),
+                &items,
+                &|_| None,
+                filter,
+                &|_| Ok(d.clone()),
+                false,
+            )
+        };
+        let items = gather(
+            &sources,
+            &[],
+            None,
+            &Manifest::default(),
+            &remotes,
+            &RecordScope::Any,
+        );
+        let doc = sources[0].derive(&items[0].artifact).unwrap().doc;
+        let cwd = crate::cmd_share::doc_session_dir(&doc).unwrap();
+        assert!(!cwd.starts_with("/test"), "{}", cwd.display());
+
+        let report = pass(&[PathBuf::from("/test")], None);
+        assert_eq!(report.summary_line(), "1 session: 1 out of scope");
+
+        let text = format!(
+            "[[project]]\ndir = {:?}\nsync = false\n",
+            cwd.display().to_string()
+        );
+        let rules = ProjectRules::parse(&text, "config.toml", None).unwrap();
+        let report = pass(&[], Some(&rules));
+        assert_eq!(report.summary_line(), "1 session: 1 excluded");
+        assert!(fake.writes().is_empty());
+    }
+
+    /// A session a `sync = false` rule covers by its listing's
+    /// directory is planned as excluded, never read, and counted.
+    #[test]
+    fn a_listing_under_a_sync_false_rule_is_counted_as_excluded() {
+        let h = Harnesses::new();
+        h.claude(CLAUDE_ID, 6);
+        let bundle = h.bundle();
+        let sources = sources_for(&bundle, &[ArtifactType::Claude]);
+        let remotes = crate::sync::load_remotes(h.cfg()).unwrap();
+        let rules =
+            ProjectRules::parse("[[project]]\ndir = '/test'\nsync = false\n", "c", None).unwrap();
+        let items = gather(
+            &sources,
+            &[],
+            Some(&rules),
+            &Manifest::default(),
+            &remotes,
+            &RecordScope::Any,
+        );
+        assert_eq!(items[0].plan, Plan::Excluded);
+        assert!(render_plan(&items, None).contains(", 1 excluded"));
+        let report = run_pass(
+            h.cfg(),
+            &items,
+            &|_| panic!("an excluded session is not read"),
+            Filter::default(),
+            &|_| panic!("an excluded session has no destination"),
+            false,
+        );
+        assert_eq!(report.summary_line(), "1 session: 1 excluded");
     }
 
     /// Overlapping include roots list a session once; a root over

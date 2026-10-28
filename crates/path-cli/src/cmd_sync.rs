@@ -621,7 +621,7 @@ mod tests {
         ));
         let server = FakePathbase::start();
         let report = ran(machine.pass(&server));
-        assert_eq!(report.summary_line(), "0 sessions");
+        assert_eq!(report.summary_line(), "1 session: 1 excluded");
         assert!(server.writes().is_empty());
     }
 
