@@ -362,7 +362,7 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
 
 /// Expand a leading `~` or `~/` against `home`; everything else passes
 /// through untouched.
-fn expand_tilde(dir: &str, home: Option<&Path>) -> PathBuf {
+pub(crate) fn expand_tilde(dir: &str, home: Option<&Path>) -> PathBuf {
     if let Some(home) = home {
         if dir == "~" {
             return home.to_path_buf();

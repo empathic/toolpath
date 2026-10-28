@@ -99,16 +99,10 @@ impl SyncConfig {
 }
 
 fn expand_home(dir: &str, home: Option<&Path>) -> Result<PathBuf> {
-    let rest = match dir.strip_prefix('~') {
-        None => return Ok(PathBuf::from(dir)),
-        Some(rest) => rest.trim_start_matches('/'),
-    };
-    let home = home.context("cannot expand `~` in [sync].include without a home directory")?;
-    Ok(if rest.is_empty() {
-        home.to_path_buf()
-    } else {
-        home.join(rest)
-    })
+    if dir.starts_with('~') && home.is_none() {
+        bail!("cannot expand `~` in [sync].include without a home directory");
+    }
+    Ok(crate::share_config::expand_tilde(dir, home))
 }
 
 fn validate_include(include: &[String]) -> Result<()> {
