@@ -44,6 +44,9 @@ fn edit() -> Result<()> {
     let rules = crate::share_config::validate_config_text(&text, &display).with_context(|| {
         format!("{display} was saved but does not validate; run `path config edit` to fix it")
     })?;
+    crate::sync_config::SyncConfig::parse(&text, &display).with_context(|| {
+        format!("{display} was saved but does not validate; run `path config edit` to fix it")
+    })?;
     let plural = if rules == 1 { "" } else { "s" };
     println!("{display}: {rules} project rule{plural}");
     Ok(())

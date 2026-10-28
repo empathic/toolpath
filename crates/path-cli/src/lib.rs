@@ -28,6 +28,8 @@ pub mod cmd_resume;
 mod cmd_share;
 #[cfg(not(target_os = "emscripten"))]
 mod cmd_show;
+#[cfg(not(target_os = "emscripten"))]
+mod cmd_sync;
 mod cmd_track;
 mod cmd_validate;
 mod config;
@@ -57,6 +59,10 @@ mod skim_picker;
 #[cfg(all(unix, not(target_os = "emscripten"), feature = "resume-remote"))]
 mod ssh;
 mod sync;
+#[cfg(not(target_os = "emscripten"))]
+mod sync_config;
+#[cfg(not(target_os = "emscripten"))]
+mod sync_service;
 mod term;
 
 use anyhow::Result;
@@ -102,6 +108,13 @@ enum Commands {
     Share {
         #[command(flatten)]
         args: cmd_share::ShareArgs,
+    },
+    /// Upload new and changed sessions to Pathbase on a timer: one pass
+    /// now, or install, remove or inspect the scheduled job
+    #[cfg(not(target_os = "emscripten"))]
+    Sync {
+        #[command(flatten)]
+        args: cmd_sync::SyncArgs,
     },
     /// Resume an agent session into the chosen harness, projecting the
     /// document and exec'ing the harness's resume command.
@@ -162,6 +175,8 @@ pub fn run() -> Result<()> {
         Commands::Show { source, ansi } => cmd_show::run(source, ansi, &config),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Share { args } => cmd_share::run(args),
+        #[cfg(not(target_os = "emscripten"))]
+        Commands::Sync { args } => cmd_sync::run(args, &config),
         #[cfg(not(target_os = "emscripten"))]
         Commands::Resume { args } => {
             #[cfg(all(unix, feature = "resume-remote"))]
