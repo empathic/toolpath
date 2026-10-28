@@ -2,32 +2,6 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
-## path-cli 0.31.0 — 2026-10-28
-
-- **`path-cli`** (0.31.0): `path sync`, the periodic upload job. A
-  bare `path sync` runs one `path share --all` pass, without a prompt,
-  over the scope in the new `[sync]` block of `config.toml` (`include`
-  directories, `[]` for every session; `harnesses`; `interval`, default
-  15m; `verbose`), and prints one summary line (with `--verbose`, a line
-  per session). A `[[project]]` rule's new `sync = false` keeps its
-  sessions out of the job. Destinations come from the existing
-  `[[project]]` `remote` rules, else the user's pathstash. A pass needs
-  login, and fails in one line without it. Passes and `share --all`
-  take an upload lock (`uploads.lock`), so a timer firing during a pass
-  skips. Each pass records its result in `sync-status.json`.
-  `path sync install [--project-under <dir>]... [--all] [--harness <h>]...
-  [--interval <dur>]` writes `[sync]` (nothing else in the file
-  changes) and installs a launchd agent
-  (`~/Library/LaunchAgents/net.toolpath.path-sync.plist`) or a systemd
-  user timer (`~/.config/systemd/user/path-sync.{timer,service}`) that
-  runs `path sync` by absolute path and appends to `sync.log` in the
-  config dir; it refuses to replace an installed job without `--force`,
-  and `--no-load` writes the files without loading them.
-  `path sync uninstall` removes the job and keeps the config and upload
-  records; `path sync status` shows the job, interval, scope and last
-  pass. `path config edit` validates `[sync]`.
-- **`toolpath-cli`** (0.31.0): lockstep bump of the deprecated shim.
-
 ## Turns and events become one ordered item stream — 2026-10-13
 
 `ConversationView` replaces its parallel `turns`/`events` vecs with a
@@ -190,6 +164,39 @@ their position in that stream.
   non-zero if any session failed. Requires login, checked before
   anything else; refuses `--no-cache`. `just acceptance` runs the sync
   acceptance tests against a running Pathbase.
+- **`path-cli`** (0.30.0): `path sync`, the periodic upload job. A
+  bare `path sync` runs one `path share --all` pass, without a prompt,
+  over the scope in the new `[sync]` block of `config.toml` (`include`
+  directories, `[]` for every session; `harnesses`; `interval`, default
+  15m; `verbose`), and prints one summary line (with `--verbose`, a line
+  per session). A `[[project]]` rule's new `sync = false` keeps its
+  sessions out of the job, chosen only among rules that set `sync`.
+  Each derived session is held to the include directories and the
+  exclusions by its recorded working directory, since a listing's
+  directory can be a lossy decoding (a Claude slug); this applies to
+  `share --all --project-under` too. Destinations come from the
+  existing `[[project]]` `remote` rules, else the user's pathstash. A
+  pass needs login and fails in one line without it; only a server
+  rejecting the stored token suggests `path auth login`. Passes and
+  `share --all` take an upload lock (`uploads.lock`; `share --all`
+  takes it after its prompt, and not for `--dry-run`), so a timer
+  firing during a pass skips. Each pass records its result in
+  `sync-status.json`. `path sync install [--project-under <dir>]...
+  [--all] [--harness <h>]... [--interval <dur>]` writes `[sync]`
+  (nothing else in the file changes) and installs a launchd agent
+  (`~/Library/LaunchAgents/net.toolpath.path-sync.plist`) or a systemd
+  user timer (`~/.config/systemd/user/path-sync.{timer,service}`) that
+  runs `path sync` by absolute path with this config dir (and
+  `CLAUDE_CONFIG_DIR`, `COPILOT_HOME`, `XDG_DATA_HOME` when set) and
+  appends to `sync.log` in the config dir. It refuses to replace an
+  installed job without `--force`; `--no-load` writes the files
+  without loading them, and launchctl or systemctl run only when
+  `$HOME` is the account's home. `path sync uninstall` removes the job
+  and keeps the config and upload records; `path sync status` shows
+  the job's config dir, binary and interval, the scope and the last
+  pass. `uninstall` and `install --force` refuse a job installed for
+  another config dir. Systemd user timers run while logged out only
+  with `loginctl enable-linger`. `path config edit` validates `[sync]`.
 - **`pathbase-client`** (0.3.0): regenerate from the Pathbase branch
   whose `POST /graphs` answers `GraphCreatedResponse`: an empty
   `document` and `paths[]` naming each stored path's `path.id` and
