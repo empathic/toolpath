@@ -2,6 +2,32 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## path-cli 0.31.0 — 2026-10-28
+
+- **`path-cli`** (0.31.0): `path sync`, the periodic upload job. A
+  bare `path sync` runs one `path share --all` pass, without a prompt,
+  over the scope in the new `[sync]` block of `config.toml` (`include`
+  directories, `[]` for every session; `harnesses`; `interval`, default
+  15m; `verbose`), and prints one summary line (with `--verbose`, a line
+  per session). A `[[project]]` rule's new `sync = false` keeps its
+  sessions out of the job. Destinations come from the existing
+  `[[project]]` `remote` rules, else the user's pathstash. A pass needs
+  login, and fails in one line without it. Passes and `share --all`
+  take an upload lock (`uploads.lock`), so a timer firing during a pass
+  skips. Each pass records its result in `sync-status.json`.
+  `path sync install [--project-under <dir>]... [--all] [--harness <h>]...
+  [--interval <dur>]` writes `[sync]` (nothing else in the file
+  changes) and installs a launchd agent
+  (`~/Library/LaunchAgents/net.toolpath.path-sync.plist`) or a systemd
+  user timer (`~/.config/systemd/user/path-sync.{timer,service}`) that
+  runs `path sync` by absolute path and appends to `sync.log` in the
+  config dir; it refuses to replace an installed job without `--force`,
+  and `--no-load` writes the files without loading them.
+  `path sync uninstall` removes the job and keeps the config and upload
+  records; `path sync status` shows the job, interval, scope and last
+  pass. `path config edit` validates `[sync]`.
+- **`toolpath-cli`** (0.31.0): lockstep bump of the deprecated shim.
+
 ## Turns and events become one ordered item stream — 2026-10-13
 
 `ConversationView` replaces its parallel `turns`/`events` vecs with a
