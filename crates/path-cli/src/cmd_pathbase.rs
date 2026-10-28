@@ -233,6 +233,26 @@ pub(crate) fn api_logout(base_url: &str, token: &str) -> Result<()> {
     }
 }
 
+/// The server answered 401 or 403: the stored token is no good there,
+/// as opposed to the server being unreachable or failing.
+#[derive(Debug)]
+pub(crate) struct CredentialsRejected {
+    base_url: String,
+    status: reqwest::StatusCode,
+}
+
+impl std::fmt::Display for CredentialsRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} rejected the stored credentials ({})",
+            self.base_url, self.status
+        )
+    }
+}
+
+impl std::error::Error for CredentialsRejected {}
+
 /// Errors are intentionally terse one-liners — callers compose them
 /// into either a fallback notice ("note: <err>; falling back to
 /// anonymous") or a propagated error with actionable next-step hints.
@@ -255,13 +275,25 @@ pub(crate) fn api_me(base_url: &str, token: &str) -> Result<User> {
             if status == reqwest::StatusCode::UNAUTHORIZED
                 || status == reqwest::StatusCode::FORBIDDEN
             {
-                bail!("{base_url} rejected the stored credentials ({status})")
+                Err(CredentialsRejected {
+                    base_url: base_url.to_string(),
+                    status,
+                }
+                .into())
             } else {
                 bail!("{base_url} returned {status} on /api/v1/users/me")
             }
         }
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
-            bail!("{base_url} returned {} on /api/v1/users/me", resp.status())
+            let status = resp.status();
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return Err(CredentialsRejected {
+                    base_url: base_url.to_string(),
+                    status,
+                }
+                .into());
+            }
+            bail!("{base_url} returned {status} on /api/v1/users/me")
         }
         Err(pathbase_client::Error::InvalidResponsePayload(_, _)) => {
             bail!("{base_url} isn't a Pathbase deployment (non-JSON /api/v1/users/me response)")

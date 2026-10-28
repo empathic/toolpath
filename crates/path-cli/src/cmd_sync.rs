@@ -173,8 +173,13 @@ fn one_pass(config: &Config, verbose: bool) -> Result<()> {
 fn login(config_dir: &Path) -> Result<Login> {
     let stored = crate::cmd_pathbase::load_session(&config_dir.join(CREDENTIALS_FILE_NAME))?
         .context("not logged in; run `path auth login`")?;
-    let user = crate::cmd_pathbase::api_me(&stored.url, &stored.token)
-        .context("the stored login does not check out; run `path auth login`")?;
+    let user = crate::cmd_pathbase::api_me(&stored.url, &stored.token).map_err(|e| {
+        if e.is::<crate::cmd_pathbase::CredentialsRejected>() {
+            anyhow::anyhow!("{e}; run `path auth login`")
+        } else {
+            e
+        }
+    })?;
     Ok(Login {
         base_url: stored.url,
         token: stored.token,
@@ -652,6 +657,58 @@ mod tests {
             .unwrap();
         assert!(matches!(machine.pass(&server).unwrap(), Pass::Busy));
         assert!(server.requests().is_empty());
+    }
+
+    fn store_login(cfg: &Path, url: &str) {
+        crate::cmd_pathbase::store_session(
+            &cfg.join(CREDENTIALS_FILE_NAME),
+            &crate::cmd_pathbase::StoredSession {
+                url: url.into(),
+                token: "token".into(),
+                user: crate::cmd_pathbase::User {
+                    id: "1".into(),
+                    username: "alex".into(),
+                    email: None,
+                    display_name: None,
+                },
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn only_rejected_credentials_are_told_to_log_in() {
+        let cfg = TempDir::new().unwrap();
+        let err = login(cfg.path()).err().unwrap();
+        assert_eq!(err.to_string(), "not logged in; run `path auth login`");
+
+        let server = FakePathbase::start();
+        store_login(cfg.path(), &server.base());
+        assert_eq!(login(cfg.path()).unwrap().username, "alex");
+
+        server.force(
+            "GET",
+            "/api/v1/u/me",
+            401,
+            r#"{"code":"unauthorized","error":"bad token"}"#,
+        );
+        let err = format!("{:#}", login(cfg.path()).err().unwrap());
+        assert!(
+            err.ends_with("(401 Unauthorized); run `path auth login`"),
+            "{err}"
+        );
+        let rejected = FakePathbase::start();
+        rejected.force("GET", "/api/v1/u/me", 403, "forbidden");
+        store_login(cfg.path(), &rejected.base());
+        let err = format!("{:#}", login(cfg.path()).err().unwrap());
+        assert!(
+            err.ends_with("(403 Forbidden); run `path auth login`"),
+            "{err}"
+        );
+
+        store_login(cfg.path(), "http://127.0.0.1:1");
+        let err = format!("{:#}", login(cfg.path()).err().unwrap());
+        assert!(!err.contains("auth login"), "{err}");
     }
 
     #[test]
