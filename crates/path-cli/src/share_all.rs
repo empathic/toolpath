@@ -634,13 +634,7 @@ pub(crate) fn run(args: AllArgs, base_url: String, token: String, username: Stri
         None => ArtifactType::ALL.to_vec(),
     };
     let include: Vec<PathBuf> = args.project_under.iter().cloned().collect();
-    let _lock = match crate::sync::lock::lock_uploads(&config_dir, false)? {
-        Some(lock) => lock,
-        None => {
-            eprintln!("Waiting for another upload pass to finish…");
-            crate::sync::lock::lock_uploads(&config_dir, true)?.expect("a waited-for lock is held")
-        }
-    };
+    let mut lock = None;
     let destination = ensuring_pathstash(&username, |dir| {
         let dest = Resolve {
             config_dir: &config_dir,
@@ -686,6 +680,14 @@ pub(crate) fn run(args: AllArgs, base_url: String, token: String, username: Stri
                 std::process::exit(130);
             }
         }
+        lock = Some(match crate::sync::lock::lock_uploads(&config_dir, false)? {
+            Some(lock) => lock,
+            None => {
+                eprintln!("Waiting for another upload pass to finish…");
+                crate::sync::lock::lock_uploads(&config_dir, true)?
+                    .expect("a waited-for lock is held")
+            }
+        });
         Ok(true)
     })?;
     let Some(report) = report else {
