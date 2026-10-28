@@ -461,7 +461,7 @@ fn save_manifest(config_dir: &Path, manifest: &Manifest) -> Result<()> {
 
 /// Write `contents` to `$CONFIG_DIR/<name>` atomically (temp file +
 /// rename), the directory 0700 and the file 0600.
-pub(super) fn write_config_file(config_dir: &Path, name: &str, contents: &str) -> Result<()> {
+pub(crate) fn write_config_file(config_dir: &Path, name: &str, contents: &str) -> Result<()> {
     std::fs::create_dir_all(config_dir)
         .with_context(|| format!("create {}", config_dir.display()))?;
     #[cfg(unix)]

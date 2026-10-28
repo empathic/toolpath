@@ -113,7 +113,6 @@ pub(crate) enum Pass {
 fn one_pass(config: &Config, verbose: bool) -> Result<()> {
     let started_at = Utc::now();
     let config_dir = config.config_dir()?;
-    trim_log(&config_dir);
     let outcome = login(&config_dir).and_then(|login| {
         let bundle = crate::providers::harness_bundle(config);
         pass(
@@ -124,10 +123,20 @@ fn one_pass(config: &Config, verbose: bool) -> Result<()> {
             verbose,
         )
     });
+    let code = finish(&config_dir, started_at, outcome);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
+/// Report how a pass went and record it in the status file, unless it
+/// was skipped; the exit code.
+fn finish(config_dir: &Path, started_at: DateTime<Utc>, outcome: Result<Pass>) -> i32 {
     let (status, code) = match outcome {
         Ok(Pass::Busy) => {
             println!("path sync: another upload pass is running; skipped");
-            return Ok(());
+            return 0;
         }
         Ok(Pass::Ran(report)) => {
             let failures = failure_lines(&report);
@@ -159,13 +168,10 @@ fn one_pass(config: &Config, verbose: bool) -> Result<()> {
             (status, 1)
         }
     };
-    if let Err(e) = write_status(&config_dir, &status) {
+    if let Err(e) = write_status(config_dir, &status) {
         eprintln!("path sync: could not record the pass: {e:#}");
     }
-    if code != 0 {
-        std::process::exit(code);
-    }
-    Ok(())
+    code
 }
 
 /// The stored login, checked against its server as `share --all`
@@ -208,6 +214,7 @@ pub(crate) fn pass(
     let Some(_lock) = crate::sync::lock::lock_uploads(config_dir, false)? else {
         return Ok(Pass::Busy);
     };
+    trim_log(config_dir);
     let resolve = Resolve {
         config_dir,
         home,
@@ -266,8 +273,9 @@ fn trim_log(config_dir: &Path) {
 }
 
 fn write_status(config_dir: &Path, status: &PassStatus) -> Result<()> {
-    write_file(
-        &config_dir.join(SYNC_STATUS_FILE_NAME),
+    crate::sync::write_config_file(
+        config_dir,
+        SYNC_STATUS_FILE_NAME,
         &serde_json::to_string_pretty(status)?,
     )
 }
@@ -283,9 +291,9 @@ fn read_status(config_dir: &Path) -> Result<Option<PassStatus>> {
     }
 }
 
-/// Write `text` to `path` through a sibling temporary file, so a reader
-/// never sees half of it.
-fn write_file(path: &Path, text: &str) -> Result<()> {
+/// Write a launchd or systemd file through a sibling temporary file, so
+/// the scheduler never reads half of it.
+fn write_job_file(path: &Path, text: &str) -> Result<()> {
     let dir = path.parent().context("a file path has a parent")?;
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let mut tmp = path.as_os_str().to_owned();
@@ -471,9 +479,9 @@ pub(crate) fn install_job(
     if installed.is_some() && host.live {
         host.unload();
     }
-    write_file(&config_path, &updated)?;
+    crate::sync::write_config_file(host.config_dir, CONFIG_FILE_NAME, &updated)?;
     for (path, content) in &files {
-        write_file(path, content)?;
+        write_job_file(path, content)?;
     }
     if load {
         // launchd finishes a bootout after launchctl returns, so a
@@ -1175,6 +1183,49 @@ mod tests {
             status_text(Some(Scheduler::Launchd), Some(a.home.path()), a.cfg.path()).unwrap();
         assert!(text.contains("  runs every: 300s\n"), "{text}");
         assert!(text.contains("install --force"), "{text}");
+    }
+
+    #[test]
+    fn a_failed_pass_is_recorded_and_exits_non_zero() {
+        let cfg = TempDir::new().unwrap();
+        let code = finish(
+            cfg.path(),
+            Utc::now(),
+            Err(anyhow::anyhow!("not logged in; run `path auth login`")),
+        );
+        assert_eq!(code, 1);
+        let status = read_status(cfg.path()).unwrap().unwrap();
+        assert!(!status.ok);
+        assert_eq!(status.summary, "not logged in; run `path auth login`");
+
+        let mut report = Report::default();
+        report.sessions.push((
+            crate::artifact::ArtifactType::Codex,
+            "abc".into(),
+            "me/pathstash".into(),
+            share_all::SessionResult::Failed("boom".into()),
+        ));
+        assert_eq!(finish(cfg.path(), Utc::now(), Ok(Pass::Ran(report))), 1);
+        let status = read_status(cfg.path()).unwrap().unwrap();
+        assert_eq!(status.summary, "1 session: 1 failed");
+        assert_eq!(status.failures, ["codex abc → me/pathstash: boom"]);
+
+        assert_eq!(
+            finish(cfg.path(), Utc::now(), Ok(Pass::Ran(Report::default()))),
+            0
+        );
+        assert!(read_status(cfg.path()).unwrap().unwrap().ok);
+    }
+
+    #[test]
+    fn a_skipped_pass_leaves_the_status_file_alone() {
+        let cfg = TempDir::new().unwrap();
+        assert_eq!(finish(cfg.path(), Utc::now(), Ok(Pass::Busy)), 0);
+        assert_eq!(read_status(cfg.path()).unwrap(), None);
+        finish(cfg.path(), Utc::now(), Err(anyhow::anyhow!("earlier")));
+        let before = read_status(cfg.path()).unwrap();
+        assert_eq!(finish(cfg.path(), Utc::now(), Ok(Pass::Busy)), 0);
+        assert_eq!(read_status(cfg.path()).unwrap(), before);
     }
 
     #[test]
