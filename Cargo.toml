@@ -21,6 +21,7 @@ members = [
     "crates/toolpath-model",
     "crates/toolpath-harness-mock",
     "crates/xtask",
+    "crates/toolpath-agents",
 ]
 exclude = ["crates/toolpath-cli"]
 resolver = "2"

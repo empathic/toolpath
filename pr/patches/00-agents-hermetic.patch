@@ -1,0 +1,868 @@
+From e7d33535c9931d2c1cc168d6d13d02ccbc9873a1 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 28 Oct 2026 13:14:09 -0400
+Subject: [PATCH] test(agents): hash-verified agent binaries from agents.lock
+ and a hermetic runner
+
+agents.lock names claude 2.1.308 and codex 0.165.0 by url and the vendor's published sha256; crates/toolpath-agents
+(dev crate, publish = false) fetches and verifies them into a content-addressed cache, unpacks only the named member,
+and runs an agent with an empty env, a temp HOME/TMPDIR and cwd /. Bobby 2026-10-28: the first thing of the stack.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GH9199DYh87xBXURFbufjD
+---
+ Cargo.lock                                    |  46 +++-
+ Cargo.toml                                    |   1 +
+ agents.lock                                   |  44 ++++
+ crates/toolpath-agents/Cargo.toml             |  21 ++
+ .../src/bin/toolpath-agents.rs                |  85 +++++++
+ crates/toolpath-agents/src/cache.rs           | 222 ++++++++++++++++++
+ crates/toolpath-agents/src/hermetic.rs        | 119 ++++++++++
+ crates/toolpath-agents/src/lib.rs             |  33 +++
+ crates/toolpath-agents/src/lock.rs            | 150 ++++++++++++
+ 9 files changed, 716 insertions(+), 5 deletions(-)
+ create mode 100644 agents.lock
+ create mode 100644 crates/toolpath-agents/Cargo.toml
+ create mode 100644 crates/toolpath-agents/src/bin/toolpath-agents.rs
+ create mode 100644 crates/toolpath-agents/src/cache.rs
+ create mode 100644 crates/toolpath-agents/src/hermetic.rs
+ create mode 100644 crates/toolpath-agents/src/lib.rs
+ create mode 100644 crates/toolpath-agents/src/lock.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 7ef85214..683bd583 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1288,7 +1288,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+ dependencies = [
+  "libc",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -4265,7 +4265,7 @@ dependencies = [
+  "errno",
+  "libc",
+  "linux-raw-sys",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -4322,7 +4322,7 @@ dependencies = [
+  "security-framework",
+  "security-framework-sys",
+  "webpki-root-certs",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -5044,6 +5044,17 @@ dependencies = [
+  "libc",
+ ]
+ 
++[[package]]
++name = "tar"
++version = "0.4.46"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
++dependencies = [
++ "filetime",
++ "libc",
++ "xattr",
++]
++
+ [[package]]
+ name = "tempfile"
+ version = "3.27.0"
+@@ -5054,7 +5065,7 @@ dependencies = [
+  "getrandom 0.4.2",
+  "once_cell",
+  "rustix",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -5319,6 +5330,21 @@ dependencies = [
+  "serde_json",
+ ]
+ 
++[[package]]
++name = "toolpath-agents"
++version = "0.1.0"
++dependencies = [
++ "anyhow",
++ "clap",
++ "flate2",
++ "reqwest",
++ "serde",
++ "sha2 0.10.9",
++ "tar",
++ "tempfile",
++ "toml",
++]
++
+ [[package]]
+ name = "toolpath-claude"
+ version = "0.13.4"
+@@ -6154,7 +6180,7 @@ version = "0.1.11"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+ dependencies = [
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -6492,6 +6518,16 @@ version = "0.6.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+ 
++[[package]]
++name = "xattr"
++version = "1.6.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
++dependencies = [
++ "libc",
++ "rustix",
++]
++
+ [[package]]
+ name = "yansi"
+ version = "1.0.1"
+diff --git a/Cargo.toml b/Cargo.toml
+index 8d36c72b..65371cce 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -15,6 +15,7 @@ members = [
+     "crates/toolpath-pi",
+     "crates/pathbase-client",
+     "crates/path-cli",
++    "crates/toolpath-agents",
+ ]
+ exclude = ["crates/toolpath-cli"]
+ resolver = "2"
+diff --git a/agents.lock b/agents.lock
+new file mode 100644
+index 00000000..950b9094
+--- /dev/null
++++ b/agents.lock
+@@ -0,0 +1,44 @@
++# The agent CLIs toolpath's tests run. Read ONLY through crates/toolpath-agents (`toolpath-agents
++# fetch <agent>`): each url is downloaded, refused unless it hashes to the sha256 here, and kept in a
++# content-addressed cache. Nothing comes from PATH or a package manager.
++#
++# Every sha256 is the vendor's own published checksum, checked against a download on 2026-10-28:
++#   claude: the release manifest.json (platforms.<p>.checksum) beside the binaries.
++#   codex:  GitHub's asset digest on the release (sha256:...), equal to the tarball's sha256.
++# A bump is a PR that changes version, url and sha256 together, from the same sources.
++
++[[agent]]
++name = "claude"
++version = "2.1.308"
++source = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.308/manifest.json"
++
++[[agent.platform]]
++target = "aarch64-apple-darwin"
++url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.308/darwin-arm64/claude"
++sha256 = "ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37"
++archive = "binary"
++
++[[agent.platform]]
++target = "x86_64-unknown-linux-gnu"
++url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.308/linux-x64/claude"
++sha256 = "356733f185fa988e6bf3aa9a555269fdd167982a2e2a80d3c8a78037bb92ad58"
++archive = "binary"
++
++[[agent]]
++name = "codex"
++version = "0.165.0"
++source = "https://github.com/openai/codex/releases/tag/rust-v0.165.0"
++
++[[agent.platform]]
++target = "aarch64-apple-darwin"
++url = "https://github.com/openai/codex/releases/download/rust-v0.165.0/codex-aarch64-apple-darwin.tar.gz"
++sha256 = "78ea9c178d2dc8fde71d6494df3b9eab902fd6d6de0a84e65234220d93bb6144"
++archive = "tar-gz"
++member = "codex-aarch64-apple-darwin"
++
++[[agent.platform]]
++target = "x86_64-unknown-linux-gnu"
++url = "https://github.com/openai/codex/releases/download/rust-v0.165.0/codex-x86_64-unknown-linux-musl.tar.gz"
++sha256 = "be635d3486a5bd060d0fff582ae6d30160280c31344dd85719707fa920e187f0"
++archive = "tar-gz"
++member = "codex-x86_64-unknown-linux-musl"
+diff --git a/crates/toolpath-agents/Cargo.toml b/crates/toolpath-agents/Cargo.toml
+new file mode 100644
+index 00000000..7a53d976
+--- /dev/null
++++ b/crates/toolpath-agents/Cargo.toml
+@@ -0,0 +1,21 @@
++[package]
++name = "toolpath-agents"
++version = "0.1.0"
++edition = { workspace = true }
++license = { workspace = true }
++repository = "https://github.com/empathic/toolpath"
++description = "The agent CLIs toolpath's tests run, resolved only through agents.lock: hash-verified downloads, a content-addressed cache, and a hermetic runner."
++publish = false
++
++[dependencies]
++anyhow = { workspace = true }
++clap = { workspace = true }
++serde = { workspace = true }
++toml = { workspace = true }
++reqwest = { workspace = true }
++sha2 = "0.10"
++flate2 = "1"
++tar = "0.4"
++tempfile = { workspace = true }
++
++[dev-dependencies]
+diff --git a/crates/toolpath-agents/src/bin/toolpath-agents.rs b/crates/toolpath-agents/src/bin/toolpath-agents.rs
+new file mode 100644
+index 00000000..ac557944
+--- /dev/null
++++ b/crates/toolpath-agents/src/bin/toolpath-agents.rs
+@@ -0,0 +1,85 @@
++//! `toolpath-agents list|fetch|path|run`: the agent CLIs the tests run, through `agents.lock` only.
++
++use std::path::PathBuf;
++
++use anyhow::{Context, Result};
++use clap::{Parser, Subcommand};
++use toolpath_agents::{Cache, Hermetic, Lock, host_target};
++
++#[derive(Parser, Debug)]
++#[command(
++    name = "toolpath-agents",
++    about = "Hash-verified agent CLIs for toolpath's tests"
++)]
++struct Cli {
++    /// The lock file
++    #[arg(long, global = true, default_value = "agents.lock")]
++    lock: PathBuf,
++    /// Rust target triple (default: this machine)
++    #[arg(long, global = true)]
++    target: Option<String>,
++    #[command(subcommand)]
++    command: Cmd,
++}
++
++#[derive(Subcommand, Debug)]
++enum Cmd {
++    /// What the lock names and whether each entry is fetched
++    List,
++    /// Download an agent from the lock's url, verify its sha256, unpack it; prints the executable
++    Fetch { agent: String },
++    /// The installed executable of an already fetched agent
++    Path { agent: String },
++    /// Run a fetched agent hermetically (empty env, temp HOME, cwd /), passing ARGS
++    Run {
++        agent: String,
++        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
++        args: Vec<String>,
++    },
++}
++
++fn main() -> Result<()> {
++    let cli = Cli::parse();
++    let lock = Lock::parse(
++        &std::fs::read_to_string(&cli.lock)
++            .with_context(|| format!("read {}", cli.lock.display()))?,
++    )?;
++    let cache = Cache::default_location()?;
++    let target = cli.target.unwrap_or_else(|| host_target().to_string());
++    match cli.command {
++        Cmd::List => {
++            for a in &lock.agents {
++                for p in &a.platforms {
++                    let state = if cache.lookup(&p.sha256).is_some() {
++                        "fetched"
++                    } else {
++                        "not fetched"
++                    };
++                    println!(
++                        "{} {} {} {} {state}",
++                        a.name,
++                        a.version,
++                        p.target,
++                        &p.sha256[..12]
++                    );
++                }
++            }
++        }
++        Cmd::Fetch { agent } => {
++            let (_, p) = lock.find(&agent, &target)?;
++            cache.fetch(p)?;
++            println!("{}", cache.install(p)?.display());
++        }
++        Cmd::Path { agent } => {
++            let (_, p) = lock.find(&agent, &target)?;
++            println!("{}", cache.install(p)?.display());
++        }
++        Cmd::Run { agent, args } => {
++            let (_, p) = lock.find(&agent, &target)?;
++            let h = Hermetic::new(cache.install(p)?)?;
++            let status = h.command(&args).status()?;
++            std::process::exit(status.code().unwrap_or(1));
++        }
++    }
++    Ok(())
++}
+diff --git a/crates/toolpath-agents/src/cache.rs b/crates/toolpath-agents/src/cache.rs
+new file mode 100644
+index 00000000..e3ca45a3
+--- /dev/null
++++ b/crates/toolpath-agents/src/cache.rs
+@@ -0,0 +1,222 @@
++//! A content-addressed cache of verified agent downloads and their unpacked executables.
++
++use std::path::{Path, PathBuf};
++
++use anyhow::{Context, Result, anyhow, bail};
++use sha2::{Digest, Sha256};
++
++use crate::lock::{Archive, Platform};
++
++pub fn sha256_hex(bytes: &[u8]) -> String {
++    Sha256::digest(bytes)
++        .iter()
++        .map(|b| format!("{b:02x}"))
++        .collect()
++}
++
++pub struct Cache {
++    root: PathBuf,
++}
++
++impl Cache {
++    pub fn at(root: impl Into<PathBuf>) -> Cache {
++        Cache { root: root.into() }
++    }
++
++    /// `$XDG_CACHE_HOME/toolpath/agents`, else `$HOME/.cache/toolpath/agents`.
++    pub fn default_location() -> Result<Cache> {
++        let base = match std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
++            Some(x) => PathBuf::from(x),
++            None => PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow!("no HOME"))?)
++                .join(".cache"),
++        };
++        Ok(Cache::at(base.join("toolpath/agents")))
++    }
++
++    fn blob(&self, sha: &str) -> PathBuf {
++        self.root.join(sha).join("blob")
++    }
++
++    fn unpacked(&self, sha: &str) -> PathBuf {
++        self.root.join(sha).join("root")
++    }
++
++    /// Keep `bytes` under their sha256, which must be `expected`; refuses otherwise. The blob has
++    /// no execute bit: only [`Cache::install`] makes something runnable.
++    pub fn store(&self, expected: &str, bytes: &[u8]) -> Result<PathBuf> {
++        let got = sha256_hex(bytes);
++        if got != expected {
++            bail!("sha256 mismatch: the lock says {expected}, the download is {got}");
++        }
++        let path = self.blob(expected);
++        std::fs::create_dir_all(path.parent().expect("has a parent"))?;
++        let tmp = path.with_extension("part");
++        std::fs::write(&tmp, bytes)?;
++        std::fs::rename(&tmp, &path)?;
++        Ok(path)
++    }
++
++    /// The cached blob for `sha`, re-hashed on every lookup: an entry that no longer matches its
++    /// name is treated as absent.
++    pub fn lookup(&self, sha: &str) -> Option<PathBuf> {
++        let p = self.blob(sha);
++        let bytes = std::fs::read(&p).ok()?;
++        (sha256_hex(&bytes) == sha).then_some(p)
++    }
++
++    /// Download `platform.url` unless a valid blob is cached, verify it, keep it.
++    pub fn fetch(&self, platform: &Platform) -> Result<PathBuf> {
++        if let Some(p) = self.lookup(&platform.sha256) {
++            return Ok(p);
++        }
++        // Agent binaries run to hundreds of MB (claude's is ~275 MB): reqwest's blocking default
++        // of 30 s for the whole body is too short, so the limit is per download, generous.
++        let client = reqwest::blocking::Client::builder()
++            .timeout(std::time::Duration::from_secs(1800))
++            .build()?;
++        let bytes = client
++            .get(&platform.url)
++            .send()
++            .and_then(|r| r.error_for_status())
++            .and_then(|r| r.bytes())
++            .with_context(|| format!("download {}", platform.url))?;
++        self.store(&platform.sha256, &bytes)
++    }
++
++    /// The executable for a fetched platform entry, unpacked once from the verified blob.
++    pub fn install(&self, platform: &Platform) -> Result<PathBuf> {
++        let blob = self.lookup(&platform.sha256).ok_or_else(|| {
++            anyhow!(
++                "{} is not in the cache (fetch it first)",
++                &platform.sha256[..12]
++            )
++        })?;
++        let root = self.unpacked(&platform.sha256);
++        let exe = match (platform.archive, &platform.member) {
++            (Archive::Binary, _) => root.join("agent"),
++            (Archive::TarGz, Some(m)) => root.join(m),
++            (Archive::TarGz, None) => bail!("a tar-gz entry must name its member"),
++        };
++        if exe.is_file() {
++            return Ok(exe);
++        }
++        let tmp = root.with_extension("part");
++        let _ = std::fs::remove_dir_all(&tmp);
++        std::fs::create_dir_all(&tmp)?;
++        match platform.archive {
++            Archive::Binary => {
++                std::fs::copy(&blob, tmp.join("agent"))?;
++            }
++            Archive::TarGz => {
++                let gz = flate2::read::GzDecoder::new(std::fs::File::open(&blob)?);
++                let mut ar = tar::Archive::new(gz);
++                ar.set_preserve_permissions(false);
++                // `unpack` refuses entries that would land outside `tmp` (`..`, absolute paths).
++                ar.unpack(&tmp)?;
++            }
++        }
++        let staged = tmp.join(exe.strip_prefix(&root).expect("under root"));
++        if !staged.is_file() {
++            bail!("{} has no member {}", platform.url, staged.display());
++        }
++        make_executable(&staged)?;
++        std::fs::rename(&tmp, &root)?;
++        Ok(exe)
++    }
++}
++
++#[cfg(unix)]
++fn make_executable(p: &Path) -> Result<()> {
++    use std::os::unix::fs::PermissionsExt;
++    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755))?;
++    Ok(())
++}
++
++#[cfg(not(unix))]
++fn make_executable(_: &Path) -> Result<()> {
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn platform(sha: &str, archive: Archive, member: Option<&str>) -> Platform {
++        Platform {
++            target: "t".into(),
++            url: "https://example.invalid/x".into(),
++            sha256: sha.into(),
++            archive,
++            member: member.map(String::from),
++        }
++    }
++
++    #[test]
++    fn a_blob_is_kept_only_under_its_own_hash_and_a_mismatch_is_refused() {
++        let dir = tempfile::tempdir().unwrap();
++        let cache = Cache::at(dir.path());
++        let sha = sha256_hex(b"agent bytes");
++        let p = cache.store(&sha, b"agent bytes").unwrap();
++        assert_eq!(cache.lookup(&sha), Some(p.clone()));
++        #[cfg(unix)]
++        {
++            use std::os::unix::fs::PermissionsExt;
++            let mode = std::fs::metadata(&p).unwrap().permissions().mode();
++            assert_eq!(mode & 0o111, 0, "a blob is never executable");
++        }
++        let e = cache.store(&sha, b"tampered").unwrap_err().to_string();
++        assert!(e.contains("sha256 mismatch"), "{e}");
++    }
++
++    #[test]
++    fn a_corrupted_cache_entry_is_not_trusted() {
++        let dir = tempfile::tempdir().unwrap();
++        let cache = Cache::at(dir.path());
++        let sha = sha256_hex(b"good");
++        let p = cache.store(&sha, b"good").unwrap();
++        std::fs::write(&p, b"bad").unwrap();
++        assert_eq!(cache.lookup(&sha), None);
++        assert!(
++            cache
++                .install(&platform(&sha, Archive::Binary, None))
++                .is_err()
++        );
++    }
++
++    #[test]
++    fn install_unpacks_the_named_member_of_a_verified_tar_gz_and_makes_only_it_runnable() {
++        let mut tgz = Vec::new();
++        {
++            let gz = flate2::write::GzEncoder::new(&mut tgz, flate2::Compression::default());
++            let mut b = tar::Builder::new(gz);
++            let body = b"#!/bin/sh\necho hi\n";
++            let mut h = tar::Header::new_gnu();
++            h.set_size(body.len() as u64);
++            h.set_mode(0o644);
++            h.set_cksum();
++            b.append_data(&mut h, "pkg/bin/tool", &body[..]).unwrap();
++            b.into_inner().unwrap().finish().unwrap();
++        }
++        let dir = tempfile::tempdir().unwrap();
++        let cache = Cache::at(dir.path());
++        let sha = sha256_hex(&tgz);
++        cache.store(&sha, &tgz).unwrap();
++        let exe = cache
++            .install(&platform(&sha, Archive::TarGz, Some("pkg/bin/tool")))
++            .unwrap();
++        assert!(exe.ends_with("pkg/bin/tool"));
++        #[cfg(unix)]
++        {
++            use std::os::unix::fs::PermissionsExt;
++            assert_eq!(
++                std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777,
++                0o755
++            );
++        }
++        let e = cache
++            .install(&platform(&sha, Archive::TarGz, Some("pkg/bin/other")))
++            .unwrap_err()
++            .to_string();
++        assert!(e.contains("has no member"), "{e}");
++    }
++}
+diff --git a/crates/toolpath-agents/src/hermetic.rs b/crates/toolpath-agents/src/hermetic.rs
+new file mode 100644
+index 00000000..287894fb
+--- /dev/null
++++ b/crates/toolpath-agents/src/hermetic.rs
+@@ -0,0 +1,119 @@
++//! Run an agent so that it sees only what the caller passes in.
++//!
++//! The child gets an EMPTY environment except: `HOME` and `TMPDIR` (fresh temporary directories,
++//! removed when the [`Hermetic`] is dropped), `PATH=/usr/bin:/bin` (system tools only: never the
++//! developer's PATH, Homebrew or a version manager) and `LANG=C.UTF-8`. Its working directory is
++//! `/`. Anything else (a fixture's config, a webmock URL, a fake credential) must be added with
++//! [`Hermetic::env`] or written under [`Hermetic::home`] by the test, so the inputs of a run are
++//! exactly what the test names. Real credentials are never inherited.
++
++use std::ffi::OsStr;
++use std::path::{Path, PathBuf};
++use std::process::Command;
++
++use anyhow::Result;
++
++pub const PATH: &str = "/usr/bin:/bin";
++
++pub struct Hermetic {
++    exe: PathBuf,
++    home: tempfile::TempDir,
++    tmp: tempfile::TempDir,
++    env: Vec<(String, String)>,
++}
++
++impl Hermetic {
++    /// `exe` is an installed agent (from [`crate::Cache::install`]), never a name looked up on PATH.
++    pub fn new(exe: impl Into<PathBuf>) -> Result<Hermetic> {
++        Ok(Hermetic {
++            exe: exe.into(),
++            home: tempfile::Builder::new().prefix("agent-home.").tempdir()?,
++            tmp: tempfile::Builder::new().prefix("agent-tmp.").tempdir()?,
++            env: Vec::new(),
++        })
++    }
++
++    /// The child's HOME, for the test to seed config or fixtures into before running.
++    pub fn home(&self) -> &Path {
++        self.home.path()
++    }
++
++    /// Add one variable to the child's otherwise empty environment.
++    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Hermetic {
++        self.env.push((key.into(), value.into()));
++        self
++    }
++
++    /// The command, ready for args; the [`Hermetic`] must outlive the child (it owns HOME/TMPDIR).
++    pub fn command<I, S>(&self, args: I) -> Command
++    where
++        I: IntoIterator<Item = S>,
++        S: AsRef<OsStr>,
++    {
++        let mut c = Command::new(&self.exe);
++        c.args(args)
++            .env_clear()
++            .env("HOME", self.home.path())
++            .env("TMPDIR", self.tmp.path())
++            .env("PATH", PATH)
++            .env("LANG", "C.UTF-8")
++            .current_dir("/");
++        for (k, v) in &self.env {
++            c.env(k, v);
++        }
++        c
++    }
++}
++
++#[cfg(all(test, unix))]
++mod tests {
++    use super::*;
++    use std::os::unix::fs::PermissionsExt;
++
++    /// A stand-in agent that reports what it sees: its environment and working directory.
++    fn reporter(dir: &Path) -> PathBuf {
++        let p = dir.join("reporter");
++        std::fs::write(&p, "#!/bin/sh\npwd\nenv | LC_ALL=C sort\n").unwrap();
++        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
++        p
++    }
++
++    #[test]
++    fn the_child_sees_only_a_temp_home_system_path_and_what_the_test_adds() {
++        // The test process has HOME, PATH, CARGO_* and more; the exact key list below proves
++        // none of them reach the child.
++        let dir = tempfile::tempdir().unwrap();
++        let h = Hermetic::new(reporter(dir.path()))
++            .unwrap()
++            .env("WEBMOCK_URL", "http://127.0.0.1:1");
++        let out = h.command(Vec::<&str>::new()).output().unwrap();
++        assert!(out.status.success());
++        let text = String::from_utf8(out.stdout).unwrap();
++        let mut lines = text.lines();
++        assert_eq!(lines.next(), Some("/"), "cwd is /");
++        let keys: Vec<&str> = lines
++            .map(|l| l.split('=').next().unwrap())
++            .filter(|k| !["PWD", "SHLVL", "_", "OLDPWD"].contains(k)) // set by sh itself
++            .collect();
++        assert_eq!(
++            keys,
++            ["HOME", "LANG", "PATH", "TMPDIR", "WEBMOCK_URL"],
++            "{text}"
++        );
++        assert!(text.contains(&format!("HOME={}", h.home().display())));
++        assert!(text.contains("PATH=/usr/bin:/bin\n"));
++    }
++
++    #[test]
++    fn home_and_tmpdir_are_fresh_per_run_and_removed_afterwards() {
++        let dir = tempfile::tempdir().unwrap();
++        let exe = reporter(dir.path());
++        let a = Hermetic::new(&exe).unwrap();
++        let b = Hermetic::new(&exe).unwrap();
++        assert_ne!(a.home(), b.home());
++        let home = a.home().to_path_buf();
++        assert!(home.is_dir());
++        drop(a);
++        assert!(!home.exists());
++    }
++}
+diff --git a/crates/toolpath-agents/src/lib.rs b/crates/toolpath-agents/src/lib.rs
+new file mode 100644
+index 00000000..8633e0f9
+--- /dev/null
++++ b/crates/toolpath-agents/src/lib.rs
+@@ -0,0 +1,33 @@
++//! The agent CLIs toolpath's tests run, resolved ONLY through `agents.lock`.
++//!
++//! - [`Lock`]: per agent and platform, a version, the https url to fetch, the sha256 of what that
++//!   url serves (taken from the vendor's published checksum), the archive format and the member
++//!   that is the executable.
++//! - [`cache`]: `fetch` downloads the url, refuses unless the bytes hash to the lock's sha256, and
++//!   keeps them under that hash (`$XDG_CACHE_HOME/toolpath/agents/<sha256>/blob`); `install`
++//!   unpacks a verified blob next to it. A cache entry is re-hashed on every lookup, never trusted.
++//! - [`hermetic`]: runs an installed agent with an empty environment, a fresh temporary HOME and
++//!   TMPDIR, and `/` as its working directory, so a test sees only what it passes in.
++//!
++//! Nothing here reads `PATH`, Homebrew or the developer's own install of an agent.
++
++pub mod cache;
++pub mod hermetic;
++pub mod lock;
++
++pub use cache::{Cache, sha256_hex};
++pub use hermetic::Hermetic;
++pub use lock::{Agent, Archive, Lock, Platform};
++
++/// The Rust target triple of this machine, as the lock spells platforms.
++pub fn host_target() -> &'static str {
++    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
++        "aarch64-apple-darwin"
++    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
++        "x86_64-apple-darwin"
++    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
++        "aarch64-unknown-linux-gnu"
++    } else {
++        "x86_64-unknown-linux-gnu"
++    }
++}
+diff --git a/crates/toolpath-agents/src/lock.rs b/crates/toolpath-agents/src/lock.rs
+new file mode 100644
+index 00000000..2e958cbb
+--- /dev/null
++++ b/crates/toolpath-agents/src/lock.rs
+@@ -0,0 +1,150 @@
++//! `agents.lock`: what each agent is, per platform, and where its verified bytes come from.
++
++use anyhow::{Result, anyhow, bail};
++use serde::Deserialize;
++
++#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
++pub struct Lock {
++    #[serde(default, rename = "agent")]
++    pub agents: Vec<Agent>,
++}
++
++#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
++pub struct Agent {
++    pub name: String,
++    pub version: String,
++    /// Where the version and checksums were read (a release page or a manifest url).
++    pub source: String,
++    #[serde(default, rename = "platform")]
++    pub platforms: Vec<Platform>,
++}
++
++#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
++pub struct Platform {
++    /// Rust target triple, e.g. `aarch64-apple-darwin`.
++    pub target: String,
++    pub url: String,
++    pub sha256: String,
++    pub archive: Archive,
++    /// For an archive: the path of the executable inside it.
++    pub member: Option<String>,
++}
++
++#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
++#[serde(rename_all = "kebab-case")]
++pub enum Archive {
++    /// The url serves the executable itself.
++    Binary,
++    /// A gzip-compressed tar; `member` names the executable.
++    TarGz,
++}
++
++impl Lock {
++    /// Parse and validate: every sha256 is 64 lowercase hex, every url is https, a tar.gz names
++    /// its member, and no (agent, target) pair appears twice.
++    pub fn parse(text: &str) -> Result<Lock> {
++        let lock: Lock = toml::from_str(text)?;
++        let mut seen = std::collections::BTreeSet::new();
++        for a in &lock.agents {
++            for p in &a.platforms {
++                let what = format!("{} {} {}", a.name, a.version, p.target);
++                if p.sha256.len() != 64
++                    || !p
++                        .sha256
++                        .bytes()
++                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
++                {
++                    bail!("{what}: sha256 must be 64 lowercase hex digits");
++                }
++                if !p.url.starts_with("https://") {
++                    bail!("{what}: only https urls are allowed");
++                }
++                if p.archive == Archive::TarGz && p.member.is_none() {
++                    bail!("{what}: a tar-gz entry must name its member");
++                }
++                if !seen.insert((a.name.clone(), p.target.clone())) {
++                    bail!("{what}: listed twice");
++                }
++            }
++        }
++        Ok(lock)
++    }
++
++    pub fn find(&self, agent: &str, target: &str) -> Result<(&Agent, &Platform)> {
++        let a = self
++            .agents
++            .iter()
++            .find(|a| a.name == agent)
++            .ok_or_else(|| anyhow!("agent {agent:?} is not in the lock"))?;
++        let p = a
++            .platforms
++            .iter()
++            .find(|p| p.target == target)
++            .ok_or_else(|| anyhow!("{agent} {} has no {target} entry in the lock", a.version))?;
++        Ok((a, p))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    const SHA: &str = "ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37";
++
++    fn lock(sha: &str, url: &str, extra: &str) -> String {
++        format!(
++            r#"
++[[agent]]
++name = "claude"
++version = "2.1.308"
++source = "https://example.invalid/manifest.json"
++[[agent.platform]]
++target = "aarch64-apple-darwin"
++url = "{url}"
++sha256 = "{sha}"
++{extra}
++"#
++        )
++    }
++
++    #[test]
++    fn the_lock_names_agents_by_platform() {
++        let l = Lock::parse(&lock(SHA, "https://x/claude", "archive = \"binary\"")).unwrap();
++        let (a, p) = l.find("claude", "aarch64-apple-darwin").unwrap();
++        assert_eq!(
++            (a.version.as_str(), p.archive),
++            ("2.1.308", Archive::Binary)
++        );
++        let e = l.find("claude", "riscv").unwrap_err().to_string();
++        assert!(e.contains("no riscv entry"), "{e}");
++        let e = l.find("nope", "x").unwrap_err().to_string();
++        assert!(e.contains("not in the lock"), "{e}");
++    }
++
++    #[test]
++    fn a_lock_without_a_real_hash_an_https_url_or_a_member_is_refused() {
++        let bad = [
++            lock("PENDING", "https://x/c", "archive = \"binary\""),
++            lock(&SHA.to_uppercase(), "https://x/c", "archive = \"binary\""),
++            lock(SHA, "http://x/c", "archive = \"binary\""),
++            lock(SHA, "https://x/c.tgz", "archive = \"tar-gz\""),
++        ];
++        for text in bad {
++            assert!(Lock::parse(&text).is_err(), "accepted:\n{text}");
++        }
++    }
++
++    #[test]
++    fn the_committed_lock_parses_and_covers_this_repos_ci_platforms() {
++        let text =
++            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../agents.lock"))
++                .expect("agents.lock at the repo root");
++        let l = Lock::parse(&text).unwrap();
++        assert!(!l.agents.is_empty());
++        for a in &l.agents {
++            for t in ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"] {
++                l.find(&a.name, t).unwrap();
++            }
++        }
++    }
++}
+-- 
+2.55.0
+
