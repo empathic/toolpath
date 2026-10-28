@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use crate::artifact::{ArtifactRef, ArtifactType};
 use crate::harness::HarnessBundle;
 use crate::share_append::{self, Destination, Outcome, plural};
+use crate::share_config::ProjectRules;
 use crate::sync::sources::{self, ArtifactSource};
 use crate::sync::{Manifest, Remotes, SourceStamp};
 
@@ -106,42 +107,51 @@ pub(crate) struct Item<'a> {
     pub(crate) plan: Plan,
 }
 
-/// Every session of `sources` under `project_under`, with its plan
-/// against the records in `remotes` within `scope`, sorted by harness,
-/// then id.
+/// Every session of `sources` under any of `include` (everywhere when
+/// it is empty), less those `exclusions` takes out by their listing's
+/// directory, with its plan against the records in `remotes` within
+/// `scope`, sorted by harness, then id.
 pub(crate) fn gather<'a>(
     sources: &'a [Box<dyn ArtifactSource + 'a>],
-    project_under: Option<&Path>,
+    include: &[PathBuf],
+    exclusions: Option<&ProjectRules>,
     manifest: &Manifest,
     remotes: &Remotes,
     scope: &RecordScope,
 ) -> Vec<Item<'a>> {
+    let roots: Vec<Option<&Path>> = if include.is_empty() {
+        vec![None]
+    } else {
+        include.iter().map(|p| Some(p.as_path())).collect()
+    };
     let mut items = Vec::new();
+    let mut seen = HashSet::new();
     for source in sources {
-        for artifact in source.enumerate(project_under) {
-            let dir = artifact
-                .path
-                .clone()
-                .or_else(|| {
-                    manifest
-                        .get(artifact.artifact_type.name())
-                        .and_then(|records| records.get(&artifact.id))
-                        .and_then(|r| r.path.clone())
-                })
-                .or_else(|| source.peek_dir(&artifact.id));
-            if let Some(under) = project_under
-                && !dir.as_deref().is_some_and(|d| source.in_scope(d, under))
-            {
-                continue;
-            }
-            let stamps = scope.stamps(remotes, artifact.artifact_type, &artifact.id);
-            let plan = plan(&stamps, (artifact.modified, artifact.size));
-            items.push(Item {
-                artifact,
-                dir,
-                source: source.as_ref(),
-                plan,
-            });
+        for project_under in &roots {
+            gather_under(
+                source.as_ref(),
+                *project_under,
+                manifest,
+                &mut |artifact, dir| {
+                    if !seen.insert((artifact.artifact_type, artifact.id.clone())) {
+                        return;
+                    }
+                    if let (Some(rules), Some(d)) = (exclusions, dir.as_deref())
+                        && rules.sync_disabled_by_listing(|root| source.in_scope(d, root))
+                            == Some(true)
+                    {
+                        return;
+                    }
+                    let stamps = scope.stamps(remotes, artifact.artifact_type, &artifact.id);
+                    let plan = plan(&stamps, (artifact.modified, artifact.size));
+                    items.push(Item {
+                        artifact,
+                        dir,
+                        source: source.as_ref(),
+                        plan,
+                    });
+                },
+            );
         }
     }
     items.sort_by(|a, b| {
@@ -149,6 +159,34 @@ pub(crate) fn gather<'a>(
             .cmp(&(b.artifact.artifact_type.name(), &b.artifact.id))
     });
     items
+}
+
+/// Each session of `source` under `project_under`, with its listing's
+/// directory.
+fn gather_under(
+    source: &dyn ArtifactSource,
+    project_under: Option<&Path>,
+    manifest: &Manifest,
+    found: &mut dyn FnMut(ArtifactRef, Option<String>),
+) {
+    for artifact in source.enumerate(project_under) {
+        let dir = artifact
+            .path
+            .clone()
+            .or_else(|| {
+                manifest
+                    .get(artifact.artifact_type.name())
+                    .and_then(|records| records.get(&artifact.id))
+                    .and_then(|r| r.path.clone())
+            })
+            .or_else(|| source.peek_dir(&artifact.id));
+        if let Some(under) = project_under
+            && !dir.as_deref().is_some_and(|d| source.in_scope(d, under))
+        {
+            continue;
+        }
+        found(artifact, dir);
+    }
 }
 
 /// The sources for `types` in `bundle`.
@@ -166,6 +204,8 @@ pub(crate) fn sources_for<'a>(
 #[derive(Debug)]
 pub(crate) enum SessionResult {
     Unchanged,
+    /// Its derived working directory is under a `sync = false` rule.
+    Excluded,
     Pushed(Outcome),
     Failed(String),
 }
@@ -185,11 +225,16 @@ impl Report {
             .count()
     }
 
-    /// The closing summary: one line per kind of outcome that occurred,
-    /// then one line per destination written to.
-    pub(crate) fn render(&self) -> String {
-        // Per kind: sessions, steps, re-sent steps.
-        let mut counts: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
+    /// Per kind of outcome: sessions, steps, re-sent steps; and per
+    /// destination written to, sessions.
+    #[allow(clippy::type_complexity)]
+    fn counts(
+        &self,
+    ) -> (
+        BTreeMap<&'static str, (usize, usize, usize)>,
+        BTreeMap<&str, usize>,
+    ) {
+        let mut counts: BTreeMap<&'static str, (usize, usize, usize)> = BTreeMap::new();
         let mut bump = |kind: &'static str, steps: usize, resent: usize| {
             let e = counts.entry(kind).or_default();
             e.0 += 1;
@@ -200,6 +245,7 @@ impl Report {
         for (_, _, dest, result) in &self.sessions {
             match result {
                 SessionResult::Unchanged => bump("unchanged", 0, 0),
+                SessionResult::Excluded => bump("excluded", 0, 0),
                 SessionResult::Failed(_) => bump("failed", 0, 0),
                 SessionResult::Pushed(o) => {
                     match o {
@@ -222,18 +268,52 @@ impl Report {
                 }
             }
         }
+        (counts, by_dest)
+    }
+
+    /// The pass in one line: how many sessions, then each kind of
+    /// outcome that occurred, e.g. `12 sessions: 1 created (40 steps),
+    /// 11 unchanged`.
+    pub(crate) fn summary_line(&self) -> String {
+        let (counts, _) = self.counts();
+        let parts: Vec<String> = Self::ORDER
+            .iter()
+            .filter_map(|&(kind, with_steps)| {
+                let (n, steps, _) = counts.get(kind)?;
+                Some(if with_steps {
+                    format!("{n} {kind} ({})", plural(*steps, "step"))
+                } else {
+                    format!("{n} {kind}")
+                })
+            })
+            .collect();
+        let total = plural(self.sessions.len(), "session");
+        if parts.is_empty() {
+            total
+        } else {
+            format!("{total}: {}", parts.join(", "))
+        }
+    }
+
+    /// Each kind of outcome in report order, and whether it moved steps.
+    const ORDER: [(&'static str, bool); 9] = [
+        ("created", true),
+        ("appended", true),
+        ("continued", true),
+        ("recreated", true),
+        ("up to date", false),
+        ("unchanged", false),
+        ("excluded", false),
+        ("empty", false),
+        ("failed", false),
+    ];
+
+    /// The closing summary: one line per kind of outcome that occurred,
+    /// then one line per destination written to.
+    pub(crate) fn render(&self) -> String {
+        let (counts, by_dest) = self.counts();
         let mut out = format!("{} in scope\n", plural(self.sessions.len(), "session"));
-        let order = [
-            ("created", true),
-            ("appended", true),
-            ("continued", true),
-            ("recreated", true),
-            ("up to date", false),
-            ("unchanged", false),
-            ("empty", false),
-            ("failed", false),
-        ];
-        for (kind, with_steps) in order {
+        for (kind, with_steps) in Self::ORDER {
             let Some((n, steps, resent)) = counts.get(kind) else {
                 continue;
             };
@@ -275,16 +355,20 @@ impl Report {
 }
 
 /// Run one pass over `items`: derive and push each that needs it,
-/// sequentially, reporting each as it finishes on stderr. A session
-/// whose derive, destination or push fails is reported and the pass
-/// goes on. `cached` returns a session's cached document when the cache
-/// is current for it, sparing the derive; `destination` maps a session
-/// directory to where it goes.
+/// sequentially, reporting each as it finishes on stderr when
+/// `verbose`. A session whose derive, destination or push fails is
+/// reported and the pass goes on. `cached` returns a session's cached
+/// document when the cache is current for it, sparing the derive;
+/// `exclusions` skips a session whose derived working directory a
+/// `sync = false` rule covers; `destination` maps a session directory
+/// to where it goes.
 pub(crate) fn run_pass(
     config_dir: &Path,
     items: &[Item],
     cached: &dyn Fn(&ArtifactRef) -> Option<toolpath::v1::Graph>,
+    exclusions: Option<&ProjectRules>,
     destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
+    verbose: bool,
 ) -> Report {
     let mut report = Report::default();
     let total = items.len();
@@ -300,19 +384,28 @@ pub(crate) fn run_pass(
             ));
             continue;
         }
-        let (dest, pushed) = push_item(config_dir, item, cached, destination);
+        let (dest, pushed) = push_item(config_dir, item, cached, exclusions, destination);
         let dest = dest.unwrap_or_default();
-        let result = match pushed {
-            Ok(outcome) => {
+        let (line, result) = match pushed {
+            Ok(None) => (
+                format!("{label}: excluded by a `sync = false` rule"),
+                SessionResult::Excluded,
+            ),
+            Ok(Some(outcome)) => {
                 let url = outcome.url().map(|u| format!(" → {u}")).unwrap_or_default();
-                eprintln!("{label}{}: {}{url}", arrow(&dest), outcome.describe());
-                SessionResult::Pushed(outcome)
+                (
+                    format!("{label}{}: {}{url}", arrow(&dest), outcome.describe()),
+                    SessionResult::Pushed(outcome),
+                )
             }
-            Err(e) => {
-                eprintln!("{label}{}: failed: {e:#}", arrow(&dest));
-                SessionResult::Failed(format!("{e:#}"))
-            }
+            Err(e) => (
+                format!("{label}{}: failed: {e:#}", arrow(&dest)),
+                SessionResult::Failed(format!("{e:#}")),
+            ),
         };
+        if verbose {
+            eprintln!("{line}");
+        }
         report
             .sessions
             .push((a.artifact_type, a.id.clone(), dest, result));
@@ -331,14 +424,16 @@ fn arrow(dest: &str) -> String {
 
 /// Derive (or read from the cache) and push one session to the
 /// destination of the working directory its document records, or of
-/// its listing's directory when it records none. The destination's
-/// display comes back whenever it was resolved, failure or not.
+/// its listing's directory when it records none; `Ok(None)` when
+/// `exclusions` covers that directory. The destination's display comes
+/// back whenever it was resolved, failure or not.
 fn push_item(
     config_dir: &Path,
     item: &Item,
     cached: &dyn Fn(&ArtifactRef) -> Option<toolpath::v1::Graph>,
+    exclusions: Option<&ProjectRules>,
     destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
-) -> (Option<String>, Result<Outcome>) {
+) -> (Option<String>, Result<Option<Outcome>>) {
     let a = &item.artifact;
     let doc = match cached(a) {
         Some(doc) => doc,
@@ -357,6 +452,11 @@ fn push_item(
     };
     let dir =
         crate::cmd_share::doc_session_dir(&doc).or_else(|| item.dir.as_ref().map(PathBuf::from));
+    if let (Some(rules), Some(dir)) = (exclusions, dir.as_deref())
+        && rules.sync_disabled(dir)
+    {
+        return (None, Ok(None));
+    }
     let dest = match destination(dir.as_deref()).context("resolve the destination") {
         Ok(dest) => dest,
         Err(e) => return (None, Err(e)),
@@ -372,7 +472,7 @@ fn push_item(
         },
         true,
     );
-    (Some(dest.display()), outcome)
+    (Some(dest.display()), outcome.map(Some))
 }
 
 /// The heading before a pass: how many sessions are in scope and what
@@ -432,54 +532,117 @@ pub(crate) struct AllArgs {
     pub(crate) yes: bool,
 }
 
+/// What a bulk pass covers and how much it reports.
+pub(crate) struct Bulk<'a> {
+    pub(crate) config_dir: &'a Path,
+    pub(crate) bundle: &'a HarnessBundle,
+    pub(crate) types: &'a [ArtifactType],
+    /// Directory subtrees; empty is everywhere.
+    pub(crate) include: &'a [PathBuf],
+    /// The `sync = false` rules to honour, for `path sync`.
+    pub(crate) exclusions: Option<&'a ProjectRules>,
+    pub(crate) records: RecordScope,
+    /// A line per session as it finishes.
+    pub(crate) verbose: bool,
+}
+
+/// The bulk upload under both `path share --all` and `path sync`:
+/// gather the sessions in scope, show them to `proceed`, which can stop
+/// the pass by answering false (then `None`), and push each that needs
+/// it to `destination`. The caller holds the upload lock.
+pub(crate) fn bulk(
+    b: &Bulk,
+    destination: &dyn Fn(Option<&Path>) -> Result<Destination>,
+    proceed: &mut dyn FnMut(&[Item]) -> Result<bool>,
+) -> Result<Option<Report>> {
+    let sources = sources_for(b.bundle, b.types);
+    let manifest = crate::sync::load_manifest(b.config_dir).unwrap_or_default();
+    let remotes = crate::sync::load_remotes(b.config_dir)?;
+    let items = gather(
+        &sources,
+        b.include,
+        b.exclusions,
+        &manifest,
+        &remotes,
+        &b.records,
+    );
+    if !proceed(&items)? {
+        return Ok(None);
+    }
+    Ok(Some(run_pass(
+        b.config_dir,
+        &items,
+        &|a| cached_doc(&manifest, a),
+        b.exclusions,
+        destination,
+        b.verbose,
+    )))
+}
+
 /// `path share --all`, as `username` with `token`.
 pub(crate) fn run(args: AllArgs, base_url: String, token: String, username: String) -> Result<()> {
     let config_dir = crate::config::config_dir()?;
+    let home = crate::config::home_dir();
     let bundle = HarnessBundle::from_environment();
     let types: Vec<ArtifactType> = match args.harness {
         Some(h) => vec![h],
         None => ArtifactType::ALL.to_vec(),
     };
-    let sources = sources_for(&bundle, &types);
-    let manifest = crate::sync::load_manifest(&config_dir).unwrap_or_default();
-    let remotes = crate::sync::load_remotes(&config_dir)?;
-
-    let scope = record_scope(&args, &base_url, &username);
-    let items = gather(
-        &sources,
-        args.project_under.as_deref(),
-        &manifest,
-        &remotes,
-        &scope,
-    );
-    eprint!("{}", render_plan(&items, args.project_under.as_deref()));
-    let work = items.iter().filter(|i| i.plan != Plan::Unchanged).count();
-    if work == 0 {
-        eprintln!("Nothing to share.");
-        return Ok(());
-    }
-    if args.dry_run {
-        return Ok(());
-    }
-    if !args.yes {
-        let answer = crate::cmd_pathbase::prompt_line(&format!(
-            "Share {}? [y/N] ",
-            plural(work, "session")
-        ))?;
-        if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
-            eprintln!("Aborted.");
-            std::process::exit(130);
+    let include: Vec<PathBuf> = args.project_under.iter().cloned().collect();
+    let _lock = match crate::sync::lock::lock_uploads(&config_dir, false)? {
+        Some(lock) => lock,
+        None => {
+            eprintln!("Waiting for another upload pass to finish…");
+            crate::sync::lock::lock_uploads(&config_dir, true)?.expect("a waited-for lock is held")
         }
-    }
+    };
     let destination = ensuring_pathstash(&username, |dir| {
-        destination_for(&args, &base_url, &token, &username, dir)
+        let dest = Resolve {
+            config_dir: &config_dir,
+            home: home.as_deref(),
+            base_url: &base_url,
+            token: &token,
+            username: &username,
+            url: args.url.as_deref(),
+            repo: args.repo.as_ref(),
+            public: args.public,
+        };
+        dest.destination_for(dir)
     });
-    let report = run_pass(
-        &config_dir,
-        &items,
-        &|a| cached_doc(&manifest, a),
-        &destination,
-    );
+    let pass = Bulk {
+        config_dir: &config_dir,
+        bundle: &bundle,
+        types: &types,
+        include: &include,
+        exclusions: None,
+        records: record_scope(&args, &base_url, &username),
+        verbose: true,
+    };
+    let report = bulk(&pass, &destination, &mut |items| {
+        eprint!("{}", render_plan(items, args.project_under.as_deref()));
+        let work = items.iter().filter(|i| i.plan != Plan::Unchanged).count();
+        if work == 0 {
+            eprintln!("Nothing to share.");
+            return Ok(false);
+        }
+        if args.dry_run {
+            return Ok(false);
+        }
+        if !args.yes {
+            let answer = crate::cmd_pathbase::prompt_line(&format!(
+                "Share {}? [y/N] ",
+                plural(work, "session")
+            ))?;
+            if !matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes") {
+                eprintln!("Aborted.");
+                std::process::exit(130);
+            }
+        }
+        Ok(true)
+    })?;
+    let Some(report) = report else {
+        return Ok(());
+    };
     eprint!("{}", report.render());
     let failed = report.failed();
     if failed > 0 {
@@ -506,7 +669,7 @@ fn record_scope(args: &AllArgs, base_url: &str, username: &str) -> RecordScope {
 /// first time a session resolves to it there. A failure to create it
 /// fails that session's resolution, and the next session to need it
 /// tries again.
-fn ensuring_pathstash<'a>(
+pub(crate) fn ensuring_pathstash<'a>(
     username: &'a str,
     resolve: impl Fn(Option<&Path>) -> Result<Destination> + 'a,
 ) -> impl Fn(Option<&Path>) -> Result<Destination> + 'a {
@@ -523,37 +686,48 @@ fn ensuring_pathstash<'a>(
     }
 }
 
-/// The destination for a session in `dir`: `--repo` when given, else the
-/// remote configured for the directory, else the user's `pathstash` on
-/// `base_url`.
-fn destination_for(
-    args: &AllArgs,
-    base_url: &str,
-    token: &str,
-    username: &str,
-    dir: Option<&Path>,
-) -> Result<Destination> {
-    let dest = |base: &str, owner: &str, repo: &str| Destination {
-        base_url: base.to_string(),
-        token: token.to_string(),
-        owner: owner.to_string(),
-        repo: repo.to_string(),
-        name: None,
-        public: args.public,
-    };
-    if let Some(spec) = &args.repo {
-        return Ok(dest(base_url, &spec.owner, &spec.name));
-    }
-    if let Some(dir) = dir
-        && let Some(found) = crate::share_config::resolve_remote(dir)?
-    {
-        let base = match (&args.url, &found.base_url) {
-            (None, Some(remote)) => remote.as_str(),
-            _ => base_url,
+/// How a pass resolves each session's destination.
+pub(crate) struct Resolve<'a> {
+    pub(crate) config_dir: &'a Path,
+    pub(crate) home: Option<&'a Path>,
+    pub(crate) base_url: &'a str,
+    pub(crate) token: &'a str,
+    pub(crate) username: &'a str,
+    /// `--url`: beats a configured remote's own server.
+    pub(crate) url: Option<&'a str>,
+    /// `--repo`: beats configured remotes.
+    pub(crate) repo: Option<&'a crate::remote::RepoSpec>,
+    pub(crate) public: bool,
+}
+
+impl Resolve<'_> {
+    /// The destination for a session in `dir`: `--repo` when given,
+    /// else the remote configured for the directory, else the user's
+    /// `pathstash` on `base_url`.
+    pub(crate) fn destination_for(&self, dir: Option<&Path>) -> Result<Destination> {
+        let dest = |base: &str, owner: &str, repo: &str| Destination {
+            base_url: base.to_string(),
+            token: self.token.to_string(),
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            name: None,
+            public: self.public,
         };
-        return Ok(dest(base, &found.repo.owner, &found.repo.name));
+        if let Some(spec) = self.repo {
+            return Ok(dest(self.base_url, &spec.owner, &spec.name));
+        }
+        if let Some(dir) = dir
+            && let Some(found) =
+                crate::share_config::resolve_remote_in(self.config_dir, self.home, dir)?
+        {
+            let base = match (self.url, &found.base_url) {
+                (None, Some(remote)) => remote.as_str(),
+                _ => self.base_url,
+            };
+            return Ok(dest(base, &found.repo.owner, &found.repo.name));
+        }
+        Ok(dest(self.base_url, self.username, "pathstash"))
     }
-    Ok(dest(base_url, username, "pathstash"))
 }
 
 #[cfg(test)]
@@ -654,10 +828,13 @@ mod tests {
             let bundle = self.bundle();
             let sources = sources_for(&bundle, &[ArtifactType::Claude, ArtifactType::Codex]);
             let remotes = crate::sync::load_remotes(self.cfg()).unwrap();
-            let items = gather(&sources, None, &Manifest::default(), &remotes, scope);
+            let items = gather(&sources, &[], None, &Manifest::default(), &remotes, scope);
             between(&items);
             let plans = items.iter().map(|i| i.plan).collect();
-            (plans, run_pass(self.cfg(), &items, &|_| None, destination))
+            (
+                plans,
+                run_pass(self.cfg(), &items, &|_| None, None, destination, true),
+            )
         }
 
         fn record(
@@ -742,6 +919,34 @@ mod tests {
         assert_eq!(plan(&[None], (None, None)), Plan::Update);
         assert_eq!(plan(&[known], (None, None)), Plan::Update);
         assert_eq!(plan(&[None], stamp), Plan::Update);
+    }
+
+    /// Overlapping include roots list a session once; a root over
+    /// nothing lists nothing.
+    #[test]
+    fn gather_takes_the_union_of_its_roots() {
+        let h = Harnesses::new();
+        h.claude(CLAUDE_ID, 6);
+        let bundle = h.bundle();
+        let sources = sources_for(&bundle, &[ArtifactType::Claude]);
+        let remotes = crate::sync::load_remotes(h.cfg()).unwrap();
+        let ids = |include: &[PathBuf]| -> Vec<String> {
+            gather(
+                &sources,
+                include,
+                None,
+                &Manifest::default(),
+                &remotes,
+                &RecordScope::Any,
+            )
+            .into_iter()
+            .map(|i| i.artifact.id)
+            .collect()
+        };
+        let roots = [PathBuf::from("/test"), PathBuf::from("/test/project")];
+        assert_eq!(ids(&roots), [CLAUDE_ID]);
+        assert_eq!(ids(&[]), [CLAUDE_ID]);
+        assert!(ids(&[PathBuf::from("/elsewhere")]).is_empty());
     }
 
     /// Sessions with no settled step, only the first prompt or only

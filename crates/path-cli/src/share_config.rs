@@ -52,8 +52,21 @@ pub(crate) struct ConfiguredRemote {
 
 /// Resolve the share remote configured for `session_dir`, if any.
 pub(crate) fn resolve_remote(session_dir: &Path) -> Result<Option<ConfiguredRemote>> {
-    let global = crate::config::config_dir()?.join(crate::config::CONFIG_FILE_NAME);
-    resolve_remote_from(&global, home_dir().as_deref(), session_dir)
+    resolve_remote_in(
+        &crate::config::config_dir()?,
+        home_dir().as_deref(),
+        session_dir,
+    )
+}
+
+/// [`resolve_remote`] against the config file under `config_dir`.
+pub(crate) fn resolve_remote_in(
+    config_dir: &Path,
+    home: Option<&Path>,
+    session_dir: &Path,
+) -> Result<Option<ConfiguredRemote>> {
+    let global = config_dir.join(crate::config::CONFIG_FILE_NAME);
+    resolve_remote_from(&global, home, session_dir)
 }
 
 fn resolve_remote_from(
@@ -111,6 +124,10 @@ struct ProjectRule {
     origin: Option<String>,
     #[serde(default)]
     remote: Option<String>,
+    /// `false` keeps the periodic `path sync` job away from the
+    /// sessions this rule selects.
+    #[serde(default)]
+    sync: Option<bool>,
 }
 
 impl ProjectRule {
@@ -172,6 +189,31 @@ fn global_rule(
     let config: GlobalConfig = toml::from_str(&text)
         .with_context(|| format!("failed to parse {}", config_path.display()))?;
 
+    let Some(rule) = select(&config.project, home, session_dir, |r| r.remote.is_some()) else {
+        return Ok(None);
+    };
+    let origin = format!("{} ({})", home_relative(config_path, home), rule.label());
+    let value = rule
+        .remote
+        .as_deref()
+        .expect("remote-less rules were skipped");
+    let (repo, base_url) = parse_remote(value, &origin)?;
+    Ok(Some(ConfiguredRemote {
+        repo,
+        base_url,
+        display: value.to_string(),
+        origin,
+    }))
+}
+
+/// The rule that applies to `session_dir` among those `applies`
+/// accepts.
+fn select<'a>(
+    rules: &'a [ProjectRule],
+    home: Option<&Path>,
+    session_dir: &Path,
+    applies: impl Fn(&ProjectRule) -> bool,
+) -> Option<&'a ProjectRule> {
     // An `origin` rule names the repository itself, a `dir` rule names
     // a place it happens to sit, so identity wins over location: any
     // matching `origin` rule beats every `dir` rule. Among `origin`
@@ -186,8 +228,8 @@ fn global_rule(
     let mut best_origin: Option<&ProjectRule> = None;
     let mut best_dir: Option<(usize, &ProjectRule)> = None;
 
-    for rule in &config.project {
-        if rule.remote.is_none() || (rule.dir.is_none() && rule.origin.is_none()) {
+    for rule in rules {
+        if !applies(rule) || (rule.dir.is_none() && rule.origin.is_none()) {
             continue;
         }
         if let Some(want) = &rule.origin {
@@ -216,21 +258,68 @@ fn global_rule(
             best_dir = Some((depth, rule));
         }
     }
-    let Some(rule) = best_origin.or(best_dir.map(|(_, rule)| rule)) else {
-        return Ok(None);
-    };
-    let origin = format!("{} ({})", home_relative(config_path, home), rule.label());
-    let value = rule
-        .remote
-        .as_deref()
-        .expect("remote-less rules were skipped");
-    let (repo, base_url) = parse_remote(value, &origin)?;
-    Ok(Some(ConfiguredRemote {
-        repo,
-        base_url,
-        display: value.to_string(),
-        origin,
-    }))
+    best_origin.or(best_dir.map(|(_, rule)| rule))
+}
+
+/// The `[[project]]` rules, read once for a whole `path sync` pass to
+/// decide which sessions it leaves alone.
+pub(crate) struct ProjectRules {
+    rules: Vec<ProjectRule>,
+    home: Option<PathBuf>,
+}
+
+impl ProjectRules {
+    /// The rules in the config file under `config_dir`; none when it is
+    /// absent.
+    pub(crate) fn load(config_dir: &Path, home: Option<&Path>) -> Result<Self> {
+        let path = config_dir.join(crate::config::CONFIG_FILE_NAME);
+        let text = read_optional(&path)?.unwrap_or_default();
+        Self::parse(&text, &path.display().to_string(), home)
+    }
+
+    pub(crate) fn parse(text: &str, file: &str, home: Option<&Path>) -> Result<Self> {
+        validate_config_text(text, file)?;
+        let config: GlobalConfig =
+            toml::from_str(text).with_context(|| format!("failed to parse {file}"))?;
+        Ok(Self {
+            rules: config.project,
+            home: home.map(Path::to_path_buf),
+        })
+    }
+
+    /// Whether the rule that applies to `session_dir`, among those
+    /// that set `sync`, says `sync = false`. Chosen as the remote is:
+    /// `origin` over `dir`, then the most specific `dir`.
+    pub(crate) fn sync_disabled(&self, session_dir: &Path) -> bool {
+        let dir = canonicalize_prefix(session_dir);
+        select(&self.rules, self.home.as_deref(), &dir, |r| {
+            r.sync.is_some()
+        })
+        .is_some_and(|r| r.sync == Some(false))
+    }
+
+    /// [`Self::sync_disabled`] for a session known only by its
+    /// listing's directory, which a harness may encode lossily:
+    /// `under(rule_dir)` says whether the listing's directory is in
+    /// that subtree. `None` when a rule that sets `sync` selects by
+    /// `origin`, which only the session's real directory can answer.
+    pub(crate) fn sync_disabled_by_listing(&self, under: impl Fn(&Path) -> bool) -> Option<bool> {
+        let setting = || self.rules.iter().filter(|r| r.sync.is_some());
+        if setting().any(|r| r.origin.is_some()) {
+            return None;
+        }
+        let mut best: Option<(usize, &ProjectRule)> = None;
+        for rule in setting() {
+            let Some(dir) = &rule.dir else { continue };
+            let raw = expand_tilde(dir, self.home.as_deref());
+            let rule_dir = canonicalize_prefix(&raw);
+            let depth = rule_dir.components().count();
+            if (under(&raw) || under(&rule_dir)) && best.is_none_or(|(d, _)| depth > d) {
+                best = Some((depth, rule));
+            }
+        }
+        Some(best.is_some_and(|(_, r)| r.sync == Some(false)))
+    }
 }
 
 /// Parse `text` as the personal config and check every rule: it must
@@ -787,5 +876,71 @@ mod tests {
         )
         .unwrap();
         assert_eq!(n, 1);
+    }
+
+    fn rules(text: &str) -> ProjectRules {
+        ProjectRules::parse(text, "config.toml", Some(Path::new("/home/me"))).unwrap()
+    }
+
+    #[test]
+    fn sync_false_takes_a_subtree_out_and_a_deeper_rule_puts_part_back() {
+        let r = rules(
+            "[[project]]\ndir = '/gone/work'\nsync = false\n\
+             [[project]]\ndir = '/gone/work/public'\nsync = true\n\
+             [[project]]\ndir = '/gone/work/public/deeper'\nremote = 'me/r'\n",
+        );
+        assert!(r.sync_disabled(Path::new("/gone/work")));
+        assert!(r.sync_disabled(Path::new("/gone/work/private/x")));
+        assert!(!r.sync_disabled(Path::new("/gone/work/public")));
+        assert!(!r.sync_disabled(Path::new("/gone/work/public/deeper/y")));
+        assert!(!r.sync_disabled(Path::new("/gone/workshop")));
+        assert!(!r.sync_disabled(Path::new("/elsewhere")));
+    }
+
+    #[test]
+    fn sync_rules_expand_tilde() {
+        let r = rules("[[project]]\ndir = '~/private'\nsync = false\n");
+        assert!(r.sync_disabled(Path::new("/home/me/private/x")));
+        assert!(!r.sync_disabled(Path::new("/home/me/public")));
+    }
+
+    #[test]
+    fn an_origin_rule_decides_sync_over_a_dir_rule() {
+        let temp = TempDir::new().unwrap();
+        let checkout = temp.path().join("work/repo");
+        init_repo_with_origin(&checkout, "git@github.com:acme/secret.git");
+        let text = format!(
+            "[[project]]\norigin = 'acme/secret'\nsync = false\n\
+             [[project]]\ndir = {:?}\nsync = true\n",
+            checkout.display().to_string()
+        );
+        let r = rules(&text);
+        assert!(r.sync_disabled(&checkout));
+        assert!(!r.sync_disabled(&temp.path().join("work/other")));
+        assert_eq!(r.sync_disabled_by_listing(|_| true), None);
+    }
+
+    #[test]
+    fn a_listing_is_judged_by_dir_rules_alone() {
+        let r = rules(
+            "[[project]]\ndir = '/gone/a'\nsync = false\n\
+             [[project]]\ndir = '/gone/a/b'\nsync = true\n\
+             [[project]]\norigin = 'o/r'\nremote = 'o/r'\n",
+        );
+        let in_a = |root: &Path| root == Path::new("/gone/a");
+        let in_b = |root: &Path| root.starts_with("/gone/a");
+        assert_eq!(r.sync_disabled_by_listing(in_a), Some(true));
+        assert_eq!(r.sync_disabled_by_listing(in_b), Some(false));
+        assert_eq!(r.sync_disabled_by_listing(|_| false), Some(false));
+    }
+
+    #[test]
+    fn sync_must_be_a_boolean() {
+        let err = validate_config_text("[[project]]\ndir = '/a'\nsync = 'false'\n", "c");
+        assert!(err.is_err());
+        assert_eq!(
+            validate_config_text("[[project]]\ndir = '/a'\nsync = false\n", "c").unwrap(),
+            1
+        );
     }
 }

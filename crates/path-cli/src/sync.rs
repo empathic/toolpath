@@ -21,6 +21,9 @@ pub(crate) use sources::Stamp;
 mod engine;
 
 #[cfg(not(target_os = "emscripten"))]
+pub(crate) mod lock;
+
+#[cfg(not(target_os = "emscripten"))]
 mod remotes;
 
 #[cfg(not(target_os = "emscripten"))]

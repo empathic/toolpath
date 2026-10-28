@@ -42,6 +42,14 @@ pub(crate) const REMOTES_FILE_NAME: &str = "remotes.json";
 pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 /// The document cache directory (see `cache`).
 pub(crate) const DOCUMENTS_DIR_NAME: &str = "documents";
+/// Held for the length of an upload pass so two never overlap (see
+/// `sync::lock`).
+pub(crate) const UPLOAD_LOCK_FILE_NAME: &str = "uploads.lock";
+/// What the last `path sync` pass did (see `cmd_sync`).
+pub(crate) const SYNC_STATUS_FILE_NAME: &str = "sync-status.json";
+/// Where the launchd agent or systemd timer sends the output of each
+/// `path sync` pass (see `sync_service`).
+pub(crate) const SYNC_LOG_FILE_NAME: &str = "sync.log";
 
 /// Environment-derived configuration. [`Config::load`] reads the
 /// environment once, at the composition root. Code below the root
