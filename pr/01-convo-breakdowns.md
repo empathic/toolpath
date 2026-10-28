@@ -11,6 +11,10 @@ Commits: `fix(convo): extract_conversation sums per-turn token breakdowns into t
 - `toolpath-convo` `extract.rs`: the total's `breakdowns` are the per-turn breakdowns added class by class, alongside the counters. `output_tokens` is unchanged; breakdowns are still never summed into a counter (the doc comment on `TokenUsage::breakdowns` now says so in one sentence).
 - Test `test_total_usage_breakdowns_round_trip`: two turns, 900/450 and 100/25, derive → extract → total 1000 with `output.reasoning` 475.
 
+## Proves
+- A session total's `breakdowns` are the per-turn breakdowns summed class by class, and survive derive → extract — crates/toolpath-convo/src/derive.rs::test_total_usage_breakdowns_round_trip
+- `Turn::is_content_empty` is true only for a turn with no text (ignoring whitespace), thinking, tool uses, delegations or file mutations — crates/toolpath-convo/src/lib.rs::test_turn_is_content_empty
+
 ## Verification
 `cargo test -p toolpath-convo`: 124 + 4 pass. `goldens check`: 46 ok (outputs byte-identical; this changes a value the goldens had pinned as lost in pathbase, not in toolpath).
 

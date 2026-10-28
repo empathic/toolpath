@@ -5,8 +5,11 @@
 //! * `pins fetch <agent>`: the same code as `path d agents fetch` (download, verify the sha256,
 //!   keep by hash). Only an entry with an approved url and sha256 can be fetched.
 //! * `pins bump`: not built (needs approved sources).
+//! * `contract [--branch pr/NN-x]`: the PR record's `## Proves` claims, each run and tabled (contract.rs).
+//! * `red-green [--base <rev>]`: the tests a change adds, red at the base and green at the head (contract.rs).
 
 mod agents;
+mod contract;
 
 use std::path::{Path, PathBuf};
 
@@ -146,6 +149,8 @@ fn main() -> Result<()> {
             }
         }
         [a] if a == "agents" => agents::run(Path::new(".")),
+        [c, rest @ ..] if c == "contract" => contract::contract(Path::new("."), rest),
+        [c, rest @ ..] if c == "red-green" => contract::red_green(Path::new("."), rest),
         [act, workflow, agent] if act == "act" => {
             let lock: ActLock = toml::from_str(&std::fs::read_to_string("ci/act.lock")?)?;
             // Dry run only: running needs the pinned act in the cache and a started VM.
@@ -153,7 +158,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "usage: cargo xtask pins list|verify|fetch|bump [--lock agents.lock] | act <workflow> <agent> | agents"
+            "usage: cargo xtask pins list|verify|fetch|bump [--lock agents.lock] | act <workflow> <agent> | agents | contract [--branch B] | red-green [--base REV]"
         ),
     }
 }

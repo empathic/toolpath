@@ -28,8 +28,22 @@ jobs:
             gates: doc examples
           - name: plugin-site
             gates: plugin quickstart site
+          # The PR's story: what its record says it proves, and the tests it adds going red → green.
+          # On a push or a release they have no PR and pass at once (crates/xtask/src/contract.rs).
+          - name: contract
+            gates: contract
+          - name: red-green
+            gates: redgreen
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # red-green builds the PR base in a worktree, so it needs history; the others need one commit.
+          fetch-depth: ${{ matrix.name == 'red-green' && 0 || 1 }}
+
+      # The PR records (pr/*.md) live on wip/bdelanghe, not on a PR branch cut from it.
+      - name: Fetch the PR records
+        if: matrix.name == 'contract' && github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin +refs/heads/wip/bdelanghe:refs/remotes/origin/wip/bdelanghe || echo "no wip/bdelanghe: the contract reads the tree only"
 
       - name: Install Rust
         run: rustup show # installs toolchain from rust-toolchain.toml
@@ -59,7 +73,7 @@ jobs:
       # The goldens' qualifier review needs the binary; without it the tests fail closed under CI.
       # Pinned release asset, checked against its sha256 before it runs.
       - name: Install qualifier 0.8.0
-        if: matrix.name == 'test'
+        if: matrix.name == 'test' || matrix.name == 'contract' || matrix.name == 'red-green'
         run: |
           curl -fsSL -o /tmp/qualifier.tgz \
             https://github.com/empathic/qualifier/releases/download/v0.8.0/qualifier-x86_64-unknown-linux-musl.tar.gz
@@ -83,4 +97,6 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Quality gates (${{ matrix.gates }}) # the same gates `just ci` runs, this group only
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: scripts/quality_gates.sh --verbose ${{ matrix.gates }}

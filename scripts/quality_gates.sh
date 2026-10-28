@@ -8,7 +8,7 @@
 # Usage:
 #   scripts/quality_gates.sh [--verbose] [[-]gate ...]
 #
-# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site, secrets
+# Gates: format, shellcheck, clippy, test, doc, examples, plugin, site, secrets, contract, redgreen
 # No args runs all gates. Prefix with - to exclude a gate.
 #
 # Options:
@@ -43,7 +43,7 @@ trap 'rm -rf "${_tmpdir}"' EXIT
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
 # run_gate; shellcheck can't see the call sites and flags them as unused.
 
-_all_gates=(format shellcheck clippy test doc examples plugin quickstart site secrets)
+_all_gates=(format shellcheck clippy test doc examples plugin quickstart site secrets contract redgreen)
 
 # shellcheck disable=SC2329
 gate_format() {
@@ -77,6 +77,20 @@ gate_clippy() {
 # shellcheck disable=SC2329
 gate_test() {
     RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/develop,toolpath/verify 2>&1
+}
+
+# shellcheck disable=SC2329
+gate_contract() {
+    # The PR record's `## Proves` claims, each run and tabled (crates/xtask/src/contract.rs).
+    # Not a PR (no GITHUB_HEAD_REF) or no record: says so and passes.
+    cargo xtask contract 2>&1
+}
+
+# shellcheck disable=SC2329
+gate_redgreen() {
+    # The tests this change adds: red at the PR base, green at the head. Needs PR_BASE_SHA
+    # (gates.yml sets it on pull requests); without one it says so and passes.
+    cargo xtask red-green 2>&1
 }
 
 # shellcheck disable=SC2329

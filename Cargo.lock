@@ -6797,6 +6797,7 @@ dependencies = [
  "anyhow",
  "path-cli",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
 ]
