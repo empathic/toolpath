@@ -36,9 +36,11 @@ pub(crate) fn cache_path(id: &str) -> Result<PathBuf> {
 /// Write a toolpath document to the cache under `id`. Errors if the
 /// file already exists unless `force` is true.
 ///
-/// Uses `O_CREAT | O_EXCL` (`create_new`) when `force == false` so the
-/// exists-check and the write are atomic — two concurrent `path import`
-/// invocations racing the same id can't silently stomp each other.
+/// The document goes to a temporary file, and a rename puts it at its
+/// path. A reader sees the document that was there or the new one,
+/// never a part of one. When `force == false` the rename does not
+/// replace a file: of two concurrent `path import` invocations of one
+/// id, one errors.
 pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf> {
     use std::io::Write;
 
@@ -53,35 +55,34 @@ pub(crate) fn write_cached(id: &str, doc: &Graph, force: bool) -> Result<PathBuf
     let path = cache_path(id)?;
     let json = doc.to_json_pretty()?;
 
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).truncate(true);
-    if force {
-        opts.create(true);
-    } else {
-        opts.create_new(true);
+    // The temporary file must be in the cache directory. A rename does
+    // not cross filesystems.
+    let mut temp = tempfile::NamedTempFile::new_in(&dir)
+        .with_context(|| format!("create a temporary file in {}", dir.display()))?;
+    temp.write_all(json.as_bytes())
+        .with_context(|| format!("write {}", temp.path().display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod 0600 {}", temp.path().display()))?;
     }
 
-    let mut file = match opts.open(&path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+    let persisted = if force {
+        temp.persist(&path)
+    } else {
+        temp.persist_noclobber(&path)
+    };
+    match persisted {
+        Ok(_) => Ok(path),
+        Err(e) if !force && e.error.kind() == std::io::ErrorKind::AlreadyExists => {
             bail!(
                 "cache entry {id} already exists at {}; pass --force to overwrite",
                 path.display()
             );
         }
-        Err(e) => {
-            return Err(anyhow!("open {}: {e}", path.display()));
-        }
-    };
-    file.write_all(json.as_bytes())
-        .with_context(|| format!("write {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 0600 {}", path.display()))?;
+        Err(e) => Err(anyhow!("write {}: {}", path.display(), e.error)),
     }
-    Ok(path)
 }
 
 /// Resolve a `<ref>` string to a filesystem path. A ref is either a
@@ -218,6 +219,48 @@ mod tests {
             let doc = sample_doc();
             write_cached("claude-abc", &doc, false).unwrap();
             write_cached("claude-abc", &doc, true).unwrap();
+        });
+    }
+
+    #[test]
+    fn a_refused_write_leaves_the_document_and_no_other_file() {
+        with_cfg(|_| {
+            let first = Graph::new("g-first");
+            let path = write_cached("claude-abc", &first, false).unwrap();
+            write_cached("claude-abc", &Graph::new("g-second"), false).unwrap_err();
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                first.to_json_pretty().unwrap()
+            );
+            let names: Vec<_> = std::fs::read_dir(cache_dir().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["claude-abc.json"]);
+        });
+    }
+
+    #[test]
+    fn a_reader_sees_a_whole_document_during_a_rewrite() {
+        with_cfg(|_| {
+            let docs = [
+                Graph::new("a".repeat(200_000)),
+                Graph::new("b".repeat(300_000)),
+            ];
+            let path = write_cached("claude-abc", &docs[0], false).unwrap();
+            let done = std::sync::atomic::AtomicBool::new(false);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    for n in 0..200 {
+                        write_cached("claude-abc", &docs[n % 2], true).unwrap();
+                    }
+                    done.store(true, std::sync::atomic::Ordering::Relaxed);
+                });
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    let json = std::fs::read_to_string(&path).unwrap();
+                    Graph::from_json(&json).unwrap();
+                }
+            });
         });
     }
 
