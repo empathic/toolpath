@@ -153,6 +153,11 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
 /// preserving the `Some(0)` vs `None` distinction; when `thoughts` is
 /// absent the map stays empty and is omitted from serialization.
 ///
+/// `input` (`promptTokenCount`) includes `cached`
+/// (`cachedContentTokenCount`), so the derived `input_tokens` is
+/// `input − cached` (saturating) and `cache_read_tokens` is `cached`:
+/// the classes are additive. The projector adds `cached` back.
+///
 /// `tool` is prompt-side (tool-result tokens billed separately) and
 /// `total` is a Gemini-side sum; neither is folded here — both remain
 /// available raw via `Turn.extra["gemini"]["tokens"]`.
@@ -162,7 +167,9 @@ fn tokens_to_usage(t: &Tokens) -> TokenUsage {
     let generated = output.saturating_add(thoughts);
 
     let mut usage = TokenUsage {
-        input_tokens: t.input,
+        // Gemini's `input` includes `cached`; derived classes are additive,
+        // so the cached share is counted only under `cache_read_tokens`.
+        input_tokens: t.input.map(|i| i.saturating_sub(t.cached.unwrap_or(0))),
         // Fold reasoning into output (additive in Gemini — billed as
         // output). None only when both output and thoughts are
         // absent/zero, mirroring the per-field Option semantics.
@@ -771,10 +778,10 @@ mod tests {
         let view =
             ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
         let total = view.total_usage.as_ref().unwrap();
-        // Main turns: input/(output+thoughts) = (100, 50+10), (200, 80+0).
-        // Sub-agent turn: (20, 5+0). thoughts is additive reasoning, folded
-        // into output (billed as output by Google).
-        assert_eq!(total.input_tokens, Some(320));
+        // Main turns: (input-cached)/(output+thoughts) = (100-0, 50+10),
+        // (200-50, 80+0). Sub-agent turn: (20-0, 5+0). thoughts is additive
+        // reasoning, folded into output (billed as output by Google).
+        assert_eq!(total.input_tokens, Some(270));
         assert_eq!(total.output_tokens, Some(145));
         assert_eq!(total.cache_read_tokens, Some(50));
     }
@@ -804,6 +811,34 @@ mod tests {
         assert_eq!(reasoning, Some(243));
         // reasoning ≤ output invariant holds.
         assert!(reasoning.unwrap() <= u.output_tokens.unwrap());
+    }
+
+    #[test]
+    fn test_input_tokens_exclude_cached() {
+        // Gemini's `input` (promptTokenCount) includes `cached`
+        // (cachedContentTokenCount): total == input + output + thoughts.
+        // Derived classes are additive, so cached input is counted once,
+        // under `cache_read_tokens`.
+        let t = Tokens {
+            input: Some(9562),
+            output: Some(157),
+            cached: Some(8887),
+            thoughts: Some(24),
+            tool: Some(0),
+            total: Some(9743),
+        };
+        let u = tokens_to_usage(&t);
+        assert_eq!(u.input_tokens, Some(9562 - 8887));
+        assert_eq!(u.cache_read_tokens, Some(8887));
+        assert_eq!(u.output_tokens, Some(157 + 24));
+
+        // Saturating: a cached count above input never underflows.
+        let odd = Tokens {
+            input: Some(10),
+            cached: Some(20),
+            ..Default::default()
+        };
+        assert_eq!(tokens_to_usage(&odd).input_tokens, Some(0));
     }
 
     #[test]
