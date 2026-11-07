@@ -523,12 +523,22 @@ downstream tools that trust `last_token_usage` directly over-count
 **Cached input is inside `input_tokens`:** Codex follows OpenAI's usage
 semantics, where `input_tokens` counts every prompt token and
 `cached_input_tokens` is the cached subset of it (above: 11980 input, of
-which 9728 cached). Toolpath's token classes are additive (`input_tokens`
-excludes cache reads, as in Anthropic's usage), so `toolpath-codex`
-derives `input_tokens = input_tokens − cached_input_tokens` (saturating)
-and `cache_read_tokens = cached_input_tokens`. `CodexProjector` adds the
-cached count back into the wire `input_tokens`, so a round trip
-reproduces the rollout's numbers.
+which 9728 cached). Codex CLI 0.145.0 and later (openai/codex PR #33454)
+also record `cache_write_input_tokens`, mapped from the Responses API's
+`input_tokens_details.cache_write_tokens`; it is a second subset of
+`input_tokens`, disjoint from the cached share (Codex's own test: input
+100 = 40 cached + 60 cache-write). Earlier rollouts have no such key.
+Toolpath's token classes are additive (kind v1.2.0: `input_tokens`
+excludes cache reads and cache writes, as in Anthropic's usage), so
+`toolpath-codex` derives `input_tokens = input_tokens −
+cached_input_tokens − cache_write_input_tokens` (saturating),
+`cache_read_tokens = cached_input_tokens`, and `cache_write_tokens =
+cache_write_input_tokens`, the last only when the rollout records the
+field. All three are differenced from the cumulative `total_token_usage`
+like every other class. `CodexProjector` adds the cache reads and writes
+back into the wire `input_tokens` and emits `cache_write_input_tokens`
+only when the path has cache writes, so a round trip reproduces the
+rollout's numbers.
 
 **Round scoping + attribution:** a Codex round (one user task) can emit
 several assistant messages (commentary + final) and many `token_count`
@@ -871,7 +881,7 @@ The mapping below is what the provider actually emits. Source:
 | `custom_tool_call` / `_output` paired by `call_id` | same (raw `input` string preserved) |
 | `event_msg.exec_command_end` | back-fills `Turn.tool_uses[].result` with exit code / stdout / stderr |
 | `event_msg.patch_apply_end.changes[<file>]` | sibling `ArtifactChange` on the tool-call's turn with the unified diff as `raw` and `codex.{add,update,delete}` as `structural` |
-| `event_msg.token_count.info.total_token_usage.{input_tokens,cached_input_tokens}` | `input_tokens − cached_input_tokens` → `input_tokens`, `cached_input_tokens` → `cache_read_tokens` (additive classes; the projector folds cached back in) |
+| `event_msg.token_count.info.total_token_usage.{input_tokens,cached_input_tokens,cache_write_input_tokens}` | `input_tokens − cached_input_tokens − cache_write_input_tokens` → `input_tokens`, `cached_input_tokens` → `cache_read_tokens`, `cache_write_input_tokens` (0.145+; absent → no `cache_write_tokens`) → `cache_write_tokens` (additive classes; the projector folds both back in) |
 | `event_msg.token_count.info.total_token_usage` | cumulative; differenced per step → `Turn.attributed_token_usage`, summed per round → `Turn.token_usage` (round's final turn) + `ConversationView.total_usage` |
 | `event_msg.token_count.info.total_token_usage.reasoning_output_tokens` (⊆ output, cumulative) | differenced per step → `breakdowns["output"]["reasoning"]` on `attributed_token_usage`; summed per round onto `token_usage` (informational, never summed into the total) |
 | `event_msg` non-turn types (`task_started`, `task_complete`, `user_message`, `agent_message`, etc.) | `ConversationView.events` as typed `ConversationEvent`s |

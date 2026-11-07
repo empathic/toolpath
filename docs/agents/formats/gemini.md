@@ -121,6 +121,16 @@ paths — stem match first, then scan-and-match on inner `sessionId`.
 One JSON object per file (not JSONL). Serialized verbatim on every
 turn — Gemini rewrites the whole file rather than appending.
 
+Recent Gemini CLI versions instead write a `.jsonl` stream: line 1 is
+the top-level header (without `messages`), each later line is either a
+message (it carries `type`) or a `{"$set": {…}}` header update. A
+message that changes after it is first written (for example when its
+`toolCalls` results land) is appended again in full under the same
+`id`. A reader keeps the last copy of each `id`, in the position of the
+first, so a rewritten message (and its `tokens`) counts once.
+`toolpath-gemini` does not read this form yet; the real-fixture test
+loads it this way.
+
 ### Top level
 
 ```json
@@ -246,14 +256,14 @@ not concatenated into the visible text.
 | `output` | Generated tokens (excluding reasoning). |
 | `cached` | Tokens reused from Gemini's prompt cache (`cachedContentTokenCount`; a subset of `input`). |
 | `thoughts` | Reasoning/thinking tokens (Gemini 3+). |
-| `tool` | Tool-result tokens billed separately. |
+| `tool` | Prompt tokens from tool use (`toolUsePromptTokenCount`; **outside** `input`). |
 | `total` | Sum of the above (not always exactly — Gemini's total occasionally includes overhead). |
 
-All fields are optional. `cached` → `cache_read_tokens` and
-`input − cached` → `input_tokens` (see below). The
-standalone `tool` and `total` counters are Gemini-specific and are
-preserved raw in a provider-namespaced extras bucket
-(`Turn.extra["gemini"]["tokens"]`).
+All fields are optional; Gemini CLI writes `0` for a count the API did
+not report. `cached` → `cache_read_tokens` and
+`input − cached + tool` → `input_tokens` (see below). The whole struct,
+`total` included, is also preserved raw in a provider-namespaced extras
+bucket (`Turn.extra["gemini"]["tokens"]`).
 
 #### `cached` is inside `input`
 
@@ -266,6 +276,23 @@ when `cached` is non-zero. Toolpath's token classes are additive
 `toolpath-gemini` derives `input_tokens = input − cached` (saturating)
 and `cache_read_tokens = cached`. `GeminiProjector` adds `cached` back
 into the wire `input`, so a round trip reproduces the session's numbers.
+
+#### `tool` is prompt input outside `input`
+
+The Gemini API reports `toolUsePromptTokenCount` separately from
+`promptTokenCount`: its documented total is
+`promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount +
+thoughtsTokenCount`. These are prompt tokens the model processed that
+were neither read from nor written to a cache, so `toolpath-gemini`
+adds them to `input_tokens`:
+`input_tokens = input − cached + tool` (saturating), and the four
+derived classes sum to Gemini's `total`. When `tool` is non-zero the
+slice is also recorded as `breakdowns["input"]["tool_use"] = tool`
+(informational, `≤ input_tokens`); a zero or absent `tool` records no
+`input` breakdown. `GeminiProjector` folds it back:
+wire `tool = breakdowns["input"]["tool_use"]` (`0` when absent, matching
+Gemini CLI's zero-fill) and wire
+`input = input_tokens − tool + cached`.
 
 #### `thoughts` is additive reasoning — folded into `output_tokens`
 
@@ -301,8 +328,9 @@ projection (`Path → Tokens`) the projector reads
 `breakdowns["output"]["reasoning"]` and un-folds reasoning back out of
 the folded `output_tokens` (`output = output_tokens − reasoning`,
 `thoughts = reasoning`). So `output` and `thoughts` round-trip
-losslessly through the IR. Only the Gemini-extra-only `tool`/`total`
-counters remain lossy on round-trip — they have no IR home.
+losslessly through the IR, as `input`, `cached`, and `tool` do through
+the `input` breakdown. Only `total` is lossy on round-trip when the
+extras bucket is gone — it has no IR home.
 
 The stored `Tokens` struct otherwise carries **no** nested modality
 detail (no `candidatesTokensDetails` / `promptTokensDetails`, no

@@ -417,9 +417,22 @@ finish reason (`stop`, `tool-calls`, `length`, `content-filter`, …).
 `tokens` is a per-step delta; sum over all `step-finish` parts in a
 session for a total. `cost` is USD for that step.
 
+**The token semantics changed across opencode versions**, and opencode
+records no per-message writer version (`session.version` is set once, when
+the session is created, and a fork copies older messages under a newer
+version), so `toolpath-opencode` reads every message with current
+semantics; the kind lists this as a known producer gap:
+
+- before 1.0.62 (c8bda598f), `input` was the raw `usage.inputTokens`, which
+  includes cache reads for providers other than Anthropic and Bedrock;
+- in 1.3.4–1.3.5 (the AI SDK v6 upgrade, fixed in 1.3.6), Anthropic and
+  Bedrock `input` included cache reads and writes;
+- before 1.3.16 (280eb16e7), `output` already included `reasoning`: for
+  every provider from 1.3.4, and for OpenAI-family models before that.
+
 `reasoning` is an **additive** category, separate from `output` —
 `total == input + output + reasoning + cache.read + cache.write` (verified
-against real sessions; the Vercel AI SDK opencode uses reports
+against real sessions from opencode 1.3.16 on; the Vercel AI SDK opencode uses reports
 `reasoningTokens` separately from `outputTokens`). This differs from
 Claude/OpenAI, where reasoning is already inside `output`. `toolpath-opencode`
 therefore folds `reasoning` into the derived `output_tokens` so the IR's

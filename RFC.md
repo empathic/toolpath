@@ -301,7 +301,8 @@ unrecognized URIs should be treated as a generic path. Kind URIs are
 immutable, semver-versioned, and revisions ship at a new version URI.
 
 Defined kinds are listed at <https://toolpath.net/kinds/>. The only one defined
-so far is `https://toolpath.net/kinds/agent-coding-session/v1.0.0` — a path
+so far is `agent-coding-session`, currently
+`https://toolpath.net/kinds/agent-coding-session/v1.2.0` — a path
 recording an AI coding conversation, where each conversational-turn step
 carries a `"conversation.append"` structural change with the turn's role,
 text, and so on. See the linked spec for the full contract.

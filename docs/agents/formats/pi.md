@@ -147,12 +147,21 @@ splits them across two entries by design.
 
 `usage` is **per API call** (per assistant message), not cumulative.
 `totalTokens`'s formula is **version-dependent and not load-bearing for us**:
-older Pi reported `input + output`, but Pi 0.2.0+ redefined its headline
-token metric to `input + output + cacheWrite` (cacheRead deliberately
-excluded so repeated cache hits don't dominate). `toolpath-pi` does **not**
-read `totalTokens` — it reads the raw `input`/`output`/`cacheRead`/`cacheWrite`
-fields and sums each independently, so it's correct regardless of which
-`totalTokens` convention a session used. The `cost` breakdown is
+current pi reports `input + output + cacheRead + cacheWrite` for Anthropic
+and OpenAI-compatible providers and Gemini's native `totalTokenCount` for
+Google (pi 0.13.0: "total tokens processed by the LLM (input + output +
+cache)"). `toolpath-pi` does **not** read `totalTokens` — it reads the raw
+`input`/`output`/`cacheRead`/`cacheWrite` fields independently.
+
+Current pi normalizes every provider's usage to the additive classes:
+`input` excludes cache reads and writes, and `output` includes reasoning
+(`reasoning`, since pi 0.80.3, is a subset of `output`). Older pi did not,
+and `toolpath-pi` reads every session with current semantics (the kind
+lists this as a known producer gap): before pi 0.12.10, OpenAI `input`
+included cached tokens; before pi 0.63.0, Google and Vertex `input` was
+`promptTokenCount`, which includes cached tokens; before pi 0.70.0,
+OpenAI-compatible `output` was `completion + reasoning`, counting
+reasoning twice. The `cost` breakdown is
 Pi-specific; not present in real sessions where cost can't be computed.
 
 ### Stop reasons

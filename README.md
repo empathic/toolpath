@@ -148,7 +148,7 @@ step-1 -- step-2 --+
 
 A path can declare a **kind**, a versioned, immutable URI naming what
 its steps mean. Agent sessions use
-`https://toolpath.net/kinds/agent-coding-session/v1.1.0`; `path kind
+`https://toolpath.net/kinds/agent-coding-session/v1.2.0`; `path kind
 agent-coding-session` prints the field reference. [RFC.md](RFC.md) is
 the full specification and
 [schema/toolpath.schema.json](schema/toolpath.schema.json) is the JSON

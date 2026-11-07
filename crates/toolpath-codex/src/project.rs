@@ -690,13 +690,18 @@ fn event_msg_line(timestamp: &str, payload: Value) -> RolloutLine {
 
 fn convo_usage_to_codex_json(u: &toolpath_convo::TokenUsage) -> Value {
     let mut m = Map::new();
-    // Codex's `input_tokens` includes the cached share; fold it back in.
+    // Codex's `input_tokens` includes cache reads and writes; fold them back in.
     if let Some(v) = u.input_tokens {
-        let inclusive = v.saturating_add(u.cache_read_tokens.unwrap_or(0));
+        let inclusive = v
+            .saturating_add(u.cache_read_tokens.unwrap_or(0))
+            .saturating_add(u.cache_write_tokens.unwrap_or(0));
         m.insert("input_tokens".to_string(), Value::from(inclusive));
     }
     if let Some(v) = u.cache_read_tokens {
         m.insert("cached_input_tokens".to_string(), Value::from(v));
+    }
+    if let Some(v) = u.cache_write_tokens {
+        m.insert("cache_write_input_tokens".to_string(), Value::from(v));
     }
     if let Some(v) = u.output_tokens {
         m.insert("output_tokens".to_string(), Value::from(v));
@@ -818,6 +823,97 @@ mod tests {
         assert_eq!(usage.input_tokens, Some(90));
         assert_eq!(usage.cache_read_tokens, Some(10));
         assert_eq!(usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn interleaved_attributed_groups_preserve_totals_after_projection() {
+        let usage = |n| TokenUsage {
+            input_tokens: Some(n),
+            output_tokens: Some(n),
+            cache_read_tokens: Some(n),
+            cache_write_tokens: Some(n),
+            ..Default::default()
+        };
+        let mut a1 = assistant_turn("a1", "first A call");
+        a1.group_id = Some("A".into());
+        a1.token_usage = None;
+        a1.attributed_token_usage = Some(usage(10));
+        let mut b = assistant_turn("b", "B call");
+        b.group_id = Some("B".into());
+        b.token_usage = Some(usage(20));
+        b.attributed_token_usage = Some(usage(20));
+        let mut a2 = assistant_turn("a2", "last A call");
+        a2.group_id = Some("A".into());
+        a2.token_usage = Some(usage(30));
+        a2.attributed_token_usage = Some(usage(20));
+        let view = view_with(vec![a1, b, a2]);
+        let session = CodexProjector::default().project(&view).unwrap();
+        let back = crate::provider::to_view(&session);
+        assert_eq!(back.turns[0].token_usage, None);
+        assert_eq!(back.turns[1].token_usage, Some(usage(20)));
+        assert_eq!(back.turns[2].token_usage, Some(usage(30)));
+        for (actual, original) in back.turns.iter().zip(&view.turns) {
+            assert_eq!(
+                actual.attributed_token_usage,
+                original.attributed_token_usage
+            );
+        }
+
+        let path = toolpath_convo::derive_path(&back, &Default::default());
+        let extracted = toolpath_convo::extract_conversation(&path);
+        assert_eq!(extracted.total_usage, Some(usage(50)));
+    }
+
+    #[test]
+    fn token_count_folds_cache_writes_back_into_input() {
+        let mut t = assistant_turn("a1", "hi");
+        t.token_usage = Some(TokenUsage {
+            input_tokens: Some(0),
+            output_tokens: Some(10),
+            cache_read_tokens: Some(40),
+            cache_write_tokens: Some(60),
+            ..Default::default()
+        });
+        let s = CodexProjector::default()
+            .project(&view_with(vec![t]))
+            .unwrap();
+        let tc = s
+            .lines
+            .iter()
+            .find(|l| l.payload["type"] == "token_count")
+            .unwrap();
+        let total = &tc.payload["info"]["total_token_usage"];
+        assert_eq!(total["input_tokens"], 100);
+        assert_eq!(total["cached_input_tokens"], 40);
+        assert_eq!(total["cache_write_input_tokens"], 60);
+
+        let back = crate::provider::to_view(&s);
+        let usage = back.turns.last().unwrap().token_usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, Some(0));
+        assert_eq!(usage.cache_read_tokens, Some(40));
+        assert_eq!(usage.cache_write_tokens, Some(60));
+        assert_eq!(usage.output_tokens, Some(10));
+    }
+
+    #[test]
+    fn token_count_omits_cache_writes_when_path_has_none() {
+        let mut t = assistant_turn("a1", "hi");
+        t.token_usage = Some(TokenUsage {
+            input_tokens: Some(90),
+            output_tokens: Some(5),
+            cache_read_tokens: Some(10),
+            ..Default::default()
+        });
+        let s = CodexProjector::default()
+            .project(&view_with(vec![t]))
+            .unwrap();
+        let tc = s
+            .lines
+            .iter()
+            .find(|l| l.payload["type"] == "token_count")
+            .unwrap();
+        let total = &tc.payload["info"]["total_token_usage"];
+        assert!(total.get("cache_write_input_tokens").is_none());
     }
 
     #[test]
