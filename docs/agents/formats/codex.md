@@ -847,7 +847,9 @@ The mapping below is what the provider actually emits. Source:
 | `session_meta.id` | `ConversationView.id`, `path.id = path-codex-<first-8>` |
 | `session_meta.cwd` | `Turn.environment.working_dir`, `path.base.uri` |
 | `session_meta.git.commit_hash` | `path.base.ref_str` |
-| `session_meta` (full) | `path.meta.extra["codex"]` (originator, cli_version, model_provider, git block, forked_from_id) |
+| `session_meta.cli_version` | `path.meta.producer = {name: "codex", version: <cli_version>}` (`producer.name` is always the harness id) |
+| `session_meta.originator` | `path.meta.extra["codex"]["originator"]` (`codex-tui`, `codex_exec`, …) |
+| `session_meta.model_provider` | `ActorDefinition.provider` on assistant actors |
 | `turn_context.model` | `Turn.model` on subsequent assistant turns |
 | `turn_context` (full) | `ConversationEvent` (round-trip preservation) |
 | `message` role `user` | `Turn { role: User }` → Step with `actor: "human:user"` |

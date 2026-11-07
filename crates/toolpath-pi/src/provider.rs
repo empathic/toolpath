@@ -563,7 +563,10 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
         session_ids,
         events: vec![],
         base,
-        ..Default::default()
+        producer: Some(toolpath_convo::ProducerInfo {
+            name: "pi".to_string(),
+            version: None,
+        }),
     }
 }
 

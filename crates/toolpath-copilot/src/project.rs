@@ -169,18 +169,13 @@ impl CopilotProjector {
                 ctx.insert("baseCommit".into(), json!(rev));
             }
         }
-        let producer = view
-            .producer
-            .as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "copilot-agent".to_string());
         // Mirror the observed 1.0.67 session.start top-level shape. The loader
         // validates required fields one at a time (`startTime` was the first
         // caught); emitting the full observed set avoids repeat rejections.
         json!({
             "sessionId": view.id,
             "version": 1,
-            "producer": producer,
+            "producer": "copilot-agent",
             "copilotVersion": self.copilot_version,
             "startTime": start_time,
             "contextTier": Value::Null,
@@ -714,6 +709,30 @@ mod tests {
         assert_eq!(base.vcs_revision.as_deref(), Some("abc"));
         // total_usage survives.
         assert_eq!(view2.total_usage.as_ref().unwrap().output_tokens, Some(42));
+    }
+
+    #[test]
+    fn session_start_producer_is_copilot_wire_value() {
+        // `producer.name` on a view is the harness id (`copilot`, or another
+        // harness's id for a cross-harness resume); session.start carries the
+        // value Copilot itself writes.
+        for name in ["copilot", "claude-code"] {
+            let view = ConversationView {
+                id: "s".into(),
+                producer: Some(toolpath_convo::ProducerInfo {
+                    name: name.into(),
+                    version: None,
+                }),
+                ..Default::default()
+            };
+            let projected = CopilotProjector::new().project(&view).unwrap();
+            let start = projected
+                .lines
+                .iter()
+                .find(|l| l.kind == "session.start")
+                .unwrap();
+            assert_eq!(start.data.as_ref().unwrap()["producer"], "copilot-agent");
+        }
     }
 
     #[test]

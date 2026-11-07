@@ -100,7 +100,7 @@ mod tests {
             .expect("meta.extra.producer object");
         assert_eq!(
             producer.get("name").and_then(|v| v.as_str()),
-            Some("copilot-cli")
+            Some("copilot")
         );
         assert_eq!(
             producer.get("version").and_then(|v| v.as_str()),
