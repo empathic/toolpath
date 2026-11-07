@@ -690,8 +690,10 @@ fn event_msg_line(timestamp: &str, payload: Value) -> RolloutLine {
 
 fn convo_usage_to_codex_json(u: &toolpath_convo::TokenUsage) -> Value {
     let mut m = Map::new();
+    // Codex's `input_tokens` includes the cached share; fold it back in.
     if let Some(v) = u.input_tokens {
-        m.insert("input_tokens".to_string(), Value::from(v));
+        let inclusive = v.saturating_add(u.cache_read_tokens.unwrap_or(0));
+        m.insert("input_tokens".to_string(), Value::from(inclusive));
     }
     if let Some(v) = u.cache_read_tokens {
         m.insert("cached_input_tokens".to_string(), Value::from(v));
@@ -785,6 +787,37 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    #[test]
+    fn token_count_folds_cached_back_into_input() {
+        // Derived classes are additive; Codex's wire `input_tokens`
+        // includes `cached_input_tokens`.
+        let mut t = assistant_turn("a1", "hi");
+        t.token_usage = Some(TokenUsage {
+            input_tokens: Some(90),
+            output_tokens: Some(5),
+            cache_read_tokens: Some(10),
+            ..Default::default()
+        });
+        let s = CodexProjector::default()
+            .project(&view_with(vec![t.clone()]))
+            .unwrap();
+        let tc = s
+            .lines
+            .iter()
+            .find(|l| l.payload["type"] == "token_count")
+            .unwrap();
+        let total = &tc.payload["info"]["total_token_usage"];
+        assert_eq!(total["input_tokens"], 100);
+        assert_eq!(total["cached_input_tokens"], 10);
+        assert_eq!(total["output_tokens"], 5);
+
+        let back = crate::provider::to_view(&s);
+        let usage = back.turns.last().unwrap().token_usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, Some(90));
+        assert_eq!(usage.cache_read_tokens, Some(10));
+        assert_eq!(usage.output_tokens, Some(5));
     }
 
     #[test]
