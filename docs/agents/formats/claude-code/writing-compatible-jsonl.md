@@ -72,6 +72,24 @@ and `worktreePath` inside `worktree-state.worktreeSession`. How the
 loader uses them on resume is not known. A writer that moves a session
 to another directory decides for each whether to rewrite it.
 
+### 4. An errored `tool_result` must have content
+
+The loader accepts it, but the first resumed turn replays the transcript
+to the Messages API, which rejects a `tool_result` with `is_error: true`
+and empty content: `400 messages.N.content.0.tool_result: content cannot
+be empty if \`is_error\` is true` (`claude -p -r` exits 1, measured
+2026-10-15 on 2.1.285). A source that recorded only the failure (no
+output text) must get a stand-in text; the projector writes
+`(tool call failed; the source session recorded no output)`.
+
+```jsonc
+// ❌ Rejected on the next turn
+{"type": "tool_result", "tool_use_id": "t1", "content": "", "is_error": true}
+
+// ✅ Correct
+{"type": "tool_result", "tool_use_id": "t1", "content": "Path does not exist", "is_error": true}
+```
+
 ## Strong conventions
 
 Real Claude Code entries always carry these envelope fields. The
