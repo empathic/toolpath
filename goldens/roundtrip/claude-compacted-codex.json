@@ -1,0 +1,51 @@
+{
+  "adapter": "codex",
+  "gained": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.cli_version",
+    "paths[].steps[].change.<artifact>.structural.cwd",
+    "paths[].steps[].change.<artifact>.structural.event_data_type",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.id",
+    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.memory_citation",
+    "paths[].steps[].change.<artifact>.structural.message",
+    "paths[].steps[].change.<artifact>.structural.model",
+    "paths[].steps[].change.<artifact>.structural.model_provider",
+    "paths[].steps[].change.<artifact>.structural.originator",
+    "paths[].steps[].change.<artifact>.structural.phase",
+    "paths[].steps[].change.<artifact>.structural.rate_limits",
+    "paths[].steps[].change.<artifact>.structural.source",
+    "paths[].steps[].change.<artifact>.structural.timestamp",
+    "paths[].steps[].change.<artifact>.structural.turn_id",
+    "paths[].steps[].change.src/auth.rs.structural.after",
+    "paths[].steps[].change.src/auth.rs.structural.before"
+  ],
+  "ir1": {
+    "key_paths": 42,
+    "steps": 7,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "ir2": {
+    "key_paths": 57,
+    "steps": 19,
+    "text_chars": 317,
+    "tool_uses": 2
+  },
+  "lost": [
+    "paths[].meta.files_changed[]",
+    "paths[].path.base.branch",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+    "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.src/auth.rs.structural.operation"
+  ],
+  "set": "claude-compacted"
+}

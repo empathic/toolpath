@@ -1,0 +1,23 @@
+{"timestamp":"2024-06-01T10:00:00.000Z","type":"session_meta","payload":{"cli_version":"0.0.0-projected","cwd":"/","id":"sess-compact","model_provider":"openai","originator":"codex-toolpath","source":"cli","timestamp":"2024-06-01T10:00:00.000Z"}}
+{"timestamp":"2024-06-01T10:00:00.000Z","type":"turn_context","payload":{"cwd":"/","model":"claude-opus-4-6","turn_id":"sess-compact-t1"}}
+{"timestamp":"2024-06-01T10:00:00Z","type":"response_item","payload":{"content":[{"text":"Help me refactor the auth module.","type":"input_text"}],"role":"user","type":"message"}}
+{"timestamp":"2024-06-01T10:00:00Z","type":"event_msg","payload":{"images":[],"local_images":[],"message":"Help me refactor the auth module.","text_elements":[],"type":"user_message"}}
+{"timestamp":"2024-06-01T10:00:01Z","type":"response_item","payload":{"content":[{"text":"I'll start by reading the current auth code.","type":"output_text"}],"phase":"commentary","role":"assistant","type":"message"}}
+{"timestamp":"2024-06-01T10:00:01Z","type":"event_msg","payload":{"memory_citation":null,"message":"I'll start by reading the current auth code.","phase":"commentary","type":"agent_message"}}
+{"timestamp":"2024-06-01T10:00:01Z","type":"response_item","payload":{"arguments":"{\"file_path\":\"src/auth.rs\"}","call_id":"t-pre-1","name":"read_file","type":"function_call"}}
+{"timestamp":"2024-06-01T10:00:01Z","type":"response_item","payload":{"call_id":"t-pre-1","output":"pub fn login() { ... }","type":"function_call_output"}}
+{"timestamp":"2024-06-01T10:00:01Z","type":"event_msg","payload":{"info":{"total_token_usage":{"input_tokens":300,"output_tokens":40}},"rate_limits":null,"type":"token_count"}}
+{"timestamp":"2024-06-01T10:30:01Z","type":"response_item","payload":{"content":[{"text":"[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation.","type":"input_text"}],"role":"user","type":"message"}}
+{"timestamp":"2024-06-01T10:30:01Z","type":"event_msg","payload":{"images":[],"local_images":[],"message":"[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation.","text_elements":[],"type":"user_message"}}
+{"timestamp":"2024-06-01T10:31:00Z","type":"response_item","payload":{"content":[{"text":"Now add the session validation.","type":"input_text"}],"role":"user","type":"message"}}
+{"timestamp":"2024-06-01T10:31:00Z","type":"event_msg","payload":{"images":[],"local_images":[],"message":"Now add the session validation.","text_elements":[],"type":"user_message"}}
+{"timestamp":"2024-06-01T10:31:01Z","type":"turn_context","payload":{"cwd":"/","model":"claude-opus-4-6","turn_id":"sess-compact-t4"}}
+{"timestamp":"2024-06-01T10:31:01Z","type":"response_item","payload":{"content":[{"text":"Adding session validation to login().","type":"output_text"}],"phase":"commentary","role":"assistant","type":"message"}}
+{"timestamp":"2024-06-01T10:31:01Z","type":"event_msg","payload":{"memory_citation":null,"message":"Adding session validation to login().","phase":"commentary","type":"agent_message"}}
+{"timestamp":"2024-06-01T10:31:01Z","type":"response_item","payload":{"arguments":"{\"file_path\":\"src/auth.rs\",\"new_string\":\"pub fn login() { validate_session();\",\"old_string\":\"pub fn login() {\"}","call_id":"t-post-1","name":"write_file","type":"function_call"}}
+{"timestamp":"2024-06-01T10:31:01Z","type":"response_item","payload":{"call_id":"t-post-1","output":"File written successfully","type":"function_call_output"}}
+{"timestamp":"2024-06-01T10:31:01Z","type":"event_msg","payload":{"info":{"total_token_usage":{"input_tokens":900,"output_tokens":120}},"rate_limits":null,"type":"token_count"}}
+{"timestamp":"2024-06-01T10:31:03Z","type":"turn_context","payload":{"cwd":"/","model":"claude-opus-4-6","turn_id":"sess-compact-t5"}}
+{"timestamp":"2024-06-01T10:31:03Z","type":"response_item","payload":{"content":[{"text":"Done. The auth module now validates sessions on login.","type":"output_text"}],"phase":"final_answer","role":"assistant","type":"message"}}
+{"timestamp":"2024-06-01T10:31:03Z","type":"event_msg","payload":{"memory_citation":null,"message":"Done. The auth module now validates sessions on login.","phase":"final_answer","type":"agent_message"}}
+{"timestamp":"2024-06-01T10:31:03Z","type":"event_msg","payload":{"info":{"total_token_usage":{"input_tokens":1600,"output_tokens":140}},"rate_limits":null,"type":"token_count"}}
