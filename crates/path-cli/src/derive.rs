@@ -368,13 +368,14 @@ pub(crate) fn derive_pi_session_with(
 /// document. Used by `path import pathbase` and `path resume <url>`.
 #[cfg(not(target_os = "emscripten"))]
 pub(crate) fn pathbase_fetch_to_doc(target: &str, url_flag: Option<&str>) -> Result<DerivedDoc> {
-    use crate::cmd_pathbase::{credentials_path, graphs_download, load_session, resolve_url};
+    use crate::cmd_pathbase::{
+        credentials_path, graphs_download, load_session_for, resolve_session_url,
+    };
 
     let (base, ref_) = parse_pathbase_ref(target, url_flag)?;
-    let stored = load_session(&credentials_path()?)?;
-    let base_url = base
-        .or_else(|| stored.as_ref().map(|s| s.url.clone()))
-        .unwrap_or_else(|| resolve_url(None));
+    let base_url = base.unwrap_or_else(|| resolve_session_url(None));
+    // Only this server's login: another server's token is never sent.
+    let stored = load_session_for(&credentials_path()?, &base_url)?;
 
     let token = stored.as_ref().map(|s| s.token.as_str());
 
@@ -596,6 +597,7 @@ mod tests {
     #[test]
     #[cfg(not(target_os = "emscripten"))]
     fn pathbase_fetch_to_doc_url_input() {
+        let _env = crate::config::FakeCredentials::new();
         use crate::cmd_pathbase::tests::MockServer;
         let body = r#"{"graph":{"id":"g1"},"paths":[{"path":{"id":"p1","head":"s1"},"steps":[{"step":{"id":"s1","actor":"agent:claude-code","timestamp":"2026-01-01T00:00:00Z"},"change":{}}]}]}"#;
         let server = MockServer::start("HTTP/1.1 200 OK", body);

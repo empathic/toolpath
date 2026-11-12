@@ -225,6 +225,7 @@ pub(crate) fn infer_source_harness(path: &TPath) -> Option<Harness> {
             "copilot" => return Some(Harness::Copilot),
             "opencode" => return Some(Harness::Opencode),
             "cursor" => return Some(Harness::Cursor),
+            "cursor-agent" => return Some(Harness::CursorAgent),
             "pi" => return Some(Harness::Pi),
             _ => {} // fall through to actor sniffing
         }
@@ -473,7 +474,7 @@ pub(crate) fn pick_harness(
 
     if installed.is_empty() {
         anyhow::bail!(
-            "no installed harnesses found on PATH; install one of: claude, gemini, codex, opencode, cursor, pi"
+            "no installed harnesses found on PATH; install one of: claude, gemini, codex, opencode, cursor, cursor-agent, pi, copilot"
         );
     }
 
@@ -541,6 +542,7 @@ pub(crate) fn argv_for(harness: Harness, session_id: &str) -> Vec<String> {
             vec![".".into()]
         }
         Harness::Pi => vec!["--session".into(), session_id.into()],
+        Harness::CursorAgent => vec!["--resume".into(), session_id.into()],
     }
 }
 
@@ -601,6 +603,7 @@ pub(crate) fn project_into_harness(
         Harness::Opencode => crate::projection::opencode::project_opencode(path, cwd),
         Harness::Cursor => crate::projection::cursor::project_cursor(path, cwd),
         Harness::Pi => crate::projection::pi::project_pi(path, cwd),
+        Harness::CursorAgent => crate::projection::cursor_agent::project_cursor_agent(path, cwd),
     }
 }
 
@@ -885,9 +888,7 @@ mod tests {
 
     #[test]
     fn resolve_input_url_dispatches_to_pathbase_fetch() {
-        let _env = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _env = crate::config::FakeCredentials::new();
         use crate::cmd_pathbase::tests::MockServer;
         let body = {
             let mut path = make_path_with_actor("agent:codex");
