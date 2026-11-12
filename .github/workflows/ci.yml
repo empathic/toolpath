@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to a PR cancels that PR's older run; main is never cancelled or superseded (its
+# group carries the sha, so every push to main runs the full gates and its deploy).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The quality gates as a parallel matrix of gate groups (gates.yml; release.yml calls the same).
+  gates:
+    uses: ./.github/workflows/gates.yml
+
+  # The wasm build and the site deploy (site.yml), after the gates pass. Forked PRs skip it: they
+  # get no Cloudflare secrets, so it could only fail. Same-repo PRs deploy a preview; pushes to
+  # main deploy production.
+  site:
+    needs: gates
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/site.yml
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    secrets: inherit
