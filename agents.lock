@@ -1,0 +1,44 @@
+# The agent CLIs toolpath's tests run. Read ONLY through crates/toolpath-agents (`toolpath-agents
+# fetch <agent>`): each url is downloaded, refused unless it hashes to the sha256 here, and kept in a
+# content-addressed cache. Nothing comes from PATH or a package manager.
+#
+# Every sha256 is the vendor's own published checksum, checked against a download on 2026-10-28:
+#   claude: the release manifest.json (platforms.<p>.checksum) beside the binaries.
+#   codex:  GitHub's asset digest on the release (sha256:...), equal to the tarball's sha256.
+# A bump is a PR that changes version, url and sha256 together, from the same sources.
+
+[[agent]]
+name = "claude"
+version = "2.1.308"
+source = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.308/manifest.json"
+
+[[agent.platform]]
+target = "aarch64-apple-darwin"
+url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.308/darwin-arm64/claude"
+sha256 = "ca923c86ac84b30574a82331a05b6e066c27477a926ceaffe46a845a33e4dd37"
+archive = "binary"
+
+[[agent.platform]]
+target = "x86_64-unknown-linux-gnu"
+url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/2.1.308/linux-x64/claude"
+sha256 = "356733f185fa988e6bf3aa9a555269fdd167982a2e2a80d3c8a78037bb92ad58"
+archive = "binary"
+
+[[agent]]
+name = "codex"
+version = "0.165.0"
+source = "https://github.com/openai/codex/releases/tag/rust-v0.165.0"
+
+[[agent.platform]]
+target = "aarch64-apple-darwin"
+url = "https://github.com/openai/codex/releases/download/rust-v0.165.0/codex-aarch64-apple-darwin.tar.gz"
+sha256 = "78ea9c178d2dc8fde71d6494df3b9eab902fd6d6de0a84e65234220d93bb6144"
+archive = "tar-gz"
+member = "codex-aarch64-apple-darwin"
+
+[[agent.platform]]
+target = "x86_64-unknown-linux-gnu"
+url = "https://github.com/openai/codex/releases/download/rust-v0.165.0/codex-x86_64-unknown-linux-musl.tar.gz"
+sha256 = "be635d3486a5bd060d0fff582ae6d30160280c31344dd85719707fa920e187f0"
+archive = "tar-gz"
+member = "codex-x86_64-unknown-linux-musl"
