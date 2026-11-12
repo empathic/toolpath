@@ -19,6 +19,20 @@ const DEFAULT_AGENT: &str = "build";
 const DEFAULT_MODEL_PROVIDER: &str = "anthropic";
 const DEFAULT_MODEL_ID: &str = "unknown";
 const DEFAULT_VERSION: &str = "0.0.0-projected";
+/// The step-finish `reason` for a turn with no stop reason that ended on text, and on tool calls.
+const DEFAULT_FINISH: &str = "stop";
+const DEFAULT_FINISH_TOOL_CALLS: &str = "tool-calls";
+
+/// Values this writer invents because opencode needs them and the view does not carry them,
+/// as `(key, value)` in the written session (provider and model only when the turn has none).
+/// The step-finish `reason` of a turn with no stop reason is `stop`, or `tool-calls` when the
+/// turn ended in tool calls; that value depends on the turn, so it is not in this table. The
+/// baseline checks each entry is really written (`crates/toolpath-goldens/tests/contract.rs`).
+pub const SYNTHESIZED: &[(&str, &str)] = &[
+    ("providerID", DEFAULT_MODEL_PROVIDER),
+    ("modelID", DEFAULT_MODEL_ID),
+    ("version", DEFAULT_VERSION),
+];
 
 #[derive(Debug, Clone, Default)]
 pub struct OpencodeProjector {
@@ -106,12 +120,6 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_VERSION.to_string());
 
-    let session_id = if view.id.starts_with("ses_") {
-        view.id.clone()
-    } else {
-        mint_session_id(&view.id)
-    };
-
     let time_created = view
         .started_at
         .map(|t| t.timestamp_millis())
@@ -121,6 +129,12 @@ fn project_view(
                 .and_then(|t| parse_timestamp_ms(&t.timestamp))
         })
         .unwrap_or(0);
+
+    let session_id = if view.id.starts_with("ses_") {
+        view.id.clone()
+    } else {
+        mint_session_id(&view.id, time_created)
+    };
     let time_updated = view
         .last_activity
         .map(|t| t.timestamp_millis())
@@ -159,10 +173,13 @@ fn project_view(
         .clone()
         .unwrap_or_else(|| DEFAULT_MODEL_ID.to_string());
 
+    // opencode has no system-role message; its place for system text is `UserMessage.system`, on
+    // the user message the text precedes. Consecutive system turns join with a blank line.
+    let mut pending_system: Option<String> = None;
     for turn in &view.turns {
         match turn.role {
             Role::User => {
-                let msg = build_user_message(
+                let mut msg = build_user_message(
                     turn,
                     &session_id,
                     &mut counter,
@@ -170,13 +187,20 @@ fn project_view(
                     &default_provider,
                     &default_model,
                 );
+                if let MessageData::User(u) = &mut msg.data {
+                    u.system = pending_system.take();
+                }
                 prev_msg_id = Some(msg.id.clone());
                 messages.push(msg);
             }
             Role::Assistant => {
-                let parent = prev_msg_id
-                    .clone()
-                    .unwrap_or_else(|| mint_message_id(&session_id, counter));
+                let parent = prev_msg_id.clone().unwrap_or_else(|| {
+                    mint_message_id(
+                        &session_id,
+                        counter,
+                        parse_timestamp_ms(&turn.timestamp).unwrap_or(0),
+                    )
+                });
                 let msg = build_assistant_message(
                     turn,
                     &session_id,
@@ -190,13 +214,31 @@ fn project_view(
                 prev_msg_id = Some(msg.id.clone());
                 messages.push(msg);
             }
-            Role::System | Role::Other(_) => {
-                // opencode has no system-role message variant; fold the
-                // text into the next user/assistant turn's context by
-                // skipping. The system prompt itself rides on
-                // UserMessage.system if needed.
+            Role::System => {
+                if !turn.text.is_empty() {
+                    match &mut pending_system {
+                        Some(s) => {
+                            s.push_str("\n\n");
+                            s.push_str(&turn.text);
+                        }
+                        None => pending_system = Some(turn.text.clone()),
+                    }
+                }
             }
+            Role::Other(_) => {}
         }
+    }
+    // System text with no user message after it rides on the last user message instead.
+    if let Some(s) = pending_system
+        && let Some(u) = messages.iter_mut().rev().find_map(|m| match &mut m.data {
+            MessageData::User(u) => Some(u),
+            _ => None,
+        })
+    {
+        u.system = Some(match u.system.take() {
+            Some(prev) => format!("{prev}\n\n{s}"),
+            None => s,
+        });
     }
 
     Ok(Session {
@@ -229,8 +271,8 @@ fn build_user_message(
     default_model: &str,
 ) -> Message {
     *counter += 1;
-    let msg_id = mint_message_id(session_id, *counter);
     let time_created = parse_timestamp_ms(&turn.timestamp).unwrap_or(0);
+    let msg_id = mint_message_id(session_id, *counter, time_created);
 
     let opencode_extras = opencode_extras(turn);
     let model = opencode_extras
@@ -266,7 +308,7 @@ fn build_user_message(
     if !turn.text.is_empty() {
         *counter += 1;
         parts.push(Part {
-            id: mint_part_id(session_id, *counter),
+            id: mint_part_id(session_id, *counter, time_created),
             message_id: msg_id.clone(),
             session_id: session_id.to_string(),
             time_created,
@@ -304,8 +346,8 @@ fn build_assistant_message(
     default_model: &str,
 ) -> Message {
     *counter += 1;
-    let msg_id = mint_message_id(session_id, *counter);
     let time_created = parse_timestamp_ms(&turn.timestamp).unwrap_or(0);
+    let msg_id = mint_message_id(session_id, *counter, time_created);
 
     let extras = opencode_extras(turn);
     let provider_id = extras
@@ -383,7 +425,7 @@ fn build_assistant_message(
 
     *counter += 1;
     parts.push(Part {
-        id: mint_part_id(session_id, *counter),
+        id: mint_part_id(session_id, *counter, time_created),
         message_id: msg_id.clone(),
         session_id: session_id.to_string(),
         time_created,
@@ -399,7 +441,7 @@ fn build_assistant_message(
     {
         *counter += 1;
         parts.push(Part {
-            id: mint_part_id(session_id, *counter),
+            id: mint_part_id(session_id, *counter, time_created),
             message_id: msg_id.clone(),
             session_id: session_id.to_string(),
             time_created,
@@ -419,7 +461,7 @@ fn build_assistant_message(
     if !turn.text.is_empty() {
         *counter += 1;
         parts.push(Part {
-            id: mint_part_id(session_id, *counter),
+            id: mint_part_id(session_id, *counter, time_created),
             message_id: msg_id.clone(),
             session_id: session_id.to_string(),
             time_created,
@@ -440,7 +482,7 @@ fn build_assistant_message(
 
     for tu in &turn.tool_uses {
         *counter += 1;
-        let part_id = mint_part_id(session_id, *counter);
+        let part_id = mint_part_id(session_id, *counter, time_created);
         parts.push(Part {
             id: part_id,
             message_id: msg_id.clone(),
@@ -453,16 +495,21 @@ fn build_assistant_message(
 
     *counter += 1;
     parts.push(Part {
-        id: mint_part_id(session_id, *counter),
+        id: mint_part_id(session_id, *counter, time_created),
         message_id: msg_id.clone(),
         session_id: session_id.to_string(),
         time_created,
         time_updated: time_created,
         data: PartData::StepFinish(StepFinishPart {
-            reason: turn
-                .stop_reason
-                .clone()
-                .unwrap_or_else(|| "stop".to_string()),
+            // The turn's own reason; else what opencode itself writes: `tool-calls` when the
+            // turn ended in tool calls, `stop` when it ended on text.
+            reason: turn.stop_reason.clone().unwrap_or_else(|| {
+                if turn.tool_uses.is_empty() {
+                    DEFAULT_FINISH.to_string()
+                } else {
+                    DEFAULT_FINISH_TOOL_CALLS.to_string()
+                }
+            }),
             snapshot,
             cost: 0.0,
             tokens,
@@ -672,24 +719,65 @@ fn opencode_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None
 }
 
-fn mint_session_id(seed: &str) -> String {
-    format!("ses_{}", stable_hex24(seed))
+/// Session ids sort newest-first in opencode (`Identifier.descending`).
+fn mint_session_id(seed: &str, time_ms: i64) -> String {
+    mint_id("ses", true, time_ms, 1, seed)
 }
 
-fn mint_message_id(session_id: &str, n: u32) -> String {
-    format!("msg_{}", stable_hex24(&format!("{}-msg-{}", session_id, n)))
+fn mint_message_id(session_id: &str, n: u32, time_ms: i64) -> String {
+    mint_id(
+        "msg",
+        false,
+        time_ms,
+        n,
+        &format!("{}-msg-{}", session_id, n),
+    )
 }
 
-fn mint_part_id(session_id: &str, n: u32) -> String {
-    format!("prt_{}", stable_hex24(&format!("{}-prt-{}", session_id, n)))
+fn mint_part_id(session_id: &str, n: u32, time_ms: i64) -> String {
+    mint_id(
+        "prt",
+        false,
+        time_ms,
+        n,
+        &format!("{}-prt-{}", session_id, n),
+    )
 }
 
-fn stable_hex24(seed: &str) -> String {
+const ID_TAIL_LEN: usize = 14;
+const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// Mint an id in opencode's own shape (`packages/opencode/src/id/id.ts`):
+/// `<prefix>_` + 12 hex chars of the 48-bit value `time_ms * 4096 +
+/// counter` (bit-inverted when `descending`) + 14 base62 chars.
+/// opencode draws the tail from `randomBytes`; we draw it from the
+/// SHA-1 of `seed` so projections stay deterministic.
+///
+/// The shape matters beyond cosmetics: OpenCode Zen's free tier rejects
+/// requests whose `x-opencode-session` header is not an opencode-shaped
+/// id (`403 FreeTierError`, "can only be used from within OpenCode"),
+/// and opencode sends the session id — and a message id as
+/// `x-opencode-request` — on every Zen call. Using the real counter
+/// also makes ids monotonic within one millisecond, which is how
+/// opencode orders parts within a message.
+fn mint_id(prefix: &str, descending: bool, time_ms: i64, counter: u32, seed: &str) -> String {
     use sha1::{Digest, Sha1};
+    const MASK48: u64 = (1 << 48) - 1;
+    let mut value = (time_ms.max(0) as u64)
+        .wrapping_mul(4096)
+        .wrapping_add(u64::from(counter) & 0xfff)
+        & MASK48;
+    if descending {
+        value = !value & MASK48;
+    }
     let mut h = Sha1::new();
     h.update(seed.as_bytes());
-    let bytes = h.finalize();
-    hex::encode(&bytes[..12])
+    let digest = h.finalize();
+    let tail: String = digest[..ID_TAIL_LEN]
+        .iter()
+        .map(|b| BASE62[usize::from(*b) % BASE62.len()] as char)
+        .collect();
+    format!("{}_{:012x}{}", prefix, value, tail)
 }
 
 fn parse_timestamp_ms(ts: &str) -> Option<i64> {
@@ -752,6 +840,7 @@ mod tests {
 
     fn user_turn(text: &str) -> Turn {
         Turn {
+            provider: None,
             id: "u1".into(),
             parent_id: None,
             group_id: None,
@@ -759,6 +848,7 @@ mod tests {
             timestamp: "2026-04-21T12:00:00.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -772,6 +862,7 @@ mod tests {
 
     fn assistant_turn(text: &str) -> Turn {
         Turn {
+            provider: None,
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -779,6 +870,7 @@ mod tests {
             timestamp: "2026-04-21T12:00:01.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: Some("claude-sonnet-4-6".into()),
             stop_reason: Some("stop".into()),
@@ -941,6 +1033,99 @@ mod tests {
             kinds,
             vec!["step-start", "reasoning", "text", "step-finish"]
         );
+    }
+
+    /// Decode the 48-bit time field of an opencode id back to millis
+    /// (`Identifier.timestamp`), inverting first for descending ids.
+    fn id_millis(id: &str, descending: bool) -> i64 {
+        let hex = &id[id.find('_').unwrap() + 1..][..12];
+        let mut v = u64::from_str_radix(hex, 16).unwrap();
+        if descending {
+            v = !v & ((1 << 48) - 1);
+        }
+        (v / 4096) as i64
+    }
+
+    fn assert_opencode_shape(id: &str, prefix: &str) {
+        let body = id.strip_prefix(&format!("{prefix}_")).expect("prefix");
+        assert_eq!(body.len(), 26, "{id}: opencode ids are prefix + 26 chars");
+        assert!(
+            body[..12].bytes().all(|b| b.is_ascii_hexdigit()),
+            "{id}: 12-hex time field"
+        );
+        assert!(
+            body[12..].bytes().all(|b| b.is_ascii_alphanumeric()),
+            "{id}: 14 base62 chars"
+        );
+    }
+
+    #[test]
+    fn minted_ids_have_opencode_shape_and_encode_time() {
+        let mut a = assistant_turn("ok");
+        a.thinking = Some("hm".into());
+        let s = OpencodeProjector::default()
+            .project(&view_with(vec![user_turn("hi"), a]))
+            .unwrap();
+        let user_ms = parse_timestamp_ms("2026-04-21T12:00:00.000Z").unwrap();
+        let asst_ms = parse_timestamp_ms("2026-04-21T12:00:01.000Z").unwrap();
+        assert_eq!(s.time_created, user_ms);
+        // `ms * 4096 + counter` is kept to 48 bits, so the recoverable
+        // time is `ms mod 2^36` — exactly as for opencode's own ids.
+        let user_ms = user_ms & ((1 << 36) - 1);
+        let asst_ms = asst_ms & ((1 << 36) - 1);
+
+        assert_opencode_shape(&s.id, "ses");
+        assert_eq!(id_millis(&s.id, true), user_ms, "session time = first turn");
+
+        assert_opencode_shape(&s.messages[0].id, "msg");
+        assert_eq!(id_millis(&s.messages[0].id, false), user_ms);
+        assert_opencode_shape(&s.messages[1].id, "msg");
+        assert_eq!(id_millis(&s.messages[1].id, false), asst_ms);
+        assert!(
+            s.messages[0].id < s.messages[1].id,
+            "message ids sort by time"
+        );
+
+        // Parts of one message share a timestamp; the counter keeps their
+        // ids in creation order, which is how opencode orders parts.
+        let part_ids: Vec<&str> = s.messages[1].parts.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(part_ids.len(), 4);
+        for p in &part_ids {
+            assert_opencode_shape(p, "prt");
+            assert_eq!(id_millis(p, false), asst_ms);
+        }
+        assert!(part_ids.windows(2).all(|w| w[0] < w[1]), "{part_ids:?}");
+    }
+
+    #[test]
+    fn minted_ids_are_deterministic_and_distinct() {
+        let view = view_with(vec![user_turn("hi"), assistant_turn("ok")]);
+        let a = OpencodeProjector::default().project(&view).unwrap();
+        let b = OpencodeProjector::default().project(&view).unwrap();
+        assert_eq!(a.id, b.id);
+        let ids_a: Vec<String> = a
+            .messages
+            .iter()
+            .flat_map(|m| std::iter::once(m.id.clone()).chain(m.parts.iter().map(|p| p.id.clone())))
+            .collect();
+        let ids_b: Vec<String> = b
+            .messages
+            .iter()
+            .flat_map(|m| std::iter::once(m.id.clone()).chain(m.parts.iter().map(|p| p.id.clone())))
+            .collect();
+        assert_eq!(ids_a, ids_b);
+        let mut dedup = ids_a.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(dedup.len(), ids_a.len(), "ids are distinct");
+    }
+
+    #[test]
+    fn ses_prefixed_view_id_is_kept_verbatim() {
+        let mut view = view_with(vec![user_turn("hi")]);
+        view.id = "ses_ebf0d2752ffeyUbSD2NMGoLbai".into();
+        let s = OpencodeProjector::default().project(&view).unwrap();
+        assert_eq!(s.id, "ses_ebf0d2752ffeyUbSD2NMGoLbai");
     }
 
     #[test]

@@ -121,6 +121,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
     let delegations = extract_delegations(&tool_uses);
 
     Turn {
+        provider: None,
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
         // The API message ID (`msg_…`). Claude Code writes one JSONL line
@@ -131,6 +132,16 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         role: claude_role_to_role(&msg.role),
         timestamp: entry.timestamp.clone(),
         text,
+        thinking_signature: thinking
+            .as_deref()
+            .zip(msg.thinking_signature())
+            .map(|(text, sig)| {
+                toolpath_convo::ThinkingSignature::new(
+                    toolpath_convo::ThinkingSignature::ANTHROPIC,
+                    sig,
+                    text,
+                )
+            }),
         thinking,
         tool_uses,
         model: msg.model.clone(),
@@ -238,18 +249,7 @@ fn extract_file_path_for_tool(input: &serde_json::Value) -> Option<String> {
 fn extract_delegations(tool_uses: &[ToolInvocation]) -> Vec<DelegatedWork> {
     tool_uses
         .iter()
-        .filter(|tu| tu.category == Some(ToolCategory::Delegation))
-        .map(|tu| DelegatedWork {
-            agent_id: tu.id.clone(),
-            prompt: tu
-                .input
-                .get("prompt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            turns: vec![],
-            result: tu.result.as_ref().map(|r| r.content.clone()),
-        })
+        .filter_map(ToolInvocation::as_delegation)
         .collect()
 }
 
@@ -339,13 +339,26 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     // chain intact for `derive_path`. The original UUID is preserved
     // via the `tool_result_user` event.
     let mut parent_rewrites: HashMap<String, String> = HashMap::new();
+    // The tool-result-only entries alone (absorbed into the assistant turn): an attachment that
+    // followed one hangs off that turn, not off the nearest turn-bearing entry.
+    let mut absorbed_results: HashMap<String, String> = HashMap::new();
     let mut last_turn_uuid: Option<String> = None;
 
     for entry in &convo.entries {
         let Some(msg) = &entry.message else {
             // Message-less entries (attachments, snapshots) survive as
             // events so the projector can re-emit them.
-            events.push(entry_to_event(entry));
+            let mut event = entry_to_event(entry);
+            // An attachment that followed an absorbed tool-result entry hangs off the turn that
+            // result belongs to (the writer puts it after that turn's tool results again).
+            if let Some(real) = event
+                .parent_id
+                .as_deref()
+                .and_then(|p| absorbed_results.get(p))
+            {
+                event.parent_id = Some(real.clone());
+            }
+            events.push(event);
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
             }
@@ -365,6 +378,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
             merge_tool_results(&mut turns, msg);
             if let Some(prev) = &last_turn_uuid {
                 parent_rewrites.insert(entry.uuid.clone(), prev.clone());
+                absorbed_results.insert(entry.uuid.clone(), prev.clone());
             }
             continue;
         }
@@ -855,6 +869,7 @@ mod tests {
 
     fn message_turn_stub(id: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -862,6 +877,7 @@ mod tests {
             timestamp: "2024-01-01T00:00:00Z".into(),
             text: String::new(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -1434,6 +1450,7 @@ mod tests {
     fn test_merge_tool_results_by_id() {
         // Verify that merge matches by tool_use_id, not position
         let mut turns = vec![Turn {
+            provider: None,
             id: "t1".into(),
             parent_id: None,
             group_id: None,
@@ -1441,6 +1458,7 @@ mod tests {
             timestamp: "2024-01-01T00:00:00Z".into(),
             text: "test".into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![
                 ToolInvocation {
                     id: "tool-a".into(),

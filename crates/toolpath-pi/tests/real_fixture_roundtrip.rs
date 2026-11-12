@@ -236,3 +236,70 @@ fn projector_output_is_re_parseable_by_reader() {
     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
 }
+
+/// Who served the model survives a round trip: a pi session run on
+/// `ollama` comes back as `ollama`, not the projector's `anthropic`
+/// default. The provider rides the RFC's slot,
+/// `meta.actors["agent:<model>"].provider`.
+#[test]
+fn provider_survives_round_trip() {
+    let src = std::fs::read_to_string(fixture_path()).expect("read pi fixture");
+    let mut rewritten = String::new();
+    for line in src.lines() {
+        let mut v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
+        if let Some(m) = v.get_mut("message")
+            && m.get("role").and_then(|r| r.as_str()) == Some("assistant")
+        {
+            m["provider"] = "ollama".into();
+            m["model"] = "gemma4".into();
+        }
+        rewritten.push_str(&serde_json::to_string(&v).unwrap());
+        rewritten.push('\n');
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("convo.jsonl");
+    std::fs::write(&file, rewritten).unwrap();
+
+    let session = reader::read_session_from_file(&file).expect("read rewritten session");
+    let view = session_to_view(&session);
+    let assistant: Vec<_> = view
+        .turns
+        .iter()
+        .filter(|t| matches!(t.role, Role::Assistant))
+        .collect();
+    assert!(!assistant.is_empty());
+    assert!(
+        assistant
+            .iter()
+            .all(|t| t.provider.as_deref() == Some("ollama")),
+        "the pi reader keeps the provider"
+    );
+
+    let path = derive_path(&view, &DeriveConfig::default());
+    let def = path
+        .meta
+        .as_ref()
+        .and_then(|m| m.actors.as_ref())
+        .and_then(|a| a.get("agent:gemma4"))
+        .expect("agent:gemma4 actor");
+    assert_eq!(def.provider.as_deref(), Some("ollama"));
+
+    let after = ir_roundtrip(&view);
+    let projected = PiProjector::new().project(&after).expect("project to pi");
+    let mut seen = 0;
+    for entry in &projected.entries {
+        if let toolpath_pi::Entry::Message {
+            message:
+                toolpath_pi::AgentMessage::Assistant {
+                    provider, model, ..
+                },
+            ..
+        } = entry
+        {
+            assert_eq!(provider, "ollama");
+            assert_eq!(model, "gemma4");
+            seen += 1;
+        }
+    }
+    assert!(seen > 0, "projection has assistant entries");
+}
