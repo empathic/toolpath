@@ -80,6 +80,10 @@ A minimal document needs only `step` + `change`. Making `meta` optional means si
 
 Steps have a `parents` array. An empty or omitted array means root step. A single-element array is linear history. Multiple parents represent a merge from parallel work.
 
+### How does the format evolve?
+
+Through kinds: shape added on top of the base format is named by a `meta.kind` URI. Kind URIs are immutable and semver-versioned: a revision ships at a new version URI, and a superseded URI stays valid with the meaning it always had ([Path Kinds](/kinds/)). A kind's constraints apply by structural `type`, and extra properties never make a path invalid ([agent-coding-session v1.1.0](/kinds/agent-coding-session/v1.1.0/)).
+
 <svg class="topo topo-wide" viewBox="0 0 900 60" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
   <style>.topo-accent{stroke:var(--accent);}.topo-pencil{stroke:var(--text-secondary);}</style>
   <path d="M0,30 Q200,5 400,35 Q600,60 900,25" class="topo-accent" stroke-width="1" opacity="0.14" fill="none"/>
@@ -101,10 +105,6 @@ Options: central registry, namespaced extensions (`rust.add_method`), schema-per
 ### How should privacy and redaction be handled?
 
 Options: reference-don't-embed (store URIs, not content), redaction markers, access tiers, or encryption. Current leaning: reference by default, with optional redaction markers.
-
-### How does the format evolve?
-
-Options: semver, date-based, or extension-based (frozen core). Current leaning: semver for core schema, with "old readers ignore unknown fields" policy.
 
 ## Links
 

@@ -11,7 +11,7 @@ permalink: /format/
 A format for what happens between commits.
 </p>
 
-Yesterday's tooling was a footnote. You manually ran `rustfmt` and it was incidental to the actual change. Coding agents now make a majority of the decisions on a PR — what to write, when to abandon an approach, how to phrase the test. That's a new class of information about how artifacts come to be: dense, branching, multi-actor. Nothing was built to capture it.
+Yesterday's tooling was a footnote. You manually ran `rustfmt` and it was incidental to the actual change. Coding agents now do a growing share of the work on a PR — what to write, when to abandon an approach, how to phrase the test. That's a new class of information about how artifacts come to be: dense, branching, multi-actor. Nothing was built to capture it.
 
 Git stores the final snapshot. Chat logs live in proprietary formats. Tool decisions vanish into telemetry. There's no neutral format for **saving** what actually happened, **transforming** it between systems, or **analyzing** it after the fact.
 
@@ -39,7 +39,7 @@ A complete Toolpath document is small enough to read in one breath:
 
 ```json
 {
-  "graph": { "id": "graph-step-001" },
+  "graph": { "id": "path-step-001" },
   "paths": [
     {
       "path": { "id": "path-step-001", "head": "step-001" },
@@ -52,7 +52,7 @@ A complete Toolpath document is small enough to read in one breath:
           },
           "change": {
             "src/main.rs": {
-              "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+              "raw": "@@ -1,3 +1,3 @@\n fn main() {\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");\n }\n"
             }
           }
         }
@@ -62,7 +62,7 @@ A complete Toolpath document is small enough to read in one breath:
 }
 ```
 
-That's the canonical fixture [`step-01-minimal.json`](https://github.com/empathic/toolpath/blob/main/examples/step-01-minimal.json) — one author, one timestamp, one file changed, one diff. Every Toolpath document looks like this. The objects nest the same way. Bigger documents just hold more of them.
+That's the canonical fixture [`step-01-minimal.json`](https://github.com/empathic/toolpath/blob/main/examples/step-01-minimal.json), exactly as `path p track` writes it for that one edit — one author, one timestamp, one file changed, one diff. Every Toolpath document looks like this. The objects nest the same way. Bigger documents just hold more of them.
 
 ## Steps form a DAG
 
@@ -138,7 +138,7 @@ The minimal example above shows the shape. To see what a Toolpath document looks
 | Why they changed it    | Unstructured commit message | `meta.intent` + linked refs                      |
 | Abandoned approaches   | Lost when branch is deleted | Dead ends preserved in the DAG                   |
 | Multi-actor provenance | Collapsed into one commit   | Each actor gets their own step                   |
-| Verification           | GPG on whole commit         | Scoped signatures: author, reviewer, CI          |
+| Verification           | GPG on whole commit         | Scoped signatures: author, reviewer              |
 | Granularity            | Commit-level                | Sub-commit: multiple steps between commits       |
 
 ## File extensions

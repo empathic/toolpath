@@ -8,7 +8,26 @@ source, so there is no upstream type definition to cross-check against
 and every claim here is empirical.
 
 Date: **2026-06-01**. Revisit when the Cursor minor version bumps or a
-`_v` field on any object increments.
+`_v` field on any object increments. The baseline's recording
+(`test-fixtures/cursor/convo.json`, a `CursorSession` dump) carries the
+fields generated in [observed/cursor.md](observed/cursor.md).
+
+> **Observed 2026-10-15 on Cursor.app 3.24.12 (not yet folded into the
+> sections below).** `composerData._v` is now 18 (16 here). Composer
+> headers live in a `composerHeaders` table (`composerId, workspaceId,
+> createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt,
+> subagentTypeName, value`) with `cursorDiskKV.composer.composerHeaders.migratedToTable = 1`;
+> `ItemTable.composer.composerHeaders` is a legacy key that Cursor
+> re-migrates at launch and then deletes. `toolpath-cursor` reads the
+> table's rows (most recent first) and fills in from the legacy key
+> (pr/20, 2026-10-19; checked against a copy of a real 3.24.12 DB);
+> projection writes a table row when the table exists and keeps writing
+> the key, which Cursor adopts and lists by title in its Agents window.
+> `cursor <folder>` opens the
+> Agents window with the sidebar collapsed; the projected composer is in
+> the list, not on screen. Cursor computes its own workspaceStorage id and
+> leaves toolpath's `workspace.json`-only entry orphaned. Evidence:
+> `<scratchpad>/review/resume-matrix-v4-cursor.md`.
 
 ## Storage roots
 
@@ -193,7 +212,7 @@ values are UTF-8 JSON unless otherwise noted.
 | `composerData:<composer-uuid>` | UUIDv4 | Full per-composer/session metadata |
 | `bubbleId:<composer-uuid>:<bubble-uuid>` | composer + bubble UUIDv4 | One UI message bubble (user prompt, assistant text, tool call, thinking…) |
 | `composer.content.<hash>` | 64 hex chars | Content-addressed file blob (raw bytes) |
-| `agentKv:blob:<hash>` | 64 hex chars | Same scheme, duplicate / agent-backend mirror |
+| `agentKv:blob:<hash>` | 64 hex chars (SHA-256 of the row) | Cursor 3.24: one model message (AI SDK `ModelMessage` JSON) of a chat's history; listed by `composerData.conversationState` (see "What the model sees") |
 | `inlineDiff:<workspace-id>:<diff-uuid>` | hex + UUID | Structured per-edit diff (apply/reject record) |
 | `ofsContent:<composer-uuid>:<file-uri>` | composer + full URI | Snapshot of file content as the agent saw it (often 0 bytes, used as a presence marker) |
 
@@ -262,6 +281,10 @@ Notable bits:
 - `workspaceIdentifier.uri.$mid: 1` is the VS Code `URI` tag — the
   fields are reserialized verbatim from `URI.toJSON()` and round-trip
   through `URI.from(…)`.
+- `workspaceIdentifier` may be absent, and `uri` may be `{}` (an
+  untitled or remote window). toolpath's IDE writer leaves it out when
+  neither the caller nor the document names a directory, rather than
+  writing `/`.
 - The list contains composers that have **no `bubbleId:` rows** —
   drafts the user opened and abandoned. Always cross-check with the
   bubble keyspace before assuming a session has body.
@@ -573,9 +596,8 @@ Observed behavior:
   `blobEncryptionKey` is present on the composer but unused on these
   blobs in the wild.
 
-A parallel keyspace `agentKv:blob:<hash>` mirrors the same data with
-the same hash — likely the `cursor-agent` backend's own copy. Treat
-the two as a single content store with two index prefixes.
+`agentKv:blob:<hash>` is not a mirror of these file blobs in Cursor
+3.24: it holds the chat's model history (next section).
 
 ## `inlineDiff:<workspace-id>:<diff-id>` — apply/reject records
 
@@ -788,9 +810,9 @@ Pitfalls for anyone parsing and re-emitting the format.
    SHA-256 of `""`; non-empty hashes are some normalized variant.
    Don't try to verify by recomputing — just use the hash as a lookup
    key.
-9. **`composer.content.<hash>` and `agentKv:blob:<hash>` are the same
-   content under two prefixes.** Either is sufficient; the latter is
-   the `cursor-agent` backend's own copy.
+9. **`agentKv:blob:<hash>` is model history, not file content** (Cursor
+   3.24.12): each row is one AI SDK message and its key is the SHA-256
+   of the row. See "What the model sees".
 10. **`blobEncryptionKey` and `speculativeSummarizationEncryptionKey`
     are present on every composer** but unused on the blobs we
     observed. Some fields (e.g. `inlineDiff:*` in newer Cursor
@@ -856,6 +878,79 @@ source. Suggested mapping into `ConversationView` + `toolpath::v1::Path`:
   call corresponds to the nth tool bubble in document order — but
   with Cursor's friendly tool names mapping to the bubble's internal
   ones. Use that as a sanity check, not a join key.
+
+## What the model sees (Cursor 3.24)
+
+Observed 2026-10-19 on Cursor.app 3.24.12, comparing a chat Cursor wrote
+itself with one `path resume --harness cursor` wrote. The bubbles are
+only what the chat panel draws. What Cursor sends the model on the next
+turn is a separate list:
+
+- `composerData.conversationState` is `"~"` followed by standard base64
+  (with padding) of a protobuf. Field 1 repeats: each entry is a 32-byte
+  SHA-256, in conversation order. Other fields seen (5, 8, 9 workspace
+  URI, 10, 18 file paths the agent touched, 22 `"ide"`, 26 a ms time,
+  27 the time zone, 38 the last user bubble id, 39) are not written by
+  the projector; whether Cursor needs any of them to load the history is
+  not yet checked against a live Cursor.
+- Each hash names a `cursorDiskKV` row `agentKv:blob:<sha256 hex>` whose
+  value is one AI SDK `ModelMessage` as JSON: `{"role": "system" |
+  "user" | "assistant" | "tool", "content": …, "providerOptions": …}`.
+  Assistant content parts are `reasoning` (with `signature`), `text` and
+  `tool-call` (`toolCallId`, `toolName`, `args`); tool messages carry
+  `tool-result` parts (`toolCallId`, `toolName`, `result`). The SHA-256
+  of the value bytes equals the key.
+- No bubble draws a system message, so the reader takes system text from
+  this history: each system message becomes a System turn placed before
+  the turn the next user or assistant message names (the k-th user
+  bubble with text, or the assistant bubble with that id), or at the end.
+- A native 3.24 composer also has `_v: 18`, `hasLoaded: true`, no
+  `agentBackend`, and writes a readable copy of the history to
+  `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl`.
+
+A composer with no `conversationState`, `_v: 16` and `agentBackend:
+"cursor-agent"` (what the projector wrote before) is listed in the Agents
+window but opens to an empty chat, and a follow-up starts a new
+conversation: Cursor's agent answered "This chat does not have the
+Copilot session as prior turns". The projector now writes the history
+blobs, the `conversationState` list, `_v: 18` and `hasLoaded: true`, and
+leaves `agentBackend` out. That shape matches the native chat; that
+Cursor then loads it is pending a live check.
+
+## The Cursor CLI's chat store (`cursor-agent`)
+
+Read from the cursor-cli bundle (nixpkgs `cursor-cli` 0-unstable-2026-08-11:
+`cursor-config` `oe()`, `src/state/index.ts`, `sqlite-blob-store.js`,
+`agent-kv`, the `agent.v1` field tables) and checked by writing a store from
+scratch and listing it with `cursor-agent ls` in a temp HOME, no login
+(2026-10-19). `toolpath_cursor::agent_store` writes and reads it; `path resume
+--harness cursor-agent` uses it.
+
+- **Path**: `<config>/chats/<md5(cwd)>/<agentId>/store.db`. `<config>` is
+  `$CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor`, else `~/.cursor`
+  (blank values ignored). The hash is MD5 hex of `path.resolve(process.cwd())`,
+  so of the canonical directory. The CLI also writes a `meta.json` cache
+  (`schemaVersion`, `createdAtMs`, `hasConversation`, `title`, `updatedAtMs`)
+  beside the store when it lists the chat; a store without one is listed.
+- **Tables**: `blobs (id TEXT PRIMARY KEY, data BLOB)` and
+  `meta (key TEXT PRIMARY KEY, value TEXT)`; `PRAGMA user_version = 1`; WAL.
+  A blob's id is the hex SHA-256 of its bytes.
+- **`meta['0']`**: hex of UTF-8 JSON `{agentId, latestRootBlobId (hex), name,
+  mode, isRunEverything, createdAt (ms), blobEncryptionKey (64 hex)}`; later
+  CLIs add `lastUsedModel`, `approvalMode` and others. The key is random per
+  chat and sent to Cursor's server as `x-blob-encryption-key`; the local
+  blobs are plain.
+- **Root blob** (`agent.v1.ConversationStateStructure`): field 1
+  `root_prompt_messages_json` repeats the ids of AI SDK `ModelMessage` JSON
+  blobs, the same messages the IDE lists in `conversationState` (above);
+  field 8 `turns` repeats ids of `ConversationTurnStructure` blobs. Fields 3–39
+  (todos, token details, summaries, file states, plans, …) are not written.
+- **A turn**: `ConversationTurnStructure.agent_conversation_turn` (1) embeds an
+  `AgentConversationTurnStructure`: `user_message` (1, the id of a
+  `UserMessage` blob: `text` 1, `message_id` 2) and `steps` (2, repeated ids of
+  `ConversationStep` blobs: `assistant_message` 1 → `text` 1, `tool_call` 2,
+  `thinking_message` 3 → `text` 1). The writer emits thinking and text steps;
+  tool calls are in the model history only.
 
 ## Projecting bubbles Cursor will render
 

@@ -300,11 +300,14 @@ Consumers that recognize the URI may rely on the structure that spec describes;
 unrecognized URIs should be treated as a generic path. Kind URIs are
 immutable, semver-versioned, and revisions ship at a new version URI.
 
-Defined kinds are listed at <https://toolpath.net/kinds/>. The only one defined
-so far is `https://toolpath.net/kinds/agent-coding-session/v1.0.0` — a path
-recording an AI coding conversation, where each conversational-turn step
-carries a `"conversation.append"` structural change with the turn's role,
-text, and so on. See the linked spec for the full contract.
+Defined kinds are listed at <https://toolpath.net/kinds/>. The only kind defined
+so far is `agent-coding-session` — a path recording an AI coding conversation,
+where each conversational-turn step carries a `"conversation.append"`
+structural change with the turn's role, text, and so on. Its current URI is
+`https://toolpath.net/kinds/agent-coding-session/v1.1.0`, the only version
+producers write. `…/v1.0.0` is read-only legacy: still valid, still accepted by
+readers, not supported for writing, and carrying an erratum on token
+accounting that its page records. See the linked specs for the full contract.
 
 #### Actor Definitions
 
@@ -396,7 +399,7 @@ level (for one-offs or overrides).
 Signatures can appear on both steps and paths, enabling:
 - Author signatures on individual steps
 - Reviewer signatures on paths (PR approval)
-- CI attestation signatures
+- Several signers on one step or path
 - Witness signatures for audit trails
 
 ### Path Tree Structure
@@ -713,7 +716,7 @@ Signatures require a canonical byte representation. Toolpath uses **JCS (RFC
 
 To produce a signable byte sequence:
 
-1. **Key Ordering**: Object keys sorted lexicographically by UTF-8 bytes
+1. **Key Ordering**: Object keys sorted by UTF-16 code units (RFC 8785 §3.2.3). This differs from UTF-8 byte order only for keys with characters outside the Basic Multilingual Plane, whose surrogate pairs sort before U+E000–U+FFFF
 2. **No Whitespace**: No spaces, newlines, or indentation
 3. **Unicode**: Literal characters when valid; escape only `"`, `\`, and control
    characters (U+0000-U+001F); lowercase hex in escapes (`\u001f` not `\u001F`)
@@ -935,7 +938,7 @@ other version control systems by capturing information they don't:
    ends for reflection
 3. **Multi-perspective changes**: Raw diff + structural AST ops + semantic intent
 4. **Actor provenance**: Link actors to external identities (GitHub, email, etc.)
-5. **Multi-party signatures**: Author, reviewer, CI attestation on same artifact
+5. **Multi-party signatures**: Author and reviewer signatures on the same artifact
 6. **Tool-agnostic history**: Capture changes from AI agents, formatters, linters
    that may not create VCS commits
 
