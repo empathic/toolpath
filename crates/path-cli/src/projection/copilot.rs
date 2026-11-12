@@ -12,15 +12,25 @@ pub(crate) fn build_copilot_session(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
 ) -> Result<toolpath_copilot::Session> {
+    build_copilot_session_with_id(path, project_dir, None)
+}
+
+/// [`build_copilot_session`] with the session id given; `None` derives it from the
+/// document ([`toolpath_copilot::project::session_id_for`]: the same document, the same id).
+fn build_copilot_session_with_id(
+    path: &toolpath::v1::Path,
+    project_dir: &std::path::Path,
+    id: Option<String>,
+) -> Result<toolpath_copilot::Session> {
     use toolpath_convo::ConversationProjector;
     let project_dir = std::fs::canonicalize(project_dir)
         .with_context(|| format!("resolve project path {}", project_dir.display()))?;
     let cwd_str = project_dir.to_string_lossy().to_string();
 
     let mut view = toolpath_convo::extract_conversation(path);
-    // Fresh session id so we never clobber an existing Copilot session; root
+    // The id comes from the document, so exporting it twice names one session; root
     // the session at the resume directory.
-    view.id = uuid::Uuid::new_v4().to_string();
+    view.id = id.unwrap_or_else(|| toolpath_copilot::project::session_id_for(&view.id));
     let base = view.base.get_or_insert_with(Default::default);
     base.working_dir = Some(cwd_str);
 
@@ -31,14 +41,91 @@ pub(crate) fn build_copilot_session(
 
 /// Project `path` into a GitHub Copilot CLI session under `project_dir`
 /// (writing `~/.copilot/session-state/<id>/` + a `session-store.db` row) and
-/// return the freshly-generated session id. Only ever INSERTs a new id.
+/// return the session id. The id is derived from the document, so projecting it again
+/// names the same session. Never clobbers: a session already there with identical content is
+/// reused (nothing is written); one that has diverged is left alone and the document is written
+/// under a fresh random id, with a note.
 pub(crate) fn project_copilot(
     path: &toolpath::v1::Path,
     project_dir: &std::path::Path,
 ) -> Result<String> {
-    let session = build_copilot_session(path, project_dir)?;
+    let mut session = build_copilot_session(path, project_dir)?;
+    match existing_session(&session)? {
+        Existing::Absent => {}
+        Existing::Identical => {
+            eprintln!(
+                "Copilot session {} already exists with this content; reusing it.",
+                session.id
+            );
+            return Ok(session.id);
+        }
+        Existing::Diverged => {
+            let fresh = uuid::Uuid::new_v4().to_string();
+            eprintln!(
+                "Copilot session {} already exists with different content; leaving it alone \
+                 and writing this one as {fresh}.",
+                session.id
+            );
+            session = build_copilot_session_with_id(path, project_dir, Some(fresh))?;
+        }
+    }
     write_into_copilot_project(&session)?;
     Ok(session.id)
+}
+
+/// What Copilot already has under a session's id.
+#[derive(Debug, PartialEq, Eq)]
+enum Existing {
+    Absent,
+    Identical,
+    Diverged,
+}
+
+/// The `events.jsonl` text [`write_into_copilot_project`] writes for `session`.
+fn events_text(session: &toolpath_copilot::Session) -> Result<String> {
+    let mut lines: Vec<String> = Vec::with_capacity(session.lines.len());
+    for line in &session.lines {
+        lines.push(serde_json::to_string(line)?);
+    }
+    Ok(format!("{}\n", lines.join("\n")))
+}
+
+/// Compare what is on disk (state directory) and in `session-store.db` for `session.id` with
+/// what would be written. A session-store row with no state directory counts as diverged: the
+/// id is taken by something we did not write.
+fn existing_session(session: &toolpath_copilot::Session) -> Result<Existing> {
+    let resolver = toolpath_copilot::PathResolver::new();
+    let state_dir = resolver
+        .session_state_dir()
+        .map_err(|e| anyhow::anyhow!("Cannot resolve ~/.copilot/session-state: {}", e))?;
+    let events = state_dir.join(&session.id).join("events.jsonl");
+    if events.exists() {
+        let on_disk = std::fs::read_to_string(&events)
+            .with_context(|| format!("read {}", events.display()))?;
+        return Ok(if on_disk == events_text(session)? {
+            Existing::Identical
+        } else {
+            Existing::Diverged
+        });
+    }
+    let registered = match resolver.session_store_db() {
+        Ok(db) if db.exists() => rusqlite::Connection::open(&db)
+            .and_then(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+                    [&session.id],
+                    |r| r.get::<_, i64>(0),
+                )
+            })
+            .map(|n| n > 0)
+            .unwrap_or(false),
+        _ => false,
+    };
+    Ok(if registered {
+        Existing::Diverged
+    } else {
+        Existing::Absent
+    })
 }
 
 fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()> {
@@ -50,12 +137,8 @@ fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()>
     std::fs::create_dir_all(&sess_dir).with_context(|| format!("create {}", sess_dir.display()))?;
 
     // events.jsonl
-    let mut lines: Vec<String> = Vec::with_capacity(session.lines.len());
-    for line in &session.lines {
-        lines.push(serde_json::to_string(line)?);
-    }
     let events_path = sess_dir.join("events.jsonl");
-    std::fs::write(&events_path, format!("{}\n", lines.join("\n")))
+    std::fs::write(&events_path, events_text(session)?)
         .with_context(|| format!("write {}", events_path.display()))?;
 
     // workspace.yaml
@@ -99,9 +182,18 @@ fn write_into_copilot_project(session: &toolpath_copilot::Session) -> Result<()>
     Ok(())
 }
 
+/// The instant, in the shape Copilot CLI writes and validates in
+/// `workspace.yaml` (`2026-10-15T13:50:59.997Z`). The chrono default
+/// (`…59.997483+00:00`) fails its datetime check: copilot 1.0.61 logs
+/// `Failed to load workspace … created_at: Invalid datetime` and resumes
+/// without the workspace state.
+fn copilot_now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 fn copilot_workspace_yaml(session: &toolpath_copilot::Session) -> String {
     let ws = session.workspace.clone().unwrap_or_default();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = copilot_now();
     let mut out = String::new();
     out.push_str(&format!("id: {}\n", session.id));
     if let Some(cwd) = &ws.git_root {
@@ -135,7 +227,7 @@ fn register_copilot_session(
     let ws = session.workspace.clone().unwrap_or_default();
     let cwd = ws.git_root.unwrap_or_default();
     let summary = copilot_first_user_message(session);
-    let now = chrono::Utc::now().to_rfc3339();
+    let now = copilot_now();
     conn.execute(
         "INSERT OR REPLACE INTO sessions
             (id, cwd, repository, host_type, branch, summary, created_at, updated_at)
@@ -156,4 +248,91 @@ fn register_copilot_session(
 
 fn copilot_first_user_message(session: &toolpath_copilot::Session) -> String {
     session.first_user_text().unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run `body` with `COPILOT_HOME` at a fresh temp dir and a project dir.
+    fn with_copilot_home(body: impl FnOnce(&std::path::Path, &std::path::Path)) {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("copilot");
+        std::fs::create_dir_all(&home).unwrap();
+        let project = temp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        let _g = crate::config::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var_os("COPILOT_HOME");
+        unsafe { std::env::set_var("COPILOT_HOME", &home) };
+        body(&home, &project);
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("COPILOT_HOME", v),
+                None => std::env::remove_var("COPILOT_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn project_copilot_names_one_session_for_one_document_and_reuses_it() {
+        use crate::projection::test_support::make_convo_path;
+        with_copilot_home(|home, project| {
+            let path = make_convo_path("claude-code://copilot-reuse-test");
+            let first = project_copilot(&path, project).unwrap();
+            let events = home.join("session-state").join(&first).join("events.jsonl");
+            let before = std::fs::read_to_string(&events).unwrap();
+            let second = project_copilot(&path, project).unwrap();
+            assert_eq!(first, second, "the same document names the same session");
+            assert_eq!(std::fs::read_to_string(&events).unwrap(), before);
+            assert_eq!(
+                std::fs::read_dir(home.join("session-state"))
+                    .unwrap()
+                    .count(),
+                1,
+                "no second session directory"
+            );
+        });
+    }
+
+    #[test]
+    fn project_copilot_never_overwrites_a_diverged_session() {
+        use crate::projection::test_support::make_convo_path;
+        with_copilot_home(|home, project| {
+            let path = make_convo_path("claude-code://copilot-clobber-test");
+            let first = project_copilot(&path, project).unwrap();
+            let events = home.join("session-state").join(&first).join("events.jsonl");
+            let mut text = std::fs::read_to_string(&events).unwrap();
+            text.push_str("{\"local\":\"divergence\"}\n");
+            std::fs::write(&events, &text).unwrap();
+
+            let second = project_copilot(&path, project).unwrap();
+            assert_ne!(first, second, "a diverged session is not reused");
+            assert_eq!(
+                std::fs::read_to_string(&events).unwrap(),
+                text,
+                "the diverged session is untouched"
+            );
+            assert!(
+                home.join("session-state")
+                    .join(&second)
+                    .join("events.jsonl")
+                    .exists(),
+                "the document is written under the fresh id"
+            );
+        });
+    }
+
+    #[test]
+    fn workspace_timestamps_are_millisecond_utc_z() {
+        // `2026-10-15T13:50:59.997Z`: 24 chars, `Z`, three fractional digits —
+        // the only shape copilot's workspace.yaml validator accepts.
+        let now = copilot_now();
+        assert_eq!(now.len(), 24, "{now}");
+        assert!(now.ends_with('Z'), "{now}");
+        assert_eq!(&now[19..20], ".", "{now}");
+        assert!(now[20..23].chars().all(|c| c.is_ascii_digit()), "{now}");
+        assert!(!now.contains("+00:00"), "{now}");
+    }
 }
