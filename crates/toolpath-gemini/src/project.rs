@@ -279,16 +279,22 @@ fn tokens_from_common(u: &TokenUsage) -> Tokens {
         .get("output")
         .and_then(|m| m.get("reasoning"))
         .copied();
+    let output = match (u.output_tokens, thoughts) {
+        (Some(o), Some(r)) => Some(o.saturating_sub(r)),
+        (o, _) => o,
+    };
+    // Gemini states `tool` (tool-use prompt tokens, 0 when none) and `total` (input + output +
+    // thoughts + tool; cached is inside input) on every message. The usage has no tool slot.
+    let total = u
+        .input_tokens
+        .map(|i| i + output.unwrap_or(0) + thoughts.unwrap_or(0));
     Tokens {
         input: u.input_tokens,
-        output: match (u.output_tokens, thoughts) {
-            (Some(o), Some(r)) => Some(o.saturating_sub(r)),
-            (o, _) => o,
-        },
+        output,
         cached: u.cache_read_tokens,
         thoughts,
-        tool: None,
-        total: None,
+        tool: u.input_tokens.map(|_| 0),
+        total,
     }
 }
 
@@ -583,6 +589,26 @@ mod tests {
         assert_eq!(tokens.thoughts, Some(243));
     }
 
+    /// Gemini states `tool` and `total` on every message: `total` is the sum of input, output,
+    /// thoughts and tool (cached is part of input), so both follow from the usage.
+    #[test]
+    fn tokens_from_common_states_tool_and_total() {
+        let usage = TokenUsage {
+            input_tokens: Some(8702),
+            output_tokens: Some(365),
+            cache_read_tokens: Some(0),
+            breakdowns: BTreeMap::from([(
+                "output".to_string(),
+                BTreeMap::from([("reasoning".to_string(), 329u32)]),
+            )]),
+            ..Default::default()
+        };
+        let tokens = tokens_from_common(&usage);
+        assert_eq!(tokens.output, Some(36));
+        assert_eq!(tokens.tool, Some(0));
+        assert_eq!(tokens.total, Some(9067));
+    }
+
     #[test]
     fn tokens_from_common_without_breakdown_leaves_output_unchanged() {
         let usage = TokenUsage {
@@ -597,6 +623,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -604,6 +631,7 @@ mod tests {
             timestamp: "2026-04-17T15:00:00Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -617,6 +645,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -624,6 +653,7 @@ mod tests {
             timestamp: "2026-04-17T15:00:01Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: Some("gemini-3-flash-preview".into()),
             stop_reason: None,
@@ -728,8 +758,10 @@ mod tests {
         assert_eq!(tokens.input, Some(100));
         assert_eq!(tokens.output, Some(50));
         assert_eq!(tokens.cached, Some(20));
-        // thoughts/tool/total unknown on the fallback path
-        assert!(tokens.total.is_none());
+        // thoughts unknown on the fallback path; tool is stated as 0 (the usage has no tool-use
+        // prompt slot) and total follows: input + output
+        assert_eq!(tokens.tool, Some(0));
+        assert_eq!(tokens.total, Some(150));
     }
 
     #[test]

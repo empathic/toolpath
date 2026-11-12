@@ -241,6 +241,50 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
     // Per-turn tool-result info: (tool_call_id, content, is_error).
     let mut tool_result_payloads: Vec<(usize, String, String, bool)> = Vec::new();
 
+    // Pi chains every entry to its predecessor, including the ones that do
+    // not become turns here: `toolResult` messages fold onto the assistant
+    // that made the call, and model / thinking-level changes and labels are
+    // dropped. A turn whose `parentId` names one of those would lose its
+    // parent in the IR (the step DAG only links turn to turn), and every
+    // projection of it — Claude's `parentUuid`, Pi's own `parentId` — would
+    // start a new root at each tool call, so a resume shows only the last
+    // message. Resolve such a parent up to the nearest ancestor that IS a
+    // turn.
+    let parent_of: HashMap<&str, Option<&str>> = session
+        .entries
+        .iter()
+        .map(|e| (e.entry_id(), e.parent_entry_id()))
+        .collect();
+    let folded: std::collections::HashSet<&str> = session
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Entry::ModelChange { .. }
+                    | Entry::ThinkingLevelChange { .. }
+                    | Entry::Label { .. }
+                    | Entry::Message {
+                        message: AgentMessage::ToolResult { .. },
+                        ..
+                    }
+            )
+        })
+        .map(|e| e.entry_id())
+        .collect();
+    let resolve_parent = |parent_id: &Option<String>| -> Option<String> {
+        let mut cur = parent_id.as_deref();
+        let mut hops = 0usize;
+        while let Some(id) = cur
+            && folded.contains(id)
+            && hops < session.entries.len()
+        {
+            cur = parent_of.get(id).copied().flatten();
+            hops += 1;
+        }
+        cur.map(str::to_string)
+    };
+
     for entry in &session.entries {
         match entry {
             Entry::Session(_) => continue,
@@ -252,13 +296,15 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
 
             Entry::Compaction { base, summary, .. } => {
                 turns.push(Turn {
+                    provider: None,
                     id: base.id.clone(),
-                    parent_id: base.parent_id.clone(),
+                    parent_id: resolve_parent(&base.parent_id),
                     group_id: None,
                     role: Role::System,
                     timestamp: base.timestamp.clone(),
                     text: format!("Compacted (summary): {}", summary),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,
@@ -272,13 +318,15 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
 
             Entry::BranchSummary { base, summary, .. } => {
                 turns.push(Turn {
+                    provider: None,
                     id: base.id.clone(),
-                    parent_id: base.parent_id.clone(),
+                    parent_id: resolve_parent(&base.parent_id),
                     group_id: None,
                     role: Role::System,
                     timestamp: base.timestamp.clone(),
                     text: format!("Branch summary: {}", summary),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,
@@ -292,13 +340,15 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
 
             Entry::Custom { base, .. } => {
                 turns.push(Turn {
+                    provider: None,
                     id: base.id.clone(),
-                    parent_id: base.parent_id.clone(),
+                    parent_id: resolve_parent(&base.parent_id),
                     group_id: None,
                     role: Role::Other("custom".to_string()),
                     timestamp: base.timestamp.clone(),
                     text: String::new(),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,
@@ -317,13 +367,15 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 ..
             } => {
                 turns.push(Turn {
+                    provider: None,
                     id: base.id.clone(),
-                    parent_id: base.parent_id.clone(),
+                    parent_id: resolve_parent(&base.parent_id),
                     group_id: None,
                     role: Role::Other(format!("custom:{}", custom_type)),
                     timestamp: base.timestamp.clone(),
                     text: extract_user_text(content),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,
@@ -340,6 +392,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                 let mut thinking = None;
                 let mut tool_uses: Vec<ToolInvocation> = Vec::new();
                 let mut model: Option<String> = None;
+                let mut provider: Option<String> = None;
                 let mut stop_reason_s: Option<String> = None;
                 let mut token_usage: Option<TokenUsage> = None;
                 let mut delegations: Vec<DelegatedWork> = Vec::new();
@@ -354,11 +407,13 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
                     AgentMessage::Assistant {
                         content,
                         model: m,
+                        provider: p,
                         usage,
                         stop_reason,
                         ..
                     } => {
                         role = Role::Assistant;
+                        provider = Some(p.clone()).filter(|p| !p.is_empty());
                         text = extract_assistant_text(content);
                         thinking = extract_assistant_thinking(content);
                         model = Some(m.clone());
@@ -458,14 +513,16 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
 
                 turns.push(Turn {
                     id: base.id.clone(),
-                    parent_id: base.parent_id.clone(),
+                    parent_id: resolve_parent(&base.parent_id),
                     group_id: None,
                     role,
                     timestamp: base.timestamp.clone(),
                     text,
                     thinking,
+                    thinking_signature: None,
                     tool_uses,
                     model,
+                    provider,
                     stop_reason: stop_reason_s,
                     token_usage,
                     attributed_token_usage: None,
@@ -968,6 +1025,69 @@ mod tests {
         assert!(v.turns[0].text.starts_with("$ ls"));
         assert_eq!(v.turns[0].tool_uses.len(), 1);
         assert_eq!(v.turns[0].tool_uses[0].category, Some(ToolCategory::Shell));
+    }
+
+    #[test]
+    fn test_parent_through_folded_entries_resolves_to_the_nearest_turn() {
+        // u1 <- m1 (model change, dropped) <- a1 <- r1 (tool result, folded)
+        // <- a2. The view has three turns and every turn's parent is a turn.
+        let u1 = user_text_entry("u1", None, "hi");
+        let m1 = Entry::ModelChange {
+            base: base("m1", Some("u1"), "t"),
+            provider: "anthropic".into(),
+            model_id: "m".into(),
+            extra: HashMap::new(),
+        };
+        let a1 = assistant_entry(
+            "a1",
+            Some("m1"),
+            vec![ContentBlock::ToolCall {
+                id: "t1".into(),
+                name: "read".into(),
+                arguments: json!({}),
+                extra: HashMap::new(),
+            }],
+            usage(1, 1),
+            StopReason::Known(KnownStopReason::ToolUse),
+            "m",
+        );
+        let r1 = Entry::Message {
+            base: base("r1", Some("a1"), "t"),
+            message: AgentMessage::ToolResult {
+                tool_call_id: "t1".into(),
+                tool_name: "read".into(),
+                content: vec![ToolResultContent::Text {
+                    text: "result".into(),
+                    extra: HashMap::new(),
+                }],
+                details: None,
+                is_error: false,
+                timestamp: 3,
+                extra: HashMap::new(),
+            },
+            extra: HashMap::new(),
+        };
+        let a2 = assistant_entry(
+            "a2",
+            Some("r1"),
+            vec![ContentBlock::Text {
+                text: "done".into(),
+                extra: HashMap::new(),
+            }],
+            usage(1, 1),
+            StopReason::Known(KnownStopReason::Stop),
+            "m",
+        );
+        let v = session_to_view(&session_from(vec![u1, m1, a1, r1, a2], "/tmp/p"));
+        let ids: Vec<&str> = v.turns.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["u1", "a1", "a2"]);
+        assert_eq!(v.turns[0].parent_id, None);
+        assert_eq!(v.turns[1].parent_id.as_deref(), Some("u1"));
+        assert_eq!(v.turns[2].parent_id.as_deref(), Some("a1"));
+        assert_eq!(
+            v.turns[1].tool_uses[0].result.as_ref().unwrap().content,
+            "result"
+        );
     }
 
     #[test]

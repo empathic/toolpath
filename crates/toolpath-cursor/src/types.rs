@@ -219,6 +219,57 @@ impl ComposerData {
             .and_then(|mc| mc.model_name.as_deref())
             .filter(|s| !s.is_empty())
     }
+
+    /// The model history's blob hashes (hex), in conversation order:
+    /// `conversationState` is `"~"` + base64 of a protobuf whose field 1
+    /// repeats 32-byte SHA-256s (Cursor 3.24). Empty when the composer has
+    /// no such state or it does not decode.
+    pub fn model_history_hashes(&self) -> Vec<String> {
+        let Some(state) = self
+            .extra
+            .get("conversationState")
+            .and_then(Value::as_str)
+            .and_then(|s| s.strip_prefix('~'))
+        else {
+            return Vec::new();
+        };
+        let Some(bytes) = base64_std_decode(state) else {
+            return Vec::new();
+        };
+        let Ok(msg) = crate::proto::fields(&bytes) else {
+            return Vec::new();
+        };
+        crate::proto::repeated_bytes(&msg, 1)
+            .into_iter()
+            .filter(|h| h.len() == 32)
+            .map(crate::project::hex_lower)
+            .collect()
+    }
+}
+
+/// Standard base64 with padding, as `conversationState` carries it. `None`
+/// on any byte outside the alphabet.
+pub(crate) fn base64_std_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes().filter(|&c| c != b'=') {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -356,6 +407,9 @@ pub struct Bubble {
     /// `Object.entries(undefined)` on the thinking-blocks indexer.
     #[serde(rename = "allThinkingBlocks", default)]
     pub all_thinking_blocks: Vec<ThinkingBlock>,
+    /// The bubble's own thinking text and signature, when Cursor recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<BubbleThinking>,
     /// Must serialize as `[]` when empty — same renderer trap as
     /// `allThinkingBlocks`.
     #[serde(rename = "toolResults", default)]
@@ -414,6 +468,18 @@ pub struct TokenCount {
 pub struct ModelInfo {
     #[serde(rename = "modelName", default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra: HashMap<String, Value>,
+}
+
+/// A bubble's own `thinking` object: what Cursor records for a thinking step in practice
+/// (`allThinkingBlocks` is empty beside it). `signature` is Cursor's, empty when it signs nothing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BubbleThinking {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
     pub extra: HashMap<String, Value>,
 }
@@ -580,6 +646,13 @@ pub struct CursorSession {
     /// Keyed by hash (the part after `composer.content.`).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub content_blobs: HashMap<String, String>,
+    /// Cursor 3.x model history, keyed by hash (the part after
+    /// `agentKv:blob:`): each value is one AI SDK `ModelMessage` as JSON,
+    /// and the hash is the SHA-256 of those bytes. `composerData`'s
+    /// `conversationState` lists the hashes in order; it is the history
+    /// Cursor sends the model, while the bubbles are only what it draws.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub agent_blobs: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<PathBuf>,
 }
@@ -621,6 +694,18 @@ impl CursorSession {
 
     pub fn content_blob(&self, hash: &str) -> Option<&str> {
         self.content_blobs.get(hash).map(|s| s.as_str())
+    }
+
+    /// The model history (Cursor 3.24): each `conversationState` hash's
+    /// blob parsed as one AI SDK `ModelMessage`, in order. A hash with no
+    /// blob, or a blob that is not JSON, is skipped.
+    pub fn model_messages(&self) -> Vec<Value> {
+        self.data
+            .model_history_hashes()
+            .iter()
+            .filter_map(|h| self.agent_blobs.get(h))
+            .filter_map(|body| serde_json::from_str(body).ok())
+            .collect()
     }
 }
 

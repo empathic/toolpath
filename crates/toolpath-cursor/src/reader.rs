@@ -16,8 +16,17 @@ pub const COMPOSER_DATA_PREFIX: &str = "composerData:";
 pub const BUBBLE_PREFIX: &str = "bubbleId:";
 /// Prefix for content-addressed file blobs.
 pub const CONTENT_PREFIX: &str = "composer.content.";
-/// Cross-workspace composer index key (in `ItemTable`).
+/// `cursorDiskKV` key prefix of Cursor 3.x model-history blobs; the rest of
+/// the key is the SHA-256 (hex) of the blob, which is one AI SDK message.
+pub const AGENT_BLOB_PREFIX: &str = "agentKv:blob:";
+/// Cross-workspace composer index key (in `ItemTable`). Cursor 3.24
+/// migrates it into the [`HEADERS_TABLE`] table at launch and deletes
+/// the key.
 pub const HEADERS_KEY: &str = "composer.composerHeaders";
+/// The composer index as a table (Cursor 3.24+; `cursorDiskKV`
+/// `composer.composerHeaders.migratedToTable = 1`): one row per head,
+/// the head's JSON in `value`.
+pub const HEADERS_TABLE: &str = "composerHeaders";
 
 /// Thin wrapper around a rusqlite connection opened read-only against
 /// Cursor's `state.vscdb`.
@@ -47,9 +56,60 @@ impl DbReader {
         &self.path
     }
 
-    /// Read `ItemTable.composer.composerHeaders`. Returns the parsed
-    /// blob, or an empty `ComposerHeaders` when the key is missing.
+    /// Every composer head: the rows of the `composerHeaders` table
+    /// (Cursor 3.24+), most recent first, then any head in the legacy
+    /// `ItemTable.composer.composerHeaders` blob the table does not
+    /// already hold (a head written before Cursor next migrates it).
+    /// Empty when neither exists.
     pub fn read_composer_headers(&self) -> Result<ComposerHeaders> {
+        let mut headers = self.read_headers_table()?;
+        let legacy = self.read_headers_blob()?;
+        for head in legacy.all_composers {
+            if !headers
+                .all_composers
+                .iter()
+                .any(|h| h.composer_id == head.composer_id)
+            {
+                headers.all_composers.push(head);
+            }
+        }
+        Ok(headers)
+    }
+
+    /// The `composerHeaders` table's heads, most recent first; empty
+    /// when the table does not exist (Cursor before 3.24).
+    fn read_headers_table(&self) -> Result<ComposerHeaders> {
+        let exists: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            params![HEADERS_TABLE],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Ok(ComposerHeaders::default());
+        }
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT composerId, value FROM {HEADERS_TABLE} ORDER BY recency DESC, composerId"
+        ))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+        })?;
+        let mut all_composers = Vec::new();
+        for row in rows {
+            let (id, value) = row?;
+            let Some(value) = value else { continue };
+            let head: ComposerHead =
+                serde_json::from_str(&value).map_err(|e| CursorError::MalformedPayload {
+                    what: format!("{HEADERS_TABLE}:{id}"),
+                    detail: e.to_string(),
+                })?;
+            all_composers.push(head);
+        }
+        Ok(ComposerHeaders { all_composers })
+    }
+
+    /// `ItemTable.composer.composerHeaders`, or empty when the key is
+    /// missing.
+    fn read_headers_blob(&self) -> Result<ComposerHeaders> {
         let raw: Option<String> = self
             .conn
             .query_row(
@@ -70,8 +130,8 @@ impl DbReader {
         }
     }
 
-    /// All composer ids known to the DB, in the order they appear in
-    /// `composer.composerHeaders.allComposers`. Composers with no
+    /// All composer ids known to the DB, in [`Self::read_composer_headers`]
+    /// order. Composers with no
     /// bubbles are included — call [`Self::composer_has_bubbles`] to filter
     /// drafts.
     pub fn list_composer_ids(&self) -> Result<Vec<String>> {
@@ -282,11 +342,20 @@ impl DbReader {
             }
         }
 
+        // Load the model-history blobs `conversationState` lists (Cursor 3.24).
+        let mut agent_blobs = std::collections::HashMap::new();
+        for hash in data.model_history_hashes() {
+            if let Some(body) = self.read_value_bytes(&format!("{AGENT_BLOB_PREFIX}{hash}"))? {
+                agent_blobs.insert(hash, String::from_utf8_lossy(&body).into_owned());
+            }
+        }
+
         Ok(crate::types::CursorSession {
             head,
             data,
             bubbles,
             content_blobs,
+            agent_blobs,
             transcript_path: None,
         })
     }
@@ -332,6 +401,58 @@ pub(crate) mod tests {
           ('composer.content.e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', ''),
           ('composer.content.ABC', 'fn main() {}');
     "#;
+
+    /// The Cursor 3.24 shape: the head lives in the `composerHeaders`
+    /// table (schema as Cursor 3.24.12 creates it), the ItemTable key
+    /// is gone, and `cursorDiskKV` records the migration.
+    pub(crate) const HEADERS_TABLE_3_24: &str = r#"
+        CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, subagentTypeName TEXT, value TEXT);
+        CREATE INDEX idx_composerHeaders_0 ON composerHeaders (workspaceId, isSubagent, isArchived, recency);
+        CREATE INDEX idx_composerHeaders_1 ON composerHeaders (recency, composerId);
+        INSERT INTO composerHeaders (composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value)
+          SELECT json_extract(h.value, '$.composerId'), json_extract(h.value, '$.workspaceIdentifier.id'),
+                 json_extract(h.value, '$.createdAt'), json_extract(h.value, '$.lastUpdatedAt'), 0, 0,
+                 json_extract(h.value, '$.lastUpdatedAt'), h.value
+          FROM ItemTable, json_each(ItemTable.value, '$.allComposers') AS h
+          WHERE ItemTable.key = 'composer.composerHeaders';
+        DELETE FROM ItemTable WHERE key = 'composer.composerHeaders';
+        INSERT INTO cursorDiskKV (key, value) VALUES ('composer.composerHeaders.migratedToTable', '1');
+    "#;
+
+    #[test]
+    fn reads_heads_from_the_3_24_table() {
+        let f = fixture_db(&format!("{BASIC_FIXTURE}{HEADERS_TABLE_3_24}"));
+        let r = DbReader::open(f.path()).unwrap();
+        assert_eq!(r.list_composer_ids().unwrap(), vec!["c1"]);
+        let head = r.read_composer_head("c1").unwrap().unwrap();
+        assert_eq!(head.name.as_deref(), Some("T"));
+        let s = r.load_session("c1").unwrap();
+        assert_eq!(s.bubbles.len(), 3);
+        assert_eq!(s.head.unwrap().composer_id, "c1");
+    }
+
+    #[test]
+    fn table_heads_come_first_and_the_legacy_blob_fills_in() {
+        // A head toolpath wrote to the blob after Cursor migrated (c2),
+        // plus a stale blob copy of a migrated head (c1): table wins.
+        let setup = format!(
+            r#"{BASIC_FIXTURE}{HEADERS_TABLE_3_24}
+            INSERT INTO ItemTable (key, value) VALUES ('composer.composerHeaders',
+              '{{"allComposers":[{{"composerId":"c2","name":"new"}},{{"composerId":"c1","name":"stale"}}]}}');"#
+        );
+        let f = fixture_db(&setup);
+        let r = DbReader::open(f.path()).unwrap();
+        assert_eq!(r.list_composer_ids().unwrap(), vec!["c1", "c2"]);
+        let c1 = r.read_composer_head("c1").unwrap().unwrap();
+        assert_eq!(c1.name.as_deref(), Some("T"));
+    }
+
+    #[test]
+    fn no_table_and_no_blob_is_empty() {
+        let f = fixture_db("");
+        let r = DbReader::open(f.path()).unwrap();
+        assert!(r.list_composer_ids().unwrap().is_empty());
+    }
 
     #[test]
     fn opens_and_lists_composers() {
@@ -399,6 +520,44 @@ pub(crate) mod tests {
         // Both before + after blobs cached.
         assert_eq!(s.content_blobs.len(), 2);
         assert_eq!(s.content_blob("ABC"), Some("fn main() {}"));
+    }
+
+    #[test]
+    fn load_session_reads_the_model_history_blobs_and_its_system_text() {
+        use sha2::{Digest, Sha256};
+        let body = r#"{"role":"system","content":"be terse"}"#;
+        let user = r#"{"role":"user","content":[{"type":"text","text":"hello"}]}"#;
+        let (mut proto, mut rows) = (Vec::new(), Vec::new());
+        for b in [body, user] {
+            let digest: [u8; 32] = Sha256::digest(b.as_bytes()).into();
+            crate::proto::put_bytes(&mut proto, 1, &digest);
+            rows.push(format!(
+                "('{AGENT_BLOB_PREFIX}{}', '{b}')",
+                crate::project::hex_lower(&digest)
+            ));
+        }
+        let hash = crate::project::hex_lower(&Sha256::digest(body.as_bytes()));
+        let state = format!("~{}", crate::project::base64_std(&proto));
+        let f = fixture_db(&format!(
+            "{BASIC_FIXTURE}
+            UPDATE cursorDiskKV SET value = json_set(value, '$.conversationState', '{state}')
+              WHERE key = 'composerData:c1';
+            INSERT INTO cursorDiskKV (key, value) VALUES {};",
+            rows.join(", ")
+        ));
+        let s = DbReader::open(f.path())
+            .unwrap()
+            .load_session("c1")
+            .unwrap();
+        assert_eq!(s.agent_blobs.len(), 2);
+        assert_eq!(s.agent_blobs.get(&hash).map(String::as_str), Some(body));
+        let view = crate::session_to_view(&s);
+        assert_eq!(view.turns[0].role, toolpath_convo::Role::System);
+        assert_eq!(view.turns[0].text, "be terse");
+        assert_eq!(
+            view.turns[1].parent_id.as_deref(),
+            Some(view.turns[0].id.as_str())
+        );
     }
 
     #[test]

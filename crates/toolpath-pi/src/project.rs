@@ -6,17 +6,12 @@
 //! view, `PiProjector` serializes that view back into Pi's on-disk
 //! shape (a [`SessionHeader`] plus a list of [`Entry`]).
 //!
-//! The projector consumes provider-specific data the forward path
-//! stashed under `Turn.extra["pi"]` — `api`/`provider`, `stopReason`,
-//! `toolCallId`, bash-execution metadata, custom-message markers, and
-//! synthetic-turn structures (`compaction`, `branchSummary`, `custom`,
-//! `customMessage`). For `ConversationView`s from non-Pi sources, the
-//! projector synthesizes sensible defaults (api: "anthropic",
-//! stop_reason: "stop", etc.).
-//!
-//! Foreign-namespace extras (`Turn.extra["claude"]`,
-//! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
-//! Pi's format and would pollute the JSONL.
+//! Each assistant entry's `provider` comes from [`Turn::provider`] (who
+//! served the model, e.g. `ollama`), so a pi session keeps it across a
+//! round trip. Where the view has none — and for every other Pi field
+//! the view does not carry (`api`, `stopReason`, …) — the projector
+//! writes a default (`provider`/`api`: "anthropic", stop_reason:
+//! "stop", …).
 
 use std::collections::HashMap;
 
@@ -32,6 +27,16 @@ use crate::types::{
 };
 
 // ── PiProjector ───────────────────────────────────────────────────────
+
+/// Values this writer invents because pi needs them and the view does not
+/// carry them, as `(key, value)` in the written session. `provider` is only
+/// invented when the turn has none (`Turn::provider`). The baseline checks
+/// each is really written (`crates/toolpath-goldens/fixtures/contract/pi.json`).
+///
+/// A turn that names no stop reason is written `stopReason: "stop"`, or `"toolUse"` when it
+/// ended in tool calls (`parse_stop_reason`). That depends on the turn, and no recording has a
+/// text-only turn without a reason, so it is not in this table.
+pub const SYNTHESIZED: &[(&str, &str)] = &[("api", "anthropic"), ("provider", "anthropic")];
 
 /// Project a [`ConversationView`] into a Pi [`PiSession`].
 ///
@@ -61,11 +66,10 @@ pub struct PiProjector {
     /// pulls it from the first turn's environment (or falls back to
     /// `"/"` if absent).
     pub cwd: Option<String>,
-    /// Default `api` field for assistant turns when not present in
-    /// `Turn.extra["pi"]["api"]`. Defaults to `"anthropic"`.
+    /// Default `api` field for assistant turns. Defaults to `"anthropic"`.
     pub default_api: Option<String>,
-    /// Default `provider` field for assistant turns when not present
-    /// in `Turn.extra["pi"]["api"]`. Defaults to `"anthropic"`.
+    /// Default `provider` field for assistant turns whose
+    /// [`Turn::provider`] is `None`. Defaults to `"anthropic"`.
     pub default_provider: Option<String>,
 }
 
@@ -162,10 +166,40 @@ fn project_view(
         })
         .collect();
 
+    // Pi's main thread is the newest leaf's ancestry. An assistant turn with
+    // results expands into the assistant entry plus a chain of `toolResult`
+    // entries hanging off it; whatever followed that turn in the view must
+    // hang off the LAST of those, or the results are siblings off the thread
+    // and a resume sees a tool call with no result (and no history past it).
+    let mut rewrites: HashMap<String, String> = HashMap::new();
     for turn in &view.turns {
         let pi = pi_extras(turn).cloned().unwrap_or_default();
+        let rechained: Turn;
+        let turn = match turn.parent_id.as_deref().and_then(|p| rewrites.get(p)) {
+            Some(tail) => {
+                rechained = Turn {
+                    parent_id: Some(tail.clone()),
+                    ..turn.clone()
+                };
+                &rechained
+            }
+            None => turn,
+        };
         emit_pending_meta(&mut entries, turn, &pi);
+        let before = entries.len();
         emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+        if let Some(tail) = entries[before..].iter().rev().find(|e| {
+            matches!(
+                e,
+                Entry::Message {
+                    message: AgentMessage::ToolResult { .. },
+                    ..
+                }
+            )
+        }) && tail.entry_id() != turn.id
+        {
+            rewrites.insert(turn.id.clone(), tail.entry_id().to_string());
+        }
     }
 
     Ok(PiSession {
@@ -384,10 +418,15 @@ fn emit_assistant(
                 .clone()
                 .unwrap_or_else(|| "anthropic".to_string())
         });
-    let provider = api_obj
-        .and_then(|m| m.get("provider"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let provider = turn
+        .provider
+        .clone()
+        .or_else(|| {
+            api_obj
+                .and_then(|m| m.get("provider"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| {
             cfg.default_provider
                 .clone()
@@ -395,7 +434,11 @@ fn emit_assistant(
         });
     let model = turn.model.clone().unwrap_or_default();
     let usage = build_usage(turn);
-    let stop_reason = parse_stop_reason(turn.stop_reason.as_deref(), pi.get("stopReason"));
+    let stop_reason = parse_stop_reason(
+        turn.stop_reason.as_deref(),
+        pi.get("stopReason"),
+        !turn.tool_uses.is_empty(),
+    );
     let error_message = pi
         .get("errorMessage")
         .and_then(Value::as_str)
@@ -710,16 +753,27 @@ fn build_usage(turn: &Turn) -> Usage {
 
 /// Resolve the assistant's `stopReason`. Prefer the structured
 /// `pi.stopReason` (preserves any Pi-specific values verbatim); fall
-/// back to `Turn.stop_reason` (a string), then to `Stop`.
-fn parse_stop_reason(turn_stop: Option<&str>, pi_stop: Option<&Value>) -> StopReason {
+/// back to `Turn.stop_reason` (a string), then to what Pi itself writes: `ToolUse` when the
+/// turn ended in tool calls, `Stop` when it ended on text.
+fn parse_stop_reason(
+    turn_stop: Option<&str>,
+    pi_stop: Option<&Value>,
+    has_tool_calls: bool,
+) -> StopReason {
     if let Some(v) = pi_stop
         && let Ok(sr) = serde_json::from_value::<StopReason>(v.clone())
     {
         return sr;
     }
-    let s = turn_stop.unwrap_or("stop");
-    serde_json::from_value::<StopReason>(json!(s))
-        .unwrap_or(StopReason::Known(KnownStopReason::Stop))
+    let default = if has_tool_calls {
+        KnownStopReason::ToolUse
+    } else {
+        KnownStopReason::Stop
+    };
+    let Some(s) = turn_stop else {
+        return StopReason::Known(default);
+    };
+    serde_json::from_value::<StopReason>(json!(s)).unwrap_or(StopReason::Known(default))
 }
 
 /// Pick Pi's native tool name.
@@ -758,6 +812,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -765,6 +820,7 @@ mod tests {
             timestamp: "2026-04-16T10:00:00Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -778,6 +834,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -785,6 +842,7 @@ mod tests {
             timestamp: "2026-04-16T10:00:01Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: Some("claude-sonnet-4-5".into()),
             stop_reason: Some("stop".into()),
@@ -903,6 +961,34 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_turn_after_tool_results_hangs_off_the_last_result_entry() {
+        // a1 (one call with a result) <- a2. Pi's thread is the leaf's
+        // ancestry, so a2 must be parented to the synthesized tool-result
+        // entry, not to a1, or that result (and a1's whole line) drops off.
+        let mut a1 = assistant_turn("a1", "reading");
+        a1.tool_uses = vec![ToolInvocation {
+            id: "tc1".into(),
+            name: "read".into(),
+            input: serde_json::json!({"path": "x.rs"}),
+            result: Some(ToolResult {
+                content: "fn main(){}".into(),
+                is_error: false,
+            }),
+            category: Some(ToolCategory::FileRead),
+        }];
+        let mut a2 = assistant_turn("a2", "done");
+        a2.parent_id = Some("a1".into());
+        let session = PiProjector::default()
+            .project(&view_with(vec![a1, a2]))
+            .unwrap();
+        let ids: Vec<&str> = session.entries.iter().map(|e| e.entry_id()).collect();
+        assert_eq!(ids, ["session-uuid", "a1", "a1-tr-1", "a2"]);
+        assert_eq!(session.entries[3].parent_entry_id(), Some("a1-tr-1"));
+        let thread: Vec<&str> = session.main_thread().iter().map(|e| e.entry_id()).collect();
+        assert_eq!(thread, ["a1", "a1-tr-1", "a2"]);
     }
 
     #[test]

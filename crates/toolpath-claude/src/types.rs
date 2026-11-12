@@ -72,10 +72,23 @@ pub struct Message {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub message_type: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none", alias = "stop_reason")]
+    // `message` is the Anthropic Messages API object, whose fields are
+    // snake_case (`stop_reason`, `stop_sequence`), not the envelope's
+    // camelCase. The envelope's own `stopReason` is a different,
+    // hook-provided field (docs/agents/formats/claude-code/jsonl-envelope.md);
+    // the camelCase alias only keeps reading files older toolpath wrote.
+    #[serde(
+        rename = "stop_reason",
+        skip_serializing_if = "Option::is_none",
+        alias = "stopReason"
+    )]
     pub stop_reason: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none", alias = "stop_sequence")]
+    #[serde(
+        rename = "stop_sequence",
+        skip_serializing_if = "Option::is_none",
+        alias = "stopSequence"
+    )]
     pub stop_sequence: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,6 +197,21 @@ impl Message {
     /// Thinking blocks, if any.
     ///
     /// Returns `None` when the message has no thinking content (not an empty vec).
+    pub fn thinking_signature(&self) -> Option<&str> {
+        let parts = match &self.content {
+            Some(MessageContent::Parts(parts)) => parts,
+            _ => return None,
+        };
+        let mut sigs = parts.iter().filter_map(|p| match p {
+            ContentPart::Thinking { signature, .. } => Some(signature.as_deref()),
+            _ => None,
+        });
+        match (sigs.next(), sigs.next()) {
+            (Some(Some(s)), None) => Some(s),
+            _ => None,
+        }
+    }
+
     pub fn thinking(&self) -> Option<Vec<&str>> {
         let parts = match &self.content {
             Some(MessageContent::Parts(parts)) => parts,
@@ -273,6 +301,13 @@ impl ConversationEntry {
     /// Thinking blocks from the message, if any.
     pub fn thinking(&self) -> Option<Vec<&str>> {
         self.message.as_ref().and_then(|m| m.thinking())
+    }
+
+    /// The signature of the message's thinking block, when the message has exactly one thinking
+    /// block and it is signed. With several blocks there is no single signature over their
+    /// joined text, so none is returned.
+    pub fn thinking_signature(&self) -> Option<&str> {
+        self.message.as_ref().and_then(|m| m.thinking_signature())
     }
 
     /// Tool use entries from the message, if any.
@@ -1226,6 +1261,37 @@ mod tests {
         .unwrap();
         assert_eq!(entry.stop_reason(), Some("end_turn"));
         assert!(entry.message.as_ref().unwrap().stop_sequence.is_none());
+    }
+
+    #[test]
+    fn test_message_stop_fields_written_snake_case() {
+        // The claude golden's assistant lines carry message.stop_reason (the
+        // API field); writing them back must keep that name, never the
+        // envelope's hook-provided `stopReason`.
+        let g = toolpath_golden::golden("claude");
+        let mut seen = 0;
+        for line in g.input().lines() {
+            let raw: serde_json::Value = serde_json::from_str(line).unwrap();
+            let Some(sr) = raw["message"]["stop_reason"].as_str() else {
+                continue;
+            };
+            let entry: ConversationEntry = serde_json::from_str(line).unwrap();
+            let out = serde_json::to_value(&entry).unwrap();
+            assert_eq!(out["message"]["stop_reason"].as_str(), Some(sr));
+            assert!(out["message"].get("stopReason").is_none());
+            assert!(out.get("stopReason").is_none());
+            seen += 1;
+        }
+        assert!(
+            seen > 0,
+            "the claude golden should carry message.stop_reason"
+        );
+
+        let msg: Message =
+            serde_json::from_str(r#"{"role":"assistant","stop_sequence":"END"}"#).unwrap();
+        let out = serde_json::to_value(&msg).unwrap();
+        assert_eq!(out["stop_sequence"].as_str(), Some("END"));
+        assert!(out.get("stopSequence").is_none());
     }
 
     #[test]

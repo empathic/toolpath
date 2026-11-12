@@ -275,7 +275,29 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn handle_user_message(&mut self, msg: &Message, _u: &UserMessage) {
+    fn handle_user_message(&mut self, msg: &Message, u: &UserMessage) {
+        // `system` is the system text that preceded this user message: its own turn, before it.
+        if let Some(sys) = u.system.as_deref().filter(|s| !s.is_empty()) {
+            self.turns.push(Turn {
+                provider: None,
+                id: format!("{}-system", msg.id),
+                parent_id: None,
+                group_id: None,
+                role: Role::System,
+                timestamp: millis_to_iso(msg.time_created),
+                text: sys.to_string(),
+                thinking: None,
+                thinking_signature: None,
+                tool_uses: Vec::new(),
+                model: None,
+                stop_reason: None,
+                token_usage: None,
+                attributed_token_usage: None,
+                environment: None,
+                delegations: Vec::new(),
+                file_mutations: Vec::new(),
+            });
+        }
         let text = concat_text_parts(&msg.parts);
         let environment = Some(EnvironmentSnapshot {
             working_dir: Some(self.session.directory.to_string_lossy().to_string()),
@@ -284,6 +306,7 @@ impl<'a> Builder<'a> {
         });
 
         self.turns.push(Turn {
+            provider: None,
             id: msg.id.clone(),
             parent_id: None,
             group_id: None,
@@ -291,6 +314,7 @@ impl<'a> Builder<'a> {
             timestamp: millis_to_iso(msg.time_created),
             text,
             thinking: None,
+            thinking_signature: None,
             tool_uses: Vec::new(),
             model: None,
             stop_reason: None,
@@ -446,9 +470,12 @@ impl<'a> Builder<'a> {
         //   2. For any file-write tool whose path wasn't covered by the
         //      snapshot diff, add a tool-input-derived FileMutation
         //      (catches gitignored paths and the no-repo case).
+        // A delegation-type tool call (`task`) is a delegation too, beside the `subtask` parts.
+        delegations.extend(tool_uses.iter().filter_map(ToolInvocation::as_delegation));
         let file_mutations = self.compute_turn_mutations(&snapshots, &tool_uses);
 
         self.turns.push(Turn {
+            provider: None,
             id: msg.id.clone(),
             parent_id: if a.parent_id.is_empty() {
                 None
@@ -464,6 +491,7 @@ impl<'a> Builder<'a> {
             } else {
                 Some(thinking_chunks.join("\n\n"))
             },
+            thinking_signature: None,
             tool_uses,
             model: if a.model_id.is_empty() {
                 None
@@ -526,6 +554,11 @@ impl<'a> Builder<'a> {
         // Tool-input fallback for file-write tools whose paths aren't
         // already covered by a snapshot-diff mutation.
         for tu in tool_uses {
+            // Only tools that write: read, list, glob and grep also carry a
+            // path-shaped input, but they change nothing (a directory even).
+            if tool_category(&tu.name) != Some(ToolCategory::FileWrite) {
+                continue;
+            }
             let Some(path) = tool_input_file_path(tu) else {
                 continue;
             };
@@ -690,6 +723,16 @@ fn accumulate_total(total: &mut TokenUsage, delta: &TokenUsage) {
     }
     if let Some(v) = delta.cache_write_tokens {
         add_u32(&mut total.cache_write_tokens, v);
+    }
+    // Breakdowns add class by class like the counters they decompose, so
+    // the session total carries the turns' `output.reasoning` (as
+    // `toolpath_convo::extract_conversation` rebuilds it from a document).
+    for (class, inner) in &delta.breakdowns {
+        let target = total.breakdowns.entry(class.clone()).or_default();
+        for (sub, n) in inner {
+            let slot = target.entry(sub.clone()).or_insert(0);
+            *slot = slot.saturating_add(*n);
+        }
     }
 }
 
@@ -997,6 +1040,33 @@ mod tests {
     }
 
     #[test]
+    fn only_write_tools_become_file_mutations() {
+        // read, list and grep carry a path-shaped input too (a directory even), but change
+        // nothing; only the write tool is a file mutation.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m','s',1,1,'{"parentID":"","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":1}}');
+            INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+              ('p1','m','s',1,1,'{"type":"tool","tool":"read","callID":"c1","state":{"status":"completed","input":{"filePath":"/p/src"},"output":"dir","title":"r","metadata":{},"time":{"start":1,"end":2}}}'),
+              ('p2','m','s',2,2,'{"type":"tool","tool":"grep","callID":"c2","state":{"status":"completed","input":{"path":"/p/lib","pattern":"x"},"output":"","title":"g","metadata":{},"time":{"start":2,"end":3}}}'),
+              ('p3','m','s',3,3,'{"type":"tool","tool":"write","callID":"c3","state":{"status":"completed","input":{"filePath":"/p/out.txt","content":"x"},"output":"ok","title":"w","metadata":{},"time":{"start":3,"end":4}}}'),
+              ('p4','m','s',4,4,'{"type":"step-finish","reason":"stop","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        let paths: Vec<_> = view.turns[0]
+            .file_mutations
+            .iter()
+            .map(|m| (m.path.as_str(), m.operation.as_deref()))
+            .collect();
+        assert_eq!(paths, vec![("/p/out.txt", Some("add"))]);
+    }
+
+    #[test]
     fn step_finish_drives_token_usage() {
         let (_t, mgr) = setup(BASIC_SQL);
         let view = to_view(&mgr.read_session("ses_x").unwrap());
@@ -1065,6 +1135,34 @@ mod tests {
             u.breakdowns.get("output").and_then(|m| m.get("reasoning")),
             Some(&12u32)
         );
+    }
+
+    #[test]
+    fn total_usage_sums_breakdowns_across_messages() {
+        // Two assistant messages with reasoning 5 and 7: each turn keeps its
+        // own output.reasoning, and the session total carries their sum,
+        // like the counters.
+        let body = r#"
+            INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+              VALUES ('p','/p',1,2,'[]');
+            INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+              VALUES ('s','p','slug','/p','T','1.0.0',1,2);
+            INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+              ('m1','s',1,1,'{"parentID":"","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":10,"output":20,"reasoning":5,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":1}}'),
+              ('m2','s',2,2,'{"parentID":"m1","role":"assistant","mode":"b","agent":"b","path":{"cwd":"/p","root":"/p"},"cost":0,"tokens":{"input":3,"output":4,"reasoning":7,"cache":{"read":0,"write":0}},"modelID":"m","providerID":"p","time":{"created":2}}');
+        "#;
+        let (_t, mgr) = setup(body);
+        let view = to_view(&mgr.read_session("s").unwrap());
+        let reasoning = |u: &TokenUsage| u.breakdowns.get("output")?.get("reasoning").copied();
+        let per_turn: Vec<_> = view
+            .turns
+            .iter()
+            .filter_map(|t| t.token_usage.as_ref().and_then(reasoning))
+            .collect();
+        assert_eq!(per_turn, [5, 7]);
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(total.output_tokens, Some(36));
+        assert_eq!(reasoning(total), Some(12));
     }
 
     #[test]

@@ -270,6 +270,7 @@ fn view_from_jsonl(
             .collect();
 
         turns.push(Turn {
+            provider: None,
             id: turn_id.clone(),
             parent_id: prev_id.clone(),
             group_id: None,
@@ -279,6 +280,7 @@ fn view_from_jsonl(
             timestamp: format!("2026-06-01T{:02}:{:02}:00Z", line_no / 60, line_no % 60),
             text,
             thinking: None,
+            thinking_signature: None,
             tool_uses,
             model: None,
             stop_reason: None,

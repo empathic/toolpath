@@ -15,6 +15,7 @@ members = [
     "crates/toolpath-pi",
     "crates/pathbase-client",
     "crates/path-cli",
+    "crates/toolpath-golden",
     "crates/toolpath-agents",
 ]
 exclude = ["crates/toolpath-cli"]
