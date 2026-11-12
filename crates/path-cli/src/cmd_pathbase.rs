@@ -10,6 +10,7 @@
 //! on reqwest and must build on emscripten) can reuse it.
 
 use anyhow::{Context, Result, anyhow, bail};
+use pathbase_client::types::ApiErrorCode;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -287,39 +288,48 @@ pub(crate) enum AuthMode {
 }
 
 /// Probe credentials and decide whether the upload should go authed or
-/// anonymous, *before* any picker/derive/cache work. Behavior:
+/// anonymous, *before* any picker/derive/cache work. `required_by` names
+/// what needs an authenticated upload (flags, a mode), when something
+/// does. Behavior:
 ///
 /// - `--anon` → `Anon`, no credentials check.
-/// - No stored credentials and no auth-requiring flags → `Anon` with the
+/// - No stored credentials and nothing requires auth → `Anon` with the
 ///   "not logged in — uploading anonymously" notice.
+/// - No stored credentials and `required_by` → an error saying to log
+///   in, with no anonymous notice first.
 /// - Stored credentials present → call `api_me` against the target URL.
 ///   - On success → `Authed { token, username }`.
-///   - On failure with no auth-requiring flags (`--repo`/`--public`/`--slug`)
-///     → fall back to `Anon` with a stderr notice explaining why.
-///   - On failure with auth-requiring flags → propagate the error so the
-///     user knows their explicit request can't be satisfied.
+///   - On failure with nothing requiring auth → fall back to `Anon` with
+///     a stderr notice explaining why.
+///   - On failure with `required_by` → propagate the error so the user
+///     knows their explicit request can't be satisfied.
 ///
 /// `host_of(base_url) != host_of(stored.url)` triggers an advisory warning
 /// before the credentials probe so the user sees the mismatch even if
 /// `api_me` happens to succeed.
-pub(crate) fn preflight_auth(base_url: &str, anon: bool, needs_auth: bool) -> Result<AuthMode> {
+pub(crate) fn preflight_auth(
+    base_url: &str,
+    anon: bool,
+    required_by: Option<&str>,
+) -> Result<AuthMode> {
     if anon {
         return Ok(AuthMode::Anon);
     }
     let stored = load_session(&credentials_path()?)?;
 
-    let go_anon = stored.is_none() && !needs_auth;
-    if go_anon {
-        eprintln!(
-            "note: not logged in — uploading anonymously (not listable). \
-             Run `path auth login --url {base_url}` for a listable upload."
-        );
-        return Ok(AuthMode::Anon);
-    }
-
-    let session = match stored {
-        Some(s) => s,
-        None => bail!("Not logged in. Run `path auth login` or pass `--anon`."),
+    let session = match (stored, required_by) {
+        (Some(s), _) => s,
+        (None, None) => {
+            eprintln!(
+                "note: not logged in — uploading anonymously (not listable). \
+                 Run `path auth login --url {base_url}` for a listable upload."
+            );
+            return Ok(AuthMode::Anon);
+        }
+        (None, Some(what)) => bail!(
+            "Not logged in: {what} needs an authenticated upload. \
+             Run `path auth login --url {base_url}`."
+        ),
     };
 
     if host_of(base_url) != host_of(&session.url) {
@@ -329,17 +339,16 @@ pub(crate) fn preflight_auth(base_url: &str, anon: bool, needs_auth: bool) -> Re
         );
     }
 
-    match api_me(base_url, &session.token) {
-        Ok(user) => Ok(AuthMode::Authed {
+    match (api_me(base_url, &session.token), required_by) {
+        (Ok(user), _) => Ok(AuthMode::Authed {
             token: session.token,
             username: user.username,
         }),
-        Err(e) if needs_auth => Err(e.context(format!(
-            "--repo / --public / --slug require an authenticated upload. \
-             Run `path auth login --url {base_url}` to authenticate against this \
-             server, or drop those flags to upload anonymously."
+        (Err(e), Some(what)) => Err(e.context(format!(
+            "{what} needs an authenticated upload. \
+             Run `path auth login --url {base_url}` to authenticate against this server."
         ))),
-        Err(e) => {
+        (Err(e), None) => {
             eprintln!("note: {e}; falling back to anonymous upload.");
             Ok(AuthMode::Anon)
         }
@@ -456,16 +465,54 @@ impl BatchClient {
             .map_err(BatchFailure::Transport)?;
         let status = response.status();
         let text = response.text().await.map_err(BatchFailure::Transport)?;
-        if status.is_success() {
-            serde_json::from_str(&text).map_err(|_| {
-                BatchFailure::Other(format!("unexpected response body: {}", short_body(&text)))
-            })
-        } else {
-            Err(BatchFailure::Status(
-                status.as_u16(),
-                error_message(&text).unwrap_or_else(|| short_body(&text)),
-            ))
-        }
+        decode_response(status, &text)
+    }
+}
+
+impl BatchClient {
+    /// `GET url` and decode a 2xx response as `T`.
+    async fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> std::result::Result<T, BatchFailure> {
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(BatchFailure::Transport)?;
+        let status = response.status();
+        let text = response.text().await.map_err(BatchFailure::Transport)?;
+        decode_response(status, &text)
+    }
+}
+
+/// A batch route's answer: a 2xx body decoded as `T`, or why not. A 2xx
+/// body that is not JSON at all is a page, not the API: a release
+/// Pathbase answers routes it does not have with its web app's shell.
+fn decode_response<T: serde::de::DeserializeOwned>(
+    status: reqwest::StatusCode,
+    text: &str,
+) -> std::result::Result<T, BatchFailure> {
+    if !status.is_success() {
+        let body = error_body(text);
+        let code = body.as_ref().and_then(|b| b.code.clone());
+        let message = body
+            .and_then(|b| b.error)
+            .unwrap_or_else(|| short_body(text));
+        return Err(BatchFailure::Status {
+            status: status.as_u16(),
+            code,
+            message,
+        });
+    }
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Err(_) => Err(BatchFailure::NotJson {
+            status: status.as_u16(),
+        }),
+        Ok(value) => serde_json::from_value(value).map_err(|_| {
+            BatchFailure::Other(format!("unexpected response body: {}", short_body(text)))
+        }),
     }
 }
 
@@ -613,22 +660,31 @@ pub(crate) fn graphs_post(
             // Declared error responses (e.g. the 400 from duplicate step IDs)
             // carry an `ApiErrorResponse { code, error }` body — surface the
             // human-readable `error` rather than just the status code.
-            let msg = resp.into_inner().error;
-            if msg.is_empty() {
-                bail!("upload to {owner}/{repo} failed (HTTP {code})")
+            let body = resp.into_inner();
+            let message = if body.error.is_empty() {
+                format!("upload to {owner}/{repo} failed (HTTP {code})")
             } else {
-                bail!("upload to {owner}/{repo} failed (HTTP {code}): {msg}")
-            }
+                format!(
+                    "upload to {owner}/{repo} failed (HTTP {code}): {}",
+                    body.error
+                )
+            };
+            Err(Refusal::error(Some(body.code.to_string()), message))
         }
         Err(pathbase_client::Error::UnexpectedResponse(resp)) => {
             let status = resp.status();
             let body = block_on(resp.text()).unwrap_or_default();
-            let msg = error_message(&body).unwrap_or(body);
-            if msg.is_empty() {
-                bail!("upload to {owner}/{repo} returned unexpected status: HTTP {status}")
-            } else {
-                bail!("upload to {owner}/{repo} failed ({status}): {msg}")
-            }
+            let parsed = error_body(&body).unwrap_or(ErrorBody {
+                code: None,
+                error: None,
+            });
+            let message = match parsed.error.as_deref().unwrap_or(&body) {
+                "" => {
+                    format!("upload to {owner}/{repo} returned unexpected status: HTTP {status}")
+                }
+                msg => format!("upload to {owner}/{repo} failed ({status}): {msg}"),
+            };
+            Err(Refusal::error(parsed.code, message))
         }
         Err(pathbase_client::Error::CommunicationError(e)) => {
             bail!("upload to {owner}/{repo} failed: {}", reqwest_hint(&e))
@@ -638,6 +694,48 @@ pub(crate) fn graphs_post(
             full_chain(&e)
         )),
     }
+}
+
+/// The server refused an upload: the API error code its answer carried,
+/// if any, and the message for the user. [`refusal_code`] reads the code
+/// back from the `anyhow::Error` a create returns.
+#[derive(Debug)]
+pub(crate) struct Refusal {
+    code: Option<String>,
+    message: String,
+}
+
+impl Refusal {
+    fn error(code: Option<String>, message: String) -> anyhow::Error {
+        anyhow::Error::new(Self { code, message })
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// The API error code of an upload the server refused.
+pub(crate) fn refusal_code(e: &anyhow::Error) -> Option<&str> {
+    e.downcast_ref::<Refusal>()?.code.as_deref()
+}
+
+/// `DELETE /api/v1/u/{owner}/repos/{repo}/graphs/{id}`.
+pub(crate) fn graphs_delete(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    graph_id: &uuid::Uuid,
+) -> Result<()> {
+    let client = pathbase_client(base_url, Some(token))?;
+    block_on(client.delete_graph(owner, repo, graph_id))
+        .map(|_| ())
+        .map_err(|e| anyhow!("delete graph {graph_id}: {}", full_chain(&e)))
 }
 
 fn relogin_message(base_url: &str) -> String {
@@ -780,7 +878,18 @@ fn parents_first_order(steps: &[toolpath::v1::Step]) -> Option<Vec<usize>> {
 
 enum BatchFailure {
     Transport(reqwest::Error),
-    Status(u16, String),
+    /// A non-2xx answer: the status, the `ApiErrorResponse` code when
+    /// the body carries one (known to this build or not), and the
+    /// message.
+    Status {
+        status: u16,
+        code: Option<String>,
+        message: String,
+    },
+    /// A 2xx answer whose body is not JSON.
+    NotJson {
+        status: u16,
+    },
     Other(String),
 }
 
@@ -788,8 +897,8 @@ impl BatchFailure {
     fn retryable(&self) -> bool {
         match self {
             BatchFailure::Transport(_) => true,
-            BatchFailure::Status(code, _) => *code >= 500,
-            BatchFailure::Other(_) => false,
+            BatchFailure::Status { status, .. } => *status >= 500,
+            BatchFailure::NotJson { .. } | BatchFailure::Other(_) => false,
         }
     }
 
@@ -803,8 +912,15 @@ impl BatchFailure {
                 BATCH_READ_TIMEOUT.as_secs()
             ),
             BatchFailure::Transport(e) => reqwest_hint(e),
-            BatchFailure::Status(code, msg) if msg.is_empty() => format!("HTTP {code}"),
-            BatchFailure::Status(code, msg) => format!("HTTP {code}: {msg}"),
+            BatchFailure::Status {
+                status, message, ..
+            } if message.is_empty() => format!("HTTP {status}"),
+            BatchFailure::Status {
+                status, message, ..
+            } => format!("HTTP {status}: {message}"),
+            BatchFailure::NotJson { status } => {
+                format!("HTTP {status} with a body that is not JSON")
+            }
             BatchFailure::Other(msg) => msg.clone(),
         }
     }
@@ -818,9 +934,17 @@ fn post_batch<T: serde::de::DeserializeOwned>(
     url: &str,
     body: &str,
 ) -> std::result::Result<T, BatchFailure> {
+    with_retries(|| block_on(client.send(url, body)))
+}
+
+/// Run `request`, retrying transport errors and 5xx responses with
+/// backoff, up to [`BATCH_RETRIES`] times.
+fn with_retries<T>(
+    request: impl Fn() -> std::result::Result<T, BatchFailure>,
+) -> std::result::Result<T, BatchFailure> {
     let mut retries = 0;
     loop {
-        match block_on(client.send(url, body)) {
+        match request() {
             Err(f) if f.retryable() && retries < BATCH_RETRIES => {
                 retries += 1;
                 eprintln!(
@@ -876,7 +1000,12 @@ pub(crate) fn graphs_post_streamed(
                 let _ = block_on(typed.delete_graph(owner, repo, &graph_id));
             }
             match (&e.failure, e.largest_step) {
-                (BatchFailure::Status(404 | 405, _), _) if e.opening_path => {
+                (
+                    BatchFailure::Status {
+                        status: 404 | 405, ..
+                    },
+                    _,
+                ) if e.opening_path => {
                     eprintln!(
                         "note: {base_url} does not serve streamed upload; \
                          sending the document in one request"
@@ -884,8 +1013,8 @@ pub(crate) fn graphs_post_streamed(
                     let json = serde_json::to_string(doc).context("serialize graph")?;
                     graphs_post(base_url, token, owner, repo, name, &json, public)
                 }
-                (BatchFailure::Status(401, _), _) => bail!(relogin_message(base_url)),
-                (BatchFailure::Status(413, _), Some((id, len))) => {
+                (BatchFailure::Status { status: 401, .. }, _) => bail!(relogin_message(base_url)),
+                (BatchFailure::Status { status: 413, .. }, Some((id, len))) => {
                     let step_alone = if len * 2 > e.body_len {
                         format!("; step {id} itself is too large for one request")
                     } else {
@@ -899,7 +1028,16 @@ pub(crate) fn graphs_post_streamed(
                         e.body_len
                     )
                 }
-                _ => bail!("upload to {owner}/{repo} failed: {}", e.failure.describe()),
+                (failure, _) => {
+                    let code = match failure {
+                        BatchFailure::Status { code, .. } => code.clone(),
+                        _ => None,
+                    };
+                    Err(Refusal::error(
+                        code,
+                        format!("upload to {owner}/{repo} failed: {}", failure.describe()),
+                    ))
+                }
             }
         }
     }
@@ -925,7 +1063,7 @@ fn stream_paths(
     graph_id: &uuid::Uuid,
     doc: &toolpath::v1::Graph,
     budget: usize,
-) -> std::result::Result<Vec<pathbase_client::types::CreatedPath>, StreamError> {
+) -> std::result::Result<Vec<pathbase_client::types::CreatedPath>, Box<StreamError>> {
     use toolpath::v1::PathOrRef;
 
     let paths: Vec<&toolpath::v1::Path> = doc
@@ -964,13 +1102,15 @@ fn stream_paths(
                 batches.len(),
                 batch.body.len()
             );
-            let stream_error = |failure| StreamError {
-                failure,
-                path_id: path.path.id.clone(),
-                batch_no: bi + 1,
-                body_len: batch.body.len(),
-                largest_step: batch.largest_step.clone(),
-                opening_path: bi == 0,
+            let stream_error = |failure| {
+                Box::new(StreamError {
+                    failure,
+                    path_id: path.path.id.clone(),
+                    batch_no: bi + 1,
+                    body_len: batch.body.len(),
+                    largest_step: batch.largest_step.clone(),
+                    opening_path: bi == 0,
+                })
             };
             if bi == 0 {
                 let url = client.open_route(owner, repo, graph_id);
@@ -991,10 +1131,277 @@ fn stream_paths(
     Ok(opened)
 }
 
+/// Create a graph from `doc` (whose JSON is `body`) in `owner/repo`: one
+/// request when it fits [`BATCH_BUDGET`] or cannot be streamed, else
+/// [`graphs_post_streamed`]. The streamed routes take inline paths with
+/// at least one step; any other document goes up in one request
+/// whatever its size.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_graph(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+    name: Option<&str>,
+    doc: &toolpath::v1::Graph,
+    body: &str,
+    public: bool,
+) -> Result<CreatedGraph> {
+    let streamable = doc.paths.iter().all(|p| match p {
+        toolpath::v1::PathOrRef::Path(p) => !p.steps.is_empty(),
+        toolpath::v1::PathOrRef::Ref(_) => false,
+    });
+    if body.len() <= BATCH_BUDGET || !streamable {
+        graphs_post(base_url, token, owner, repo, name, body, public)
+    } else {
+        graphs_post_streamed(
+            base_url,
+            token,
+            owner,
+            repo,
+            name,
+            doc,
+            public,
+            BATCH_BUDGET,
+        )
+    }
+}
+
+// ── Append to a stored path ─────────────────────────────────────────────
+
+/// Why a sync request to a stored path (an append, a read of its step
+/// ids, a read of its graph's URL) failed. The sync client answers
+/// `Frozen` with a continuation, `Gone` and `InheritedStepRedefined`
+/// with a fresh graph, and `InvalidDocument` with an ids diff or a
+/// fresh graph.
+#[derive(Debug)]
+pub(crate) enum AppendError {
+    /// `409 write_to_frozen`: the path can no longer change.
+    Frozen,
+    /// `404 not_found`: the graph or the path is gone.
+    Gone,
+    /// `400 invalid_document`: a step conflicts with what is stored.
+    InvalidDocument(String),
+    /// `400 inherited_step_redefined`: a step's id is stored along the
+    /// path's parent chain, possibly above a parent the caller cannot
+    /// read.
+    InheritedStepRedefined(String),
+    /// Anything else, described for the user.
+    Other(String),
+}
+
+impl std::fmt::Display for AppendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppendError::Frozen => f.write_str("the path is frozen"),
+            AppendError::Gone => f.write_str("the path is gone"),
+            AppendError::InvalidDocument(msg) => write!(f, "the server refused a step: {msg}"),
+            AppendError::InheritedStepRedefined(msg) => {
+                write!(f, "a step is stored along the path's parents: {msg}")
+            }
+            AppendError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl AppendError {
+    /// Classify `failure` of a request to `route` (named for the user).
+    /// A route answered by a page rather than the API, or by a `404` or
+    /// `405` with no error code, is one the server does not have: it
+    /// does not support incremental sharing. A code this build does not
+    /// know is the API answering: the failure keeps the server's message.
+    fn from_failure(base_url: &str, route: &str, failure: BatchFailure) -> Self {
+        let raw = match &failure {
+            BatchFailure::Status { code, .. } => code.as_deref(),
+            _ => None,
+        };
+        let code = raw.and_then(|c| c.parse::<ApiErrorCode>().ok());
+        match (&failure, code) {
+            (BatchFailure::Status { status: 409, .. }, Some(ApiErrorCode::WriteToFrozen)) => {
+                Self::Frozen
+            }
+            (BatchFailure::Status { status: 404, .. }, Some(ApiErrorCode::NotFound)) => Self::Gone,
+            (
+                BatchFailure::Status {
+                    status: 400,
+                    message,
+                    ..
+                },
+                Some(ApiErrorCode::InvalidDocument),
+            ) => Self::InvalidDocument(message.clone()),
+            (
+                BatchFailure::Status {
+                    status: 400,
+                    message,
+                    ..
+                },
+                Some(ApiErrorCode::InheritedStepRedefined),
+            ) => Self::InheritedStepRedefined(message.clone()),
+            (BatchFailure::Status { status: 401, .. }, _) => Self::Other(relogin_message(base_url)),
+            (
+                BatchFailure::Status {
+                    status: 404 | 405, ..
+                },
+                _,
+            )
+            | (BatchFailure::NotJson { .. }, _)
+                if raw.is_none() =>
+            {
+                Self::Other(format!(
+                    "{base_url} does not support incremental sharing: it does not serve {route}; \
+                     upgrade the server"
+                ))
+            }
+            (
+                BatchFailure::Status {
+                    status, message, ..
+                },
+                None,
+            ) if raw.is_some() => Self::Other(format!(
+                "{route}: HTTP {status} ({}): {message}",
+                raw.unwrap_or_default()
+            )),
+            _ => Self::Other(format!("{route}: {}", failure.describe())),
+        }
+    }
+}
+
+/// Append `steps` (sent in that order, or parents first when they are
+/// not) to the stored path at `path_url` (its API URL, as
+/// [`remote_path_url`] spells it), then a `Head` line naming `head`.
+/// `path` gives the identity and actors the lines are written with.
+/// The body is the RFC JSONL writer's output for those steps without
+/// its `PathOpen` and `PathClose`: the path's `ActorDef` lines, each
+/// step with its `Signature` lines, and the `Head`, split into requests
+/// of at most `budget` bytes as the streamed upload splits a path.
+pub(crate) fn append_steps(
+    base_url: &str,
+    token: &str,
+    path_url: &str,
+    path: &toolpath::v1::Path,
+    mut steps: Vec<toolpath::v1::Step>,
+    head: &str,
+    budget: usize,
+) -> std::result::Result<(), AppendError> {
+    if let Some(order) = parents_first_order(&steps) {
+        steps = order.iter().map(|&i| steps[i].clone()).collect();
+    }
+    let actors = path.meta.as_ref().and_then(|m| m.actors.clone());
+    let tail = toolpath::v1::Path {
+        path: toolpath::v1::PathIdentity {
+            head: head.to_string(),
+            ..path.path.clone()
+        },
+        steps,
+        meta: Some(toolpath::v1::PathMeta {
+            actors,
+            ..Default::default()
+        }),
+    };
+    let jsonl = tail.to_jsonl_string().expect("write jsonl to memory");
+    let after_open = jsonl.split_once('\n').map_or("", |(_, rest)| rest);
+    let close = after_open
+        .trim_end_matches('\n')
+        .rfind('\n')
+        .map_or(0, |i| i + 1);
+    let body = &after_open[..close];
+    let step_ids: Vec<&str> = tail.steps.iter().map(|s| s.step.id.as_str()).collect();
+    let batches = pack_batches(body, &step_ids, budget);
+
+    let client =
+        BatchClient::new(base_url, token).map_err(|e| AppendError::Other(e.to_string()))?;
+    let url = format!("{path_url}/steps");
+    for (bi, batch) in batches.iter().enumerate() {
+        if batches.len() > 1 {
+            eprintln!(
+                "  appending batch {}/{} ({} bytes)",
+                bi + 1,
+                batches.len(),
+                batch.body.len()
+            );
+        }
+        let _: pathbase_client::types::AppendStepsResponse = post_batch(&client, &url, &batch.body)
+            .map_err(|f| {
+                AppendError::from_failure(base_url, "the append route (POST …/steps)", f)
+            })?;
+    }
+    Ok(())
+}
+
+/// A stored path's step ids, as the step-ids route answers.
+#[derive(Debug, Deserialize)]
+pub(crate) struct StepIds {
+    /// The path's ids in document order; with `composed`, followed by
+    /// each parent's along the chain, nearest first.
+    pub(crate) step_ids: Vec<String>,
+    /// The parent the caller cannot read, where the walk stopped: ids
+    /// stored above it are missing from `step_ids`.
+    #[serde(default)]
+    pub(crate) truncated_at: Option<toolpath::v1::Parent>,
+}
+
+/// The ids of the steps stored in the path at `path_url`, in document
+/// order, followed with `composed` by the ids stored along its
+/// parent chain, nearest first, as far as the caller can read.
+pub(crate) fn path_step_ids(
+    base_url: &str,
+    token: &str,
+    path_url: &str,
+    composed: bool,
+) -> std::result::Result<StepIds, AppendError> {
+    let client =
+        BatchClient::new(base_url, token).map_err(|e| AppendError::Other(e.to_string()))?;
+    let url = if composed {
+        format!("{path_url}/step-ids?composed=true")
+    } else {
+        format!("{path_url}/step-ids")
+    };
+    with_retries(|| block_on(client.get::<StepIds>(&url)))
+        .map_err(|f| AppendError::from_failure(base_url, "the step-ids route (GET …/step-ids)", f))
+}
+
+/// The server's URL for the graph holding the path at the API URL
+/// `path_url`: its page, and the `uri` a child path's `parent` names it
+/// by. Read from `GET …/graphs/{id}/meta`, since only the server knows
+/// its public URL.
+pub(crate) fn graph_url(
+    base_url: &str,
+    token: &str,
+    path_url: &str,
+) -> std::result::Result<String, AppendError> {
+    #[derive(Deserialize)]
+    struct Meta {
+        url: String,
+    }
+    let graph = path_url
+        .rfind("/paths/")
+        .map(|cut| &path_url[..cut])
+        .ok_or_else(|| AppendError::Other(format!("{path_url} is not a Pathbase path URL")))?;
+    let client =
+        BatchClient::new(base_url, token).map_err(|e| AppendError::Other(e.to_string()))?;
+    with_retries(|| block_on(client.get::<Meta>(&format!("{graph}/meta"))))
+        .map(|meta| meta.url)
+        .map_err(|f| AppendError::from_failure(base_url, "the graph meta route (GET …/meta)", f))
+}
+
+/// An error answer's body: the API's `ApiErrorResponse`, or the part of
+/// it a proxy or an older server sends (an `error` with no `code`). The
+/// code is read as a string, so one newer than this build still leaves
+/// the body, and its message, readable.
+#[derive(Deserialize)]
+struct ErrorBody {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+fn error_body(body: &str) -> Option<ErrorBody> {
+    serde_json::from_str(body).ok()
+}
+
 fn error_message(body: &str) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+    error_body(body)?.error
 }
 
 /// Walk an error's `source()` chain and join each link's `Display`
@@ -1758,7 +2165,7 @@ pub(crate) mod tests {
     fn preflight_anon_when_logged_out_and_no_auth_flags() {
         let cfg = tempfile::tempdir().unwrap();
         let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
-        let mode = preflight_auth("https://pathbase.dev", false, false).unwrap();
+        let mode = preflight_auth("https://pathbase.dev", false, None).unwrap();
         assert!(matches!(mode, AuthMode::Anon));
     }
 
@@ -1773,7 +2180,7 @@ pub(crate) mod tests {
         let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), &server.base());
         let base = server.base();
-        let mode = preflight_auth(&base, false, false).unwrap();
+        let mode = preflight_auth(&base, false, None).unwrap();
         match mode {
             AuthMode::Authed { username, .. } => assert_eq!(username, "alice"),
             AuthMode::Anon => panic!("expected Authed, got Anon"),
@@ -1789,7 +2196,7 @@ pub(crate) mod tests {
         let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), &server.base());
         let base = server.base();
-        let mode = preflight_auth(&base, false, false).unwrap();
+        let mode = preflight_auth(&base, false, None).unwrap();
         assert!(matches!(mode, AuthMode::Anon));
     }
 
@@ -1802,7 +2209,7 @@ pub(crate) mod tests {
         let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), &server.base());
         let base = server.base();
-        let err = preflight_auth(&base, false, true).unwrap_err();
+        let err = preflight_auth(&base, false, Some("--repo")).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("--repo"), "expected mention of --repo: {msg}");
     }
@@ -1815,7 +2222,7 @@ pub(crate) mod tests {
         let cfg = tempfile::tempdir().unwrap();
         let _g = EnvGuard::set("TOOLPATH_CONFIG_DIR", cfg.path().to_str().unwrap());
         write_credentials(cfg.path(), "https://pathbase.dev");
-        let mode = preflight_auth("https://pathbase.dev", true, false).unwrap();
+        let mode = preflight_auth("https://pathbase.dev", true, None).unwrap();
         assert!(matches!(mode, AuthMode::Anon));
     }
 
@@ -1903,6 +2310,7 @@ pub(crate) mod tests {
                 base: None,
                 head: steps.last().unwrap().step.id.clone(),
                 graph_ref: None,
+                parent: None,
             },
             steps,
             meta: Some(PathMeta {
@@ -2432,5 +2840,169 @@ pub(crate) mod tests {
             request_line(&server.requests()[1]),
             format!("POST /api/v1/u/al%20ex/repos/path%2Fstash/graphs/{TEST_UUID}/paths HTTP/1.1")
         );
+    }
+
+    // ── Append ───────────────────────────────────────────────────────
+
+    /// An append over budget goes as several requests to `…/steps`:
+    /// actor definitions first, each step with its signatures, the
+    /// `Head` last, no `PathOpen`, `PathClose` or path signature.
+    #[test]
+    fn append_steps_batches_the_tail_and_ends_with_head() {
+        use crate::fake_pathbase::FakePathbase;
+        let fake = FakePathbase::start();
+        let mut path = stream_path(8, 200);
+        let mut actors = std::collections::HashMap::new();
+        actors.insert("human:alex".to_string(), Default::default());
+        path.meta.as_mut().unwrap().actors = Some(actors);
+        let mut first = path.clone();
+        first.steps.truncate(1);
+        first.path.head = "s0".into();
+        let doc = toolpath::v1::Graph::from_path(first);
+        let created = create_graph(
+            &fake.base(),
+            "tok",
+            "alex",
+            "x",
+            None,
+            &doc,
+            &doc.to_json().unwrap(),
+            false,
+        )
+        .unwrap();
+        let url = remote_path_url(
+            &fake.base(),
+            "alex",
+            "x",
+            &created.id,
+            &created.paths[0].server_id,
+        );
+        fake.clear_log();
+
+        let tail = path.steps[1..8].to_vec();
+        append_steps(&fake.base(), "tok", &url, &path, tail, "s7", 1000).unwrap();
+        let writes = fake.writes();
+        assert!(writes.len() >= 3, "{} requests", writes.len());
+        assert!(
+            writes
+                .iter()
+                .all(|w| w.target == format!("{}/steps", &url[url.find("/api").unwrap()..]))
+        );
+        let sent: Vec<String> = writes.iter().flat_map(|w| w.step_ids()).collect();
+        assert_eq!(sent, (1..8).map(|i| format!("s{i}")).collect::<Vec<_>>());
+        assert!(
+            writes[0].body.starts_with(r#"{"ActorDef":"#),
+            "{}",
+            writes[0].body
+        );
+        for (i, w) in writes.iter().enumerate() {
+            assert!(!w.body.contains("PathOpen") && !w.body.contains("PathClose"));
+            assert!(!w.body.contains(r#""target":"path""#));
+            let heads = if i + 1 == writes.len() {
+                vec!["s7".to_string()]
+            } else {
+                vec![]
+            };
+            assert_eq!(w.heads(), heads);
+        }
+        assert!(
+            writes
+                .iter()
+                .any(|w| w.body.contains(r#""target":"step:s1""#))
+        );
+        let stored = fake.path_at(&url).unwrap();
+        assert_eq!(stored.step_ids().len(), 8);
+        assert_eq!(stored.head.as_deref(), Some("s7"));
+    }
+
+    #[test]
+    fn append_errors_are_classified_by_status_and_code() {
+        let status = |status: u16, code: Option<&str>| BatchFailure::Status {
+            status,
+            code: code.map(String::from),
+            message: "m".into(),
+        };
+        let b = "https://h";
+        let classify = |f| AppendError::from_failure(b, "the step-ids route", f);
+        assert!(matches!(
+            classify(status(409, Some("write_to_frozen"))),
+            AppendError::Frozen
+        ));
+        assert!(matches!(
+            classify(status(404, Some("not_found"))),
+            AppendError::Gone
+        ));
+        assert!(matches!(
+            classify(status(400, Some("invalid_document"))),
+            AppendError::InvalidDocument(m) if m == "m"
+        ));
+        assert!(matches!(
+            classify(status(400, Some("inherited_step_redefined"))),
+            AppendError::InheritedStepRedefined(m) if m == "m"
+        ));
+        assert!(matches!(
+            classify(status(400, Some("bad_request"))),
+            AppendError::Other(_)
+        ));
+        assert!(matches!(
+            classify(status(409, Some("conflict"))),
+            AppendError::Other(_)
+        ));
+        // A code newer than this build: the server's message, never an
+        // unsupported server, and a 404 is not a deleted graph.
+        for status_code in [400, 404, 409] {
+            let AppendError::Other(msg) = classify(status(status_code, Some("path_deleted")))
+            else {
+                panic!("an unknown code is reported as it came");
+            };
+            assert_eq!(
+                msg,
+                format!("the step-ids route: HTTP {status_code} (path_deleted): m")
+            );
+        }
+        for unsupported in [status(404, None), BatchFailure::NotJson { status: 200 }] {
+            let AppendError::Other(msg) = classify(unsupported) else {
+                panic!("a route the server does not have is not a deleted graph");
+            };
+            assert!(
+                msg.contains("does not support incremental sharing")
+                    && msg.contains("the step-ids route"),
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_error_body_with_an_unknown_code_keeps_its_code_and_message() {
+        let failure = decode_response::<serde_json::Value>(
+            reqwest::StatusCode::NOT_FOUND,
+            r#"{"code":"path_deleted","error":"the path was deleted"}"#,
+        );
+        let Err(BatchFailure::Status {
+            status,
+            code,
+            message,
+        }) = failure
+        else {
+            panic!("an error status");
+        };
+        assert_eq!(
+            (status, code.as_deref(), message.as_str()),
+            (404, Some("path_deleted"), "the path was deleted")
+        );
+    }
+
+    #[test]
+    fn a_page_where_the_api_should_answer_is_not_json() {
+        let ok = reqwest::StatusCode::OK;
+        let page = decode_response::<serde_json::Value>(ok, "<!doctype html><html></html>");
+        assert!(matches!(page, Err(BatchFailure::NotJson { status: 200 })));
+        #[derive(Debug, Deserialize)]
+        struct Wanted {
+            #[allow(dead_code)]
+            step_ids: Vec<String>,
+        }
+        let wrong = decode_response::<Wanted>(ok, r#"{"other":1}"#);
+        assert!(matches!(wrong, Err(BatchFailure::Other(_))));
     }
 }

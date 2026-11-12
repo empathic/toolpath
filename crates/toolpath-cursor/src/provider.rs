@@ -40,8 +40,8 @@ use crate::types::{
 };
 use toolpath_convo::{
     ConversationMeta, ConversationProvider, ConversationView, ConvoError as ConvoTraitError,
-    EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
-    ToolInvocation, ToolResult, Turn, unified_diff,
+    EnvironmentSnapshot, FileMutation, Item, ProducerInfo, Role, SessionBase, TokenUsage,
+    ToolCategory, ToolInvocation, ToolResult, Turn, unified_diff,
 };
 
 /// The dispatch family used in `path.meta.source` and
@@ -336,7 +336,7 @@ impl<'a> Builder<'a> {
             id: self.session.id().to_string(),
             started_at,
             last_activity,
-            turns: self.turns,
+            items: self.turns.into_iter().map(Item::Turn).collect(),
             total_usage: if self.total_usage_set {
                 Some(self.total_usage)
             } else {
@@ -345,7 +345,6 @@ impl<'a> Builder<'a> {
             provider_id: Some(PROVIDER_ID.to_string()),
             files_changed: self.files_changed_order,
             session_ids: vec![self.session.id().to_string()],
-            events: Vec::new(),
             base: Some(SessionBase {
                 working_dir: self
                     .session
@@ -748,24 +747,25 @@ mod tests {
 
         assert_eq!(view.id, "c1");
         assert_eq!(view.provider_id.as_deref(), Some("cursor"));
-        assert_eq!(view.turns.len(), 3);
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert_eq!(turns.len(), 3);
 
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "hello");
+        assert_eq!(turns[0].role, Role::User);
+        assert_eq!(turns[0].text, "hello");
 
-        assert_eq!(view.turns[1].role, Role::Assistant);
-        assert_eq!(view.turns[1].text, "hi back");
-        assert_eq!(view.turns[1].model.as_deref(), Some("claude-opus-4-7"));
+        assert_eq!(turns[1].role, Role::Assistant);
+        assert_eq!(turns[1].text, "hi back");
+        assert_eq!(turns[1].model.as_deref(), Some("claude-opus-4-7"));
         assert_eq!(
-            view.turns[1].token_usage.as_ref().unwrap().input_tokens,
+            turns[1].token_usage.as_ref().unwrap().input_tokens,
             Some(10)
         );
 
-        assert_eq!(view.turns[2].role, Role::Assistant);
-        assert_eq!(view.turns[2].tool_uses.len(), 1);
-        assert_eq!(view.turns[2].tool_uses[0].name, "edit_file_v2");
+        assert_eq!(turns[2].role, Role::Assistant);
+        assert_eq!(turns[2].tool_uses.len(), 1);
+        assert_eq!(turns[2].tool_uses[0].name, "edit_file_v2");
         assert_eq!(
-            view.turns[2].tool_uses[0].category,
+            turns[2].tool_uses[0].category,
             Some(ToolCategory::FileWrite)
         );
     }
@@ -785,7 +785,7 @@ mod tests {
     fn file_mutation_populated_with_diff() {
         let (_t, mgr) = setup();
         let view = session_to_view(&mgr.read_session("c1").unwrap());
-        let edit_turn = &view.turns[2];
+        let edit_turn = view.turns().nth(2).unwrap();
         assert_eq!(edit_turn.file_mutations.len(), 1);
         let fm = &edit_turn.file_mutations[0];
         assert_eq!(fm.path, "/p/x.rs");
@@ -807,9 +807,10 @@ mod tests {
     fn parent_id_chains_turns() {
         let (_t, mgr) = setup();
         let view = session_to_view(&mgr.read_session("c1").unwrap());
-        assert!(view.turns[0].parent_id.is_none());
-        assert_eq!(view.turns[1].parent_id.as_deref(), Some("u1"));
-        assert_eq!(view.turns[2].parent_id.as_deref(), Some("a1"));
+        let turns: Vec<&Turn> = view.turns().collect();
+        assert!(turns[0].parent_id.is_none());
+        assert_eq!(turns[1].parent_id.as_deref(), Some("u1"));
+        assert_eq!(turns[2].parent_id.as_deref(), Some("a1"));
     }
 
     #[test]
@@ -824,7 +825,7 @@ mod tests {
         let r = crate::reader::DbReader::open(f.path()).unwrap();
         let s = r.load_session("cs").unwrap();
         let view = session_to_view(&s);
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         assert_eq!(tool.category, Some(ToolCategory::Shell));
         let result = tool.result.as_ref().unwrap();
         assert!(!result.is_error);
@@ -844,7 +845,7 @@ mod tests {
         let r = crate::reader::DbReader::open(f.path()).unwrap();
         let s = r.load_session("ce").unwrap();
         let view = session_to_view(&s);
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         assert!(tool.result.as_ref().unwrap().is_error);
     }
 
@@ -860,7 +861,7 @@ mod tests {
         let r = crate::reader::DbReader::open(f.path()).unwrap();
         let s = r.load_session("cu").unwrap();
         let view = session_to_view(&s);
-        let tool = &view.turns[0].tool_uses[0];
+        let tool = &view.turns().next().unwrap().tool_uses[0];
         assert_eq!(tool.name, "future_thing_v9");
         assert_eq!(tool.category, None);
         assert_eq!(tool.input["x"], 1);
@@ -882,7 +883,7 @@ mod tests {
         let ids = ConversationProvider::list_conversations(&mgr, "").unwrap();
         assert_eq!(ids, vec!["c1".to_string()]);
         let v = ConversationProvider::load_conversation(&mgr, "", "c1").unwrap();
-        assert_eq!(v.turns.len(), 3);
+        assert_eq!(v.turns().count(), 3);
         let m = ConversationProvider::load_metadata(&mgr, "", "c1").unwrap();
         assert_eq!(m.message_count, 3);
     }

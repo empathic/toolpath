@@ -32,6 +32,8 @@ mod cmd_track;
 mod cmd_validate;
 mod config;
 mod derive;
+#[cfg(all(test, not(target_os = "emscripten")))]
+mod fake_pathbase;
 #[cfg(not(target_os = "emscripten"))]
 mod fuzzy;
 #[cfg(not(target_os = "emscripten"))]
@@ -44,6 +46,10 @@ mod providers;
 mod query;
 mod remote;
 mod schema;
+#[cfg(not(target_os = "emscripten"))]
+mod share_all;
+#[cfg(not(target_os = "emscripten"))]
+mod share_append;
 #[cfg(not(target_os = "emscripten"))]
 mod share_config;
 #[cfg(all(not(target_os = "emscripten"), feature = "embedded-picker"))]

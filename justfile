@@ -30,6 +30,13 @@ refresh-openapi:
 test-pathbase-live *URL:
     ./scripts/test-pathbase-live.sh {{URL}}
 
+# Path sync acceptance tests against a running Pathbase. Set
+# TEST_PATHBASE_URL (its API base, e.g. http://127.0.0.1:8788) and
+# TEST_PATHBASE_TOKEN (a CLI token for a user there, from
+# `POST /api/v1/auth/cli/redeem`)
+acceptance:
+    cargo test -p path-cli --test sync_acceptance -- --ignored --nocapture
+
 # Verify all workspace crates can be published (dry run; safe)
 release-check *FLAGS:
     ./scripts/release.sh {{FLAGS}}

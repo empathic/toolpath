@@ -27,8 +27,9 @@ const REMOTES_VERSION: u32 = 1;
 /// URL on that remote — on Pathbase its API URL,
 /// `<server>/api/v1/u/<owner>/repos/<repo>/graphs/<graph>/paths/<path>`
 /// (`cmd_pathbase::remote_path_url`) — so the containing graph is the
-/// key without its last two segments and is not stored. Nothing reads
-/// these yet; incremental append and `share --all` will.
+/// key without its last two segments and is not stored. `path share`
+/// reads them to append to the remote path instead of creating another
+/// (`share_append`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RemoteRecord {
     /// How many steps of the derive the remote holds.
@@ -37,6 +38,18 @@ pub(crate) struct RemoteRecord {
     pub(crate) last_step: String,
     /// The head the remote was last told.
     pub(crate) head: String,
+    /// Whether the remote path carries a `path.parent`: it was created
+    /// as a continuation of a frozen path, so some of the derive's steps
+    /// are inherited from the chain above it rather than its own. The
+    /// server stores a path's edges only among its own steps, so every
+    /// batch appended to such a path keeps only parents among them.
+    /// Which ids are owned and which inherited is asked of the server,
+    /// never inferred from positions in the local derive: once a session
+    /// has been truncated and regrown, a continuation's own steps need
+    /// not be a contiguous suffix of it. Absent in records written
+    /// before it existed, which are never continuations' records: false.
+    #[serde(default)]
+    pub(crate) has_parent: bool,
     /// The local source's stamp when those steps were sent; absent
     /// when the source provides neither part, so freshness cannot be
     /// told by stamp.
@@ -62,21 +75,6 @@ impl SourceStamp {
     }
 }
 
-impl RemoteRecord {
-    /// The record for a remote holding every step of `path`, taken
-    /// while the local source was at `stamp`. `None` for a path with
-    /// no steps: there is nothing to hold.
-    pub(crate) fn of(path: &toolpath::v1::Path, stamp: sources::Stamp) -> Option<Self> {
-        let last = path.steps.last()?;
-        Some(Self {
-            steps: path.steps.len(),
-            last_step: last.step.id.clone(),
-            head: path.path.head.clone(),
-            source_stamp: SourceStamp::known(stamp),
-        })
-    }
-}
-
 /// One session's records: path URL → record.
 pub(crate) type SessionRemotes = BTreeMap<String, RemoteRecord>;
 
@@ -95,6 +93,56 @@ impl Default for Remotes {
             version: REMOTES_VERSION,
             sessions: BTreeMap::new(),
         }
+    }
+}
+
+impl Remotes {
+    /// The session's records, on every destination.
+    pub(crate) fn of(
+        &self,
+        artifact_type: ArtifactType,
+        id: &str,
+    ) -> impl Iterator<Item = &RemoteRecord> {
+        self.sessions
+            .get(artifact_type.name())
+            .and_then(|sessions| sessions.get(id))
+            .into_iter()
+            .flat_map(|records| records.values())
+    }
+
+    /// The session's records on the server (scheme and host) of
+    /// `probe`, any path API URL there, whatever their owner and repo.
+    pub(crate) fn on_server<'a>(
+        &'a self,
+        artifact_type: ArtifactType,
+        id: &str,
+        probe: &str,
+    ) -> impl Iterator<Item = &'a RemoteRecord> {
+        let server = destination(probe).map(|(server, ..)| server);
+        self.sessions
+            .get(artifact_type.name())
+            .and_then(|sessions| sessions.get(id))
+            .into_iter()
+            .flat_map(|records| records.iter())
+            .filter(move |(key, _)| server.is_some() && destination(key).map(|(s, ..)| s) == server)
+            .map(|(_, record)| record)
+    }
+
+    /// The session's record on the destination (server, owner, repo) of
+    /// `probe`, any path API URL there, with the key it sits under.
+    pub(crate) fn at(
+        &self,
+        artifact_type: ArtifactType,
+        id: &str,
+        probe: &str,
+    ) -> Option<(&str, &RemoteRecord)> {
+        let dest = destination(probe)?;
+        self.sessions
+            .get(artifact_type.name())?
+            .get(id)?
+            .iter()
+            .find(|(key, _)| destination(key).as_ref() == Some(&dest))
+            .map(|(key, record)| (key.as_str(), record))
     }
 }
 
@@ -211,6 +259,7 @@ pub(super) fn lift_from_manifest(config_dir: &Path) -> Result<()> {
                     steps: old.steps,
                     last_step: old.last_step,
                     head: old.head,
+                    has_parent: false,
                     source_stamp: parse_stamp_string(&old.source_stamp),
                 };
                 lifted.push((name.clone(), id.clone(), api_url(&url), remote));
@@ -282,6 +331,7 @@ mod tests {
             steps,
             last_step: format!("s{}", steps - 1),
             head: format!("s{}", steps - 1),
+            has_parent: false,
             source_stamp: Some(SourceStamp {
                 modified: Some("2026-01-01T00:00:00Z".parse().unwrap()),
                 size: Some(10),
@@ -361,6 +411,37 @@ mod tests {
         assert!(
             session(cfg, "s2").is_empty(),
             "other sessions are untouched"
+        );
+    }
+
+    #[test]
+    fn at_finds_the_record_on_the_probed_destination_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path();
+        let x = &path_url("a", "x", 1);
+        let y = &path_url("a", "y", 2);
+        record_remote(cfg, ArtifactType::Claude, "s1", x, remote_record(1)).unwrap();
+        record_remote(cfg, ArtifactType::Claude, "s1", y, remote_record(2)).unwrap();
+        let remotes = load_remotes(cfg).unwrap();
+
+        let probe_x = path_url("a", "x", 9);
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", &probe_x),
+            Some((x.as_str(), &remote_record(1)))
+        );
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", &path_url("a", "y", 9)),
+            Some((y.as_str(), &remote_record(2)))
+        );
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", &path_url("b", "x", 9)),
+            None
+        );
+        assert_eq!(remotes.at(ArtifactType::Claude, "s2", &probe_x), None);
+        assert_eq!(remotes.at(ArtifactType::Codex, "s1", &probe_x), None);
+        assert_eq!(
+            remotes.at(ArtifactType::Claude, "s1", "s3://bucket/key"),
+            None
         );
     }
 
@@ -491,16 +572,33 @@ mod tests {
 
     #[test]
     fn remote_record_serializes_as_the_spec_shape() {
-        let json = serde_json::to_value(remote_record(412)).unwrap();
+        let record = RemoteRecord {
+            has_parent: true,
+            ..remote_record(412)
+        };
+        let json = serde_json::to_value(&record).unwrap();
         assert_eq!(
             json,
             serde_json::json!({
                 "steps": 412,
                 "last_step": "s411",
                 "head": "s411",
+                "has_parent": true,
                 "source_stamp": {"modified": "2026-01-01T00:00:00Z", "size": 10},
             })
         );
+        assert_eq!(
+            serde_json::from_value::<RemoteRecord>(json).unwrap(),
+            record
+        );
+    }
+
+    /// A record written before `has_parent` existed is a fresh path's.
+    #[test]
+    fn a_record_without_has_parent_has_no_parent() {
+        let old = serde_json::json!({"steps": 3, "last_step": "s2", "head": "s2"});
+        let record: RemoteRecord = serde_json::from_value(old).unwrap();
+        assert!(!record.has_parent);
     }
 
     /// A stamp with neither part is left out of the record and reads
@@ -539,37 +637,5 @@ mod tests {
         );
         assert_eq!(parse_stamp_string("/"), None);
         assert_eq!(parse_stamp_string("garbage"), None);
-    }
-
-    #[test]
-    fn remote_record_of_takes_the_path_tail_and_head() {
-        let mut path = toolpath::v1::Path {
-            path: toolpath::v1::PathIdentity {
-                id: "p".into(),
-                base: None,
-                head: "s2".into(),
-                graph_ref: None,
-            },
-            steps: Vec::new(),
-            meta: None,
-        };
-        assert_eq!(RemoteRecord::of(&path, (None, None)), None);
-        for id in ["s0", "s1", "s2"] {
-            path.steps.push(toolpath::v1::Step {
-                step: toolpath::v1::StepIdentity {
-                    id: id.into(),
-                    parents: Vec::new(),
-                    actor: "a".into(),
-                    timestamp: "2024-01-01T00:00:00Z".into(),
-                },
-                change: Default::default(),
-                meta: None,
-            });
-        }
-        let rec = RemoteRecord::of(&path, (None, Some(9))).unwrap();
-        assert_eq!(rec.steps, 3);
-        assert_eq!(rec.last_step, "s2");
-        assert_eq!(rec.head, "s2");
-        assert_eq!(rec.source_stamp, SourceStamp::known((None, Some(9))));
     }
 }

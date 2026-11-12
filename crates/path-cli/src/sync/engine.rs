@@ -379,22 +379,6 @@ pub(crate) fn fresh_cache_id(
     .then_some((cache_id, (modified, size)))
 }
 
-/// The session a cache entry was derived from, with the source stamp
-/// its record carries: what `p export pathbase <cache id>` records an
-/// upload against. `None` when no manifest record names the entry.
-pub(crate) fn session_of_cache_id(
-    cache_id: &str,
-) -> Option<(ArtifactType, String, sources::Stamp)> {
-    let manifest = load_manifest(&crate::config::config_dir().ok()?).ok()?;
-    manifest.iter().find_map(|(name, records)| {
-        let artifact_type = ArtifactType::parse(name)?;
-        records
-            .iter()
-            .find(|(_, rec)| rec.cache_id.as_deref() == Some(cache_id))
-            .map(|(id, rec)| (artifact_type, id.clone(), (rec.modified, rec.size)))
-    })
-}
-
 /// `p cache rm` eviction: the doc is gone, so any record pointing
 /// at it downgrades to known-but-uncached (the artifact itself is
 /// still real; the next in-scope sync re-materializes it).

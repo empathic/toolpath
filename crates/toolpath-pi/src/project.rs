@@ -9,7 +9,7 @@
 //! The projector consumes provider-specific data the forward path
 //! stashed under `Turn.extra["pi"]` — `api`/`provider`, `stopReason`,
 //! `toolCallId`, bash-execution metadata, custom-message markers, and
-//! synthetic-turn structures (`compaction`, `branchSummary`, `custom`,
+//! synthetic-turn structures (`branchSummary`, `custom`,
 //! `customMessage`). For `ConversationView`s from non-Pi sources, the
 //! projector synthesizes sensible defaults (api: "anthropic",
 //! stop_reason: "stop", etc.).
@@ -18,11 +18,13 @@
 //! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
 //! Pi's format and would pollute the JSONL.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use serde_json::{Map, Value, json};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    ConversationProjector, ConversationView, ConvoError, Item, KeptAncestors, Result, Role,
+    ToolInvocation, Turn,
 };
 
 use crate::reader::PiSession;
@@ -108,8 +110,7 @@ fn project_view(
         .cwd
         .clone()
         .or_else(|| {
-            view.turns
-                .iter()
+            view.turns()
                 .find_map(|t| t.environment.as_ref()?.working_dir.clone())
         })
         .unwrap_or_else(|| "/".to_string());
@@ -117,15 +118,15 @@ fn project_view(
     let timestamp = view
         .started_at
         .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-        .or_else(|| view.turns.first().map(|t| t.timestamp.clone()))
+        .or_else(|| view.turns().next().map(|t| t.timestamp.clone()))
         .unwrap_or_default();
 
     // Pi's session header optionally carries `parentSession` — the
     // forward path stashed it on the first turn's extras. Round-trip
     // it when present.
     let parent_session = view
-        .turns
-        .first()
+        .turns()
+        .next()
         .and_then(|t| pi_extras(t))
         .and_then(|pi| pi.get("parentSession").and_then(Value::as_str))
         .map(str::to_string);
@@ -151,8 +152,7 @@ fn project_view(
     // both populates `tool_uses[i].result` AND keeps the original
     // tool-result message as a separate turn).
     let covered: std::collections::HashSet<String> = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| matches!(t.role, Role::Other(ref s) if s == "tool"))
         .filter_map(|t| {
             pi_extras(t)
@@ -162,10 +162,23 @@ fn project_view(
         })
         .collect();
 
-    for turn in &view.turns {
-        let pi = pi_extras(turn).cloned().unwrap_or_default();
-        emit_pending_meta(&mut entries, turn, &pi);
-        emit_turn_entries(cfg, turn, &pi, &covered, &mut entries);
+    // Only turns project to entries; events are dropped. A Pi compaction,
+    // read as a System turn, projects like any other System turn. A turn
+    // may chain onto an event, so its parent resolves past dropped events
+    // to the nearest turn.
+    let kept = KeptAncestors::new(view, |item| matches!(item, Item::Turn(_)));
+    for turn in view.turns() {
+        let parent = kept.resolve(turn.parent_id.as_deref());
+        let turn = if parent == turn.parent_id.as_deref() {
+            Cow::Borrowed(turn)
+        } else {
+            Cow::Owned(Turn {
+                parent_id: parent.map(str::to_string),
+                ..turn.clone()
+            })
+        };
+        let pi = pi_extras(&turn).cloned().unwrap_or_default();
+        emit_turn_entries(cfg, &turn, &pi, &covered, &mut entries);
     }
 
     Ok(PiSession {
@@ -176,99 +189,11 @@ fn project_view(
     })
 }
 
-/// Used to return `Turn.extra["pi"]`; the IR no longer carries
-/// provider-namespaced extras. Always `None`. Callers fall back to
-/// reconstructing source-format details from typed IR fields and
+/// The IR carries no provider-namespaced extras, so this is always `None`;
+/// callers reconstruct source-format details from typed IR fields and
 /// reasonable defaults.
 fn pi_extras(_turn: &Turn) -> Option<&'static Map<String, Value>> {
     None
-}
-
-/// Emit `ModelChange` / `ThinkingLevelChange` / `Label` entries that the
-/// forward path buffered into the next turn's `extra["pi"]`.
-fn emit_pending_meta(entries: &mut Vec<Entry>, turn: &Turn, pi: &Map<String, Value>) {
-    if let Some(mc) = pi.get("modelChange").and_then(Value::as_object) {
-        let id = mc
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}-mc", turn.id));
-        let timestamp = mc
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| turn.timestamp.clone());
-        let provider = mc
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let model_id = mc
-            .get("modelId")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        entries.push(Entry::ModelChange {
-            base: EntryBase {
-                id,
-                parent_id: None,
-                timestamp,
-            },
-            provider,
-            model_id,
-            extra: extra_map_from(mc.get("rawExtra")),
-        });
-    }
-    if let Some(tlc) = pi.get("thinkingLevelChange").and_then(Value::as_object) {
-        let id = tlc
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}-tlc", turn.id));
-        let timestamp = tlc
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| turn.timestamp.clone());
-        let thinking_level = tlc
-            .get("thinkingLevel")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        entries.push(Entry::ThinkingLevelChange {
-            base: EntryBase {
-                id,
-                parent_id: None,
-                timestamp,
-            },
-            thinking_level,
-            extra: extra_map_from(tlc.get("rawExtra")),
-        });
-    }
-    if let Some(labels) = pi.get("labels").and_then(Value::as_array) {
-        for (i, label) in labels.iter().enumerate() {
-            let lo = label.as_object();
-            let id = lo
-                .and_then(|m| m.get("id"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("{}-lbl-{}", turn.id, i));
-            let timestamp = lo
-                .and_then(|m| m.get("timestamp"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| turn.timestamp.clone());
-            let extra = extra_map_from(lo.and_then(|m| m.get("rawExtra")));
-            entries.push(Entry::Label {
-                base: EntryBase {
-                    id,
-                    parent_id: None,
-                    timestamp,
-                },
-                extra,
-            });
-        }
-    }
 }
 
 /// Emit the entry (or entries) corresponding to a single turn's role
@@ -282,12 +207,8 @@ fn emit_turn_entries(
     covered_tool_ids: &std::collections::HashSet<String>,
     entries: &mut Vec<Entry>,
 ) {
-    // Synthetic compaction / branch_summary / custom turns map to
-    // their own Entry variants rather than `Entry::Message`.
-    if let Some(comp) = pi.get("compaction").and_then(Value::as_object) {
-        emit_compaction(turn, comp, entries);
-        return;
-    }
+    // Synthetic branch_summary / custom turns map to their own Entry
+    // variants rather than `Entry::Message`.
     if let Some(bs) = pi.get("branchSummary").and_then(Value::as_object) {
         emit_branch_summary(turn, bs, entries);
         return;
@@ -547,41 +468,6 @@ fn emit_bash_execution(turn: &Turn, pi: &Map<String, Value>, entries: &mut Vec<E
     });
 }
 
-fn emit_compaction(turn: &Turn, comp: &Map<String, Value>, entries: &mut Vec<Entry>) {
-    let summary = comp
-        .get("summary")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            // Fall back to extracting from the text the forward path
-            // wrote ("Compacted (summary): X").
-            turn.text
-                .strip_prefix("Compacted (summary): ")
-                .unwrap_or(&turn.text)
-                .to_string()
-        });
-    let first_kept_entry_id = comp
-        .get("firstKeptEntryId")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_default();
-    let tokens_before = comp
-        .get("tokensBefore")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let details = comp.get("details").cloned();
-    let from_hook = comp.get("fromHook").and_then(Value::as_bool);
-    entries.push(Entry::Compaction {
-        base: base_for(turn),
-        summary,
-        first_kept_entry_id,
-        tokens_before,
-        details,
-        from_hook,
-        extra: HashMap::new(),
-    });
-}
-
 fn emit_branch_summary(turn: &Turn, bs: &Map<String, Value>, entries: &mut Vec<Entry>) {
     let from_id = bs
         .get("fromId")
@@ -740,15 +626,6 @@ fn tool_native_name(tu: &ToolInvocation) -> String {
     tu.name.clone()
 }
 
-/// Coerce a `Value` (expected to be a map) into Pi's `extra:
-/// HashMap<String, Value>` shape.
-fn extra_map_from(v: Option<&Value>) -> HashMap<String, Value> {
-    match v {
-        Some(Value::Object(m)) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        _ => HashMap::new(),
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -807,12 +684,11 @@ mod tests {
             id: "session-uuid".into(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: Some("pi".into()),
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -1022,5 +898,34 @@ mod tests {
                 s
             );
         }
+    }
+
+    #[test]
+    fn test_turn_parent_resolves_past_dropped_events() {
+        // Claude and Codex readers chain turns through events; Pi drops
+        // events, so a turn chained onto one must name the turn before it.
+        let event = |id: &str, parent: &str| {
+            toolpath_convo::Item::Event(toolpath_convo::ConversationEvent {
+                id: id.into(),
+                timestamp: "2026-04-16T10:00:00Z".into(),
+                parent_id: Some(parent.into()),
+                event_type: "token_count".into(),
+                data: HashMap::new(),
+            })
+        };
+        let mut a1 = assistant_turn("a1", "hello");
+        a1.parent_id = Some("e2".into());
+        let mut view = view_with(vec![]);
+        view.items = vec![
+            toolpath_convo::Item::Turn(user_turn("u1", "hi")),
+            event("e1", "u1"),
+            event("e2", "e1"),
+            toolpath_convo::Item::Turn(a1),
+        ];
+
+        let session = PiProjector::default().project(&view).unwrap();
+        let ids: Vec<&str> = session.entries.iter().map(|e| e.entry_id()).collect();
+        assert_eq!(ids, ["session-uuid", "u1", "a1"]);
+        assert_eq!(session.entries[2].parent_entry_id(), Some("u1"));
     }
 }

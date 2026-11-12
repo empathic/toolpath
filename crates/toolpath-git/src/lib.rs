@@ -245,6 +245,7 @@ mod native {
                 }),
                 head: head_step_id,
                 graph_ref: None,
+                parent: None,
             },
             steps,
             meta: Some(PathMeta {

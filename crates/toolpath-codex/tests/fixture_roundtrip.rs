@@ -30,17 +30,13 @@ fn view_has_expected_turn_count() {
     let view = to_view(&s);
     // From prior inspection: 1 user + 1 developer + 10 assistant messages.
     assert!(
-        view.turns.len() >= 10 && view.turns.len() <= 14,
+        view.turns().count() >= 10 && view.turns().count() <= 14,
         "expected 10-14 turns, got {}",
-        view.turns.len()
+        view.turns().count()
     );
-    let users = view.turns.iter().filter(|t| t.role == Role::User).count();
-    let assistants = view
-        .turns
-        .iter()
-        .filter(|t| t.role == Role::Assistant)
-        .count();
-    let system = view.turns.iter().filter(|t| t.role == Role::System).count();
+    let users = view.turns().filter(|t| t.role == Role::User).count();
+    let assistants = view.turns().filter(|t| t.role == Role::Assistant).count();
+    let system = view.turns().filter(|t| t.role == Role::System).count();
     // The fixture has two user messages: the actual prompt plus a
     // `function_call_output`-style carrier that encodes tool output.
     // Accept either 1 or 2 so the test stays robust across wire variants.
@@ -61,11 +57,10 @@ fn view_has_expected_turn_count() {
 fn tool_calls_pair_correctly() {
     let s = session();
     let view = to_view(&s);
-    let total_tools: usize = view.turns.iter().map(|t| t.tool_uses.len()).sum();
+    let total_tools: usize = view.turns().map(|t| t.tool_uses.len()).sum();
     assert!(total_tools > 0);
     let with_result: usize = view
-        .turns
-        .iter()
+        .turns()
         .flat_map(|t| &t.tool_uses)
         .filter(|tu| tu.result.is_some())
         .count();
@@ -83,8 +78,7 @@ fn exec_commands_surface_as_shell_category() {
     let s = session();
     let view = to_view(&s);
     let shell_calls: Vec<&toolpath_convo::ToolInvocation> = view
-        .turns
-        .iter()
+        .turns()
         .flat_map(|t| &t.tool_uses)
         .filter(|tu| tu.category == Some(ToolCategory::Shell))
         .collect();
@@ -99,8 +93,7 @@ fn apply_patch_preserved() {
     let s = session();
     let view = to_view(&s);
     let apply_patches: Vec<&toolpath_convo::ToolInvocation> = view
-        .turns
-        .iter()
+        .turns()
         .flat_map(|t| &t.tool_uses)
         .filter(|tu| tu.name == "apply_patch")
         .collect();
@@ -169,8 +162,7 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
     // summing the twice-emitted counts, or stamping the cumulative — this would
     // overshoot. This is the dedup-safe / no-double-count proof on real data.
     let attributed_reasoning: u32 = view
-        .turns
-        .iter()
+        .turns()
         .map(|t| reasoning_of(t.attributed_token_usage.as_ref()))
         .sum();
     assert_eq!(
@@ -179,7 +171,7 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
     );
 
     // Per step, reasoning ⊆ output.
-    for t in &view.turns {
+    for t in view.turns() {
         if let Some(a) = t.attributed_token_usage.as_ref() {
             let r = reasoning_of(Some(a));
             assert!(
@@ -194,8 +186,7 @@ fn reasoning_breakdown_differenced_dedup_safe_against_real_fixture() {
     // Round (group) totals: Σ over group token_usage reasoning == 979 too, and
     // each round's reasoning ⊆ its output.
     let round_reasoning: u32 = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| t.token_usage.is_some())
         .map(|t| {
             let u = t.token_usage.as_ref().unwrap();
@@ -219,7 +210,7 @@ fn encrypted_reasoning_does_not_land_on_thinking() {
     // garbage).
     let s = session();
     let view = to_view(&s);
-    let with_thinking = view.turns.iter().filter(|t| t.thinking.is_some()).count();
+    let with_thinking = view.turns().filter(|t| t.thinking.is_some()).count();
     assert_eq!(
         with_thinking, 0,
         "encrypted reasoning must not land on turn.thinking"
@@ -230,13 +221,10 @@ fn encrypted_reasoning_does_not_land_on_thinking() {
 fn events_preserve_non_turn_content() {
     let s = session();
     let view = to_view(&s);
-    let has_turn_context = view.events.iter().any(|e| e.event_type == "turn_context");
-    let has_task_started = view.events.iter().any(|e| e.event_type == "task_started");
-    let has_task_complete = view.events.iter().any(|e| e.event_type == "task_complete");
-    let has_patch_apply = view
-        .events
-        .iter()
-        .any(|e| e.event_type == "patch_apply_end");
+    let has_turn_context = view.events().any(|e| e.event_type == "turn_context");
+    let has_task_started = view.events().any(|e| e.event_type == "task_started");
+    let has_task_complete = view.events().any(|e| e.event_type == "task_complete");
+    let has_patch_apply = view.events().any(|e| e.event_type == "patch_apply_end");
     assert!(has_turn_context);
     assert!(has_task_started);
     assert!(has_task_complete);

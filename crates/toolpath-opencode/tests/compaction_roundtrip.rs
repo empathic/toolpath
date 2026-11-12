@@ -10,21 +10,14 @@
 //! What this test asserts (and why):
 //!
 //!   - A compacted session loads via the SQLite reader without crashing.
-//!   - `to_view` surfaces the compaction part as a `ConversationEvent`
-//!     in `view.events` (this is the documented contract).
-//!   - User/assistant content surrounding the compaction part survives
-//!     the IR derive/extract round-trip and the projector emits a
-//!     functionally equivalent `Session`.
-//!
-//! Known limitation (documented, not asserted as fully preserved): the
-//! `ConversationEvent` carrying the compaction metadata does not
-//! survive the `derive → extract` round-trip today — `derive_path` does
-//! not emit `conversation.event` steps for `view.events`, and the
-//! opencode projector does not consume `view.events`. The compaction
-//! marker is purely structural metadata (the surrounding messages
-//! carry the actual content), so for "good UX" today this is an
-//! acceptable loss; if/when we close the gap, this test gets
-//! tightened.
+//!   - `to_view` surfaces the compaction part as a `part.compaction`
+//!     `ConversationEvent` in the item stream (this is the documented
+//!     contract).
+//!   - The event, and the user/assistant content surrounding it, survive
+//!     the IR derive/extract round-trip: `derive_path` emits the event
+//!     as a `conversation.event` step and `extract_conversation`
+//!     restores it.
+//!   - The projector emits a functionally equivalent `Session`.
 
 use std::fs;
 
@@ -136,17 +129,23 @@ fn fixture_loads_with_compaction_part() {
 fn to_view_surfaces_compaction_as_event() {
     let (_temp, session) = setup_session();
     let view = to_view(&session);
-    let event = view
-        .events
-        .iter()
-        .find(|e| e.event_type == "part.compaction");
+    let event = view.events().find(|e| e.event_type == "part.compaction");
     assert!(
         event.is_some(),
-        "expected a `part.compaction` ConversationEvent in view.events; got: {:?}",
-        view.events
-            .iter()
-            .map(|e| &e.event_type)
-            .collect::<Vec<_>>()
+        "expected a `part.compaction` ConversationEvent in view.events(); got: {:?}",
+        view.events().map(|e| &e.event_type).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn compaction_event_survives_ir_roundtrip() {
+    let (_temp, session) = setup_session();
+    let view = to_view(&session);
+    let after = ir_roundtrip(&view);
+
+    assert!(
+        after.events().any(|e| e.event_type == "part.compaction"),
+        "part.compaction event dropped by derive → extract roundtrip"
     );
 }
 
@@ -158,11 +157,11 @@ fn pre_compact_user_turn_survives_roundtrip() {
 
     let needle = "refactor the auth module";
     assert!(
-        view.turns.iter().any(|t| t.text.contains(needle)),
+        view.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt missing from initial view"
     );
     assert!(
-        after.turns.iter().any(|t| t.text.contains(needle)),
+        after.turns().any(|t| t.text.contains(needle)),
         "pre-compact prompt dropped after roundtrip"
     );
 }
@@ -178,11 +177,11 @@ fn post_compact_user_and_assistant_turns_survive_roundtrip() {
         "added session validation to login()",
     ] {
         assert!(
-            view.turns.iter().any(|t| t.text.contains(needle)),
+            view.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(needle)),
+            after.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} dropped after roundtrip"
         );
     }
@@ -200,8 +199,9 @@ fn projector_emits_session_with_pre_and_post_compact_messages() {
     let projected: Session = projector.project(&after).expect("project");
 
     // The projected session must carry both surrounding user prompts and
-    // both assistant responses (modulo whatever the compaction part
-    // itself becomes — see module-level note).
+    // both assistant responses. The compaction event itself is dropped on
+    // projection (the projector walks turns only), so message counts
+    // exclude it.
     let user_count = projected
         .messages
         .iter()

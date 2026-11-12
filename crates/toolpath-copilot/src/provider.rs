@@ -11,7 +11,7 @@ use crate::types::{CopilotEvent, Session};
 use serde_json::Value;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationEvent, ConversationView, DelegatedWork, FileMutation, ProducerInfo, Role,
+    ConversationEvent, ConversationView, DelegatedWork, FileMutation, Item, ProducerInfo, Role,
     SessionBase, TokenUsage, ToolCategory, ToolInvocation, ToolResult, Turn,
 };
 
@@ -172,7 +172,7 @@ pub fn to_view(session: &Session) -> ConversationView {
                 seq += 1;
                 let mut t = empty_turn(format!("u{seq}"), Role::User, ts);
                 t.text = m.text;
-                push_linked(&mut turns, t);
+                turns.push(t);
             }
             CopilotEvent::AssistantTurnStart => {
                 flush(&mut turns, &mut current);
@@ -291,9 +291,9 @@ pub fn to_view(session: &Session) -> ConversationView {
     // were created-then-dropped as empty (which differs across re-derivation
     // and would break parent-graph idempotency). Turn ids are only used for the
     // step DAG; tool/delegation pairing keys off tool/agent ids, not turn ids.
+    // Parents are stitched during `items` assembly below.
     for (i, t) in turns.iter_mut().enumerate() {
         t.id = format!("t{i}");
-        t.parent_id = (i > 0).then(|| format!("t{}", i - 1));
     }
 
     // Session total = field-wise sum of per-turn usage (Σ turns = session
@@ -362,16 +362,33 @@ pub fn to_view(session: &Session) -> ConversationView {
         None
     };
 
+    let mut items: Vec<Item> = turns
+        .into_iter()
+        .map(Item::Turn)
+        .chain(events.into_iter().map(Item::Event))
+        .collect();
+
+    // Copilot records no linkage on the wire, so the chain is the event log
+    // order: each item parents on the one emitted before it.
+    let mut prev: Option<String> = None;
+    for item in &mut items {
+        let (id, parent_id) = match item {
+            Item::Turn(t) => (&t.id, &mut t.parent_id),
+            Item::Event(e) => (&e.id, &mut e.parent_id),
+        };
+        *parent_id = prev.take();
+        prev = Some(id.clone());
+    }
+
     ConversationView {
         id: session.id.clone(),
         started_at: session.started_at(),
         last_activity: session.last_activity(),
-        turns,
+        items,
         total_usage,
         provider_id: Some(PROVIDER_ID.to_string()),
         files_changed,
         session_ids: Vec::new(),
-        events,
         base,
         producer: Some(ProducerInfo {
             name: PRODUCER_NAME.to_string(),
@@ -427,13 +444,6 @@ fn append_text(buf: &mut String, more: &str) {
     buf.push_str(more);
 }
 
-fn push_linked(turns: &mut Vec<Turn>, mut t: Turn) {
-    if let Some(prev) = turns.last() {
-        t.parent_id = Some(prev.id.clone());
-    }
-    turns.push(t);
-}
-
 fn turn_has_content(t: &Turn) -> bool {
     !t.text.trim().is_empty()
         || !t.tool_uses.is_empty()
@@ -446,7 +456,7 @@ fn flush(turns: &mut Vec<Turn>, current: &mut Option<Turn>) {
     if let Some(t) = current.take()
         && turn_has_content(&t)
     {
-        push_linked(turns, t);
+        turns.push(t);
     }
 }
 
@@ -748,28 +758,28 @@ mod tests {
     #[test]
     fn builds_user_and_assistant_turns() {
         let view = to_view(&parse(&body()));
-        assert_eq!(view.turns.len(), 2);
-        assert_eq!(view.turns[0].role, Role::User);
-        assert_eq!(view.turns[0].text, "build a thing");
-        assert_eq!(view.turns[1].role, Role::Assistant);
+        assert_eq!(view.turns().count(), 2);
+        assert_eq!(view.turns().next().unwrap().role, Role::User);
+        assert_eq!(view.turns().next().unwrap().text, "build a thing");
+        assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
         // Two assistant messages collapsed into one turn.
-        assert!(view.turns[1].text.contains("Listing files."));
-        assert!(view.turns[1].text.contains("Done."));
+        assert!(view.turns().nth(1).unwrap().text.contains("Listing files."));
+        assert!(view.turns().nth(1).unwrap().text.contains("Done."));
     }
 
     #[test]
     fn assistant_turn_chains_to_user() {
         let view = to_view(&parse(&body()));
         assert_eq!(
-            view.turns[1].parent_id.as_deref(),
-            Some(view.turns[0].id.as_str())
+            view.turns().nth(1).unwrap().parent_id.as_deref(),
+            Some(view.turns().next().unwrap().id.as_str())
         );
     }
 
     #[test]
     fn tool_calls_paired_with_results() {
         let view = to_view(&parse(&body()));
-        let tools = &view.turns[1].tool_uses;
+        let tools = &view.turns().nth(1).unwrap().tool_uses;
         assert_eq!(tools.len(), 2);
         let shell = tools.iter().find(|t| t.name == "bash").unwrap();
         assert_eq!(shell.category, Some(ToolCategory::Shell));
@@ -782,7 +792,7 @@ mod tests {
     fn assistant_reasoning_becomes_thinking() {
         let view = to_view(&parse(&body()));
         assert_eq!(
-            view.turns[1].thinking.as_deref(),
+            view.turns().nth(1).unwrap().thinking.as_deref(),
             Some("Let me look at the files.")
         );
     }
@@ -828,7 +838,10 @@ mod tests {
     #[test]
     fn file_write_produces_mutation_with_raw_diff() {
         let view = to_view(&parse(&body()));
-        let fm = view.turns[1]
+        let fm = view
+            .turns()
+            .nth(1)
+            .unwrap()
             .file_mutations
             .iter()
             .find(|f| f.path == "a.rs")
@@ -928,7 +941,7 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        let d = &view.turns[0].delegations[0];
+        let d = &view.turns().next().unwrap().delegations[0];
         assert_eq!(d.agent_id, "sub-1");
         assert_eq!(d.prompt, "do research");
         assert_eq!(d.result.as_deref(), Some("found it"));
@@ -942,9 +955,9 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        assert_eq!(view.events.len(), 2);
-        assert_eq!(view.events[0].event_type, "hook.start");
-        assert_eq!(view.events[1].event_type, "skill.invoked");
+        assert_eq!(view.events().count(), 2);
+        assert_eq!(view.events().next().unwrap().event_type, "hook.start");
+        assert_eq!(view.events().nth(1).unwrap().event_type, "skill.invoked");
     }
 
     #[test]
@@ -969,7 +982,7 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        let tools = &view.turns[0].tool_uses;
+        let tools = &view.turns().next().unwrap().tool_uses;
         assert_eq!(
             tools.len(),
             1,
@@ -988,9 +1001,9 @@ mod tests {
         ]
         .join("\n");
         let view = to_view(&parse(&body));
-        assert_eq!(view.turns[0].tool_uses.len(), 1);
+        assert_eq!(view.turns().next().unwrap().tool_uses.len(), 1);
         assert_eq!(
-            view.turns[0].file_mutations.len(),
+            view.turns().next().unwrap().file_mutations.len(),
             1,
             "id-less file write must not duplicate the mutation"
         );
@@ -1001,13 +1014,16 @@ mod tests {
     fn tool_pairing_with_ids_still_works() {
         // Regression guard: explicit ids remain authoritative.
         let view = to_view(&parse(&body()));
-        let shell = view.turns[1]
+        let shell = view
+            .turns()
+            .nth(1)
+            .unwrap()
             .tool_uses
             .iter()
             .find(|t| t.name == "bash")
             .unwrap();
         assert_eq!(shell.result.as_ref().unwrap().content, "a.rs");
         // body() has two id-bearing tool calls: bash + create_file.
-        assert_eq!(view.turns[1].tool_uses.len(), 2);
+        assert_eq!(view.turns().nth(1).unwrap().tool_uses.len(), 2);
     }
 }
