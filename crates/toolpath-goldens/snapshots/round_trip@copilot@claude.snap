@@ -1,0 +1,73 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_copilot
+  agent: copilot
+  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
+input_file: test-fixtures/copilot/convo.jsonl
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 14,
+    "text_chars": 29685,
+    "tool_uses": 11,
+    "key_paths": 70
+  },
+  "after": {
+    "steps": 14,
+    "text_chars": 29685,
+    "tool_uses": 11,
+    "key_paths": 51
+  },
+  "lost": [
+    "paths[].meta.producer.name",
+    "paths[].meta.producer.version",
+    "paths[].path.base.uri",
+    "paths[].steps[].change.<artifact>.structural.contextTier",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.newModel",
+    "paths[].steps[].change.<artifact>.structural.reasoningEffort",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.new_str",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.old_str",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path",
+    "paths[].steps[].change.count.sh.raw",
+    "paths[].steps[].change.count.sh.structural.after",
+    "paths[].steps[].change.count.sh.structural.operation",
+    "paths[].steps[].change.count.sh.structural.tool",
+    "paths[].steps[].change.count.sh.structural.tool_id",
+    "paths[].steps[].change.count.sh.structural.type",
+    "paths[].steps[].change.notes.md.raw",
+    "paths[].steps[].change.notes.md.structural.after",
+    "paths[].steps[].change.notes.md.structural.operation",
+    "paths[].steps[].change.notes.md.structural.tool",
+    "paths[].steps[].change.notes.md.structural.tool_id",
+    "paths[].steps[].change.notes.md.structural.type"
+  ],
+  "gained": [
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.operation",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.tool_id",
+    "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.type",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
+    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type",
+    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+    "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+    "paths[].steps[].change.<artifact>.structural.raw.sessionId",
+    "paths[].steps[].change.<artifact>.structural.raw.type",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path"
+  ]
+}

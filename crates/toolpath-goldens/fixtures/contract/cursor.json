@@ -1,0 +1,151 @@
+{
+  "writer": "cursor",
+  "ops": [
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.provider", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.value", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {
+      "op": "drop",
+      "path": "paths[].meta.producer.version",
+      "why": "toolpath's own producer stamp; the target format has no place for it"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].meta.vcs_remote",
+      "why": "cursor's session records no vcs remote"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.branch",
+      "why": "cursor's session records no branch"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].path.base.ref",
+      "why": "cursor's session records no ref"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+      "why": "cursor reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+      "why": "cursor reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+      "why": "cursor's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+      "why": "cursor's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
+      "why": "cursor's session format has no delegation record"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
+      "why": "cursor's session format has no record of a sub-agent's own turns"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+      "why": "cursor records no VCS branch per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+      "why": "cursor records no VCS revision per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.group_id",
+      "why": "an accounting grouping key the target format does not store"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
+      "why": "cursor's format records no stop reason"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+      "why": "cursor reports no reasoning-token breakdown"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+      "why": "cursor reports no cache-read tokens"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
+      "why": "cursor reports no cache-write tokens"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.targetFile",
+      "value": "does-not-exist.txt",
+      "why": "Cursor's read tool names its path targetFile; the writer copies the source path there and keeps the original key (the value is the full-view fixture's read path)"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+      "value": false,
+      "why": "Cursor's edit-tool input flags the writer sets for every edit"
+    },
+    {
+      "op": "synthesize",
+      "path": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock",
+      "value": true,
+      "why": "Cursor's edit-tool input flags the writer sets for every edit"
+    }
+  ]
+}
