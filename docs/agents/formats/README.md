@@ -14,6 +14,14 @@ culting.
 
 ## Contents
 
+Each harness's note is prose. The facts it states about fields
+("optional = seen without it, required = never seen missing") are also
+generated from the baseline's recordings into [`observed/`](observed/),
+one table per harness, and checked: a recording that adds a field, an
+entry type or a version fails `cargo test -p toolpath-goldens --test
+observed` until the table is regenerated and the note names the new
+entry type or version.
+
 - **[`claude-code/`](claude-code/README.md)** — Claude Code
   (`~/.claude/projects/…` JSONL). Split into focused docs covering
   directory layout, the JSONL line envelope, entry types, the `message`
@@ -30,9 +38,10 @@ culting.
   GitHub Copilot CLI (`@github/copilot`), whose sessions live under
   `~/.copilot/session-state/<id>/` (`events.jsonl` + `workspace.yaml` +
   `checkpoints/`) alongside a cross-session `session-store.db` SQLite
-  index. Split into a folder because the format has several moving parts;
-  **unusually, it is not yet sample-grounded** — built from official docs
-  plus reverse-engineering, with every claim confidence-tagged. Start at
+  index. Split into a folder because the format has several moving parts.
+  Grounded in captured sessions (1.0.67, and the baseline's 1.0.68
+  recording); claims are confidence-tagged, and the rows still tagged
+  `[reverse-eng]` are the event types no recording contains yet. Start at
   its README's sourcing-posture note.
 - **[`cursor.md`](cursor.md)** — Cursor's split storage: the JSONL
   agent transcript at `~/.cursor/projects/<slug>/agent-transcripts/`
@@ -43,12 +52,24 @@ culting.
 - **[`gemini.md`](gemini.md)** — Gemini CLI chats under
   `~/.gemini/tmp/<project>/chats/`, including the main-file + sibling
   sub-agent UUID directory layout.
+- **[`antigravity.md`](antigravity.md)** — Antigravity CLI (`agy`), the
+  product Google moved individual Gemini CLI users to: a flat
+  `~/.gemini/antigravity-cli/conversations/<uuid>.{db,pb}` store of
+  protobuf trajectories (SQLite with protobuf BLOBs, or one serialized
+  message) plus a `conversation_summaries.db` index. **Not sample-grounded
+  yet** (sign-in required); every claim is tagged observed / binary /
+  docs / 3p / inferred. Not a Gemini CLI revision — nothing in
+  `gemini.md` applies.
 - **[`opencode.md`](opencode.md)** — opencode's SQLite database
   (`~/.local/share/opencode/opencode.db`), its 12 typed message-part
   variants, and the sibling bare-git snapshot repo used for file diffs.
 - **[`pi.md`](pi.md)** — Pi (pi.dev) terminal coding agent sessions
   under `~/.pi/agent/sessions/--<encoded-cwd>--/`, JSONL with a
   session header line plus tree-shaped entries.
+- **[`validation.md`](validation.md)** — across seven harnesses: what
+  each loader does on resume with extra or missing keys, wrong types,
+  unknown entry types, malformed lines and broken parent links, and
+  whether it rewrites the file; plus the rules our writers must meet.
 
 The Claude Code reference is the most detailed because it's the
 longest-standing provider and has the most moving parts (JSONL
