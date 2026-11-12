@@ -1,0 +1,44 @@
+{
+  "agent": "pathbase",
+  "recorded_at": "2026-10-23T19:08:21.465Z",
+  "key": "ba3e039332666c5c97595bfacc5ad27422841e94a3f4dc86759b47bd3a60e542",
+  "loose_key": "077f97043514f260a16f9174c94933264c8567ab5afe228c3ac37c3235a57f62",
+  "model": "",
+  "request": {
+    "method": "GET",
+    "url": "/api/v1/u/sync/repos/pathstash/graphs/f7036301-c4e6-4828-8ff2-2bdf8c16264b/download",
+    "upstream": "http://127.0.0.1:18899",
+    "headers": {
+      "cookie": "<redacted>",
+      "accept": "*/*"
+    },
+    "body": "",
+    "body_encoding": "identity",
+    "normalized": ""
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-origin": "*",
+      "date": "Fri, 23 Oct 2026 19:08:21 GMT",
+      "x-content-type-options": "nosniff",
+      "x-pathbase-version": "0.1.0+d874b09",
+      "etag": "\"sha256:4149b2ecc5a6fb4e5daf6aba77d90d9d964a23d9ea2e9fe40b6d9bbe1cb7e78a\"",
+      "content-disposition": "attachment; filename=\"streamed.json\"",
+      "cache-control": "private, no-cache, must-revalidate",
+      "vary": "Authorization",
+      "x-request-id": "1cca49e7-1476-4ad3-b984-8d2bdd465923",
+      "content-type": "application/json"
+    },
+    "chunks": [
+      {
+        "t_ms": 4,
+        "b64": "eyJncmFwaCI6eyJpZCI6InN0cmVhbS1ncmFwaCJ9LCJwYXRocyI6W3sibWV0YSI6eyJ0aXRsZSI6IlN0cmVhbWVkIHBhdGgifSwicGF0aCI6eyJoZWFkIjoiczQiLCJpZCI6InN0cmVhbS1wYXRoIn0sInN0ZXBzIjpbeyJjaGFuZ2UiOnsic3JjL21haW4ucnMiOnsicmF3IjoiQEAgLTEgKzEgQEBcbi1vbGRcbitzMSJ9fSwic3RlcCI6eyJhY3RvciI6Imh1bWFuOnVzZXIiLCJpZCI6InMxIiwidGltZXN0YW1wIjoiMjAyNi0wMS0wMVQwMDowMDowMFoifX0seyJjaGFuZ2UiOnsic3JjL21haW4ucnMiOnsicmF3IjoiQEAgLTEgKzEgQEBcbi1vbGRcbitzMiJ9fSwic3RlcCI6eyJhY3RvciI6Imh1bWFuOnVzZXIiLCJpZCI6InMyIiwicGFyZW50cyI6WyJzMSJdLCJ0aW1lc3RhbXAiOiIyMDI2LTAxLTAxVDAwOjAwOjAwWiJ9fSx7ImNoYW5nZSI6eyJzcmMvbWFpbi5ycyI6eyJyYXciOiJAQCAtMSArMSBAQFxuLW9sZFxuK3MzIn19LCJzdGVwIjp7ImFjdG9yIjoiaHVtYW46dXNlciIsImlkIjoiczMiLCJwYXJlbnRzIjpbInMyIl0sInRpbWVzdGFtcCI6IjIwMjYtMDEtMDFUMDA6MDA6MDBaIn19LHsiY2hhbmdlIjp7InNyYy9tYWluLnJzIjp7InJhdyI6IkBAIC0xICsxIEBAXG4tb2xkXG4rczQifX0sInN0ZXAiOnsiYWN0b3IiOiJodW1hbjp1c2VyIiwiaWQiOiJzNCIsInBhcmVudHMiOlsiczMiXSwidGltZXN0YW1wIjoiMjAyNi0wMS0wMVQwMDowMDowMFoifX1dfV19"
+      }
+    ],
+    "bytes": 717,
+    "duration_ms": 4,
+    "sse": false,
+    "text_preview": "{\"graph\":{\"id\":\"stream-graph\"},\"paths\":[{\"meta\":{\"title\":\"Streamed path\"},\"path\":{\"head\":\"s4\",\"id\":\"stream-path\"},\"steps\":[{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s1\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s1\",\"timestamp\":\"2026-01-01T00:00:00Z\"}},{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s2\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s2\",\"parents\":[\"s1\"],\"timestamp\":\"2026-01-01T00:"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "agent": "pathbase",
+  "recorded_at": "2026-10-23T19:08:21.442Z",
+  "key": "9bd755e5a384e7bbe20b04a1bdbf56e859c4746e51449afcf0e0e714cd08114b",
+  "loose_key": "3b38fba60ab0c8c86eeda8319923506f8731214bbb8439cecde727a669337c7b",
+  "model": "",
+  "request": {
+    "method": "POST",
+    "url": "/api/v1/u/sync/repos/pathstash/graphs/f7036301-c4e6-4828-8ff2-2bdf8c16264b/paths",
+    "upstream": "http://127.0.0.1:18899",
+    "headers": {
+      "content-type": "application/x-ndjson",
+      "cookie": "<redacted>",
+      "accept": "*/*"
+    },
+    "body": "{\"PathOpen\":{\"id\":\"stream-path\",\"meta\":{\"title\":\"Streamed path\"},\"version\":\"1\"}}\n{\"Step\":{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s1\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s1\",\"parents\":[],\"timestamp\":\"2026-01-01T00:00:00Z\"}}}\n{\"Step\":{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s2\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s2\",\"parents\":[\"s1\"],\"timestamp\":\"2026-01-01T00:00:00Z\"}}}\n",
+    "body_encoding": "identity",
+    "normalized": "{\"PathOpen\":{\"id\":\"stream-path\",\"meta\":{\"title\":\"Streamed path\"},\"version\":\"1\"}}\n{\"Step\":{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s1\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s1\",\"parents\":[],\"timestamp\":\"2026-01-01T00:00:00Z\"}}}\n{\"Step\":{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s2\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s2\",\"parents\":[\"s1\"],\"timestamp\":\"2026-01-01T00:00:00Z\"}}}\n"
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "access-control-allow-origin": "*",
+      "vary": "Authorization",
+      "content-type": "application/json",
+      "x-request-id": "a3d7d4b4-d21f-48c2-8ac4-b2b15808fc7a",
+      "x-pathbase-version": "0.1.0+d874b09",
+      "cache-control": "private, no-cache, must-revalidate",
+      "date": "Fri, 23 Oct 2026 19:08:21 GMT",
+      "x-content-type-options": "nosniff"
+    },
+    "chunks": [
+      {
+        "t_ms": 11,
+        "b64": "eyJwYXRoX2lkIjoiMjU5MzFmNTMtNmRkZi00OWE5LTllMmYtYzU4ZjhiMDFmOTBlIiwiaW5zZXJ0ZWQiOjIsImhlYWQiOm51bGx9"
+      }
+    ],
+    "bytes": 75,
+    "duration_ms": 11,
+    "sse": false,
+    "text_preview": "{\"path_id\":\"25931f53-6ddf-49a9-9e2f-c58f8b01f90e\",\"inserted\":2,\"head\":null}"
+  }
+}
