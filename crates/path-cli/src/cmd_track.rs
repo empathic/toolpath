@@ -43,6 +43,15 @@ pub enum TrackOp {
         #[arg(long)]
         base_ref: Option<String>,
 
+        /// Branch the path was opened against (appears in path.base.branch)
+        #[arg(long)]
+        base_branch: Option<String>,
+
+        /// Path and graph id (default: a fresh `track-<time>-<pid>`); also names
+        /// the session file, so a fixed id makes the output reproducible
+        #[arg(long)]
+        id: Option<String>,
+
         /// Directory for session state files (default: $TMPDIR)
         #[arg(long)]
         session_dir: Option<PathBuf>,
@@ -296,6 +305,8 @@ struct InitConfig {
     source: Option<String>,
     base_uri: Option<String>,
     base_ref: Option<String>,
+    base_branch: Option<String>,
+    id: Option<String>,
     session_dir: Option<PathBuf>,
 }
 
@@ -304,12 +315,15 @@ fn init_session(config: InitConfig) -> Result<PathBuf> {
     let now = now_iso8601();
     let pid = std::process::id();
     let ts_compact = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let session_id = format!("track-{ts_compact}-{pid}");
+    let session_id = config
+        .id
+        .clone()
+        .unwrap_or_else(|| format!("track-{ts_compact}-{pid}"));
 
     let base = config.base_uri.map(|uri| v1::Base {
         uri,
         ref_str: config.base_ref,
-        branch: None,
+        branch: config.base_branch,
     });
 
     let mut path_doc = v1::Path::new(&session_id, base, "none");
@@ -353,6 +367,8 @@ fn run_init(op: &TrackOp) -> Result<()> {
         source,
         base_uri,
         base_ref,
+        base_branch,
+        id,
         session_dir,
     } = op
     else {
@@ -375,6 +391,8 @@ fn run_init(op: &TrackOp) -> Result<()> {
         source: source.clone(),
         base_uri: base_uri.clone(),
         base_ref: base_ref.clone(),
+        base_branch: base_branch.clone(),
+        id: id.clone(),
         session_dir: session_dir.clone(),
     })?;
     println!("{}", session_path.display());
@@ -916,6 +934,8 @@ mod tests {
             source: None,
             base_uri: None,
             base_ref: None,
+            base_branch: None,
+            id: None,
             session_dir: Some(dir.to_path_buf()),
         })
         .unwrap()
@@ -950,6 +970,8 @@ mod tests {
             source: None,
             base_uri: Some("github:org/repo".to_string()),
             base_ref: Some("abc123".to_string()),
+            base_branch: None,
+            id: None,
             session_dir: Some(dir.path().to_path_buf()),
         })
         .unwrap();
@@ -994,6 +1016,8 @@ mod tests {
             source: None,
             base_uri: None,
             base_ref: None,
+            base_branch: None,
+            id: None,
             session_dir: Some(dir.path().to_path_buf()),
         })
         .unwrap();
@@ -1957,6 +1981,8 @@ mod tests {
             source: None,
             base_uri: Some("github:org/repo".to_string()),
             base_ref: Some("main".to_string()),
+            base_branch: None,
+            id: None,
             session_dir: Some(dir.path().to_path_buf()),
         })
         .unwrap();

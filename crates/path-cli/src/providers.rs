@@ -14,15 +14,33 @@ use crate::config::Config;
 use crate::harness::HarnessBundle;
 use std::path::Path;
 
-pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
+fn claude_convo_for(config: &Config, dir: Option<&Path>) -> toolpath_claude::ClaudeConvo {
     let mut resolver = toolpath_claude::PathResolver::new();
     if let Some(home) = config.home_dir() {
         resolver = resolver.with_home(home);
     }
-    if let Some(dir) = &config.claude_config_dir {
-        resolver = resolver.with_claude_dir(dir.clone());
+    if let Some(dir) = dir {
+        resolver = resolver.with_claude_dir(dir);
     }
     toolpath_claude::ClaudeConvo::with_resolver(resolver)
+}
+
+/// The primary Claude manager: the first `$CLAUDE_CONFIG_DIR` entry,
+/// or `~/.claude` when unset. Single-session commands use only this.
+pub(crate) fn claude_convo(config: &Config) -> toolpath_claude::ClaudeConvo {
+    let dirs = config.claude_config_dirs();
+    claude_convo_for(config, dirs.first().map(|p| p.as_path()))
+}
+
+/// Managers for the second and later `$CLAUDE_CONFIG_DIR` entries,
+/// read by cache sync alongside [`claude_convo`].
+pub(crate) fn claude_extra_convos(config: &Config) -> Vec<toolpath_claude::ClaudeConvo> {
+    config
+        .claude_config_dirs()
+        .iter()
+        .skip(1)
+        .map(|d| claude_convo_for(config, Some(d)))
+        .collect()
 }
 
 /// The in-process ssh client, with the agent socket and the `.ssh`
@@ -114,6 +132,7 @@ pub(crate) fn pi_convo(config: &Config, base: Option<&Path>) -> toolpath_pi::PiC
 pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
     HarnessBundle {
         claude: Some(claude_convo(config)),
+        claude_extra: claude_extra_convos(config),
         gemini: Some(gemini_convo(config)),
         codex: Some(codex_convo(config)),
         copilot: Some(copilot_convo(config)),
@@ -202,9 +221,11 @@ mod tests {
             ..Config::default()
         };
         let manager = opencode_convo(&config);
+        // Nothing exists under /xdg/data, so the resolver names the file a
+        // current (stable-channel) opencode would create.
         assert_eq!(
             manager.resolver().db_path().unwrap(),
-            PathBuf::from("/xdg/data/opencode/opencode.db")
+            PathBuf::from("/xdg/data/opencode/opencode-stable.db")
         );
     }
 

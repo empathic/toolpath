@@ -13,9 +13,15 @@ from:
    (the drizzle table definitions and the Zod Part/Message schemas).
 3. The snapshot subsystem in `packages/opencode/src/snapshot/index.ts`.
 
+The baseline's recording (`test-fixtures/opencode/convo.json`, an
+`opencode export` of opencode 1.14.41) carries the fields generated in
+[observed/opencode.md](observed/opencode.md).
+
 Unlike Codex or Gemini, opencode **does not use JSONL**. Conversations
-live in a SQLite database (`opencode.db`). Every session, message,
-and part is a row; message/part payloads are JSON text columns.
+live in a SQLite database (`opencode-stable.db` for current releases,
+`opencode.db` for older ones — see [Database file name](#database-file-name)).
+Every session, message, and part is a row; message/part payloads are
+JSON text columns.
 Per-step filesystem snapshots live in a sibling bare git repository
 addressed by content hash.
 
@@ -31,9 +37,10 @@ opencode follows XDG base-dir conventions. On macOS and Linux:
 ```
 $XDG_DATA_HOME/opencode/           (defaults to ~/.local/share/opencode/)
   auth.json                         OAuth + API-key credentials per provider (sensitive)
-  opencode.db                       Primary SQLite DB — sessions, messages, parts, projects
-  opencode.db-shm                   SQLite WAL shared-memory sidecar
-  opencode.db-wal                   SQLite WAL journal
+  opencode-stable.db                Primary SQLite DB (current releases) — sessions, messages, parts, projects
+  opencode-stable.db-shm            SQLite WAL shared-memory sidecar
+  opencode-stable.db-wal            SQLite WAL journal
+  opencode.db                       The same DB as written by older releases (not migrated; may coexist)
   log/
     YYYY-MM-DDThhmmss.log           Per-run process logs (rotating)
     dev.log                         Long-running dev-mode log
@@ -78,6 +85,38 @@ OAuth tokens and API keys, keyed by provider id:
 
 A reader should **never** ingest this file into a derived Toolpath
 document — the tokens are live credentials.
+
+## Database file name
+
+The file name depends on the release. Two witnesses:
+
+- opencode `1.3.10` (the session inspected for this document) and the
+  `opencode.db` dated 2026-09-01 on this machine: **`opencode.db`**.
+- opencode `1.18.18` (2026-10-15): **`opencode-stable.db`**. Decoded
+  from the bundled source, it resolves the path as:
+  1. `$OPENCODE_DB` if set — as is when absolute, else under the data dir;
+  2. `opencode.db` when the release channel is `latest`, `beta` or
+     `prod`, or `$OPENCODE_DISABLE_CHANNEL_DB` is `1`/`true`;
+  3. otherwise `opencode-<channel>.db`; a release build's channel is
+     `stable`.
+
+  It does not migrate or read a pre-existing `opencode.db`, so on an
+  upgraded machine both files coexist and only the stable one is live.
+  The `1.18.18` file also carries more tables (`workspace`,
+  `session_message`, `account`, …), extra nullable `session` columns
+  (`path`, `metadata`, `cost`, `tokens_*`, `agent`, `model`) and
+  foreign keys; the `project` / `session` / `message` / `part` columns
+  toolpath writes exist in both.
+
+The release that introduced the channel name is not pinned here.
+
+`toolpath-opencode` (`crates/toolpath-opencode/src/paths.rs`) mirrors
+the rule: `$OPENCODE_DB` pins the file; otherwise it takes the first of
+`opencode-stable.db`, `opencode.db` that exists, and names
+`opencode-stable.db` when neither does. `path resume --harness opencode`
+therefore writes the file the installed `opencode` opens, and
+`path p derive opencode` reads the one opencode shows. The two files are
+never kept in sync.
 
 ## `opencode.db` — SQLite layout
 
@@ -602,6 +641,32 @@ like `ses_24ee4deb6ffe…` don't look like timestamps but still sort
 as expected. Recover the wall-clock millis via
 `Identifier.timestamp(id)` on ascending IDs; for descending ones
 (`ses_*`) invert the bits first.
+
+### Projected IDs
+
+`toolpath-opencode`'s projector (`project.rs`, `mint_id`) mints ids in
+exactly this shape — 12-hex time field from the turn's timestamp plus
+the projector's running counter, 14 base62 chars — but draws the tail
+from the SHA-1 of a seed (`<view id>`, `<session>-msg-<n>`,
+`<session>-prt-<n>`) instead of `randomBytes`, so a projection is
+deterministic. A view id that already starts with `ses_` is kept
+verbatim.
+
+The shape is load-bearing, not cosmetic. On every call to the
+`opencode` provider (OpenCode Zen, `https://opencode.ai/zen/v1`)
+opencode sends `x-opencode-session: <session id>`,
+`x-opencode-request: <user message id>`, `x-opencode-project` and
+`x-opencode-client`. Zen's **free tier** rejects a request whose
+session id is not opencode-shaped with
+`403 {"type":"FreeTierError","message":"OpenCode's free tier can only
+be used from within OpenCode…"}` before any model work. Established
+2026-10-15 (opencode 1.18.18, `opencode/big-pickle`) by replaying
+captured requests: the projected body — foreign `<environment_context>`
+user turns, consecutive user turns, tool turns, `version`
+`0.0.0-projected`, user-message `model` `anthropic/unknown` — was
+accepted unchanged once the header carried a 26-char id; a 24-hex id
+(the previous minting) was refused. The time field is not checked for
+recency (a May-2026 time passed in October).
 
 ## Logs
 
