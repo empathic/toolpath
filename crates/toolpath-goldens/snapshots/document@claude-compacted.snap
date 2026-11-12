@@ -1,0 +1,244 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.document
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
+input_file: goldens/claude-compacted/input.jsonl
+---
+{
+  "graph": {
+    "id": "path-claude-code-sess-com"
+  },
+  "paths": [
+    {
+      "meta": {
+        "actors": {
+          "agent:claude-opus-4-6": {
+            "model": "claude-opus-4-6",
+            "name": "claude-opus-4-6"
+          },
+          "human:user": {
+            "name": "user"
+          },
+          "tool:claude-code": {
+            "name": "claude-code",
+            "provider": "claude-code"
+          }
+        },
+        "files_changed": [
+          "src/auth.rs"
+        ],
+        "kind": "https://toolpath.net/kinds/agent-coding-session/v1.1.0",
+        "source": "claude-code",
+        "title": "Claude session: sess-com"
+      },
+      "path": {
+        "base": {
+          "branch": "main",
+          "uri": "file:///work"
+        },
+        "head": "uuid-boundary",
+        "id": "path-claude-code-sess-com"
+      },
+      "steps": [
+        {
+          "change": {
+            "claude-code://sess-compact": {
+              "structural": {
+                "environment": {
+                  "vcs_branch": "main",
+                  "working_dir": "/work"
+                },
+                "role": "user",
+                "text": "Help me refactor the auth module.",
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "human:user",
+            "id": "uuid-pre-1",
+            "timestamp": "2024-06-01T10:00:00Z"
+          }
+        },
+        {
+          "change": {
+            "claude-code://sess-compact": {
+              "structural": {
+                "role": "assistant",
+                "stop_reason": "tool_use",
+                "text": "I'll start by reading the current auth code.",
+                "token_usage": {
+                  "input_tokens": 300,
+                  "output_tokens": 40
+                },
+                "tool_uses": [
+                  {
+                    "category": "file_read",
+                    "id": "t-pre-1",
+                    "input": {
+                      "file_path": "src/auth.rs"
+                    },
+                    "name": "Read",
+                    "result": {
+                      "content": "pub fn login() { ... }",
+                      "is_error": false
+                    }
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:claude-opus-4-6",
+            "id": "uuid-pre-2",
+            "parents": [
+              "uuid-pre-1"
+            ],
+            "timestamp": "2024-06-01T10:00:01Z"
+          }
+        },
+        {
+          "change": {
+            "claude-code://sess-compact": {
+              "structural": {
+                "role": "user",
+                "text": "[compacted summary] Earlier in this session: read src/auth.rs, identified that login() lacks session-token validation.",
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "human:user",
+            "id": "uuid-summary",
+            "parents": [
+              "uuid-pre-2"
+            ],
+            "timestamp": "2024-06-01T10:30:01Z"
+          }
+        },
+        {
+          "change": {
+            "claude-code://sess-compact": {
+              "structural": {
+                "role": "user",
+                "text": "Now add the session validation.",
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "human:user",
+            "id": "uuid-post-1",
+            "parents": [
+              "uuid-summary"
+            ],
+            "timestamp": "2024-06-01T10:31:00Z"
+          }
+        },
+        {
+          "change": {
+            "claude-code://sess-compact": {
+              "structural": {
+                "role": "assistant",
+                "stop_reason": "tool_use",
+                "text": "Adding session validation to login().",
+                "token_usage": {
+                  "input_tokens": 600,
+                  "output_tokens": 80
+                },
+                "tool_uses": [
+                  {
+                    "category": "file_write",
+                    "id": "t-post-1",
+                    "input": {
+                      "file_path": "src/auth.rs",
+                      "new_string": "pub fn login() { validate_session();",
+                      "old_string": "pub fn login() {"
+                    },
+                    "name": "Edit",
+                    "result": {
+                      "content": "File written successfully",
+                      "is_error": false
+                    }
+                  }
+                ],
+                "type": "conversation.append"
+              }
+            },
+            "src/auth.rs": {
+              "raw": "--- a/src/auth.rs\n+++ b/src/auth.rs\n--- \n+++ \n@@ -1 +1 @@\n-pub fn login() {\n\\ No newline at end of file\n+pub fn login() { validate_session();\n\\ No newline at end of file\n",
+              "structural": {
+                "operation": "update",
+                "tool": "Edit",
+                "tool_id": "t-post-1",
+                "type": "file.write"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:claude-opus-4-6",
+            "id": "uuid-post-2",
+            "parents": [
+              "uuid-post-1"
+            ],
+            "timestamp": "2024-06-01T10:31:01Z"
+          }
+        },
+        {
+          "change": {
+            "claude-code://sess-compact": {
+              "structural": {
+                "role": "assistant",
+                "stop_reason": "end_turn",
+                "text": "Done. The auth module now validates sessions on login.",
+                "token_usage": {
+                  "input_tokens": 700,
+                  "output_tokens": 20
+                },
+                "type": "conversation.append"
+              }
+            }
+          },
+          "step": {
+            "actor": "agent:claude-opus-4-6",
+            "id": "uuid-post-4",
+            "parents": [
+              "uuid-post-2"
+            ],
+            "timestamp": "2024-06-01T10:31:03Z"
+          }
+        },
+        {
+          "change": {
+            "claude-code://sess-compact": {
+              "structural": {
+                "entry_extra": {
+                  "compactMetadata": {
+                    "preTokens": 180000,
+                    "trigger": "auto"
+                  },
+                  "logicalParentUuid": "uuid-pre-3"
+                },
+                "entry_type": "compact_boundary",
+                "event_source_id": "uuid-boundary",
+                "type": "conversation.event"
+              }
+            }
+          },
+          "step": {
+            "actor": "tool:claude-code",
+            "id": "uuid-boundary",
+            "parents": [
+              "uuid-post-4"
+            ],
+            "timestamp": "2024-06-01T10:30:00Z"
+          }
+        }
+      ]
+    }
+  ]
+}

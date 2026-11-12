@@ -132,3 +132,5 @@ insta = { workspace = true }
 toolpath-golden = { workspace = true }
 toolpath-convo = { workspace = true }
 figment = { version = "0.10", features = ["env", "test"] }
+# The goldens pipeline derives the generated examples from real recorded sessions (tests/examples_generated.rs).
+toolpath-goldens = { path = "../toolpath-goldens" }
