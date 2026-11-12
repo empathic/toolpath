@@ -1,0 +1,76 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.round_trips[agent]"
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
+input_file: test-fixtures/opencode/convo.json
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 12,
+    "text_chars": 2851,
+    "tool_uses": 10,
+    "key_paths": 54
+  },
+  "after": {
+    "steps": 38,
+    "text_chars": 2851,
+    "tool_uses": 10,
+    "key_paths": 78
+  },
+  "lost": [
+    "paths[].meta.files_changed[]",
+    "paths[].path.base.ref",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+    "paths[].steps[].change.count.sh.structural.operation",
+    "paths[].steps[].change.count.sh.structural.tool",
+    "paths[].steps[].change.count.sh.structural.tool_id",
+    "paths[].steps[].change.count.sh.structural.type",
+    "paths[].steps[].change.notes.md.structural.operation",
+    "paths[].steps[].change.notes.md.structural.tool",
+    "paths[].steps[].change.notes.md.structural.tool_id",
+    "paths[].steps[].change.notes.md.structural.type"
+  ],
+  "gained": [
+    "paths[].meta.actors.<actor>.provider",
+    "paths[].steps[].change.<artifact>.structural.aggregated_output",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.call_id",
+    "paths[].steps[].change.<artifact>.structural.cli_version",
+    "paths[].steps[].change.<artifact>.structural.command[]",
+    "paths[].steps[].change.<artifact>.structural.cwd",
+    "paths[].steps[].change.<artifact>.structural.duration.nanos",
+    "paths[].steps[].change.<artifact>.structural.duration.secs",
+    "paths[].steps[].change.<artifact>.structural.entry_type",
+    "paths[].steps[].change.<artifact>.structural.event_data_type",
+    "paths[].steps[].change.<artifact>.structural.event_source_id",
+    "paths[].steps[].change.<artifact>.structural.exit_code",
+    "paths[].steps[].change.<artifact>.structural.formatted_output",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.id",
+    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.cached_input_tokens",
+    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.info.total_token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.memory_citation",
+    "paths[].steps[].change.<artifact>.structural.message",
+    "paths[].steps[].change.<artifact>.structural.model",
+    "paths[].steps[].change.<artifact>.structural.model_provider",
+    "paths[].steps[].change.<artifact>.structural.originator",
+    "paths[].steps[].change.<artifact>.structural.parsed_cmd[].cmd",
+    "paths[].steps[].change.<artifact>.structural.parsed_cmd[].type",
+    "paths[].steps[].change.<artifact>.structural.phase",
+    "paths[].steps[].change.<artifact>.structural.rate_limits",
+    "paths[].steps[].change.<artifact>.structural.source",
+    "paths[].steps[].change.<artifact>.structural.status",
+    "paths[].steps[].change.<artifact>.structural.stderr",
+    "paths[].steps[].change.<artifact>.structural.stdout",
+    "paths[].steps[].change.<artifact>.structural.timestamp",
+    "paths[].steps[].change.<artifact>.structural.turn_id"
+  ]
+}

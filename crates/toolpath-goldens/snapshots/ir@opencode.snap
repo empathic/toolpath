@@ -1,0 +1,488 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.ir
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
+input_file: test-fixtures/opencode/convo.json
+---
+{
+  "id": "ses_1fc4b59e2ffexZeA4VcZH8yV68",
+  "started_at": "2026-05-07T18:30:31.197Z",
+  "last_activity": "2026-05-07T18:31:07.810Z",
+  "turns": [
+    {
+      "id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "parent_id": null,
+      "role": "User",
+      "timestamp": "2026-05-07T18:30:31.267+00:00",
+      "text": "\"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \\\"scratch\\\" to \\\"fixture\\\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \\\"note\\\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \\\"fixture\\\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \\\"Count the words in `notes.md` and report the number.\\\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.\"\n",
+      "thinking": null,
+      "tool_uses": [],
+      "model": null,
+      "stop_reason": null,
+      "token_usage": null,
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    },
+    {
+      "id": "msg_e03b4a66e001cs3e8l03dZanXd",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:31.278+00:00",
+      "text": "",
+      "thinking": "The user wants me to walk through a set of tasks. Let me go through them in order.\n\n1. List files in current directory\n2. Write notes.md\n3. Read notes.md\n4. Edit notes.md\n5. Find files starting with \"note\"\n6. Search for \"fixture\" in files\n7. Read non-existent file\n8. Write and run count.sh\n9. Dispatch sub-agent\n10. Summarize\n\nLet me start with step 1.",
+      "tool_uses": [
+        {
+          "id": "call_00_Gwu3s7fu2MvjvECIoIZo9824",
+          "name": "read",
+          "input": {
+            "filePath": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+          },
+          "result": {
+            "content": "<path>/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode</path>\n<type>directory</type>\n<entries>\n.stderr.log\n\n(1 entries)\n</entries>",
+            "is_error": false
+          },
+          "category": "file_read"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 11294,
+        "output_tokens": 185,
+        "breakdowns": {
+          "output": {
+            "reasoning": 100
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    },
+    {
+      "id": "msg_e03b4b61e001oVhXDJ9zK3V08F",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:35.294+00:00",
+      "text": "",
+      "thinking": "Step 1 done — the directory has a single file `.stderr.log`. Now step 2: write `notes.md`.",
+      "tool_uses": [
+        {
+          "id": "call_00_0I7fUaILXp9rRI0A3NHk5069",
+          "name": "write",
+          "input": {
+            "content": "scratch — feature elicitation\nthis file will be edited and searched.",
+            "filePath": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md"
+          },
+          "result": {
+            "content": "Wrote file successfully.",
+            "is_error": false
+          },
+          "category": "file_write"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 165,
+        "output_tokens": 143,
+        "cache_read_tokens": 11392,
+        "breakdowns": {
+          "output": {
+            "reasoning": 26
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      },
+      "file_mutations": [
+        {
+          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+          "tool_id": "call_00_0I7fUaILXp9rRI0A3NHk5069",
+          "operation": "add"
+        }
+      ]
+    },
+    {
+      "id": "msg_e03b4c1e2001uYGHZ6KwHALvKP",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:38.306+00:00",
+      "text": "",
+      "thinking": "Step 2 done. Step 3: read it back.",
+      "tool_uses": [
+        {
+          "id": "call_00_vn6RGEmW1iGy5PIPVDQN3168",
+          "name": "read",
+          "input": {
+            "filePath": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md"
+          },
+          "result": {
+            "content": "<path>/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md</path>\n<type>file</type>\n<content>\n1: scratch — feature elicitation\n2: this file will be edited and searched.\n\n(End of file - total 2 lines)\n</content>",
+            "is_error": false
+          },
+          "category": "file_read"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 68,
+        "output_tokens": 101,
+        "cache_read_tokens": 11648,
+        "breakdowns": {
+          "output": {
+            "reasoning": 13
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    },
+    {
+      "id": "msg_e03b4cb55001SUUxnz5ACDFgLr",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:40.725+00:00",
+      "text": "",
+      "thinking": "Both lines confirmed. Step 4: edit \"scratch\" → \"fixture\".",
+      "tool_uses": [
+        {
+          "id": "call_00_SV9qMClj3zPZrWO51JSI7970",
+          "name": "edit",
+          "input": {
+            "filePath": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+            "newString": "fixture",
+            "oldString": "scratch"
+          },
+          "result": {
+            "content": "Edit applied successfully.",
+            "is_error": false
+          },
+          "category": "file_write"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 142,
+        "output_tokens": 142,
+        "cache_read_tokens": 11776,
+        "breakdowns": {
+          "output": {
+            "reasoning": 18
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      },
+      "file_mutations": [
+        {
+          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+          "tool_id": "call_00_SV9qMClj3zPZrWO51JSI7970",
+          "operation": "update"
+        }
+      ]
+    },
+    {
+      "id": "msg_e03b4d79b001XRfHrKagr5wB5C",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:43.867+00:00",
+      "text": "",
+      "thinking": "Step 4 done. Step 5: glob for files starting with \"note\".",
+      "tool_uses": [
+        {
+          "id": "call_00_VkYJFf0nI9pg4hK7gBuO5047",
+          "name": "glob",
+          "input": {
+            "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+            "pattern": "note*"
+          },
+          "result": {
+            "content": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+            "is_error": false
+          },
+          "category": "file_search"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 43,
+        "output_tokens": 118,
+        "cache_read_tokens": 12032,
+        "breakdowns": {
+          "output": {
+            "reasoning": 17
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    },
+    {
+      "id": "msg_e03b4e206002ZADA8YifKxG2LI",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:46.534+00:00",
+      "text": "",
+      "thinking": "Step 5 done — one match. Step 6: grep for \"fixture\".",
+      "tool_uses": [
+        {
+          "id": "call_00_CsyZNSqkFOcqn6PNh99L5471",
+          "name": "grep",
+          "input": {
+            "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+            "pattern": "fixture"
+          },
+          "result": {
+            "content": "Found 1 matches\n/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md:\n  Line 1: fixture — feature elicitation\n",
+            "is_error": false
+          },
+          "category": "file_search"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 89,
+        "output_tokens": 120,
+        "cache_read_tokens": 12160,
+        "breakdowns": {
+          "output": {
+            "reasoning": 18
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    },
+    {
+      "id": "msg_e03b4ec72001tiFVbWrPrX1oBl",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:49.202+00:00",
+      "text": "",
+      "thinking": "Step 6 done. Step 7: try to read a non-existent file.",
+      "tool_uses": [
+        {
+          "id": "call_00_oVcAYB5oEy9A0zZge5dj8881",
+          "name": "read",
+          "input": {
+            "filePath": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt"
+          },
+          "result": {
+            "content": "File not found: /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/does-not-exist.txt",
+            "is_error": true
+          },
+          "category": "file_read"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 155,
+        "output_tokens": 108,
+        "cache_read_tokens": 12288,
+        "breakdowns": {
+          "output": {
+            "reasoning": 17
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    },
+    {
+      "id": "msg_e03b4f74a002Mj0By9HXoL1vXc",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:51.978+00:00",
+      "text": "",
+      "thinking": "As instructed: read failed (file not found). Now step 8: write and run count.sh.",
+      "tool_uses": [
+        {
+          "id": "call_00_b88GP5WDItSFT4BTsg067510",
+          "name": "write",
+          "input": {
+            "content": "echo 1\necho 2\necho 3\necho 4\necho 5",
+            "filePath": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh"
+          },
+          "result": {
+            "content": "Wrote file successfully.",
+            "is_error": false
+          },
+          "category": "file_write"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 71,
+        "output_tokens": 143,
+        "cache_read_tokens": 12544,
+        "breakdowns": {
+          "output": {
+            "reasoning": 21
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      },
+      "file_mutations": [
+        {
+          "path": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh",
+          "tool_id": "call_00_b88GP5WDItSFT4BTsg067510",
+          "operation": "add"
+        }
+      ]
+    },
+    {
+      "id": "msg_e03b50381001m2UYMcEbRfw4HO",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:55.105+00:00",
+      "text": "",
+      "thinking": "Now run it.",
+      "tool_uses": [
+        {
+          "id": "call_00_iBvYTFGTroAamhuJPJtH3836",
+          "name": "bash",
+          "input": {
+            "command": "bash count.sh",
+            "description": "Run count.sh script",
+            "workdir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+          },
+          "result": {
+            "content": "1\n2\n3\n4\n5\n",
+            "is_error": false
+          },
+          "category": "shell"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 102,
+        "output_tokens": 126,
+        "cache_read_tokens": 12672,
+        "breakdowns": {
+          "output": {
+            "reasoning": 4
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    },
+    {
+      "id": "msg_e03b50ee2002c2fcvJqW9X03Pp",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:30:58.018+00:00",
+      "text": "",
+      "thinking": "Step 8 done — five lines as expected. Step 9: I have the Task tool (sub-agent). Let me dispatch it to count words in notes.md.",
+      "tool_uses": [
+        {
+          "id": "call_00_Q8ropZWVAUTqMZyQkYCI9889",
+          "name": "task",
+          "input": {
+            "description": "Count words in notes.md",
+            "prompt": "Count the words in `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md` and report the number.",
+            "subagent_type": "general"
+          },
+          "result": {
+            "content": "task_id: ses_1fc4ae43affekhOzm9Kf36uiwL (for resuming to continue this task if needed)\n\n<task_result>\n10\n</task_result>",
+            "is_error": false
+          },
+          "category": "delegation"
+        }
+      ],
+      "model": "big-pickle",
+      "stop_reason": "tool-calls",
+      "token_usage": {
+        "input_tokens": 122,
+        "output_tokens": 169,
+        "cache_read_tokens": 12800,
+        "breakdowns": {
+          "output": {
+            "reasoning": 34
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      },
+      "delegations": [
+        {
+          "agent_id": "call_00_Q8ropZWVAUTqMZyQkYCI9889",
+          "prompt": "Count the words in `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md` and report the number.",
+          "result": "task_id: ses_1fc4ae43affekhOzm9Kf36uiwL (for resuming to continue this task if needed)\n\n<task_result>\n10\n</task_result>"
+        }
+      ]
+    },
+    {
+      "id": "msg_e03b5351e003YCJK1HFZZldOSc",
+      "parent_id": "msg_e03b4a6630018m4APFhFQVopnG",
+      "role": "Assistant",
+      "timestamp": "2026-05-07T18:31:07.806+00:00",
+      "text": "The sub-agent reported that `notes.md` contains 10 words.\n\n**Summary:** I listed the directory, wrote `notes.md`, read it back, edited \"scratch\" → \"fixture\" with the edit tool, globbed for `note*` files, grepped for \"fixture\", confirmed the read tool errors on a missing file, wrote and ran `count.sh` (printed 1–5), and dispatched a sub-agent that counted 10 words in `notes.md`. All steps completed without incident.",
+      "thinking": "The sub-agent reports the word count is 10. Step 10: summarize.",
+      "tool_uses": [],
+      "model": "big-pickle",
+      "stop_reason": "stop",
+      "token_usage": {
+        "input_tokens": 89,
+        "output_tokens": 125,
+        "cache_read_tokens": 13056,
+        "breakdowns": {
+          "output": {
+            "reasoning": 17
+          }
+        }
+      },
+      "environment": {
+        "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+      }
+    }
+  ],
+  "total_usage": {
+    "input_tokens": 12340,
+    "output_tokens": 1480,
+    "cache_read_tokens": 122368,
+    "breakdowns": {
+      "output": {
+        "reasoning": 285
+      }
+    }
+  },
+  "provider_id": "opencode",
+  "files_changed": [
+    "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md",
+    "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh"
+  ],
+  "session_ids": [
+    "ses_1fc4b59e2ffexZeA4VcZH8yV68"
+  ],
+  "base": {
+    "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode",
+    "vcs_revision": "global"
+  },
+  "producer": {
+    "name": "opencode",
+    "version": "1.14.41"
+  }
+}
