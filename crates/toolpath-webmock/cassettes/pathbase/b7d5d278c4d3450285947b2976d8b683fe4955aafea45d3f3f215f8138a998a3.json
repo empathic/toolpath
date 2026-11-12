@@ -1,0 +1,57 @@
+{
+  "agent": "pathbase",
+  "recorded_at": "2026-10-23T19:08:21.454Z",
+  "key": "b7d5d278c4d3450285947b2976d8b683fe4955aafea45d3f3f215f8138a998a3",
+  "loose_key": "9116acc428d074de6030b2f478577ade9b1ea24930265c56488d07d069f491a4",
+  "model": "",
+  "request": {
+    "method": "POST",
+    "url": "/api/v1/u/sync/repos/pathstash/graphs/f7036301-c4e6-4828-8ff2-2bdf8c16264b/paths/25931f53-6ddf-49a9-9e2f-c58f8b01f90e/steps",
+    "upstream": "http://127.0.0.1:18899",
+    "headers": {
+      "accept": "*/*",
+      "content-type": "application/x-ndjson",
+      "cookie": "<redacted>"
+    },
+    "body": "{\"Step\":{\"change\":{\"src/main.rs\":{\"raw\":\"@@ -1 +1 @@\\n-old\\n+s3\"}},\"step\":{\"actor\":\"human:user\",\"id\":\"s3\",\"parents\":[\"s2\"],\"timestamp\":\"2026-01-01T00:00:00Z\"}}}\n",
+    "body_encoding": "identity",
+    "normalized": {
+      "Step": {
+        "change": {
+          "src/main.rs": {
+            "raw": "@@ -1 +1 @@\n-old\n+s3"
+          }
+        },
+        "step": {
+          "actor": "human:user",
+          "parents": [
+            "s2"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "vary": "Authorization",
+      "x-pathbase-version": "0.1.0+d874b09",
+      "x-request-id": "5234b620-9d28-4952-9e88-d029b9b7b365",
+      "x-content-type-options": "nosniff",
+      "cache-control": "private, no-cache, must-revalidate",
+      "content-type": "application/json",
+      "date": "Fri, 23 Oct 2026 19:08:21 GMT",
+      "access-control-allow-origin": "*"
+    },
+    "chunks": [
+      {
+        "t_ms": 6,
+        "b64": "eyJpbnNlcnRlZCI6MSwiaGVhZCI6bnVsbH0="
+      }
+    ],
+    "bytes": 26,
+    "duration_ms": 6,
+    "sse": false,
+    "text_preview": "{\"inserted\":1,\"head\":null}"
+  }
+}
