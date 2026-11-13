@@ -249,7 +249,7 @@ let md = toolpath_md::render(&doc, &toolpath_md::RenderOptions::default());
 The format does not require Rust. [RFC.md](RFC.md) is the
 specification,
 [schema/toolpath.schema.json](schema/toolpath.schema.json) validates
-documents in any language, and [examples/](examples/) holds 12 documents
+documents in any language, and [examples/](examples/) holds 13 documents
 covering steps, paths, and graphs.
 
 ## CLI reference
@@ -416,7 +416,7 @@ See each crate's README for library-level documentation.
 - [FAQ.md](FAQ.md) -- Design rationale and FAQ
 - [CHANGELOG.md](CHANGELOG.md) -- Release history
 - [schema/toolpath.schema.json](schema/toolpath.schema.json) -- JSON Schema
-- [examples/](examples/) -- 12 example documents covering steps, paths, and graphs
+- [examples/](examples/) -- 13 example documents covering steps, paths, and graphs
 - [DEVELOPMENT.md](DEVELOPMENT.md) -- Building and testing, plus our working notes
   on the on-disk session formats of the agents we derive from
 
