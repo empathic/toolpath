@@ -101,7 +101,7 @@ fn summarize_session(harness: ArtifactType, cache_id: &str, path: &TPath) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use toolpath_convo::{ConversationView, Role, Turn};
+    use toolpath_convo::{ConversationView, Item, Role, Turn};
 
     /// The document of a session with a prompt and an answer, as a
     /// derive writes it, with `title` when the session has one.
@@ -109,7 +109,7 @@ mod tests {
         let view = ConversationView {
             id: "1a2b3c4d-0000-0000-0000-000000000000".to_string(),
             provider_id: Some("claude-code".to_string()),
-            turns: turns
+            items: turns
                 .iter()
                 .enumerate()
                 .map(|(n, (role, text, timestamp))| Turn {
@@ -129,6 +129,7 @@ mod tests {
                     delegations: vec![],
                     file_mutations: vec![],
                 })
+                .map(Item::Turn)
                 .collect(),
             ..Default::default()
         };

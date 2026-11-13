@@ -78,7 +78,7 @@ fn test_to_view_produces_expected_turns() {
     // Turn count: user + assistant + assistant = 3
     // (tool-result entries fold into the assistant's tool_uses[i].result;
     // they no longer surface as standalone turns.)
-    assert_eq!(view.turns.len(), 3);
+    assert_eq!(view.turns().count(), 3);
     assert_eq!(view.provider_id.as_deref(), Some("pi"));
     // files_changed should include "hello.rs"
     assert!(view.files_changed.iter().any(|f| f == "hello.rs"));

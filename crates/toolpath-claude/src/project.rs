@@ -12,7 +12,8 @@ use crate::types::{
 use serde_json::json;
 use std::collections::HashMap;
 use toolpath_convo::{
-    ConversationProjector, ConversationView, ConvoError, Result, Role, ToolInvocation, Turn,
+    ConversationEvent, ConversationProjector, ConversationView, ConvoError, Item, KeptAncestors,
+    Result, Role, ToolInvocation, Turn,
 };
 
 // ── ClaudeProjector ───────────────────────────────────────────────────
@@ -56,25 +57,51 @@ impl ConversationProjector for ClaudeProjector {
 /// points at — synthesizing a new one breaks the chain.
 const TOOL_RESULT_USER_EVENT: &str = "tool_result_user";
 
+/// Event types written back as uuid-bearing Claude entries: the entry types
+/// Claude Code writes with a uuid, which the reader keeps as events when
+/// they carry no message, plus the tool-result marker. Any other event
+/// without a headerless `raw` line (a Codex `token_count`, say) has no
+/// Claude form and is dropped.
+const CLAUDE_ENTRY_EVENT_TYPES: &[&str] = &[
+    "user",
+    "assistant",
+    "system",
+    "attachment",
+    "progress",
+    "compact_boundary",
+    TOOL_RESULT_USER_EVENT,
+];
+
+/// A headerless line, written back verbatim from `data["raw"]`.
+fn is_headerless(event: &ConversationEvent) -> bool {
+    event.data.contains_key("raw")
+}
+
+/// An event written back as a uuid-bearing entry.
+fn is_claude_entry(event: &ConversationEvent) -> bool {
+    !is_headerless(event) && CLAUDE_ENTRY_EVENT_TYPES.contains(&event.event_type.as_str())
+}
+
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
     let mut convo = Conversation::new(view.id.clone());
 
-    // Headerless lines (the JSONL "preamble": ai-title, last-prompt,
-    // queue-operation, permission-mode, file-history-snapshot, and anything
-    // unrecognized) ride in `view.events` carrying the original line verbatim
-    // under `data["raw"]`. Dump them straight back. A headerless event is
-    // identified by that `raw` key — no enumerated type list.
-    let mut emitted_preamble = false;
-    for event in &view.events {
-        if let Some(raw) = event.data.get("raw") {
-            convo.preamble.push(raw.clone());
-            emitted_preamble = true;
-        }
-    }
-    // Cross-harness views won't carry a Claude preamble; emit a default
-    // permission-mode line so Claude Code can resume them.
-    if !emitted_preamble {
-        convo.preamble.push(json!({
+    // Headerless lines (ai-title, last-prompt, queue-operation,
+    // permission-mode, file-history-snapshot, and anything unrecognized)
+    // ride in `view.items` as events carrying the original line verbatim
+    // under `data["raw"]`; they are written back at their item position. A
+    // headerless event is identified by that `raw` key — no enumerated
+    // type list. Events of other harnesses are dropped. Only turns and
+    // events written as uuid-bearing entries can be named as a parent, so
+    // a parent naming a headerless line or a dropped event resolves past
+    // it (see `wire_parent`).
+    let kept = KeptAncestors::new(view, |item| match item {
+        Item::Turn(_) => true,
+        Item::Event(event) => is_claude_entry(event),
+    });
+    // Cross-harness views won't carry a Claude headerless line; emit a
+    // default permission-mode line so Claude Code can resume them.
+    if !view.events().any(is_headerless) {
+        convo.add_headerless(json!({
             "type": "permission-mode",
             "permissionMode": "default",
             "sessionId": view.id,
@@ -86,7 +113,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // every downstream `parentUuid` reference valid.
     let mut tool_result_events_by_parent: HashMap<String, Vec<&toolpath_convo::ConversationEvent>> =
         HashMap::new();
-    for event in &view.events {
+    for event in view.events() {
         if event.event_type != TOOL_RESULT_USER_EVENT {
             continue;
         }
@@ -114,7 +141,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     // intermediate streaming snapshots: they carry no per-step meaning, the
     // IR doesn't retain them, and the final total is what consumers sum.)
     let mut group_total: HashMap<&str, toolpath_convo::TokenUsage> = HashMap::new();
-    for turn in &view.turns {
+    for turn in view.turns() {
         if let (Some(mid), Some(usage)) = (turn.group_id.as_deref(), &turn.token_usage) {
             group_total
                 .entry(mid)
@@ -123,14 +150,58 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    for turn in &view.turns {
-        // Pre-rewrite this turn's parent_id if a synthesized tool_result
-        // was emitted between it and its IR-recorded parent.
-        let effective_parent = turn
-            .parent_id
-            .as_ref()
-            .and_then(|pid| parent_rewrites.get(pid).cloned())
-            .or_else(|| turn.parent_id.clone());
+    // Tool-result carriers for the last assistant entry, held back until the
+    // next uuid-bearing item. The carrier was absorbed into the assistant
+    // turn, so the IR cannot say whether a headerless line that follows the
+    // turn was written before or after the carrier. The headerless lines go
+    // first; that order is a guess (the captured session in
+    // test-fixtures/claude/convo.jsonl has both such runs after the carrier).
+    let mut pending_results: Vec<ConversationEntry> = Vec::new();
+
+    // Iterate the full item stream (not just turns) so a compaction boundary
+    // or a headerless line lands at its true position between the turns it
+    // separates — and so do events: real Claude interleaves attachments and
+    // system entries (turn_duration, etc.) with the turns, so emitting them
+    // from a trailing pass regrouped them at the end of the file and
+    // reordered the entry stream on every round-trip. Tool-result events
+    // stay with the by-parent mechanism (their position must follow the
+    // assistant entry that isn't 1:1 with an item on cross-harness views).
+    for item in &view.items {
+        if let Item::Event(event) = item {
+            if let Some(raw) = event.data.get("raw") {
+                convo.add_headerless(raw.clone());
+                continue;
+            }
+            if !is_claude_entry(event) {
+                continue;
+            }
+        }
+        for entry in pending_results.drain(..) {
+            convo.add_entry(entry);
+        }
+        let turn = match item {
+            toolpath_convo::Item::Turn(t) => t,
+            toolpath_convo::Item::Event(event) => {
+                if event.event_type == TOOL_RESULT_USER_EVENT
+                    || consumed_event_ids.contains(&event.id)
+                {
+                    continue;
+                }
+                consumed_event_ids.insert(event.id.clone());
+                let mut entry = project_event(event, &view.id);
+                entry.parent_uuid =
+                    wire_parent(event.parent_id.as_deref(), &parent_rewrites, &kept);
+                // A compact_boundary carries its prior entry in
+                // `logicalParentUuid` and writes `parentUuid: null`.
+                if crate::provider::is_compact_boundary(&entry) {
+                    entry.parent_uuid = None;
+                }
+                convo.add_entry(entry);
+                continue;
+            }
+        };
+
+        let effective_parent = wire_parent(turn.parent_id.as_deref(), &parent_rewrites, &kept);
 
         match &turn.role {
             Role::User => {
@@ -163,7 +234,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     for event in events {
                         let entry = tool_result_event_to_entry(event, &view.id);
                         last_uuid = entry.uuid.clone();
-                        convo.add_entry(entry);
+                        pending_results.push(entry);
                         consumed_event_ids.insert(event.id.clone());
                     }
                     // Anything in the IR that pointed at this assistant
@@ -179,7 +250,7 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                     for mut result_entry in tool_result_entries(turn, &view.id) {
                         apply_turn_metadata(&mut result_entry, turn);
                         last_uuid = result_entry.uuid.clone();
-                        convo.add_entry(result_entry);
+                        pending_results.push(result_entry);
                     }
                     if last_uuid != turn.id {
                         parent_rewrites.insert(turn.id.clone(), last_uuid);
@@ -201,12 +272,14 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
         }
     }
 
-    // Emit non-preamble events (attachments, etc.) as entries.
-    for event in &view.events {
-        if event.data.contains_key("raw") {
-            continue; // headerless line — already pushed onto convo.preamble
-        }
-        if consumed_event_ids.contains(&event.id) {
+    for entry in pending_results {
+        convo.add_entry(entry);
+    }
+
+    // Events the item loop did not write: tool-result events whose
+    // assistant turn is gone (rare).
+    for event in view.events() {
+        if !is_claude_entry(event) || consumed_event_ids.contains(&event.id) {
             continue;
         }
         // Tool-result events without a matching parent turn — emit them
@@ -221,6 +294,23 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
     }
 
     Ok(convo)
+}
+
+/// An item's wire parent: its IR parent, resolved past headerless events
+/// (no uuid to name) and dropped events, and redirected to the last
+/// synthesized tool_result entry when one was emitted after that parent.
+fn wire_parent(
+    parent_id: Option<&str>,
+    rewrites: &HashMap<String, String>,
+    kept: &KeptAncestors<'_>,
+) -> Option<String> {
+    let pid = kept.resolve(parent_id)?;
+    Some(
+        rewrites
+            .get(pid)
+            .cloned()
+            .unwrap_or_else(|| pid.to_string()),
+    )
 }
 
 /// Rebuild a Claude tool-result user entry verbatim from a preserved event.
@@ -324,11 +414,9 @@ fn apply_turn_metadata(entry: &mut ConversationEntry, turn: &Turn) {
         }
     }
 
-    // Source-format details (`version`, `user_type`, `request_id`,
-    // per-entry catch-all) used to ride through `Turn.extra["claude"]` for
-    // claude → IR → claude round-trip. The IR no longer carries
-    // provider-specific extras; the projected entry's fields stay `None`
-    // and the harness fills in defaults at write time.
+    // The IR carries no provider-specific extras, so source-format details
+    // (`version`, `user_type`, `request_id`, per-entry catch-all) stay `None`
+    // here and the harness fills in defaults at write time.
 }
 
 /// Build a `ConversationEntry` for a user turn.
@@ -1021,12 +1109,11 @@ mod tests {
             id: id.to_string(),
             started_at: None,
             last_activity: None,
-            turns,
+            items: turns.into_iter().map(toolpath_convo::Item::Turn).collect(),
             total_usage: None,
             provider_id: None,
             files_changed: vec![],
             session_ids: vec![],
-            events: vec![],
             ..Default::default()
         }
     }
@@ -1071,9 +1158,61 @@ mod tests {
         }
     }
 
-    /// Helper: return all conversation entries (preamble is separate).
+    /// Helper: return all conversation entries (headerless lines are separate).
     fn content_entries(convo: &Conversation) -> &[ConversationEntry] {
         &convo.entries
+    }
+
+    // ── Events of other harnesses ────────────────────────────────────
+
+    #[test]
+    fn test_foreign_events_are_dropped_and_parents_resolve_past_them() {
+        // The Codex reader chains every item onto the one before it, events
+        // included. Claude Code has no form for a Codex event, so it is not
+        // written, and a turn chained onto it names the turn before it.
+        let event = |id: &str, parent: &str, event_type: &str| {
+            Item::Event(ConversationEvent {
+                id: id.to_string(),
+                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                parent_id: Some(parent.to_string()),
+                event_type: event_type.to_string(),
+                data: HashMap::new(),
+            })
+        };
+        let mut a1 = assistant_turn("a1", "hello");
+        a1.parent_id = Some("task_started-1".to_string());
+        let mut u2 = user_turn("u2", "again");
+        u2.parent_id = Some("token_count-1".to_string());
+        let mut view = make_view("s", vec![]);
+        view.items = vec![
+            Item::Turn(user_turn("u1", "hi")),
+            event("turn_context-1", "u1", "turn_context"),
+            event("task_started-1", "turn_context-1", "task_started"),
+            Item::Turn(a1),
+            event("token_count-1", "a1", "token_count"),
+            Item::Turn(u2),
+        ];
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+        let linkage: Vec<(&str, &str, Option<&str>)> = convo
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    e.entry_type.as_str(),
+                    e.uuid.as_str(),
+                    e.parent_uuid.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            linkage,
+            [
+                ("user", "u1", None),
+                ("assistant", "a1", Some("u1")),
+                ("user", "u2", Some("a1")),
+            ]
+        );
     }
 
     // ── Message-group usage re-expansion ─────────────────────────────
@@ -1148,25 +1287,22 @@ mod tests {
 
         // Re-read: total back on the final turn only; no fabricated attribution.
         let back = crate::provider::to_view(&convo);
-        let a: Vec<&Turn> = back
-            .turns
-            .iter()
-            .filter(|t| t.role == Role::Assistant)
-            .collect();
+        let a: Vec<&Turn> = back.turns().filter(|t| t.role == Role::Assistant).collect();
         assert!(a[0].token_usage.is_none());
         assert_eq!(a[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
         assert!(a.iter().all(|t| t.attributed_token_usage.is_none()));
     }
 
-    // ── Permission-mode preamble ─────────────────────────────────────
+    // ── Default permission-mode line ─────────────────────────────────
 
     #[test]
-    fn test_permission_mode_in_preamble() {
+    fn test_permission_mode_line_synthesized_for_views_without_one() {
         let view = make_view("sess-1", vec![user_turn("u1", "Hello")]);
         let convo = ClaudeProjector.project(&view).unwrap();
 
-        assert_eq!(convo.preamble.len(), 1);
-        let perm = &convo.preamble[0];
+        assert_eq!(convo.headerless.len(), 1);
+        assert_eq!(convo.headerless[0].before, 0);
+        let perm = &convo.headerless[0].raw;
         assert_eq!(perm["type"], "permission-mode");
         assert_eq!(perm["permissionMode"], "default");
         assert_eq!(perm["sessionId"], "sess-1");

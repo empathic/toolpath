@@ -13,25 +13,27 @@
 //!   - The fixture loads cleanly (no parser crash on `compact_boundary`).
 //!   - Pre-compact user/assistant content survives the round-trip.
 //!   - Post-compact user/assistant content survives the round-trip.
+//!   - The `compact_boundary` marker becomes an inline event in
+//!     `view.items` at its stream position (after the last pre-compact
+//!     turn, before the summary), and holds that position through
+//!     derive → extract with its id and event type intact.
 //!   - The conversation can be re-projected to Claude JSONL and
 //!     re-parsed by `ConversationReader` without error.
 //!
-//! Known limitation (documented, not asserted): the `compact_boundary`
-//! marker entry itself has no `message` field, so the current
-//! provider drops it on the floor going Claude → IR. The synthetic
-//! `isCompactSummary: true` summary entry is currently surfaced as a
-//! plain `Role::User` turn — `toolpath-claude` does not yet recognize
-//! the `isCompactSummary` flag. Both are acceptable losses for "good
-//! UX" today (the compacted summary text still lands in the
-//! transcript), but if/when we tighten this, this test gets
-//! tightened with it.
+//! Known limitation (documented, not asserted): the synthetic
+//! `isCompactSummary: true` summary entry is surfaced as a plain
+//! `Role::User` turn — `toolpath-claude` does not yet recognize the
+//! `isCompactSummary` flag. Acceptable for "good UX" today (the
+//! compacted summary text still lands in the transcript), but if/when
+//! we tighten this, this test gets tightened with it.
 
 use std::path::{Path, PathBuf};
 
 use toolpath::v1::Graph;
 use toolpath_claude::{ClaudeProjector, ConversationReader};
 use toolpath_convo::{
-    ConversationProjector, ConversationView, DeriveConfig, Role, derive_path, extract_conversation,
+    ConversationProjector, ConversationView, DeriveConfig, Item, Role, derive_path,
+    extract_conversation,
 };
 
 fn fixture_path() -> PathBuf {
@@ -59,7 +61,7 @@ fn ir_roundtrip(view: &ConversationView) -> ConversationView {
 fn fixture_loads_without_panic() {
     let view = load_view();
     assert!(
-        !view.turns.is_empty(),
+        view.turns().next().is_some(),
         "compaction fixture should produce turns"
     );
 }
@@ -73,29 +75,22 @@ fn pre_compact_content_survives_roundtrip() {
     let pre_assistant_text = "I'll start by reading the current auth code.";
 
     assert!(
-        original
-            .turns
-            .iter()
-            .any(|t| t.text.contains(pre_user_text)),
+        original.turns().any(|t| t.text.contains(pre_user_text)),
         "pre-compact user prompt missing from initial view"
     );
     assert!(
         original
-            .turns
-            .iter()
+            .turns()
             .any(|t| t.text.contains(pre_assistant_text)),
         "pre-compact assistant response missing from initial view"
     );
 
     assert!(
-        after.turns.iter().any(|t| t.text.contains(pre_user_text)),
+        after.turns().any(|t| t.text.contains(pre_user_text)),
         "pre-compact user prompt dropped after roundtrip"
     );
     assert!(
-        after
-            .turns
-            .iter()
-            .any(|t| t.text.contains(pre_assistant_text)),
+        after.turns().any(|t| t.text.contains(pre_assistant_text)),
         "pre-compact assistant response dropped after roundtrip"
     );
 }
@@ -111,11 +106,11 @@ fn post_compact_content_survives_roundtrip() {
 
     for needle in [post_user_text, post_assistant_text, post_summary_text] {
         assert!(
-            original.turns.iter().any(|t| t.text.contains(needle)),
+            original.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} missing from initial view"
         );
         assert!(
-            after.turns.iter().any(|t| t.text.contains(needle)),
+            after.turns().any(|t| t.text.contains(needle)),
             "post-compact text {needle:?} dropped after roundtrip"
         );
     }
@@ -128,13 +123,11 @@ fn pre_compact_tool_call_pairs_survive_roundtrip() {
 
     let target_id = "t-pre-1";
     let original_tool = original
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("pre-compact tool call missing from initial view");
     let after_tool = after
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("pre-compact tool call dropped after roundtrip");
 
@@ -157,13 +150,11 @@ fn post_compact_tool_call_pairs_survive_roundtrip() {
 
     let target_id = "t-post-1";
     let original_tool = original
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("post-compact tool call missing from initial view");
     let after_tool = after
-        .turns
-        .iter()
+        .turns()
         .find_map(|t| t.tool_uses.iter().find(|tu| tu.id == target_id))
         .expect("post-compact tool call dropped after roundtrip");
 
@@ -180,6 +171,90 @@ fn post_compact_tool_call_pairs_survive_roundtrip() {
 }
 
 #[test]
+fn compact_boundary_links_the_chain() {
+    // On the wire the boundary has `parentUuid: null` and names its prior
+    // entry in `logicalParentUuid` (here the absorbed tool-result carrier,
+    // so the reader resolves it to the assistant turn). The view chains
+    // through the boundary, the derived path has no dead ends, and the
+    // projector writes the null back.
+    let view = load_view();
+    let boundary = view
+        .events()
+        .find(|e| e.event_type == "compact_boundary")
+        .expect("boundary event");
+    assert_eq!(boundary.parent_id.as_deref(), Some("uuid-pre-2"));
+    let summary = view
+        .turns()
+        .find(|t| t.id == "uuid-summary")
+        .expect("summary turn");
+    assert_eq!(summary.parent_id.as_deref(), Some("uuid-boundary"));
+
+    let path = derive_path(&view, &DeriveConfig::default());
+    let dead: Vec<&str> = toolpath::v1::query::dead_ends(&path.steps, &path.path.head)
+        .iter()
+        .map(|s| s.step.id.as_str())
+        .collect();
+    assert!(dead.is_empty(), "unexpected dead ends: {dead:?}");
+
+    let convo = ClaudeProjector
+        .project(&extract_conversation(&path))
+        .expect("project");
+    let entry = convo
+        .entries
+        .iter()
+        .find(|e| e.uuid == "uuid-boundary")
+        .expect("projected boundary");
+    assert_eq!(entry.parent_uuid, None);
+    assert_eq!(
+        entry
+            .extra
+            .get("logicalParentUuid")
+            .and_then(|v| v.as_str()),
+        Some("uuid-pre-3")
+    );
+    let summary = convo
+        .entries
+        .iter()
+        .find(|e| e.uuid == "uuid-summary")
+        .expect("projected summary");
+    assert_eq!(summary.parent_uuid.as_deref(), Some("uuid-boundary"));
+}
+
+#[test]
+fn compact_boundary_event_survives_at_stream_position() {
+    // Position among the turns is the round-trip contract asserted here.
+    let original = load_view();
+    let after = ir_roundtrip(&original);
+
+    for (label, view) in [("initial view", &original), ("extracted view", &after)] {
+        let idx = view
+            .items
+            .iter()
+            .position(|item| matches!(item, Item::Event(e) if e.event_type == "compact_boundary"))
+            .unwrap_or_else(|| panic!("compact_boundary event missing from {label}"));
+
+        let event = view.items[idx].as_event().unwrap();
+        assert_eq!(event.id, "uuid-boundary", "event id diverged in {label}");
+
+        let turns_before = view.items[..idx].iter().filter_map(Item::as_turn).count();
+        assert_eq!(
+            turns_before, 2,
+            "boundary must follow the two pre-compact turns in {label}"
+        );
+
+        let next_turn = view.items[idx + 1..]
+            .iter()
+            .find_map(Item::as_turn)
+            .unwrap_or_else(|| panic!("no turn after the boundary in {label}"));
+        assert!(
+            next_turn.text.contains("[compacted summary]"),
+            "boundary must precede the summary turn in {label}, got {:?}",
+            next_turn.text
+        );
+    }
+}
+
+#[test]
 fn projector_output_is_re_parseable_by_reader() {
     let view = load_view();
     let after = ir_roundtrip(&view);
@@ -188,19 +263,12 @@ fn projector_output_is_re_parseable_by_reader() {
         .project(&after)
         .expect("project to claude conversation");
 
-    let mut lines: Vec<String> = Vec::new();
-    for raw in &convo.preamble {
-        lines.push(serde_json::to_string(raw).expect("serialize preamble"));
-    }
-    for entry in &convo.entries {
-        lines.push(serde_json::to_string(entry).expect("serialize entry"));
-    }
-
     let tmp = tempfile::Builder::new()
         .suffix(".jsonl")
         .tempfile()
         .expect("tempfile");
-    std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
+    toolpath_claude::ConversationWriter::write_conversation(&convo, tmp.as_file())
+        .expect("write projected JSONL");
     ConversationReader::read_conversation(tmp.path()).expect("re-read projected JSONL");
 }
 
@@ -208,13 +276,11 @@ fn projector_output_is_re_parseable_by_reader() {
 fn role_distribution_is_sane() {
     let view = load_view();
     let user_count = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| matches!(t.role, Role::User))
         .count();
     let assistant_count = view
-        .turns
-        .iter()
+        .turns()
         .filter(|t| matches!(t.role, Role::Assistant))
         .count();
     assert!(
