@@ -633,9 +633,7 @@ The path provides:
 The `path.base` object anchors the path to its project context: the
 repository and commit, or other project state, the path runs against.
 The `uri` field identifies the origin (repository, filesystem, or a
-project tracked in Toolpath). All other fields are optional. Lineage
-between paths is a different fact and lives in
-[`path.parent`](#path-parent); a path may carry both.
+project tracked in Toolpath). All other fields are optional.
 
 | Field    | Description                                              |
 | -------- | -------------------------------------------------------- |
@@ -685,9 +683,7 @@ The `toolpath:` URI format is:
 This is the Toolpath analogue of `github:org/repo` plus `ref`. When using
 a toolpath URI, the `ref` field is omitted. This enables pure Toolpath
 documents without VCS backing, and lets a path run against a project
-state that occurs between VCS commits. It says nothing about which
-earlier work this path descends from; that is
-[`path.parent`](#path-parent).
+state that occurs between VCS commits.
 
 #### Local/Filesystem Base
 
