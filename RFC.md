@@ -64,17 +64,16 @@ Current approaches to tracking code changes have significant gaps:
 
 ### Vocabulary
 
-| Term             | Meaning                                                              |
-| ---------------- | -------------------------------------------------------------------- |
-| **step**         | A single change to artifact(s)                                       |
-| **path**         | Collection of steps with a base context                              |
-| **graph**        | Collection of paths (release, project, etc.)                         |
-| **base**         | The project context (repo, commit) a path runs against               |
-| **head**         | The current tip of the active path                                   |
-| **parent**       | The step in another path a path descends from                        |
-| **continuation** | A path whose parent step is the parent path's head                   |
-| **fork**         | A path whose parent step is any other step of the parent path        |
-| **dead end**     | Abandoned branch in the path tree                                    |
+| Term             | Meaning                                             |
+| ---------------- | --------------------------------------------------- |
+| **step**         | A single change to artifact(s)                      |
+| **path**         | Collection of steps with a base context             |
+| **graph**        | Collection of paths (release, project, etc.)        |
+| **base**         | The project context (repo, commit) a path runs against |
+| **head**         | The current tip of the active path                  |
+| **parent**       | The step in another path a path descends from       |
+| **dead end**     | Abandoned branch in the path tree                   |
+| **fork**         | Where paths diverge                                 |
 
 ### Three Core Objects
 
@@ -141,8 +140,9 @@ This means:
 
 When referencing steps (e.g., in `parents` arrays or `path.head`), the reference
 is resolved within the containing path. Cross-path step references are not
-supported; the one link between paths is [`path.parent`](#path-parent),
-which names a step in another document explicitly.
+supported; the one link between paths is
+[`path.parent`](docs/RFC-lineage.md#path-parent), which names a step in
+another document explicitly.
 
 ### Steps
 
@@ -162,7 +162,7 @@ The `step.parents` array references parent step IDs:
 | ------- | ------- |
 | `[]` or omitted | Root step (no parents) |
 | `["step-001"]` | Single parent (linear history) |
-| `["step-A", "step-B"]` | Merge: `step-A` is the main line, `step-B` the branch merged in (see [First Parent](#first-parent)) |
+| `["step-A", "step-B"]` | Merge (derived from parallel work) |
 
 ### Paths
 
@@ -427,33 +427,9 @@ indicates which step is the current tip.
 
 `parents` is ordered. `parents[0]` is the main line; every further parent
 is a branch being merged in. Writers MUST order `parents` this way, and
-readers MUST NOT treat `parents` as a set. This is git's first-parent rule,
-and it makes the main line and each branch recoverable from structure
-alone: the main line is the `parents[0]` chain from `head` to a root; the
-branch merged at step *m* starts at `m.parents[1..]` and follows
-`parents[0]` until it reaches a step on *m*'s own first-parent chain. That
-step is part of the branch: it is the step the branch left the main line
-at, and for a delegation it is the tool-use step that spawned the subagent
-and carries what the subagent was told to do.
-
-A delegated subagent is a branch. It leaves the main line at the tool-use
-step that spawned it, its steps carry their own actor, and the tool-result
-step is the merge:
-
-```
-turn-7 ─ agent-call ─────────────────────── agent-result ─ turn-8 (head)
-            └─ sub-1 ─ sub-2 ─ sub-3 ─────────┘
-```
-
-```json
-{ "step": { "id": "sub-1", "parents": ["agent-call"], "actor": "agent:claude-code/explore", … } }
-{ "step": { "id": "agent-result", "parents": ["agent-call", "sub-3"], "actor": "agent:claude-code", … } }
-```
-
-When the main conversation moved on while the subagent ran, the merge's
-first parent is the later main-line step instead of `agent-call`. A branch
-that never merges — a subagent that was stopped or never reported back — is
-a dead end. Nested subagents are branches off a branch.
+readers MUST NOT treat `parents` as a set. This is git's first-parent
+rule; the [Lineage RFC](docs/RFC-lineage.md#main-line-and-branches)
+specifies how the main line and each merged branch are recovered from it.
 
 ## Format Specification
 
@@ -624,7 +600,7 @@ A path collects steps and provides context. Paths live inside `Graph.paths`:
 The path provides:
 - **base**: The project context the path runs against (repo + ref + commit)
 - **head**: Current tip of the active path
-- **parent**: The step in another path this path descends from (see [Path Parent](#path-parent))
+- **parent**: The step in another path this path descends from, as `{uri, path, step}` (see the [Lineage RFC](docs/RFC-lineage.md#path-parent))
 - **steps**: All steps including dead ends (step-001a has no descendants)
 - **meta**: Path-level metadata including `kind` (see [Document Kind](#document-kind)), actors, and signatures
 
@@ -695,65 +671,6 @@ state that occurs between VCS commits.
   }
 }
 ```
-
-### Path Parent
-
-`path.parent` names the step in another path that this path descends
-from. Every root step of this path (a step with no `parents`) has
-`parent.step` as its implicit parent; a reader composing the two paths
-restores that edge.
-
-```json
-{
-  "path": {
-    "id": "p2",
-    "base": { "uri": "github:org/repo", "ref": "abc123" },
-    "head": "s9",
-    "parent": {
-      "uri": "https://pathbase.dev/u/org/repo/graphs/5b4e…",
-      "path": "p1",
-      "step": "s17"
-    }
-  }
-}
-```
-
-| Field  | Description                                                              |
-| ------ | ------------------------------------------------------------------------ |
-| `uri`  | The document holding the parent path. Same URI forms as `$ref`, no fragment. |
-| `path` | Id of the parent path in that document. Required even for a single-path document, so a reader can check it. |
-| `step` | Id of the step this path's root steps descend from.                      |
-
-All three fields are required.
-
-Whether the path is a continuation or a fork is not declared; it follows
-from `parent.step`:
-
-| Term             | Definition                                                            |
-| ---------------- | --------------------------------------------------------------------- |
-| **continuation** | `parent.step` is the parent path's `head`: this path picks up where the parent ended. |
-| **fork**         | `parent.step` is any other step of the parent path: new work rooted in its history. |
-
-Several paths may be rooted at the same head, and each is a continuation;
-which of them a viewer follows is a presentation choice outside this
-format. Handoff to another harness and compaction (a new segment opening
-with a summary of the old) are ordinary continuations. A client resuming
-a session sets `parent.step` to the parent's head, even when a deriver
-placed trailing steps after the session's last turn.
-
-A reader classifies against the parent path's `head` as it stands. The
-parent document is expected not to change once another path descends
-from it.
-
-`parent` is lineage; `base` is the project context the path ran against.
-The two answer different questions and a path may carry both; a
-continuation usually shares its parent's base, since both ran against the
-same project. Three things are easy to confuse: branching inside a path
-is `step.parents`; the project context a path ran against is `base`, the
-`toolpath:` form included; descent from work in another document is `parent`. Soft
-correlation between paths — the same change seen from two sources, say —
-stays in `meta.refs` (see [Correlation RFC](docs/RFC-correlation.md)); it
-creates no edges.
 
 ### Graph Object
 

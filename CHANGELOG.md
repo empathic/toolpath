@@ -13,11 +13,13 @@ All notable changes to the Toolpath workspace are documented here.
   it in JSONL. `Path::with_parent` and `Parent::new` build it. `base` keeps its
   meaning as the project context the path runs against, the
   `toolpath:<path-id>/<step-id>` form included; a path may carry both
-  `base` and `parent`. The RFC states the first-parent convention:
+  `base` and `parent`. The core RFC states the first-parent rule:
   `step.parents[0]` is the main line and further parents are branches
-  merging in, which is how a delegated subagent appears inside its
-  parent path. `PathIdentity` struct literals must initialise the new
-  field.
+  merging in. A new add-on RFC, `docs/RFC-lineage.md`, specifies
+  `path.parent`, continuations and forks, how the main line and each
+  branch are recovered, a delegated subagent as a branch inside its
+  parent path, and `parent` on the JSONL `PathOpen` line.
+  `PathIdentity` struct literals must initialise the new field.
 - **`toolpath-md`** (0.8.0): the path header, transcript header and
   front matter print `path.parent` (document, path, step) after the
   base, so a rendered continuation shows what it resumed from.
