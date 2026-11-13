@@ -313,7 +313,7 @@
         },
         "base": {
           "$ref": "#/$defs/base",
-          "description": "Root context this path branches from. Optional: paths derived from a sealed agent session or a synthetic single-step graph may have no upstream VCS state to anchor to."
+          "description": "The project context the path runs against. Optional: paths derived from a sealed agent session or a synthetic single-step graph may have no upstream VCS state to anchor to."
         },
         "head": {
           "type": "string",
