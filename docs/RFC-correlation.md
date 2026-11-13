@@ -3,7 +3,7 @@
 **Status:** Draft
 **Authors:** with Alex Kesling <alex@empathic.dev>
 **Created:** 2026-02-13
-**Extends:** [RFC: Toolpath - A Format for Artifact Transformation Provenance](./RFC.md)
+**Extends:** [RFC: Toolpath - A Format for Artifact Transformation Provenance](../RFC.md)
 
 ## Abstract
 
