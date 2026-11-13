@@ -39,6 +39,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
