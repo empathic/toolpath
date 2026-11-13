@@ -34,6 +34,9 @@ pub(crate) const MANIFEST_FILE_NAME: &str = "manifest.json";
 /// file because the manifest itself is replaced by rename on every
 /// write, which would drop any lock held on it.
 pub(crate) const MANIFEST_LOCK_FILE_NAME: &str = "manifest.json.lock";
+/// Where each session's path lives remotely (see `sync::remotes`).
+/// Written under the manifest lock.
+pub(crate) const REMOTES_FILE_NAME: &str = "remotes.json";
 /// Pathbase bearer token + user, written by `path auth login`
 /// (see `cmd_pathbase`).
 pub(crate) const CREDENTIALS_FILE_NAME: &str = "credentials.json";

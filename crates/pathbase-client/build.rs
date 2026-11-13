@@ -36,7 +36,7 @@ fn main() {
 
     downgrade_to_oas_30(&mut spec);
     rewrite_ndjson_request_bodies(&mut spec);
-    relax_graph_mutability(&mut spec);
+    relax_for_older_servers(&mut spec);
     unlink_descriptions(&mut spec);
 
     let spec: openapiv3::OpenAPI =
@@ -82,14 +82,24 @@ fn rewrite_ndjson_request_bodies(value: &mut Value) {
     }
 }
 
-/// The server requires `Graph.mutability`, but this client never reads it,
-/// and a graph response from a server that predates the field must still
-/// decode: that is how an upload reaches the batch routes, where a `404`
-/// tells path-cli to fall back to the single request. Make the field
-/// optional for generation only.
-fn relax_graph_mutability(spec: &mut Value) {
-    if let Some(Value::Array(required)) = spec.pointer_mut("/components/schemas/Graph/required") {
-        required.retain(|v| v.as_str() != Some("mutability"));
+/// Fields the server requires but a server predating them does not send.
+/// A response from such a server must still decode: that is how an upload
+/// reaches the batch routes, where a `404` tells path-cli to fall back to
+/// the single request, and how the create response is read before the
+/// server listed the stored paths. Made optional for generation only;
+/// path-cli treats their absence as "older server".
+fn relax_for_older_servers(spec: &mut Value) {
+    for (required, field) in [
+        ("/components/schemas/Graph/required", "mutability"),
+        ("/components/schemas/TracePath/required", "mutability"),
+        (
+            "/components/schemas/GraphCreatedResponse/allOf/1/required",
+            "paths",
+        ),
+    ] {
+        if let Some(Value::Array(required)) = spec.pointer_mut(required) {
+            required.retain(|v| v.as_str() != Some(field));
+        }
     }
 }
 
