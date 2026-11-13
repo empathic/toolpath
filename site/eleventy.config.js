@@ -89,14 +89,10 @@ export default function (eleventyConfig) {
   // Load RFC.md from repo root, pre-render to HTML
   const rfcRaw = readFileSync("../RFC.md", "utf-8");
   // Strip the h1 title and the status/authors/created metadata lines,
-  // rewrite relative links to point to site pages
+  // and point the FAQ link at the site's FAQ page
   const rfcContent = rfcRaw
     .replace(/^# .+\n+(\*\*.+\n)*/m, "")
-    .replace(/\(\.\/FAQ\.md\)/g, "(/faq/)")
-    .replace(
-      /\(\.\/schema\/toolpath\.schema\.json\)/g,
-      "(https://github.com/empathic/toolpath/blob/main/schema/toolpath.schema.json)",
-    );
+    .replace(/\(\.\/FAQ\.md\)/g, "(/faq/)");
   const rfcMd = markdownIt({
     html: true,
     linkify: true,
@@ -105,6 +101,21 @@ export default function (eleventyConfig) {
     permalink: markdownItAnchor.permalink.headerLink(),
     slugify,
   });
+  // Any other relative link names a file in the repository, which the
+  // site does not serve: link to it on GitHub, keeping the anchor
+  const { repo } = JSON.parse(readFileSync("_data/site.json", "utf-8"));
+  const repoBlob = `${repo}/blob/main/`;
+  const renderLinkOpen =
+    rfcMd.renderer.rules.link_open ||
+    ((tokens, idx, options, env, self) =>
+      self.renderToken(tokens, idx, options));
+  rfcMd.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+    const href = tokens[idx].attrGet("href");
+    if (href && !/^([a-z][a-z0-9+.-]*:|#|\/)/i.test(href)) {
+      tokens[idx].attrSet("href", new URL(href, repoBlob).href);
+    }
+    return renderLinkOpen(tokens, idx, options, env, self);
+  };
   eleventyConfig.addGlobalData("rfcHtml", rfcMd.render(rfcContent));
 
   // Load example JSON files for the interactive playground
