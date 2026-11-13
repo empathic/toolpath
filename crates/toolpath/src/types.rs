@@ -148,8 +148,7 @@ pub struct Parent {
 }
 
 /// Root context for a path: the project context (repo and commit, or
-/// other project state) the path runs against. Lineage between paths is [`PathIdentity::parent`]; a path may
-/// carry both.
+/// other project state) the path runs against.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Base {
     /// Origin identifier: a repo (e.g., "github:org/repo"), a filesystem
