@@ -194,6 +194,10 @@ their position in that stream.
   the cache, shows the sessions by project over a time window (`t`)
   with lanes, filters on `/`, and resumes the chosen session in its
   source harness and its own directory.
+- **Fix:** a write to the document cache goes to a temporary file in
+  `~/.toolpath/documents/` and a rename puts it at its path. A reader
+  that runs during a `p cache sync` or a `p import --force` gets the
+  document that was there or the new one, never a part of one.
 - **`toolpath-cli`** (0.29.0): lockstep bump of the deprecated shim.
 
 ## path-cli 0.28.0 — 2026-09-16
