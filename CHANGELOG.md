@@ -6,7 +6,7 @@ All notable changes to the Toolpath workspace are documented here.
 
 - **`toolpath`** (0.8.0): `PathIdentity.parent` names the step in
   another path that a path descends from: the document `uri` and the
-  parent `path` and `step` ids, all required. Every root step of the
+  parent `path` and `step` IDs, all required. Every root step of the
   path has the parent step as its implicit parent. The path is a
   continuation when `parent.step` is the parent path's head and a fork
   when it is any other step; nothing is declared. `PathOpen` carries

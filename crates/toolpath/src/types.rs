@@ -141,9 +141,9 @@ pub struct Parent {
     /// The document holding the parent path. Same URI forms as `$ref`
     /// (`https://…`, `s3://…`, `file:///…`, `toolpath://…`), no fragment.
     pub uri: String,
-    /// Toolpath id of the parent path within that document.
+    /// Toolpath ID of the parent path within that document.
     pub path: String,
-    /// Toolpath id of the step this path's root steps descend from.
+    /// Toolpath ID of the step this path's root steps descend from.
     pub step: String,
 }
 

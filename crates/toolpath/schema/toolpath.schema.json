@@ -350,11 +350,11 @@
         },
         "path": {
           "type": "string",
-          "description": "Toolpath id of the parent path within that document."
+          "description": "Toolpath ID of the parent path within that document."
         },
         "step": {
           "type": "string",
-          "description": "Toolpath id of the step this path's root steps descend from."
+          "description": "Toolpath ID of the step this path's root steps descend from."
         }
       },
       "required": ["uri", "path", "step"],

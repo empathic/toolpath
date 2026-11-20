@@ -49,8 +49,8 @@ fields.
 | Field | Meaning |
 | --- | --- |
 | `uri` | The document holding the parent path. Same URI forms as `$ref`, no fragment: a Pathbase graph URL, an `s3://` or `file://` `.path.json`, … |
-| `path` | Toolpath id of the parent path in that document. Required even for a single-path document, so a reader can check it. |
-| `step` | Toolpath id of the step this path's root steps descend from. |
+| `path` | Toolpath ID of the parent path in that document. Required even for a single-path document, so a reader can check it. |
+| `step` | Toolpath ID of the step this path's root steps descend from. |
 
 All three are required.
 
@@ -93,7 +93,7 @@ still continues from the head, not from the last turn.
 | `parent_unavailable` | 403 | A composed read reached a parent the viewer cannot read. |
 
 These replace `invalid_base`, `source_not_frozen`, `base_retargeted` and
-`base_unavailable` from #469/#470. An owned step whose id is stored anywhere
+`base_unavailable` from #469/#470. An owned step whose ID is stored anywhere
 along the parent chain is still `inherited_step_redefined`.
 
 ## Delegation: subagents as branches
@@ -168,8 +168,8 @@ The existing whole-path read is unchanged. The composed read across
 line through the parent step, recursively, depth-bounded, checking read
 permission on every graph in the chain.
 
-A derive-time delegation id on subagent steps (`meta.delegation`, the tool
-use id) would make the branch slice a single indexed filter. It is an
+A derive-time delegation ID on subagent steps (`meta.delegation`, the tool
+use ID) would make the branch slice a single indexed filter. It is an
 accelerator, not part of the model; add it when the CTE measurably hurts.
 
 ## Writes
@@ -197,7 +197,7 @@ here takes `freeze_after` or `expected_generation`.
   `base` is for next to `parent`, and the `toolpath:` base form keeps its
   meaning as project context.
 - Claude deriver: derive sidechain transcripts into the same path. The
-  `tool_use` id links the spawning step to the subagent file; the matching
+  `tool_use` ID links the spawning step to the subagent file; the matching
   `tool_result` line is the merge. Emit subagent steps before the merge
   step. Order `parents` main line first.
 - Other derivers: order `parents` main line first wherever a merge is
