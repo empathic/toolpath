@@ -72,10 +72,23 @@ pub struct Message {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub message_type: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none", alias = "stop_reason")]
+    // `message` is the Anthropic Messages API object, whose fields are
+    // snake_case (`stop_reason`, `stop_sequence`), not the envelope's
+    // camelCase. The envelope's own `stopReason` is a different,
+    // hook-provided field (docs/agents/formats/claude-code/jsonl-envelope.md);
+    // the camelCase alias only keeps reading files older toolpath wrote.
+    #[serde(
+        rename = "stop_reason",
+        skip_serializing_if = "Option::is_none",
+        alias = "stopReason"
+    )]
     pub stop_reason: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none", alias = "stop_sequence")]
+    #[serde(
+        rename = "stop_sequence",
+        skip_serializing_if = "Option::is_none",
+        alias = "stopSequence"
+    )]
     pub stop_sequence: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,6 +197,21 @@ impl Message {
     /// Thinking blocks, if any.
     ///
     /// Returns `None` when the message has no thinking content (not an empty vec).
+    pub fn thinking_signature(&self) -> Option<&str> {
+        let parts = match &self.content {
+            Some(MessageContent::Parts(parts)) => parts,
+            _ => return None,
+        };
+        let mut sigs = parts.iter().filter_map(|p| match p {
+            ContentPart::Thinking { signature, .. } => Some(signature.as_deref()),
+            _ => None,
+        });
+        match (sigs.next(), sigs.next()) {
+            (Some(Some(s)), None) => Some(s),
+            _ => None,
+        }
+    }
+
     pub fn thinking(&self) -> Option<Vec<&str>> {
         let parts = match &self.content {
             Some(MessageContent::Parts(parts)) => parts,
@@ -273,6 +301,13 @@ impl ConversationEntry {
     /// Thinking blocks from the message, if any.
     pub fn thinking(&self) -> Option<Vec<&str>> {
         self.message.as_ref().and_then(|m| m.thinking())
+    }
+
+    /// The signature of the message's thinking block, when the message has exactly one thinking
+    /// block and it is signed. With several blocks there is no single signature over their
+    /// joined text, so none is returned.
+    pub fn thinking_signature(&self) -> Option<&str> {
+        self.message.as_ref().and_then(|m| m.thinking_signature())
     }
 
     /// Tool use entries from the message, if any.

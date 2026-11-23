@@ -30,6 +30,8 @@ fn turn(id: &str, parent: Option<&str>, role: Role, text: &str) -> Turn {
         timestamp: "2026-01-01T00:00:00Z".into(),
         text: text.into(),
         thinking: None,
+        thinking_signature: None,
+        provider: None,
         tool_uses: vec![],
         model: None,
         stop_reason: None,

@@ -41,7 +41,7 @@ pub fn tool_category(name: &str) -> Option<ToolCategory> {
         "write_file" | "replace" | "edit" => Some(ToolCategory::FileWrite),
         "run_shell_command" => Some(ToolCategory::Shell),
         "web_fetch" | "google_web_search" => Some(ToolCategory::Network),
-        "task" | "activate_skill" => Some(ToolCategory::Delegation),
+        "task" | "activate_skill" | "invoke_agent" => Some(ToolCategory::Delegation),
         _ => None,
     }
 }
@@ -113,6 +113,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
     });
 
     Turn {
+        provider: None,
         id: msg.id.clone(),
         parent_id: None,
         group_id: None,
@@ -120,6 +121,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
         timestamp: msg.timestamp.clone(),
         text,
         thinking,
+        thinking_signature: None,
         tool_uses,
         model: msg.model.clone(),
         stop_reason: None,
@@ -360,22 +362,6 @@ fn first_user_text(chat: &ChatFile) -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
-/// Build a fallback `DelegatedWork` from a `ToolInvocation` when no
-/// sub-agent file was found — mirrors the Claude provider's behaviour.
-fn tool_invocation_to_delegation(tu: &ToolInvocation) -> DelegatedWork {
-    DelegatedWork {
-        agent_id: tu.id.clone(),
-        prompt: tu
-            .input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        turns: vec![],
-        result: tu.result.as_ref().map(|r| r.content.clone()),
-    }
-}
-
 // ── Conversation → View ──────────────────────────────────────────────
 
 fn conversation_to_view(convo: &Conversation) -> ConversationView {
@@ -401,9 +387,9 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
         // For each delegation-category tool invocation, try to pull the
         // next sub-agent off the queue.
         for tu in &turn.tool_uses {
-            if tu.category != Some(ToolCategory::Delegation) {
+            let Some(from_call) = tu.as_delegation() else {
                 continue;
-            }
+            };
             let delegation = match sub_iter.next() {
                 Some(sub) => {
                     let prompt_fallback = tu
@@ -413,7 +399,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
                         .unwrap_or("");
                     sub_agent_to_delegation(sub, wd_ref, prompt_fallback, tu.result.as_ref())
                 }
-                None => tool_invocation_to_delegation(tu),
+                None => from_call,
             };
             turn.delegations.push(delegation);
         }
@@ -512,6 +498,10 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
     }
 }
 
+/// The session total: every turn's usage, sub-agent turns included, added
+/// field by field. Breakdowns add class by class like the counters they
+/// decompose (as `toolpath_convo::extract_conversation` rebuilds the total
+/// from a document), so `output.reasoning` on the turns is on the total too.
 fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
     // A split message repeats its token snapshot on every line, all sharing
     // one `group_id`; count it once, on the group's last-occurring turn.
@@ -532,37 +522,35 @@ fn sum_usage(turns: &[Turn]) -> Option<TokenUsage> {
             .is_none_or(|mid| group_last_idx.get(mid) == Some(&idx));
         if counts && let Some(u) = &turn.token_usage {
             any = true;
-            total.input_tokens =
-                Some(total.input_tokens.unwrap_or(0) + u.input_tokens.unwrap_or(0));
-            total.output_tokens =
-                Some(total.output_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
-            total.cache_read_tokens = match (total.cache_read_tokens, u.cache_read_tokens) {
-                (Some(a), Some(b)) => Some(a + b),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            };
+            add_usage(&mut total, u);
         }
         // Also walk sub-agent turns inside delegations.
-        for d in &turn.delegations {
-            for t in &d.turns {
-                if let Some(u) = &t.token_usage {
-                    any = true;
-                    total.input_tokens =
-                        Some(total.input_tokens.unwrap_or(0) + u.input_tokens.unwrap_or(0));
-                    total.output_tokens =
-                        Some(total.output_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
-                    total.cache_read_tokens = match (total.cache_read_tokens, u.cache_read_tokens) {
-                        (Some(a), Some(b)) => Some(a + b),
-                        (Some(a), None) => Some(a),
-                        (None, Some(b)) => Some(b),
-                        (None, None) => None,
-                    };
-                }
-            }
+        for u in turn
+            .delegations
+            .iter()
+            .flat_map(|d| d.turns.iter())
+            .filter_map(|t| t.token_usage.as_ref())
+        {
+            any = true;
+            add_usage(&mut total, u);
         }
     }
     if any { Some(total) } else { None }
+}
+
+fn add_usage(total: &mut TokenUsage, u: &TokenUsage) {
+    total.input_tokens = Some(total.input_tokens.unwrap_or(0) + u.input_tokens.unwrap_or(0));
+    total.output_tokens = Some(total.output_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
+    total.cache_read_tokens = match (total.cache_read_tokens, u.cache_read_tokens) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0) + b.unwrap_or(0)),
+    };
+    for (class, inner) in &u.breakdowns {
+        let target = total.breakdowns.entry(class.clone()).or_default();
+        for (sub, n) in inner {
+            *target.entry(sub.clone()).or_insert(0) += n;
+        }
+    }
 }
 
 fn extract_files_changed(turns: &[Turn]) -> Vec<String> {
@@ -831,6 +819,29 @@ mod tests {
         assert_eq!(total.input_tokens, Some(320));
         assert_eq!(total.output_tokens, Some(145));
         assert_eq!(total.cache_read_tokens, Some(50));
+    }
+
+    #[test]
+    fn test_total_usage_sums_breakdowns() {
+        // The total carries the turns' breakdowns added class by class, as
+        // the counters are: m2 thoughts 10 + m3 thoughts 0 (the sub-agent
+        // turn records none) = output.reasoning 10.
+        let (_t, p) = setup_provider();
+        let view =
+            ConversationProvider::load_conversation(&p, "/abs/myrepo", "session-uuid").unwrap();
+        let per_turn: u32 = view
+            .turns()
+            .filter_map(|t| {
+                t.token_usage
+                    .as_ref()?
+                    .breakdowns
+                    .get("output")?
+                    .get("reasoning")
+            })
+            .sum();
+        let total = view.total_usage.as_ref().unwrap();
+        assert_eq!(total.breakdowns["output"]["reasoning"], 10);
+        assert_eq!(total.breakdowns["output"]["reasoning"], per_turn);
     }
 
     #[test]

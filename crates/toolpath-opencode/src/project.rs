@@ -759,6 +759,7 @@ mod tests {
 
     fn user_turn(text: &str) -> Turn {
         Turn {
+            provider: None,
             id: "u1".into(),
             parent_id: None,
             group_id: None,
@@ -766,6 +767,7 @@ mod tests {
             timestamp: "2026-04-21T12:00:00.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -779,6 +781,7 @@ mod tests {
 
     fn assistant_turn(text: &str) -> Turn {
         Turn {
+            provider: None,
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -786,6 +789,7 @@ mod tests {
             timestamp: "2026-04-21T12:00:01.000Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: Some("claude-sonnet-4-6".into()),
             stop_reason: Some("stop".into()),
