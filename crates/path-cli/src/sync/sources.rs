@@ -67,7 +67,11 @@ pub(crate) fn source_for<'a>(
     t: ArtifactType,
 ) -> Option<Box<dyn ArtifactSource + 'a>> {
     match t {
-        ArtifactType::Claude => Some(Box::new(ClaudeSource(bundle.claude.as_ref()?))),
+        ArtifactType::Claude => {
+            let mut convos = vec![bundle.claude.as_ref()?];
+            convos.extend(bundle.claude_extra.iter());
+            Some(Box::new(ClaudeSource(convos)))
+        }
         ArtifactType::Gemini => Some(Box::new(GeminiSource(bundle.gemini.as_ref()?))),
         ArtifactType::Codex => Some(Box::new(CodexSource(bundle.codex.as_ref()?))),
         ArtifactType::Opencode => Some(Box::new(OpencodeSource(bundle.opencode.as_ref()?))),
@@ -100,7 +104,47 @@ fn dir_in_scope(dir: &str, project_under: &Path) -> bool {
 
 // ── claude ─────────────────────────────────────────────────────────
 
-struct ClaudeSource<'a>(&'a toolpath_claude::ClaudeConvo);
+/// One manager per Claude config root, primary first. With a single
+/// root this is the plain one-manager source.
+struct ClaudeSource<'a>(Vec<&'a toolpath_claude::ClaudeConvo>);
+
+impl ClaudeSource<'_> {
+    /// The manager owning session `id` under `project`: the first root
+    /// that holds its transcript, else the primary. A session present
+    /// in two roots resolves to the earlier one.
+    fn owner(&self, project: &str, id: &str) -> &toolpath_claude::ClaudeConvo {
+        self.0
+            .iter()
+            .copied()
+            .find(|c| c.conversation_exists(project, id).unwrap_or(false))
+            .unwrap_or(self.0[0])
+    }
+}
+
+/// Record the owning config root on a derived Claude document, so
+/// sessions synced from different roots stay distinguishable in the
+/// cache and in `path query` (`.path.meta.claude_config_dir`,
+/// `.path.meta.account`).
+fn stamp_owner(doc: &mut toolpath::v1::Graph, mgr: &toolpath_claude::ClaudeConvo) {
+    let Ok(dir) = mgr.claude_dir_path() else {
+        return;
+    };
+    let account = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().trim_start_matches('.').to_string())
+        .unwrap_or_default();
+    for p in &mut doc.paths {
+        if let toolpath::v1::PathOrRef::Path(p) = p {
+            let meta = p.meta.get_or_insert_with(Default::default);
+            meta.extra.insert(
+                "claude_config_dir".into(),
+                serde_json::Value::String(dir.to_string_lossy().into_owned()),
+            );
+            meta.extra
+                .insert("account".into(), serde_json::Value::String(account.clone()));
+        }
+    }
+}
 
 impl ArtifactSource for ClaudeSource<'_> {
     /// Chain heads via `list_conversations` (bounded first-lines peek
@@ -109,48 +153,59 @@ impl ArtifactSource for ClaudeSource<'_> {
     /// the whole chain (see `claude_chain_stamp`) because appends land
     /// in the newest segment, not the head file.
     fn enumerate(&self, project_under: Option<&Path>) -> Vec<ArtifactRef> {
-        let mut out = Vec::new();
-        let projects = match self.0.list_projects() {
-            Ok(ps) => ps,
-            Err(e) if is_not_found_claude(&e) => return out,
-            Err(e) => {
-                eprintln!("warning: claude enumeration failed: {e}");
-                return out;
-            }
-        };
-        for project in projects {
-            if let Some(project_under) = project_under
-                && !claude_project_in_scope(&project, project_under)
-            {
-                continue;
-            }
-            let heads = match self.0.list_conversations(&project) {
-                Ok(h) => h,
+        let mut out: Vec<ArtifactRef> = Vec::new();
+        for convo in &self.0 {
+            let projects = match convo.list_projects() {
+                Ok(ps) => ps,
+                Err(e) if is_not_found_claude(&e) => continue,
                 Err(e) => {
-                    eprintln!("warning: claude project {project} failed: {e}");
+                    eprintln!("warning: claude enumeration failed: {e}");
                     continue;
                 }
             };
-            for head in heads {
-                let (modified, size) = claude_chain_stamp(self.0, &project, &head);
-                out.push(ArtifactRef {
-                    artifact_type: ArtifactType::Claude,
-                    id: head,
-                    path: Some(project.clone()),
-                    modified,
-                    size,
-                });
+            for project in projects {
+                if let Some(project_under) = project_under
+                    && !claude_project_in_scope(&project, project_under)
+                {
+                    continue;
+                }
+                let heads = match convo.list_conversations(&project) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        eprintln!("warning: claude project {project} failed: {e}");
+                        continue;
+                    }
+                };
+                for head in heads {
+                    // A session present in two roots belongs to the earlier.
+                    if out.iter().any(|a| a.id == head) {
+                        continue;
+                    }
+                    let (modified, size) = claude_chain_stamp(convo, &project, &head);
+                    out.push(ArtifactRef {
+                        artifact_type: ArtifactType::Claude,
+                        id: head,
+                        path: Some(project.clone()),
+                        modified,
+                        size,
+                    });
+                }
             }
         }
         out
     }
 
     fn stamp(&self, project: Option<&str>, id: &str) -> Option<Stamp> {
-        Some(claude_chain_stamp(self.0, project?, id))
+        let project = project?;
+        Some(claude_chain_stamp(self.owner(project, id), project, id))
     }
 
     fn derive(&self, artifact: &ArtifactRef) -> Result<DerivedDoc> {
-        derive::derive_claude_session_with(self.0, require_path(artifact)?, &artifact.id)
+        let project = require_path(artifact)?;
+        let owner = self.owner(project, &artifact.id);
+        let mut derived = derive::derive_claude_session_with(owner, project, &artifact.id)?;
+        stamp_owner(&mut derived.doc, owner);
+        Ok(derived)
     }
 
     fn in_scope(&self, dir: &str, project_under: &Path) -> bool {

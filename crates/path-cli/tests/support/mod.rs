@@ -27,15 +27,19 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-/// RAII guard that pins `$HOME`, `$TOOLPATH_CONFIG_DIR`, and
-/// `$XDG_DATA_HOME` to a tempdir, and clears `$CLAUDE_CONFIG_DIR`.
+/// RAII guard that pins `$HOME`, `$TOOLPATH_CONFIG_DIR`, `$XDG_DATA_HOME`
+/// and `$XDG_CONFIG_HOME` to a tempdir, and clears `$CLAUDE_CONFIG_DIR` and
+/// `$CURSOR_CONFIG_DIR`.
 ///
 /// `$XDG_DATA_HOME` matters because the opencode `PathResolver` prefers it
-/// over `$HOME` when locating `opencode.db`. Without pinning it, a machine
+/// over `$HOME` when locating the opencode database. Without pinning it, a machine
 /// that sets `$XDG_DATA_HOME` (common on Linux; also set on this dev box)
 /// would send the opencode projector to the *real* user database — the
 /// test would fail with "table … already exists" and, worse, mutate the
 /// user's live opencode data. Pinning it keeps every harness sandboxed.
+/// `$XDG_CONFIG_HOME` is pinned for the same reason: `cursor-agent` keeps its
+/// chats under `$XDG_CONFIG_HOME/cursor` when it is set (it is on this dev
+/// box).
 ///
 /// `$CLAUDE_CONFIG_DIR` is *cleared* rather than pinned. The Claude reader
 /// prefers it over `$HOME/.claude`, so on a machine that exports it — every
@@ -44,35 +48,37 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// walks out to the developer's real config and reports the fixture session
 /// missing. Clearing it puts the reader back on its `$HOME`-relative
 /// default, which is the sandbox. A test that wants to exercise the override
-/// should set the variable deliberately, itself.
+/// should set the variable deliberately, itself. `$CURSOR_CONFIG_DIR`, which
+/// `cursor-agent` prefers over both, is cleared the same way.
 pub struct ScopedHome {
     _td: tempfile::TempDir,
-    prev_home: Option<OsString>,
-    prev_config: Option<OsString>,
-    prev_xdg_data: Option<OsString>,
-    prev_claude_config: Option<OsString>,
+    prev: Vec<(&'static str, Option<OsString>)>,
 }
 
 impl ScopedHome {
     pub fn new() -> Self {
         let td = tempfile::tempdir().unwrap();
-        let prev_home = std::env::var_os("HOME");
-        let prev_config = std::env::var_os("TOOLPATH_CONFIG_DIR");
-        let prev_xdg_data = std::env::var_os("XDG_DATA_HOME");
-        let prev_claude_config = std::env::var_os("CLAUDE_CONFIG_DIR");
-        unsafe {
-            std::env::set_var("HOME", td.path());
-            std::env::set_var("TOOLPATH_CONFIG_DIR", td.path().join(".toolpath"));
-            std::env::set_var("XDG_DATA_HOME", td.path().join(".local/share"));
-            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        let vars: [(&'static str, Option<PathBuf>); 6] = [
+            ("HOME", Some(td.path().to_path_buf())),
+            ("TOOLPATH_CONFIG_DIR", Some(td.path().join(".toolpath"))),
+            ("XDG_DATA_HOME", Some(td.path().join(".local/share"))),
+            ("XDG_CONFIG_HOME", Some(td.path().join(".config"))),
+            ("CLAUDE_CONFIG_DIR", None),
+            ("CURSOR_CONFIG_DIR", None),
+        ];
+        let prev = vars
+            .iter()
+            .map(|(k, _)| (*k, std::env::var_os(k)))
+            .collect();
+        for (k, v) in vars {
+            unsafe {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
         }
-        Self {
-            _td: td,
-            prev_home,
-            prev_config,
-            prev_xdg_data,
-            prev_claude_config,
-        }
+        Self { _td: td, prev }
     }
 
     pub fn home_dir(&self) -> PathBuf {
@@ -82,22 +88,12 @@ impl ScopedHome {
 
 impl Drop for ScopedHome {
     fn drop(&mut self) {
-        unsafe {
-            match &self.prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-            match &self.prev_config {
-                Some(v) => std::env::set_var("TOOLPATH_CONFIG_DIR", v),
-                None => std::env::remove_var("TOOLPATH_CONFIG_DIR"),
-            }
-            match &self.prev_xdg_data {
-                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-                None => std::env::remove_var("XDG_DATA_HOME"),
-            }
-            match &self.prev_claude_config {
-                Some(v) => std::env::set_var("CLAUDE_CONFIG_DIR", v),
-                None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        for (k, v) in &self.prev {
+            unsafe {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
             }
         }
     }
