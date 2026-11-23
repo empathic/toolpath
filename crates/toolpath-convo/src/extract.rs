@@ -157,6 +157,18 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
                     }
 
                     let mut turn = build_turn(step, &structural.extra);
+                    // Who served the model: the RFC's `meta.actors[actor].provider`.
+                    turn.provider = path
+                        .meta
+                        .as_ref()
+                        .and_then(|m| m.actors.as_ref())
+                        .and_then(|a| a.get(&step.step.actor))
+                        .and_then(|d| d.provider.clone())
+                        .filter(|_| step.step.actor.starts_with("agent:"))
+                        // Documents derived before this field existed put the
+                        // harness here (`pi`, `claude-code`); that is not a
+                        // model provider, so it is not read back as one.
+                        .filter(|p| Some(p.as_str()) != view.provider_id.as_deref());
                     // Attach pre-collected file mutations to the turn.
                     // `tool_id` on each mutation links back to the
                     // specific `ToolInvocation` (when set by derive).
@@ -300,6 +312,19 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // The provider's signature over the thinking, as derive wrote it (agent-tagged).
+    let thinking_signature = extra
+        .get("thinking_signature")
+        .and_then(|v| v.as_object())
+        .and_then(|o| {
+            Some(crate::ThinkingSignature {
+                provider: o.get("provider")?.as_str()?.to_string(),
+                value: o.get("value")?.as_str()?.to_string(),
+                text_sha256: o.get("text_sha256")?.as_str()?.to_string(),
+            })
+        })
+        .filter(|_| thinking.is_some());
+
     // Model is attributed via the step actor (`agent:{model}`).
     let model = model_from_actor(&step.step.actor);
 
@@ -335,8 +360,10 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
         timestamp: step.step.timestamp.clone(),
         text,
         thinking,
+        thinking_signature,
         tool_uses,
         model,
+        provider: None,
         stop_reason,
         token_usage,
         attributed_token_usage,
@@ -1350,6 +1377,8 @@ mod tests {
             timestamp: timestamp.into(),
             text: "text".into(),
             thinking: None,
+            thinking_signature: None,
+            provider: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
