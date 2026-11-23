@@ -51,12 +51,15 @@ fn view_has_expected_turns_and_tools() {
     let session = convo.read_session(&id).unwrap();
     let view = toolpath_copilot::to_view(&session);
 
-    // One user turn, one collapsed assistant turn.
-    assert_eq!(view.turns().count(), 2);
-    assert_eq!(view.turns().next().unwrap().role, Role::User);
-    assert_eq!(view.turns().nth(1).unwrap().role, Role::Assistant);
+    // The recording's system.message (developer text), one user turn, one collapsed assistant turn.
+    let turns: Vec<_> = view.turns().collect();
+    assert_eq!(turns.len(), 3);
+    assert_eq!(turns[0].role, Role::System);
+    assert!(!turns[0].text.is_empty(), "the system text is kept");
+    assert_eq!(turns[1].role, Role::User);
+    assert_eq!(turns[2].role, Role::Assistant);
 
-    let tools = &view.turns().nth(1).unwrap().tool_uses;
+    let tools = &turns[2].tool_uses;
     assert_eq!(
         tools.len(),
         5,
@@ -108,7 +111,7 @@ fn view_has_delegation_skill_and_usage() {
     let view = toolpath_copilot::to_view(&session);
 
     // Sub-agent → delegation with result back-filled.
-    let d = &view.turns().nth(1).unwrap().delegations[0];
+    let d = &view.turns().nth(2).unwrap().delegations[0];
     assert_eq!(d.agent_id, "sub-1");
     assert_eq!(d.result.as_deref(), Some("looks good, no issues"));
 

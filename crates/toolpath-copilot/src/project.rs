@@ -13,13 +13,33 @@
 use crate::provider::native_name;
 use crate::types::{EventLine, Session, Workspace};
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use toolpath_convo::{
     ConversationProjector, ConversationView, Result, Role, TokenUsage, ToolInvocation, Turn,
 };
 
 /// The default `copilotVersion` stamped on projected `session.start` events.
 pub const DEFAULT_COPILOT_VERSION: &str = "1.0.67";
+
+/// The Copilot session id a document projects to: a UUIDv5 of the document's own source id in
+/// a toolpath namespace, so the same document gives the same id (Copilot requires a UUID).
+///
+/// An id that is already a UUIDv5 is returned as it is: it is one this function made, handed
+/// back by reading a projection and projecting it again (round 2's input is round 1's output), so
+/// going round twice keeps the id. A source id that is a random UUIDv4, as Copilot's own are,
+/// or any other string, is hashed.
+pub fn session_id_for(source_id: &str) -> String {
+    if let Ok(u) = uuid::Uuid::parse_str(source_id)
+        && u.get_version_num() == 5
+    {
+        return u.to_string();
+    }
+    let ns = uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_URL,
+        b"https://toolpath.net/copilot-session",
+    );
+    uuid::Uuid::new_v5(&ns, source_id.as_bytes()).to_string()
+}
 
 /// Projects a [`ConversationView`] into a Copilot [`Session`].
 #[derive(Debug, Clone)]
@@ -73,7 +93,7 @@ impl LineBuilder {
         // session event envelope". Emit syntactically-valid, per-session-unique
         // v4-shaped UUIDs (deterministic; no rng/dep needed).
         let id = event_uuid(self.seq);
-        let mut extra: HashMap<String, Value> = HashMap::new();
+        let mut extra: BTreeMap<String, Value> = BTreeMap::new();
         extra.insert("id".to_string(), Value::String(id.clone()));
         // Copilot requires `parentId` to be *present* — a UUID string, or
         // explicitly `null` for the root event. Omitting it is rejected.
@@ -226,7 +246,22 @@ impl CopilotProjector {
             data.insert("reasoningText".into(), json!(th));
         }
         if let Some(u) = &turn.token_usage {
-            insert_token_fields(&mut data, u);
+            // The turn's usage includes its sub-agent's messages (the reader folds them in);
+            // those messages carry their own figures below, so take them out here.
+            let mut own = u.clone();
+            for st in turn.delegations.iter().flat_map(|d| &d.turns) {
+                if let Some(s) = &st.token_usage {
+                    let sub = |a: Option<u32>, b: Option<u32>| match (a, b) {
+                        (Some(a), Some(b)) => Some(a.saturating_sub(b)),
+                        (a, _) => a,
+                    };
+                    own.input_tokens = sub(own.input_tokens, s.input_tokens);
+                    own.output_tokens = sub(own.output_tokens, s.output_tokens);
+                    own.cache_read_tokens = sub(own.cache_read_tokens, s.cache_read_tokens);
+                    own.cache_write_tokens = sub(own.cache_write_tokens, s.cache_write_tokens);
+                }
+            }
+            insert_token_fields(&mut data, &own);
         }
         if !turn.tool_uses.is_empty() {
             // The timeline UI builds its tool row from THIS mirror (name +
@@ -343,6 +378,26 @@ impl CopilotProjector {
                     "toolCallId": sub_call,
                 }),
             );
+            for (j, st) in d.turns.iter().enumerate() {
+                let mut data = Map::new();
+                data.insert("content".into(), json!(st.text));
+                data.insert("turnId".into(), json!(j.to_string()));
+                data.insert(
+                    "messageId".into(),
+                    json!(format!("{message_id}-sub{i}-{j}")),
+                );
+                data.insert("parentToolCallId".into(), json!(sub_call));
+                if let Some(m) = &st.model {
+                    data.insert("model".into(), json!(m));
+                }
+                if let Some(th) = &st.thinking {
+                    data.insert("reasoningText".into(), json!(th));
+                }
+                if let Some(u) = &st.token_usage {
+                    insert_token_fields(&mut data, u);
+                }
+                b.push("assistant.message", ts, Value::Object(data));
+            }
             if let Some(result) = &d.result {
                 b.push(
                     "subagent.completed",
@@ -668,6 +723,31 @@ fn iso_or(s: &str, fallback: &str) -> String {
 }
 
 #[cfg(test)]
+mod id_tests {
+    use super::session_id_for;
+
+    #[test]
+    fn the_same_source_gives_the_same_uuid_and_another_source_another() {
+        let a = session_id_for("claude-code://abc");
+        assert_eq!(a, session_id_for("claude-code://abc"));
+        assert_ne!(a, session_id_for("claude-code://abd"));
+        assert_eq!(uuid::Uuid::parse_str(&a).unwrap().get_version_num(), 5);
+    }
+
+    #[test]
+    fn an_id_this_function_made_comes_back_unchanged() {
+        let a = session_id_for("x");
+        assert_eq!(session_id_for(&a), a, "going round twice must keep the id");
+    }
+
+    #[test]
+    fn a_random_copilot_uuid_is_hashed_not_kept() {
+        let v4 = "16ec21a1-a5fd-4229-9042-88183f155e01";
+        assert_ne!(session_id_for(v4), v4);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::provider::to_view;
@@ -778,6 +858,7 @@ mod tests {
             ..Default::default()
         };
         view.items.push(toolpath_convo::Item::Turn(Turn {
+            provider: None,
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -785,6 +866,7 @@ mod tests {
             timestamp: "2026-07-01T00:00:00Z".into(),
             text: String::new(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![ToolInvocation {
                 id: String::new(), // empty!
                 name: "bash".into(),
@@ -841,6 +923,7 @@ mod tests {
                 ..Default::default()
             };
             v.items.push(toolpath_convo::Item::Turn(Turn {
+                provider: None,
                 id: "a1".into(),
                 parent_id: None,
                 group_id: None,
@@ -848,6 +931,7 @@ mod tests {
                 timestamp: "2026-07-01T00:00:00Z".into(),
                 text: String::new(),
                 thinking: None,
+                thinking_signature: None,
                 tool_uses: vec![tool],
                 model: None,
                 stop_reason: None,
@@ -981,6 +1065,7 @@ mod tests {
             ..Default::default()
         };
         view.items.push(toolpath_convo::Item::Turn(Turn {
+            provider: None,
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -988,6 +1073,7 @@ mod tests {
             timestamp: "2026-07-01T00:00:00Z".into(),
             text: "t".into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![
                 mk(
                     "Edit",
@@ -1048,6 +1134,7 @@ mod tests {
             ..Default::default()
         };
         view.items.push(toolpath_convo::Item::Turn(Turn {
+            provider: None,
             id: "a1".into(),
             parent_id: None,
             group_id: None,
@@ -1055,6 +1142,7 @@ mod tests {
             timestamp: "2026-07-01T00:00:00Z".into(),
             text: String::new(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![ToolInvocation {
                 id: "c1".into(),
                 name: "shell".into(),

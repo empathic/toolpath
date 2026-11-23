@@ -332,6 +332,16 @@ impl<'a> Builder<'a> {
         // unfiltered turn stream) stay valid.
         let keep = std::mem::take(&mut self.kept);
 
+        // A delegation-type tool call (`spawn_agent`) is the turn's delegation. Built here, after
+        // every output has been attached, so the delegation carries its result.
+        for t in self.turns.iter_mut() {
+            t.delegations = t
+                .tool_uses
+                .iter()
+                .filter_map(ToolInvocation::as_delegation)
+                .collect();
+        }
+
         // Assign synthetic ids to surviving turns whose source message didn't
         // carry one, numbered by position among the surviving turns.
         let mut surviving = 0usize;
@@ -862,6 +872,7 @@ fn message_to_turn(
     });
 
     Turn {
+        provider: None,
         id: msg.id.clone().unwrap_or_default(),
         parent_id: None,
         group_id: None,
@@ -869,6 +880,7 @@ fn message_to_turn(
         timestamp: timestamp.to_string(),
         text,
         thinking: None,
+        thinking_signature: None,
         tool_uses: Vec::new(),
         model: if role == Role::Assistant {
             model.map(str::to_string)
@@ -890,6 +902,7 @@ fn synthetic_assistant_turn(
     model: Option<&str>,
 ) -> Turn {
     Turn {
+        provider: None,
         id: format!("synth-{}", timestamp),
         parent_id: None,
         group_id: None,
@@ -897,6 +910,7 @@ fn synthetic_assistant_turn(
         timestamp: timestamp.to_string(),
         text: String::new(),
         thinking: None,
+        thinking_signature: None,
         tool_uses: Vec::new(),
         model: model.map(str::to_string),
         stop_reason: None,

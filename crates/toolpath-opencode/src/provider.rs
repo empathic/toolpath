@@ -289,6 +289,7 @@ impl<'a> Builder<'a> {
         });
 
         self.turns.push(Turn {
+            provider: None,
             id: msg.id.clone(),
             parent_id: None,
             group_id: None,
@@ -296,6 +297,7 @@ impl<'a> Builder<'a> {
             timestamp: millis_to_iso(msg.time_created),
             text,
             thinking: None,
+            thinking_signature: None,
             tool_uses: Vec::new(),
             model: None,
             stop_reason: None,
@@ -454,6 +456,7 @@ impl<'a> Builder<'a> {
         let file_mutations = self.compute_turn_mutations(&snapshots, &tool_uses);
 
         self.turns.push(Turn {
+            provider: None,
             id: msg.id.clone(),
             parent_id: if a.parent_id.is_empty() {
                 None
@@ -469,6 +472,7 @@ impl<'a> Builder<'a> {
             } else {
                 Some(thinking_chunks.join("\n\n"))
             },
+            thinking_signature: None,
             tool_uses,
             model: if a.model_id.is_empty() {
                 None

@@ -127,12 +127,10 @@ impl PathResolver {
         session_uuid: &str,
         chat_name: &str,
     ) -> Result<PathBuf> {
-        let stem = if chat_name.ends_with(".json") {
-            chat_name.to_string()
-        } else {
-            format!("{}.json", chat_name)
-        };
-        Ok(self.session_dir(project_path, session_uuid)?.join(stem))
+        Ok(chat_path(
+            &self.session_dir(project_path, session_uuid)?,
+            chat_name,
+        ))
     }
 
     pub fn logs_file(&self, project_path: &str) -> Result<PathBuf> {
@@ -199,11 +197,12 @@ impl PathResolver {
 
     /// List sessions under a project's `chats/` directory.
     ///
-    /// A session is either a top-level `session-*.json` main-chat file
-    /// (listed by its file stem) or an orphan `<uuid>/` directory that
-    /// has no corresponding main file (listed by the dir name).
+    /// A session is either a top-level `session-*.json` or (0.47)
+    /// `session-*.jsonl` main-chat file (listed by its file stem) or an
+    /// orphan `<uuid>/` directory that has no corresponding main file
+    /// (listed by the dir name).
     ///
-    /// When both a `session-*.json` *and* a `<uuid>/` dir point at the
+    /// When both a `session-*.json(l)` *and* a `<uuid>/` dir point at the
     /// same `sessionId`, the UUID dir is considered the main file's
     /// sub-agent bucket and is **not** surfaced as a separate session —
     /// it gets merged into the main session by `read_session`.
@@ -241,13 +240,15 @@ impl PathResolver {
             };
             let path = entry.path();
             if ft.is_file() {
-                if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                    continue;
-                }
-                let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                let stem = match chat_stem(&path) {
                     Some(s) => s.to_string(),
                     None => continue,
                 };
+                // A `.json` and a `.jsonl` with one stem are one session:
+                // keep the file `chat_path` would read.
+                if path != chat_path(&chats, &stem) {
+                    continue;
+                }
                 let session_uuid = peek_session_id(&path);
                 if let Some(uuid) = &session_uuid {
                     main_session_uuids.insert(uuid.clone());
@@ -291,24 +292,20 @@ impl PathResolver {
         for entry in fs::read_dir(&chats)?.flatten() {
             let path = entry.path();
             if path.is_file()
-                && path.extension().and_then(|s| s.to_str()) == Some("json")
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                && let Some(stem) = chat_stem(&path)
             {
                 out.push(stem.to_string());
             }
         }
         out.sort();
+        out.dedup();
         Ok(out)
     }
 
-    /// Path to a main session JSON at the top of `chats/`.
+    /// Path to a main session file at the top of `chats/`: a bare stem names
+    /// the `.jsonl` file when one exists, else the `.json` one.
     pub fn main_session_file(&self, project_path: &str, stem: &str) -> Result<PathBuf> {
-        let name = if stem.ends_with(".json") {
-            stem.to_string()
-        } else {
-            format!("{}.json", stem)
-        };
-        Ok(self.chats_dir(project_path)?.join(name))
+        Ok(chat_path(&self.chats_dir(project_path)?, stem))
     }
 
     /// Locate a main chat file whose *identity* (either the filename stem
@@ -327,13 +324,14 @@ impl PathResolver {
         project_path: &str,
         session_id: &str,
     ) -> Result<Option<PathBuf>> {
-        // Fast path: direct stem match at chats/<session_id>.json.
+        // Fast path: direct stem match at chats/<session_id>.json(l).
         let direct = self.main_session_file(project_path, session_id)?;
         if direct.exists() {
             return Ok(Some(direct));
         }
 
-        // Fallback: scan chats/*.json and match on inner sessionId.
+        // Fallback: scan chats/*.json(l) and match on inner sessionId,
+        // in name order so the answer does not depend on read_dir order.
         let chats = match self.chats_dir(project_path) {
             Ok(p) => p,
             Err(_) => return Ok(None),
@@ -341,11 +339,13 @@ impl PathResolver {
         if !chats.exists() {
             return Ok(None);
         }
-        for entry in fs::read_dir(&chats)?.flatten() {
-            let p = entry.path();
-            if !p.is_file() || p.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
+        let mut files: Vec<PathBuf> = fs::read_dir(&chats)?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && chat_stem(p).is_some())
+            .collect();
+        files.sort();
+        for p in files {
             if let Some(inner) = peek_session_id(&p)
                 && inner == session_id
             {
@@ -355,7 +355,8 @@ impl PathResolver {
         Ok(None)
     }
 
-    /// List chat file stems in a session directory (without `.json`).
+    /// List chat file stems in a session directory (without `.json` /
+    /// `.jsonl`; a stem with both is listed once).
     pub fn list_chat_files(&self, project_path: &str, session_uuid: &str) -> Result<Vec<String>> {
         let dir = match self.session_dir(project_path, session_uuid) {
             Ok(p) => p,
@@ -367,13 +368,12 @@ impl PathResolver {
         let mut stems: Vec<String> = Vec::new();
         for entry in fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json")
-                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-            {
+            if let Some(stem) = chat_stem(&path) {
                 stems.push(stem.to_string());
             }
         }
         stems.sort();
+        stems.dedup();
         Ok(stems)
     }
 
@@ -414,8 +414,38 @@ fn peek_session_id(path: &std::path::Path) -> Option<String> {
         session_id: Option<String>,
     }
     let bytes = fs::read(path).ok()?;
-    let peek: Peek = serde_json::from_slice(&bytes).ok()?;
-    peek.session_id.filter(|s| !s.is_empty())
+    let id = match serde_json::from_slice::<Peek>(&bytes) {
+        Ok(peek) => peek.session_id,
+        // Not one document: the 0.47 record stream.
+        Err(_) => crate::reader::ConversationReader::parse_chat(&bytes)
+            .ok()
+            .map(|c| c.session_id),
+    };
+    id.filter(|s| !s.is_empty())
+}
+
+/// The stem of a chat file: `.json` (one document, before 0.47) or
+/// `.jsonl` (the 0.47 record stream). `None` for anything else.
+fn chat_stem(path: &Path) -> Option<&str> {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some("json" | "jsonl") => path.file_stem().and_then(|s| s.to_str()),
+        _ => None,
+    }
+}
+
+/// `dir/<name>` for a chat named with or without its extension. A bare
+/// stem names the `.jsonl` file when one exists, else the `.json` one:
+/// 0.47 leaves a projected `.json` untouched and keeps writing a `.jsonl`
+/// twin, so the stream is the live session.
+fn chat_path(dir: &Path, name: &str) -> PathBuf {
+    if name.ends_with(".json") || name.ends_with(".jsonl") {
+        return dir.join(name);
+    }
+    let jsonl = dir.join(format!("{name}.jsonl"));
+    if jsonl.is_file() {
+        return jsonl;
+    }
+    dir.join(format!("{name}.json"))
 }
 
 /// Extract `"sessionId": "…"` from a JSON prefix, trusting it only when

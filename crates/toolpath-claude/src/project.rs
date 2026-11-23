@@ -18,6 +18,12 @@ use toolpath_convo::{
 
 // ── ClaudeProjector ───────────────────────────────────────────────────
 
+/// Values this writer invents because Claude Code needs them and the view
+/// does not carry them, as `(key, value)` in the written JSONL. The baseline
+/// checks each is really written, and that a round trip gains nothing else
+/// (`crates/toolpath-goldens/fixtures/contract/claude.json`).
+pub const SYNTHESIZED: &[(&str, &str)] = &[("permissionMode", "default")];
+
 /// Project a [`ConversationView`] into a Claude [`Conversation`].
 ///
 /// Maps the provider-agnostic view back into Claude's JSONL wire format.
@@ -81,6 +87,12 @@ fn is_headerless(event: &ConversationEvent) -> bool {
 fn is_claude_entry(event: &ConversationEvent) -> bool {
     !is_headerless(event) && CLAUDE_ENTRY_EVENT_TYPES.contains(&event.event_type.as_str())
 }
+
+/// Stand-in text for an errored tool result whose source recorded no
+/// output: the Messages API rejects an `is_error` tool_result with empty
+/// content, which would fail the first resumed turn (hard rule 4 in
+/// `docs/agents/formats/claude-code/writing-compatible-jsonl.md`).
+const EMPTY_ERROR_RESULT_TEXT: &str = "(tool call failed; the source session recorded no output)";
 
 fn project_view(view: &ConversationView) -> std::result::Result<Conversation, String> {
     let mut convo = Conversation::new(view.id.clone());
@@ -211,6 +223,27 @@ fn project_view(view: &ConversationView) -> std::result::Result<Conversation, St
                 convo.add_entry(entry);
             }
             Role::Assistant => {
+                // Drop content-empty assistant turns. Claude Code streams a
+                // message as several JSONL lines, the first an empty "seed"
+                // (text: "") superseded by the real-text line. Projecting that
+                // seed as `content:[{type:text, text:""}]` yields an
+                // API-invalid message — on the next resumed turn Anthropic
+                // rejects the replayed transcript with "text content blocks
+                // must be non-empty". Skip the seed and re-link any child that
+                // pointed at it to its parent, keeping the uuid chain intact.
+                // (Turns carrying tool_result events are never skipped — those
+                // events would be orphaned.)
+                // Content-empty *and* not carrying attached tool-result
+                // events (those would be orphaned if we dropped the turn).
+                let is_droppable_seed =
+                    turn.is_content_empty() && !tool_result_events_by_parent.contains_key(&turn.id);
+                if is_droppable_seed {
+                    if let Some(parent) = effective_parent {
+                        parent_rewrites.insert(turn.id.clone(), parent);
+                    }
+                    continue;
+                }
+
                 // Grouped: the message total on every line of the split.
                 // Ungrouped: the turn's own usage.
                 let wire_usage: Option<toolpath_convo::TokenUsage> = match turn.group_id.as_deref()
@@ -525,9 +558,16 @@ fn build_assistant_content(turn: &Turn) -> MessageContent {
     let mut parts: Vec<ContentPart> = Vec::new();
 
     if let Some(thinking) = &turn.thinking {
+        // Anthropic checks the signature on resume, so it goes back exactly when this turn's
+        // thinking is the text it signed; any other provider's signature is not valid here.
+        let signature = turn
+            .thinking_signature
+            .as_ref()
+            .and_then(|s| s.value_for(toolpath_convo::ThinkingSignature::ANTHROPIC, thinking))
+            .map(str::to_string);
         parts.push(ContentPart::Thinking {
             thinking: thinking.clone(),
-            signature: None,
+            signature,
         });
     }
 
@@ -690,9 +730,19 @@ fn tool_result_entries(turn: &Turn, session_id: &str) -> Vec<ConversationEntry> 
         .iter()
         .filter_map(|tu| {
             let result = tu.result.as_ref()?;
+            // The Messages API rejects a replayed transcript holding an
+            // errored tool_result with empty content ("content cannot be
+            // empty if `is_error` is true"), so a resume of the projected
+            // session fails on its first turn. A source that recorded only
+            // the failure (no text) gets a stand-in, never empty text.
+            let content = if result.is_error && result.content.trim().is_empty() {
+                EMPTY_ERROR_RESULT_TEXT.to_string()
+            } else {
+                result.content.clone()
+            };
             let part = ContentPart::ToolResult {
                 tool_use_id: tu.id.clone(),
-                content: ToolResultContent::Text(result.content.clone()),
+                content: ToolResultContent::Text(content),
                 is_error: result.is_error,
             };
 
@@ -1120,6 +1170,7 @@ mod tests {
 
     fn user_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.to_string(),
             parent_id: None,
             group_id: None,
@@ -1127,6 +1178,7 @@ mod tests {
             timestamp: "2024-01-01T00:00:00Z".to_string(),
             text: text.to_string(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -1140,6 +1192,7 @@ mod tests {
 
     fn assistant_turn(id: &str, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.to_string(),
             parent_id: None,
             group_id: None,
@@ -1147,6 +1200,7 @@ mod tests {
             timestamp: "2024-01-01T00:00:01Z".to_string(),
             text: text.to_string(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -1242,14 +1296,15 @@ mod tests {
             .iter()
             .filter(|e| e.entry_type == "assistant")
             .collect();
-        assert_eq!(assistants.len(), 2);
-        for entry in &assistants {
-            let msg = entry.message.as_ref().unwrap();
-            assert_eq!(msg.id.as_deref(), Some("msg_A"));
-            let u = msg.usage.as_ref().expect("every line carries usage");
-            assert_eq!(u.output_tokens, Some(997));
-            assert_eq!(u.cache_creation_input_tokens, Some(429_831));
-        }
+        // a2 is the content-empty tail of the split; it's dropped (an empty
+        // text block would be API-invalid on resume). The group total it
+        // carried is re-expanded onto the surviving line via `group_total`.
+        assert_eq!(assistants.len(), 1);
+        let msg = assistants[0].message.as_ref().unwrap();
+        assert_eq!(msg.id.as_deref(), Some("msg_A"));
+        let u = msg.usage.as_ref().expect("surviving line carries usage");
+        assert_eq!(u.output_tokens, Some(997));
+        assert_eq!(u.cache_creation_input_tokens, Some(429_831));
     }
 
     #[test]
@@ -1291,6 +1346,75 @@ mod tests {
         assert!(a[0].token_usage.is_none());
         assert_eq!(a[1].token_usage.as_ref().unwrap().output_tokens, Some(164));
         assert!(a.iter().all(|t| t.attributed_token_usage.is_none()));
+    }
+
+    // ── Empty streaming-seed assistant lines ─────────────────────────
+
+    #[test]
+    fn test_projector_skips_empty_text_seed_and_relinks_chain() {
+        // Claude Code streams an assistant message as multiple JSONL lines;
+        // the first is an empty "seed" (text: "") superseded by the real-text
+        // line, both sharing one message id. Projecting the empty seed as
+        // `content:[{type:text, text:""}]` produces an API-invalid message —
+        // on the next resumed turn Anthropic rejects it with "text content
+        // blocks must be non-empty". The projector must drop the content-empty
+        // seed and re-link the following turn's parent to the seed's parent so
+        // the uuid chain stays intact.
+        let usage = TokenUsage {
+            input_tokens: Some(5710),
+            output_tokens: Some(224),
+            ..Default::default()
+        };
+        let mut seed = assistant_turn("seed", "");
+        seed.parent_id = Some("u1".into());
+        seed.group_id = Some("msg_A".into());
+        seed.stop_reason = Some("end_turn".into());
+        let mut real = assistant_turn("real", "Chocolate, vanilla, strawberry.");
+        real.parent_id = Some("seed".into());
+        real.group_id = Some("msg_A".into());
+        real.token_usage = Some(usage);
+
+        let view = make_view(
+            "sess-1",
+            vec![user_turn("u1", "icecream flavors"), seed, real],
+        );
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        let assistants: Vec<&ConversationEntry> = content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+            .collect();
+
+        // The empty seed is gone; only the real-text line survives.
+        assert_eq!(assistants.len(), 1, "empty seed line must be dropped");
+        let entry = assistants[0];
+        assert_eq!(entry.uuid, "real");
+        // Re-linked past the dropped seed to its parent.
+        assert_eq!(
+            entry.parent_uuid.as_deref(),
+            Some("u1"),
+            "surviving turn must re-parent to the dropped seed's parent"
+        );
+
+        // No assistant message anywhere carries an empty/whitespace text block.
+        for e in content_entries(&convo)
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+        {
+            if let Some(MessageContent::Parts(parts)) =
+                e.message.as_ref().and_then(|m| m.content.as_ref())
+            {
+                for p in parts {
+                    if let ContentPart::Text { text } = p {
+                        assert!(!text.trim().is_empty(), "empty text content block leaked");
+                    }
+                }
+            }
+        }
+
+        // Usage from the group is preserved on the surviving line.
+        let msg = entry.message.as_ref().unwrap();
+        assert_eq!(msg.usage.as_ref().unwrap().output_tokens, Some(224));
     }
 
     // ── Default permission-mode line ─────────────────────────────────
@@ -1408,6 +1532,49 @@ mod tests {
         }
     }
 
+    /// The signature written for one thinking turn.
+    fn written_signature(
+        thinking: &str,
+        sig: Option<toolpath_convo::ThinkingSignature>,
+    ) -> Option<String> {
+        let mut turn = assistant_turn("a1", "answer");
+        turn.thinking = Some(thinking.to_string());
+        turn.thinking_signature = sig;
+        let convo = ClaudeProjector
+            .project(&make_view("sess-1", vec![turn]))
+            .unwrap();
+        let msg = content_entries(&convo)[0].message.as_ref().unwrap().clone();
+        match msg.content.unwrap() {
+            MessageContent::Parts(parts) => parts.into_iter().find_map(|p| match p {
+                ContentPart::Thinking { signature, .. } => Some(signature),
+                _ => None,
+            }),
+            other => panic!("Expected Parts, got {other:?}"),
+        }
+        .expect("a thinking part")
+    }
+
+    #[test]
+    fn an_anthropic_signature_over_the_same_text_is_written_back() {
+        let sig = toolpath_convo::ThinkingSignature::new("anthropic", "SIG", "deep thought");
+        assert_eq!(
+            written_signature("deep thought", Some(sig)).as_deref(),
+            Some("SIG")
+        );
+    }
+
+    #[test]
+    fn a_signature_over_other_text_or_from_another_provider_is_not_written() {
+        // the text changed after it was signed: the signature would be invalid
+        let stale = toolpath_convo::ThinkingSignature::new("anthropic", "SIG", "old thought");
+        assert_eq!(written_signature("new thought", Some(stale)), None);
+        // another provider's signature is not valid for Anthropic's API
+        let other = toolpath_convo::ThinkingSignature::new("openai", "SIG", "deep thought");
+        assert_eq!(written_signature("deep thought", Some(other)), None);
+        // and an unsigned turn stays unsigned (an absent key, never null)
+        assert_eq!(written_signature("deep thought", None), None);
+    }
+
     // ── Test 4: Simple text-only assistant → always Parts (Claude Code requires arrays) ─
 
     #[test]
@@ -1483,6 +1650,44 @@ mod tests {
     }
 
     // ── Test 6: No tool result entry when tool uses have no results ───
+
+    #[test]
+    fn test_errored_tool_result_without_output_is_never_empty() {
+        // A source that recorded only the failure (a copilot reader that
+        // dropped `error.message`; a pi or codex result whose text is "")
+        // must not project an `is_error` tool_result with empty content:
+        // the API rejects the replayed transcript on the first resumed turn
+        // (measured: `400 … tool_result: content cannot be empty if
+        // is_error is true`).
+        let mut turn = assistant_turn("a1", "Reading a missing file.");
+        turn.tool_uses = vec![ToolInvocation {
+            id: "t1".to_string(),
+            name: "Read".to_string(),
+            input: serde_json::json!({"file_path": "nope.txt"}),
+            result: Some(ToolResult {
+                content: String::new(),
+                is_error: true,
+            }),
+            category: None,
+        }];
+        let view = make_view("sess-1", vec![user_turn("u1", "Go"), turn]);
+        let convo = ClaudeProjector.project(&view).unwrap();
+        let entries = content_entries(&convo);
+        let msg = entries[2].message.as_ref().unwrap();
+        match msg.content.as_ref().unwrap() {
+            MessageContent::Parts(parts) => match &parts[0] {
+                ContentPart::ToolResult {
+                    content, is_error, ..
+                } => {
+                    assert!(is_error);
+                    assert!(!content.text().trim().is_empty());
+                    assert_eq!(content.text(), EMPTY_ERROR_RESULT_TEXT);
+                }
+                other => panic!("Expected ToolResult, got {:?}", other),
+            },
+            other => panic!("Expected Parts, got {:?}", other),
+        }
+    }
 
     #[test]
     fn test_no_tool_result_entry_when_no_results() {

@@ -6,16 +6,13 @@
 //! Loads the shared real-world fixture at
 //! `test-fixtures/gemini/convo.jsonl` (refreshed via
 //! `scripts/capture-elicit-fixtures.sh`). Recent Gemini versions write
-//! a JSONL stream — line 1 is a `ChatFile` header, subsequent lines are
-//! either `GeminiMessage` entries (carry `type`) or `$set`-style
-//! header-mutation events (skipped). Older versions wrote a single
-//! JSON object; this test handles the JSONL form to match what the
-//! capture script writes.
+//! a JSONL record stream (a `ChatFile` header, message records upserted
+//! by id, `$set` header updates); older versions wrote a single JSON
+//! object. `ConversationReader::read_chat_file` reads both.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
 use toolpath::v1::Graph;
 use toolpath_convo::{
     ConversationProjector, ConversationView, DeriveConfig, Role, Turn, derive_path,
@@ -23,7 +20,7 @@ use toolpath_convo::{
 };
 use toolpath_gemini::ConversationReader;
 use toolpath_gemini::project::GeminiProjector;
-use toolpath_gemini::types::{ChatFile, Conversation, GeminiMessage};
+use toolpath_gemini::types::Conversation;
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -35,22 +32,8 @@ fn fixture_path() -> PathBuf {
 }
 
 fn load_fixture_conversation() -> Conversation {
-    let content = std::fs::read_to_string(fixture_path()).expect("read gemini fixture");
-    let mut lines = content.lines().filter(|l| !l.trim().is_empty());
-    let header = lines.next().expect("gemini header line");
-    let mut chat_file: ChatFile = serde_json::from_str(header).expect("parse gemini header");
-    for line in lines {
-        let v: Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if v.get("type").is_none() {
-            continue;
-        }
-        if let Ok(msg) = serde_json::from_value::<GeminiMessage>(v) {
-            chat_file.messages.push(msg);
-        }
-    }
+    let chat_file =
+        ConversationReader::read_chat_file(fixture_path()).expect("read gemini fixture");
     let session_uuid = chat_file.session_id.clone();
     Conversation::new(session_uuid, chat_file)
 }

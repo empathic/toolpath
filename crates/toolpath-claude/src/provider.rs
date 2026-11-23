@@ -121,6 +121,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
     let delegations = extract_delegations(&tool_uses);
 
     Turn {
+        provider: None,
         id: entry.uuid.clone(),
         parent_id: entry.parent_uuid.clone(),
         // The API message ID (`msg_…`). Claude Code writes one JSONL line
@@ -131,6 +132,16 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
         role: claude_role_to_role(&msg.role),
         timestamp: entry.timestamp.clone(),
         text,
+        thinking_signature: thinking
+            .as_deref()
+            .zip(msg.thinking_signature())
+            .map(|(text, sig)| {
+                toolpath_convo::ThinkingSignature::new(
+                    toolpath_convo::ThinkingSignature::ANTHROPIC,
+                    sig,
+                    text,
+                )
+            }),
         thinking,
         tool_uses,
         model: msg.model.clone(),
@@ -238,18 +249,7 @@ fn extract_file_path_for_tool(input: &serde_json::Value) -> Option<String> {
 fn extract_delegations(tool_uses: &[ToolInvocation]) -> Vec<DelegatedWork> {
     tool_uses
         .iter()
-        .filter(|tu| tu.category == Some(ToolCategory::Delegation))
-        .map(|tu| DelegatedWork {
-            agent_id: tu.id.clone(),
-            prompt: tu
-                .input
-                .get("prompt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            turns: vec![],
-            result: tu.result.as_ref().map(|r| r.content.clone()),
-        })
+        .filter_map(ToolInvocation::as_delegation)
         .collect()
 }
 
@@ -965,6 +965,7 @@ mod tests {
 
     fn message_turn_stub(id: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -972,6 +973,7 @@ mod tests {
             timestamp: "2024-01-01T00:00:00Z".into(),
             text: String::new(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -1551,6 +1553,7 @@ mod tests {
     fn test_merge_tool_results_by_id() {
         // Verify that merge matches by tool_use_id, not position
         let mut turns = vec![Turn {
+            provider: None,
             id: "t1".into(),
             parent_id: None,
             group_id: None,
@@ -1558,6 +1561,7 @@ mod tests {
             timestamp: "2024-01-01T00:00:00Z".into(),
             text: "test".into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![
                 ToolInvocation {
                     id: "tool-a".into(),
