@@ -42,9 +42,8 @@ trap 'rm -rf "${_tmpdir}"' EXIT
 #
 # The opt-in cargo features the cargo gates below build with (`--features
 # "${_features}"`), so feature-gated code is compiled and tested on every gate
-# rather than skipped. One assignment per feature, added with the code it gates
-# (crates/xtask/src/contract.rs reads these lines). path-cli/develop: `path d`
-# and the goldens tests.
+# rather than skipped. One assignment per feature, added with the code it gates.
+# path-cli/develop: `path d` and the goldens tests.
 
 _features=path-cli/develop
 
