@@ -93,20 +93,6 @@ gate_test() {
 }
 
 # shellcheck disable=SC2329
-gate_contract() {
-    # The PR record's `## Proves` claims, each run and tabled (crates/xtask/src/contract.rs).
-    # Not a PR (no GITHUB_HEAD_REF) or no record: says so and passes.
-    cargo xtask contract 2>&1
-}
-
-# shellcheck disable=SC2329
-gate_redgreen() {
-    # The tests this change adds: red at the PR base, green at the head. Needs PR_BASE_SHA
-    # (gates.yml sets it on pull requests); without one it says so and passes.
-    cargo xtask red-green 2>&1
-}
-
-# shellcheck disable=SC2329
 gate_doc() {
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features "${_features}" --no-deps 2>&1
 }
@@ -120,6 +106,20 @@ gate_examples() {
         fi
     done
     return "${_failed}"
+}
+
+# shellcheck disable=SC2329
+gate_contract() {
+    # The PR record's `## Proves` claims, each run and tabled (crates/xtask/src/contract.rs).
+    # Not a PR (no GITHUB_HEAD_REF) or no record: says so and passes.
+    cargo xtask contract 2>&1
+}
+
+# shellcheck disable=SC2329
+gate_redgreen() {
+    # The tests this change adds: red at the PR base, green at the head. Needs PR_BASE_SHA
+    # (gates.yml sets it on pull requests); without one it says so and passes.
+    cargo xtask red-green 2>&1
 }
 
 # shellcheck disable=SC2329
