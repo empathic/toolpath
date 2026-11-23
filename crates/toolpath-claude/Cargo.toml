@@ -27,5 +27,7 @@ notify = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time", "fs"], optional = true }
 
 [dev-dependencies]
+toolpath-codex = { workspace = true }
+toolpath-golden = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }

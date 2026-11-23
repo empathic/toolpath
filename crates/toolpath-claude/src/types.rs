@@ -1387,6 +1387,37 @@ mod tests {
     }
 
     #[test]
+    fn test_message_stop_fields_written_snake_case() {
+        // The claude golden's assistant lines carry message.stop_reason (the
+        // API field); writing them back must keep that name, never the
+        // envelope's hook-provided `stopReason`.
+        let g = toolpath_golden::golden("claude");
+        let mut seen = 0;
+        for line in g.input().lines() {
+            let raw: serde_json::Value = serde_json::from_str(line).unwrap();
+            let Some(sr) = raw["message"]["stop_reason"].as_str() else {
+                continue;
+            };
+            let entry: ConversationEntry = serde_json::from_str(line).unwrap();
+            let out = serde_json::to_value(&entry).unwrap();
+            assert_eq!(out["message"]["stop_reason"].as_str(), Some(sr));
+            assert!(out["message"].get("stopReason").is_none());
+            assert!(out.get("stopReason").is_none());
+            seen += 1;
+        }
+        assert!(
+            seen > 0,
+            "the claude golden should carry message.stop_reason"
+        );
+
+        let msg: Message =
+            serde_json::from_str(r#"{"role":"assistant","stop_sequence":"END"}"#).unwrap();
+        let out = serde_json::to_value(&msg).unwrap();
+        assert_eq!(out["stop_sequence"].as_str(), Some("END"));
+        assert!(out.get("stopSequence").is_none());
+    }
+
+    #[test]
     fn test_usage_snake_case() {
         let entry: ConversationEntry = serde_json::from_str(
             r#"{"uuid":"u1","type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"hi","usage":{"input_tokens":1200,"output_tokens":350,"cache_creation_input_tokens":100,"cache_read_input_tokens":500,"service_tier":"standard"}}}"#,
