@@ -15,6 +15,11 @@ exclude = ["**/.qual"]
 name = "path_cli"
 path = "src/lib.rs"
 
+# The help and behaviour snapshots of the whole CLI (tests/snapshots/help@*, behaviour@*).
+[[test]]
+name = "cli_surface"
+required-features = ["develop"]
+
 [[bin]]
 name = "path"
 path = "src/main.rs"
@@ -22,6 +27,12 @@ path = "src/main.rs"
 [[bin]]
 name = "gen_synthetic_path"
 path = "src/bin/gen_synthetic_path.rs"
+
+# One test per golden set; under CI it runs `qualifier review` too, so it needs the pinned
+# qualifier binary the CI workflow installs.
+[[test]]
+name = "goldens"
+required-features = ["develop"]
 
 [dependencies]
 toolpath = { workspace = true }
@@ -114,15 +125,7 @@ resume-remote = ["dep:serde_json_canonicalizer", "dep:shlex", "dep:russh", "dep:
 develop = []
 
 [[test]]
-name = "goldens"
-required-features = ["develop"]
-
-[[test]]
 name = "goldens_producer"
-required-features = ["develop"]
-
-[[test]]
-name = "cli_surface"
 required-features = ["develop"]
 
 [dev-dependencies]

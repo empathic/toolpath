@@ -27,11 +27,32 @@ pub fn gate_features(root: &Path) -> Option<String> {
     features_of(&sh)
 }
 
+/// `X` is the list itself, or `"${_features}"`: then the script's `_features=` and `_features+=`
+/// lines, in order.
 pub fn features_of(sh: &str) -> Option<String> {
     let line = sh.lines().find(|l| l.contains("cargo test --workspace"))?;
     let mut words = line.split_whitespace();
     words.find(|w| *w == "--features")?;
-    words.next().map(str::to_string)
+    let word = words.next()?;
+    if !word.contains("_features") {
+        return Some(word.to_string());
+    }
+    let value = |v: &str| {
+        v.split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_matches('"')
+            .to_string()
+    };
+    let mut features = String::new();
+    for l in sh.lines().map(str::trim) {
+        if let Some(v) = l.strip_prefix("_features=") {
+            features = value(v);
+        } else if let Some(v) = l.strip_prefix("_features+=") {
+            features.push_str(&value(v));
+        }
+    }
+    (!features.is_empty()).then_some(features)
 }
 
 /// One `## Proves` line.
@@ -671,6 +692,10 @@ mod tests {
             "gate_test() {\n    RUSTFLAGS=x cargo test --workspace --features a/b,c/d 2>&1\n}\n";
         assert_eq!(features_of(sh).as_deref(), Some("a/b,c/d"));
         assert_eq!(features_of("    cargo test --workspace 2>&1\n"), None);
+        let sh = "_features=a/b\n\n_x=(y)\n_features+=,c/d\n\ngate_test() {\n    RUSTFLAGS=x cargo test --workspace --features \"${_features}\" 2>&1\n}\n";
+        assert_eq!(features_of(sh).as_deref(), Some("a/b,c/d"));
+        let sh = "    cargo test --workspace --features \"${_features}\" 2>&1\n";
+        assert_eq!(features_of(sh), None);
     }
 
     #[test]

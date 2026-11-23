@@ -38,12 +38,25 @@ fi
 _tmpdir=$(mktemp -d)
 trap 'rm -rf "${_tmpdir}"' EXIT
 
+# ── Features the cargo gates build ────────────────────────────────────────────
+#
+# The opt-in cargo features the cargo gates below build with (`--features
+# "${_features}"`), so feature-gated code is compiled and tested on every gate
+# rather than skipped. One assignment per feature, added with the code it gates
+# (crates/xtask/src/contract.rs reads these lines). path-cli/develop: `path d`
+# and the goldens tests.
+
+_features=path-cli/develop
+
 # ── Gate definitions ──────────────────────────────────────────────────────────
 #
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
 # run_gate; shellcheck can't see the call sites and flags them as unused.
 
 _all_gates=(format shellcheck clippy test doc examples plugin quickstart site secrets contract redgreen)
+
+# toolpath/verify: RFC signature verification (crates/toolpath/src/sign.rs) and its tests.
+_features+=,toolpath/verify
 
 # shellcheck disable=SC2329
 gate_format() {
@@ -71,12 +84,12 @@ gate_shellcheck() {
 # shellcheck disable=SC2329
 gate_clippy() {
     # --all-targets: tests, benches and examples too, not only the library and binary code.
-    cargo clippy --workspace --all-targets --features path-cli/develop,toolpath/verify -- -D warnings 2>&1
+    cargo clippy --workspace --all-targets --features "${_features}" -- -D warnings 2>&1
 }
 
 # shellcheck disable=SC2329
 gate_test() {
-    RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/develop,toolpath/verify 2>&1
+    RUSTFLAGS="-D warnings" cargo test --workspace --features "${_features}" 2>&1
 }
 
 # shellcheck disable=SC2329
@@ -95,7 +108,7 @@ gate_redgreen() {
 
 # shellcheck disable=SC2329
 gate_doc() {
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/develop,toolpath/verify --no-deps 2>&1
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features "${_features}" --no-deps 2>&1
 }
 
 # shellcheck disable=SC2329
