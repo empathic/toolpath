@@ -1,0 +1,514 @@
+From 7c9dc488f9539258373a43004c9ccea1d544fe4c Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 17:31:33 -0400
+Subject: [PATCH] fix(cursor): the IDE reader reads system-role text back from
+ the model history (pr/81)
+
+---
+ crates/toolpath-cursor/src/.qual              |  1 +
+ crates/toolpath-cursor/src/agent_store.rs     | 23 +++--
+ crates/toolpath-cursor/src/project.rs         | 55 +++++++++---
+ crates/toolpath-cursor/src/provider.rs        | 83 +++++++++++++++++++
+ crates/toolpath-cursor/src/reader.rs          | 48 ++++++++++-
+ crates/toolpath-cursor/src/types.rs           | 63 ++++++++++++++
+ .../snapshots/round_trip@codex@cursor.snap    |  7 +-
+ .../snapshots/round_trip@copilot@cursor.snap  |  7 +-
+ docs/agents/formats/cursor.md                 |  4 +
+ pr/77-system-text-and-tool-calls-survive.md   |  1 +
+ pr/81-cursor-reads-system-text.md             | 34 ++++++++
+ 11 files changed, 297 insertions(+), 29 deletions(-)
+ create mode 100644 pr/81-cursor-reads-system-text.md
+
+diff --git a/crates/toolpath-cursor/src/.qual b/crates/toolpath-cursor/src/.qual
+index 09b8b83c..cdd556ab 100644
+--- a/crates/toolpath-cursor/src/.qual
++++ b/crates/toolpath-cursor/src/.qual
+@@ -3,3 +3,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-cursor/src/provider.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:58:39.525749Z","id":"d1487b05d8b40f4f77e219cd68272fdbe24c0b617dd712df582fa7c12ac67d11","body":{"detail":"7a93457 stopped stamping agentBackend:\"cursor-agent\" because native Cursor 3.24 IDE chats carry none and a chat with it opens empty. This reader maps agentBackend to meta.producer.version, so every round_trip@*@cursor and writer@cursor now list paths[].meta.producer.version as lost (or no longer gained), key_paths -1 each; shed@cursor's same-format trip drops data.agentBackend. Accepted on purpose: the field was the projector's invention, not the source's. Reading it from _v (18) or leaving it absent is the open choice.","kind":"comment","span":{"start":{"line":360},"end":{"line":360},"content_hash":"da91b154a3df040f3ddd3e174032518304c19e894e47716801ca5c4c546a0efb"},"summary":"producer.version is the composer's agentBackend, which the projector now writes only when configured, so a projected chat reads back with no producer.version (accepted with pr/38)","tags":["baseline","accepted-loss","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-cursor/src/agent_store.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T00:19:29.096586Z","id":"7a3ee7eb870ad67164b6d6179559fd7bf0a9a2b991acc3e273d26b23c9adbb41","body":{"detail":"Checked 2026-10-19 with no model and no login: path resume --harness cursor-agent wrote the store for -C in a temp HOME (CURSOR_CONFIG_DIR, CURSOR_DATA_DIR, AGENT_CLI_CREDENTIAL_STORE=memory, NO_OPEN_BROWSER=1), and cursor-cli 0-unstable-2026-08-11's 'cursor-agent ls' under a pty listed it by title. Not checked: that 'cursor-agent --resume <id>' sends the field-1 ModelMessage history to the model, and whether the CLI needs any of ConversationStateStructure fields 3-39 or UserMessage fields beyond text/message_id. The live check (resume cell plus a random-id negative control) is in pr/58-cursor-agent-resume.md and needs CURSOR_API_KEY.","kind":"concern","span":{"start":{"line":28},"end":{"line":28},"content_hash":"cb8606522ddf62bd9914d56405d5bd625b6aa62e91db16e00583d02e8d707641"},"summary":"cursor-agent lists a written chat; that a resumed chat's model sees the history is unchecked","tags":["cursor","cursor-agent","pr/58","live-check-pending","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-cursor/src/provider.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T20:37:00.121612Z","id":"c2fc328b61851e204d7333d3a591f938b6fcc35d10520b5cd8acdea818493386","body":{"detail":"7a93457 stopped stamping agentBackend:\"cursor-agent\" because native Cursor 3.24 IDE chats carry none and a chat with it opens empty. This reader maps agentBackend to meta.producer.version, so every round_trip@*@cursor and writer@cursor now list paths[].meta.producer.version as lost (or no longer gained), key_paths -1 each; shed@cursor's same-format trip drops data.agentBackend. Accepted on purpose: the field was the projector's invention, not the source's. Reading it from _v (18) or leaving it absent is the open choice.","kind":"comment","span":{"start":{"line":371},"end":{"line":371},"content_hash":"da91b154a3df040f3ddd3e174032518304c19e894e47716801ca5c4c546a0efb"},"summary":"producer.version is the composer's agentBackend, which the projector now writes only when configured, so a projected chat reads back with no producer.version (accepted with pr/38)","supersedes":"d1487b05d8b40f4f77e219cd68272fdbe24c0b617dd712df582fa7c12ac67d11","tags":["baseline","accepted-loss","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-cursor/src/provider.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T21:27:03.621770Z","id":"0931c73f220370e5c005429395a5e560288b9ad83fccb6920b870c4aae2c62b0","body":{"detail":"7a93457 stopped stamping agentBackend:\"cursor-agent\" because native Cursor 3.24 IDE chats carry none and a chat with it opens empty. This reader maps agentBackend to meta.producer.version, so every round_trip@*@cursor and writer@cursor now list paths[].meta.producer.version as lost (or no longer gained), key_paths -1 each; shed@cursor's same-format trip drops data.agentBackend. Accepted on purpose: the field was the projector's invention, not the source's. Reading it from _v (18) or leaving it absent is the open choice.","kind":"comment","span":{"start":{"line":372},"end":{"line":372},"content_hash":"da91b154a3df040f3ddd3e174032518304c19e894e47716801ca5c4c546a0efb"},"summary":"producer.version is the composer's agentBackend, which the projector now writes only when configured, so a projected chat reads back with no producer.version (accepted with pr/38)","supersedes":"c2fc328b61851e204d7333d3a591f938b6fcc35d10520b5cd8acdea818493386","tags":["baseline","accepted-loss","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/crates/toolpath-cursor/src/agent_store.rs b/crates/toolpath-cursor/src/agent_store.rs
+index 53c788e0..c7888c6c 100644
+--- a/crates/toolpath-cursor/src/agent_store.rs
++++ b/crates/toolpath-cursor/src/agent_store.rs
+@@ -246,17 +246,11 @@ impl AgentStore {
+             };
+             match msg["role"].as_str() {
+                 Some("system") => {
+-                    // `content` is a string (the CLI's first blob, the writer's system turn)
+-                    // or a list of text parts.
+-                    let text = match &msg["content"] {
+-                        Value::String(s) => s.clone(),
+-                        _ => texts("text"),
+-                    };
+                     turns.push(new_turn(
+                         format!("system-{i}"),
+                         Role::System,
+                         &timestamp,
+-                        text,
++                        system_text(msg),
+                         &turns,
+                     ));
+                 }
+@@ -512,6 +506,21 @@ fn rendered_turns(view: &ConversationView) -> Vec<Rendered> {
+     out
+ }
+ 
++/// A system `ModelMessage`'s text: `content` is a string (the CLI's first
++/// blob, the writers' system turn) or a list of text parts.
++pub(crate) fn system_text(msg: &Value) -> String {
++    match &msg["content"] {
++        Value::String(s) => s.clone(),
++        Value::Array(parts) => parts
++            .iter()
++            .filter(|p| p["type"] == "text")
++            .filter_map(|p| p["text"].as_str())
++            .collect::<Vec<_>>()
++            .join("\n"),
++        _ => String::new(),
++    }
++}
++
+ fn new_turn(id: String, role: Role, timestamp: &str, text: String, before: &[Turn]) -> Turn {
+     Turn {
+         provider: None,
+diff --git a/crates/toolpath-cursor/src/project.rs b/crates/toolpath-cursor/src/project.rs
+index 615c277d..fbc336d0 100644
+--- a/crates/toolpath-cursor/src/project.rs
++++ b/crates/toolpath-cursor/src/project.rs
+@@ -912,7 +912,7 @@ pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+     bytes.iter().map(|b| format!("{b:02x}")).collect()
+ }
+ 
+-fn base64_std(bytes: &[u8]) -> String {
++pub(crate) fn base64_std(bytes: &[u8]) -> String {
+     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+     for chunk in bytes.chunks(3) {
+@@ -1599,19 +1599,48 @@ mod tests {
+     }
+ 
+     fn decode_b64(s: &str) -> Vec<u8> {
+-        const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+-        let mut out = Vec::new();
+-        let mut buf = 0u32;
+-        let mut n = 0;
+-        for c in s.bytes().filter(|c| *c != b'=') {
+-            buf = buf << 6 | A.iter().position(|x| *x == c).unwrap() as u32;
+-            n += 6;
+-            if n >= 8 {
+-                n -= 8;
+-                out.push((buf >> n) as u8);
+-            }
++        crate::types::base64_std_decode(s).expect("standard base64")
++    }
++
++    #[test]
++    fn system_text_reads_back_from_the_model_history_in_place() {
++        let mut sys = user_turn("s0", "be terse");
++        sys.role = Role::System;
++        let mut sys2 = user_turn("s1", "the second instructions");
++        sys2.role = Role::System;
++        let view = view_with(vec![
++            sys,
++            user_turn("u1", "hello"),
++            assistant_turn("a1", "hi"),
++            sys2,
++            user_turn("u2", "again"),
++            assistant_turn("a2", "ok"),
++        ]);
++        let s = CursorProjector::new().project(&view).unwrap();
++        let back = crate::session_to_view(&s);
++        let shape: Vec<(Role, &str)> = back
++            .turns
++            .iter()
++            .map(|t| (t.role.clone(), t.text.as_str()))
++            .collect();
++        assert_eq!(
++            shape,
++            [
++                (Role::System, "be terse"),
++                (Role::User, "hello"),
++                (Role::Assistant, "hi"),
++                (Role::System, "the second instructions"),
++                (Role::User, "again"),
++                (Role::Assistant, "ok"),
++            ]
++        );
++        for k in 1..back.turns.len() {
++            assert_eq!(
++                back.turns[k].parent_id.as_deref(),
++                Some(back.turns[k - 1].id.as_str())
++            );
+         }
+-        out
++        assert_eq!(back.turns[0].parent_id, None);
+     }
+ 
+     #[test]
+diff --git a/crates/toolpath-cursor/src/provider.rs b/crates/toolpath-cursor/src/provider.rs
+index b00ae6ea..73d8351d 100644
+--- a/crates/toolpath-cursor/src/provider.rs
++++ b/crates/toolpath-cursor/src/provider.rs
+@@ -331,6 +331,7 @@ impl<'a> Builder<'a> {
+             prev_turn_id = Some(turn.id.clone());
+             self.turns.push(turn);
+         }
++        self.insert_system_turns();
+ 
+         let started_at = self.session.started_at().or_else(|| {
+             self.session
+@@ -373,6 +374,88 @@ impl<'a> Builder<'a> {
+         }
+     }
+ 
++    /// The model history's system messages as System turns (bubbles draw no system turn; the
++    /// writer keeps that text only in the history). Each goes before the turn the next user or
++    /// assistant message names (the k-th user turn with text, or the assistant turn with that
++    /// id), or at the end when none follows; parents are then re-chained in order.
++    fn insert_system_turns(&mut self) {
++        let history = self.session.model_messages();
++        if !history.iter().any(|m| m["role"] == "system") {
++            return;
++        }
++        let user_turns: Vec<usize> = (0..self.turns.len())
++            .filter(|&i| self.turns[i].role == Role::User && !self.turns[i].text.is_empty())
++            .collect();
++        let mut users_seen = 0;
++        let mut pending: Vec<(usize, String)> = Vec::new();
++        let mut placed: Vec<(usize, usize, String)> = Vec::new();
++        for (i, msg) in history.iter().enumerate() {
++            let anchor = match msg["role"].as_str() {
++                Some("system") => {
++                    let text = crate::agent_store::system_text(msg);
++                    if !text.is_empty() {
++                        pending.push((i, text));
++                    }
++                    continue;
++                }
++                Some("user") => {
++                    users_seen += 1;
++                    user_turns.get(users_seen - 1).copied()
++                }
++                Some("assistant") => msg["id"]
++                    .as_str()
++                    .and_then(|id| self.turns.iter().position(|t| t.id == id)),
++                _ => None,
++            };
++            if let Some(anchor) = anchor {
++                placed.extend(pending.drain(..).map(|(i, text)| (anchor, i, text)));
++            }
++        }
++        let end = self.turns.len();
++        placed.extend(pending.into_iter().map(|(i, text)| (end, i, text)));
++
++        let bubble_turns = std::mem::take(&mut self.turns);
++        let last_timestamp = bubble_turns
++            .last()
++            .map(|t| t.timestamp.clone())
++            .unwrap_or_default();
++        let mut placed = placed.into_iter().peekable();
++        for (j, turn) in bubble_turns
++            .into_iter()
++            .map(Some)
++            .chain(std::iter::once(None))
++            .enumerate()
++        {
++            let timestamp = turn
++                .as_ref()
++                .map_or_else(|| last_timestamp.clone(), |t| t.timestamp.clone());
++            while let Some((_, i, text)) = placed.next_if(|(anchor, _, _)| *anchor == j) {
++                self.turns.push(Turn {
++                    provider: None,
++                    id: format!("system-{i}"),
++                    parent_id: None,
++                    group_id: None,
++                    role: Role::System,
++                    timestamp: timestamp.clone(),
++                    text,
++                    thinking: None,
++                    tool_uses: Vec::new(),
++                    model: None,
++                    stop_reason: None,
++                    token_usage: None,
++                    attributed_token_usage: None,
++                    environment: None,
++                    delegations: Vec::new(),
++                    file_mutations: Vec::new(),
++                });
++            }
++            self.turns.extend(turn);
++        }
++        for k in 0..self.turns.len() {
++            self.turns[k].parent_id = k.checked_sub(1).map(|p| self.turns[p].id.clone());
++        }
++    }
++
+     fn user_turn(&self, bubble: &Bubble, parent: Option<&str>) -> Turn {
+         let environment = self.environment();
+         Turn {
+diff --git a/crates/toolpath-cursor/src/reader.rs b/crates/toolpath-cursor/src/reader.rs
+index 59a5243e..b44ce64a 100644
+--- a/crates/toolpath-cursor/src/reader.rs
++++ b/crates/toolpath-cursor/src/reader.rs
+@@ -342,12 +342,20 @@ impl DbReader {
+             }
+         }
+ 
++        // Load the model-history blobs `conversationState` lists (Cursor 3.24).
++        let mut agent_blobs = std::collections::HashMap::new();
++        for hash in data.model_history_hashes() {
++            if let Some(body) = self.read_value_bytes(&format!("{AGENT_BLOB_PREFIX}{hash}"))? {
++                agent_blobs.insert(hash, String::from_utf8_lossy(&body).into_owned());
++            }
++        }
++
+         Ok(crate::types::CursorSession {
+             head,
+             data,
+             bubbles,
+             content_blobs,
+-            agent_blobs: std::collections::HashMap::new(),
++            agent_blobs,
+             transcript_path: None,
+         })
+     }
+@@ -514,6 +522,44 @@ pub(crate) mod tests {
+         assert_eq!(s.content_blob("ABC"), Some("fn main() {}"));
+     }
+ 
++    #[test]
++    fn load_session_reads_the_model_history_blobs_and_its_system_text() {
++        use sha2::{Digest, Sha256};
++        let body = r#"{"role":"system","content":"be terse"}"#;
++        let user = r#"{"role":"user","content":[{"type":"text","text":"hello"}]}"#;
++        let (mut proto, mut rows) = (Vec::new(), Vec::new());
++        for b in [body, user] {
++            let digest: [u8; 32] = Sha256::digest(b.as_bytes()).into();
++            crate::proto::put_bytes(&mut proto, 1, &digest);
++            rows.push(format!(
++                "('{AGENT_BLOB_PREFIX}{}', '{b}')",
++                crate::project::hex_lower(&digest)
++            ));
++        }
++        let hash = crate::project::hex_lower(&Sha256::digest(body.as_bytes()));
++        let state = format!("~{}", crate::project::base64_std(&proto));
++        let f = fixture_db(&format!(
++            "{BASIC_FIXTURE}
++            UPDATE cursorDiskKV SET value = json_set(value, '$.conversationState', '{state}')
++              WHERE key = 'composerData:c1';
++            INSERT INTO cursorDiskKV (key, value) VALUES {};",
++            rows.join(", ")
++        ));
++        let s = DbReader::open(f.path())
++            .unwrap()
++            .load_session("c1")
++            .unwrap();
++        assert_eq!(s.agent_blobs.len(), 2);
++        assert_eq!(s.agent_blobs.get(&hash).map(String::as_str), Some(body));
++        let view = crate::session_to_view(&s);
++        assert_eq!(view.turns[0].role, toolpath_convo::Role::System);
++        assert_eq!(view.turns[0].text, "be terse");
++        assert_eq!(
++            view.turns[1].parent_id.as_deref(),
++            Some(view.turns[0].id.as_str())
++        );
++    }
++
+     #[test]
+     fn load_session_missing_composer_errors() {
+         let f = fixture_db(BASIC_FIXTURE);
+diff --git a/crates/toolpath-cursor/src/types.rs b/crates/toolpath-cursor/src/types.rs
+index e721864a..9b3abc99 100644
+--- a/crates/toolpath-cursor/src/types.rs
++++ b/crates/toolpath-cursor/src/types.rs
+@@ -219,6 +219,57 @@ impl ComposerData {
+             .and_then(|mc| mc.model_name.as_deref())
+             .filter(|s| !s.is_empty())
+     }
++
++    /// The model history's blob hashes (hex), in conversation order:
++    /// `conversationState` is `"~"` + base64 of a protobuf whose field 1
++    /// repeats 32-byte SHA-256s (Cursor 3.24). Empty when the composer has
++    /// no such state or it does not decode.
++    pub fn model_history_hashes(&self) -> Vec<String> {
++        let Some(state) = self
++            .extra
++            .get("conversationState")
++            .and_then(Value::as_str)
++            .and_then(|s| s.strip_prefix('~'))
++        else {
++            return Vec::new();
++        };
++        let Some(bytes) = base64_std_decode(state) else {
++            return Vec::new();
++        };
++        let Ok(msg) = crate::proto::fields(&bytes) else {
++            return Vec::new();
++        };
++        crate::proto::repeated_bytes(&msg, 1)
++            .into_iter()
++            .filter(|h| h.len() == 32)
++            .map(crate::project::hex_lower)
++            .collect()
++    }
++}
++
++/// Standard base64 with padding, as `conversationState` carries it. `None`
++/// on any byte outside the alphabet.
++pub(crate) fn base64_std_decode(s: &str) -> Option<Vec<u8>> {
++    let mut out = Vec::with_capacity(s.len() / 4 * 3);
++    let (mut acc, mut bits) = (0u32, 0u32);
++    for c in s.bytes().filter(|&c| c != b'=') {
++        let v = match c {
++            b'A'..=b'Z' => c - b'A',
++            b'a'..=b'z' => c - b'a' + 26,
++            b'0'..=b'9' => c - b'0' + 52,
++            b'+' => 62,
++            b'/' => 63,
++            _ => return None,
++        };
++        acc = (acc << 6) | u32::from(v);
++        bits += 6;
++        if bits >= 8 {
++            bits -= 8;
++            out.push((acc >> bits) as u8);
++            acc &= (1 << bits) - 1;
++        }
++    }
++    Some(out)
+ }
+ 
+ #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+@@ -629,6 +680,18 @@ impl CursorSession {
+     pub fn content_blob(&self, hash: &str) -> Option<&str> {
+         self.content_blobs.get(hash).map(|s| s.as_str())
+     }
++
++    /// The model history (Cursor 3.24): each `conversationState` hash's
++    /// blob parsed as one AI SDK `ModelMessage`, in order. A hash with no
++    /// blob, or a blob that is not JSON, is skipped.
++    pub fn model_messages(&self) -> Vec<Value> {
++        self.data
++            .model_history_hashes()
++            .iter()
++            .filter_map(|h| self.agent_blobs.get(h))
++            .filter_map(|body| serde_json::from_str(body).ok())
++            .collect()
++    }
+ }
+ 
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap
+index 621153a2..c0fc787c 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap
+@@ -16,13 +16,12 @@ input_file: test-fixtures/codex/convo.jsonl
+     "key_paths": 123
+   },
+   "after": {
+-    "steps": 6,
+-    "text_chars": 3077,
++    "steps": 8,
++    "text_chars": 13445,
+     "tool_uses": 1,
+-    "key_paths": 25
++    "key_paths": 26
+   },
+   "lost": [
+-    "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].steps[].change.<artifact>.structural.agent_nickname",
+     "paths[].steps[].change.<artifact>.structural.approval_policy",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+index 12ddcaf1..9ad9565b 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+@@ -16,13 +16,12 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "key_paths": 60
+   },
+   "after": {
+-    "steps": 12,
+-    "text_chars": 4594,
++    "steps": 13,
++    "text_chars": 30034,
+     "tool_uses": 11,
+-    "key_paths": 57
++    "key_paths": 58
+   },
+   "lost": [
+-    "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+diff --git a/docs/agents/formats/cursor.md b/docs/agents/formats/cursor.md
+index d1a2d214..fec18b3d 100644
+--- a/docs/agents/formats/cursor.md
++++ b/docs/agents/formats/cursor.md
+@@ -896,6 +896,10 @@ turn is a separate list:
+   `tool-call` (`toolCallId`, `toolName`, `args`); tool messages carry
+   `tool-result` parts (`toolCallId`, `toolName`, `result`). The SHA-256
+   of the value bytes equals the key.
++- No bubble draws a system message, so the reader takes system text from
++  this history: each system message becomes a System turn placed before
++  the turn the next user or assistant message names (the k-th user
++  bubble with text, or the assistant bubble with that id), or at the end.
+ - A native 3.24 composer also has `_v: 18`, `hasLoaded: true`, no
+   `agentBackend`, and writes a readable copy of the history to
+   `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl`.
+diff --git a/pr/77-system-text-and-tool-calls-survive.md b/pr/77-system-text-and-tool-calls-survive.md
+index 59d3a0e2..a373a2d5 100644
+--- a/pr/77-system-text-and-tool-calls-survive.md
++++ b/pr/77-system-text-and-tool-calls-survive.md
+@@ -21,6 +21,7 @@ Text chars now equal the source in the opencode and cursor-agent round trips (e.
+ ## Known gap, not fixed here
+ The cursor IDE READER reads bubbles only, so the system text the IDE writer now puts in the model history (conversationState) is still not
+ read back: codex/copilot -> cursor still drops it on the way back. Needs a reader change or a declared loss; Bobby's call.
++Fixed by pr/81 (the reader reads the history's system messages).
+ 
+ ## Not run
+ Pinned 1.94, gitleaks, nix-develop recapture.
+diff --git a/pr/81-cursor-reads-system-text.md b/pr/81-cursor-reads-system-text.md
+new file mode 100644
+index 00000000..a12baada
+--- /dev/null
++++ b/pr/81-cursor-reads-system-text.md
+@@ -0,0 +1,34 @@
++# fix(cursor): the IDE reader reads system-role text back from the model history
++
++Status: draft · Base: pr/77 · Code (toolpath-cursor types.rs, provider.rs, reader.rs, agent_store.rs) + 2 snapshots
++
++## Why (plain words)
++pr/77 made the Cursor IDE writer keep system-role text in the model history (`conversationState` lists the hashes of
++`agentKv:blob:<sha256>` messages), but the reader read bubbles only and no bubble draws a system turn. So codex -> cursor and
++copilot -> cursor still came back short: 3077 of 13445 and 4594 of 30034 text chars. pr/77's "Known gap".
++
++## What
++- `ComposerData::model_history_hashes` decodes `conversationState` (`"~"` + base64 of a protobuf, field 1 = 32-byte hashes);
++  `CursorSession::model_messages` parses each listed blob.
++- `session_to_view` turns each system message into a System turn (`system-<i>`, as the cursor-agent reader names them), placed
++  before the turn the next user or assistant message names (the k-th user turn with text, or the assistant turn with that id), or
++  at the end; parents are re-chained in order. A composer with no history blobs (every real fixture today) reads as before.
++- `DbReader::load_session` now loads the `agentKv:blob:` rows its `conversationState` lists, so a store on disk reads the same.
++- One `system_text` helper shared with the cursor-agent reader; the test-only base64 decoder in project.rs now uses the crate's.
++- docs/agents/formats/cursor.md: the reader rule.
++
++## Snapshots
++- `round_trip@codex@cursor`: steps 6 -> 8, text_chars 3077 -> 13445 (= source), key_paths 25 -> 26;
++  `paths[].meta.actors.<actor>.provider` no longer lost.
++- `round_trip@copilot@cursor`: steps 12 -> 13, text_chars 4594 -> 30034 (= source), key_paths 57 -> 58; the same path no longer lost.
++- Nothing else moved: projections, writer@cursor and shed are unchanged (the writer is unchanged); `capture --all` moved no output sha.
++
++## Verification
++Unit tests: a projected view with two system turns reads back in place with a straight parent chain; a DB with a
++`conversationState` and its blobs loads them and reads the system turn first. Gates: see the commit's run (fmt, clippy -D warnings,
++workspace tests, doc, secrets + shellcheck, qualifier review 0 drifted, just baseline). One qualifier record re-anchored
++(toolpath-cursor provider.rs, the producer.version comment moved one line).
++
++## Note
++On a real Cursor 3.24 store the history's first blob is Cursor's own system prompt; it now reads back as a System turn too, as the
++cursor-agent reader already does for the CLI's.
+-- 
+2.55.0
+

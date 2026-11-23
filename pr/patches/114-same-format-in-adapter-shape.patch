@@ -1,0 +1,2135 @@
+From 60d8b504f4a382ea8a727162944019896c913de8 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 13:05:36 -0400
+Subject: [PATCH] fix(goldens): compare the same-format round trip in the
+ adapter's own shape (pr/106)
+
+---
+ .../snapshots/shed@gemini.snap                | 403 ++---------
+ .../snapshots/shed@opencode-forced.snap       | 677 +-----------------
+ .../snapshots/shed@opencode.snap              | 609 +---------------
+ crates/toolpath-goldens/src/.qual             |   3 +
+ crates/toolpath-goldens/src/pipeline.rs       |  14 +
+ crates/toolpath-goldens/src/shed.rs           |   4 +-
+ crates/toolpath-goldens/tests/goldens.rs      |  34 +
+ 7 files changed, 157 insertions(+), 1587 deletions(-)
+
+diff --git a/crates/toolpath-goldens/snapshots/shed@gemini.snap b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+index 0efde440..ca4335cc 100644
+--- a/crates/toolpath-goldens/snapshots/shed@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+@@ -106,505 +106,200 @@ input_file: test-fixtures/gemini/convo.jsonl
+   "same_format": {
+     "lines": 439,
+     "bytes": 18846,
+-    "event_types_shed": {
+-      "?": {
+-        "source": 13,
+-        "after": 1
+-      },
+-      "gemini": {
+-        "source": 21,
+-        "after": 0
+-      },
+-      "user": {
+-        "source": 1,
+-        "after": 0
+-      }
+-    },
++    "event_types_shed": {},
+     "key_paths": {
+-      "source": 87,
++      "source": 86,
+       "after": 42,
+-      "lost": 82,
+-      "gained": 37
++      "lost": 45,
++      "gained": 1
+     },
+     "renamed": [],
+     "dropped": [
+       {
+-        "path": "$set.lastUpdated",
+-        "example": "2026-05-07T18:28:02.234Z"
+-      },
+-      {
+-        "path": "content",
+-        "example": "I will begin by listing the files in the…"
+-      },
+-      {
+-        "path": "content[].text",
+-        "example": "You're going to walk through a small set…"
+-      },
+-      {
+-        "path": "id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "model",
+-        "example": "gemini-3-flash-preview"
+-      },
+-      {
+-        "path": "thoughts[].description",
+-        "example": "I am now focusing on executing the plann…"
+-      },
+-      {
+-        "path": "thoughts[].subject",
+-        "example": "Processing Next Steps"
+-      },
+-      {
+-        "path": "thoughts[].timestamp",
+-        "example": "2026-05-07T18:28:05.259Z"
+-      },
+-      {
+-        "path": "timestamp",
+-        "example": "2026-05-07T18:28:02.234Z"
+-      },
+-      {
+-        "path": "tokens.cached",
++        "path": "messages[].tokens.tool",
+         "example": "0"
+       },
+       {
+-        "path": "tokens.input",
+-        "example": "8702"
+-      },
+-      {
+-        "path": "tokens.output",
+-        "example": "36"
+-      },
+-      {
+-        "path": "tokens.thoughts",
+-        "example": "329"
+-      },
+-      {
+-        "path": "tokens.tool",
+-        "example": "0"
+-      },
+-      {
+-        "path": "tokens.total",
++        "path": "messages[].tokens.total",
+         "example": "9067"
+       },
+       {
+-        "path": "toolCalls[].agentId",
++        "path": "messages[].toolCalls[].agentId",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "toolCalls[].args.agent_name",
++        "path": "messages[].toolCalls[].resultDisplay.agentName",
+         "example": "generalist"
+       },
+       {
+-        "path": "toolCalls[].args.command",
+-        "example": "bash count.sh"
+-      },
+-      {
+-        "path": "toolCalls[].args.content",
+-        "example": "scratch — feature elicitation this file …"
+-      },
+-      {
+-        "path": "toolCalls[].args.context",
+-        "example": "50"
+-      },
+-      {
+-        "path": "toolCalls[].args.description",
+-        "example": "Run the count.sh script"
+-      },
+-      {
+-        "path": "toolCalls[].args.dir_path",
+-        "example": "."
+-      },
+-      {
+-        "path": "toolCalls[].args.file_path",
+-        "example": "notes.md"
+-      },
+-      {
+-        "path": "toolCalls[].args.instruction",
+-        "example": "Change 'scratch' to 'fixture'"
+-      },
+-      {
+-        "path": "toolCalls[].args.new_string",
+-        "example": "fixture"
+-      },
+-      {
+-        "path": "toolCalls[].args.old_string",
+-        "example": "scratch"
+-      },
+-      {
+-        "path": "toolCalls[].args.pattern",
+-        "example": "note*"
+-      },
+-      {
+-        "path": "toolCalls[].args.prompt",
+-        "example": "Count the words in `notes.md` and report…"
+-      },
+-      {
+-        "path": "toolCalls[].description",
+-        "example": "."
+-      },
+-      {
+-        "path": "toolCalls[].displayName",
+-        "example": "ReadFolder"
+-      },
+-      {
+-        "path": "toolCalls[].id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "toolCalls[].name",
+-        "example": "list_directory"
+-      },
+-      {
+-        "path": "toolCalls[].renderOutputAsMarkdown",
+-        "example": "true"
+-      },
+-      {
+-        "path": "toolCalls[].resultDisplay",
+-        "example": ""
+-      },
+-      {
+-        "path": "toolCalls[].resultDisplay.agentName",
+-        "example": "generalist"
+-      },
+-      {
+-        "path": "toolCalls[].resultDisplay.diffStat.model_added_chars",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.model_added_chars",
+         "example": "67"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.diffStat.model_added_lines",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.model_added_lines",
+         "example": "2"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.diffStat.model_removed_chars",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.model_removed_chars",
+         "example": "0"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.diffStat.model_removed_lines",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.model_removed_lines",
+         "example": "0"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.diffStat.user_added_chars",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.user_added_chars",
+         "example": "0"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.diffStat.user_added_lines",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.user_added_lines",
+         "example": "0"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.diffStat.user_removed_chars",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.user_removed_chars",
+         "example": "0"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.diffStat.user_removed_lines",
++        "path": "messages[].toolCalls[].resultDisplay.diffStat.user_removed_lines",
+         "example": "0"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.fileDiff",
++        "path": "messages[].toolCalls[].resultDisplay.fileDiff",
+         "example": "Index: notes.md ========================…"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.fileName",
++        "path": "messages[].toolCalls[].resultDisplay.fileName",
+         "example": "notes.md"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.filePath",
++        "path": "messages[].toolCalls[].resultDisplay.filePath",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.files[]",
++        "path": "messages[].toolCalls[].resultDisplay.files[]",
+         "example": ".stderr.log"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.isNewFile",
++        "path": "messages[].toolCalls[].resultDisplay.isNewFile",
+         "example": "true"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.isSubagentProgress",
++        "path": "messages[].toolCalls[].resultDisplay.isSubagentProgress",
+         "example": "true"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.matches[].absolutePath",
++        "path": "messages[].toolCalls[].resultDisplay.matches[].absolutePath",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.matches[].filePath",
++        "path": "messages[].toolCalls[].resultDisplay.matches[].filePath",
+         "example": "notes.md"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.matches[].line",
++        "path": "messages[].toolCalls[].resultDisplay.matches[].line",
+         "example": "fixture — feature elicitation"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.matches[].lineNumber",
++        "path": "messages[].toolCalls[].resultDisplay.matches[].lineNumber",
+         "example": "1"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.newContent",
++        "path": "messages[].toolCalls[].resultDisplay.newContent",
+         "example": "scratch — feature elicitation this file …"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.originalContent",
++        "path": "messages[].toolCalls[].resultDisplay.originalContent",
+         "example": ""
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.recentActivity[].args",
++        "path": "messages[].toolCalls[].resultDisplay.recentActivity[].args",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.recentActivity[].content",
++        "path": "messages[].toolCalls[].resultDisplay.recentActivity[].content",
+         "example": "read_file"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.recentActivity[].description",
++        "path": "messages[].toolCalls[].resultDisplay.recentActivity[].description",
+         "example": "notes.md"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.recentActivity[].displayName",
++        "path": "messages[].toolCalls[].resultDisplay.recentActivity[].displayName",
+         "example": "ReadFile"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.recentActivity[].id",
++        "path": "messages[].toolCalls[].resultDisplay.recentActivity[].id",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.recentActivity[].status",
++        "path": "messages[].toolCalls[].resultDisplay.recentActivity[].status",
+         "example": "completed"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.recentActivity[].type",
++        "path": "messages[].toolCalls[].resultDisplay.recentActivity[].type",
+         "example": "tool_call"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.result",
++        "path": "messages[].toolCalls[].resultDisplay.result",
+         "example": "{   \"response\": \"There are 11 words in `…"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.state",
++        "path": "messages[].toolCalls[].resultDisplay.state",
+         "example": "completed"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.summary",
++        "path": "messages[].toolCalls[].resultDisplay.summary",
+         "example": "Found 1 item(s)."
+       },
+       {
+-        "path": "toolCalls[].resultDisplay.terminateReason",
++        "path": "messages[].toolCalls[].resultDisplay.terminateReason",
+         "example": "GOAL"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].bg",
++        "path": "messages[].toolCalls[].resultDisplay[][].bg",
+         "example": ""
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].bold",
++        "path": "messages[].toolCalls[].resultDisplay[][].bold",
+         "example": "false"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].dim",
++        "path": "messages[].toolCalls[].resultDisplay[][].dim",
+         "example": "false"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].fg",
++        "path": "messages[].toolCalls[].resultDisplay[][].fg",
+         "example": ""
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].inverse",
++        "path": "messages[].toolCalls[].resultDisplay[][].inverse",
+         "example": "false"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].isUninitialized",
++        "path": "messages[].toolCalls[].resultDisplay[][].isUninitialized",
+         "example": "true"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].italic",
++        "path": "messages[].toolCalls[].resultDisplay[][].italic",
+         "example": "false"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].text",
++        "path": "messages[].toolCalls[].resultDisplay[][].text",
+         "example": "1                                       …"
+       },
+       {
+-        "path": "toolCalls[].resultDisplay[][].underline",
++        "path": "messages[].toolCalls[].resultDisplay[][].underline",
+         "example": "false"
+       },
+       {
+-        "path": "toolCalls[].result[].functionResponse.id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "toolCalls[].result[].functionResponse.name",
+-        "example": "list_directory"
+-      },
+-      {
+-        "path": "toolCalls[].result[].functionResponse.response.error",
++        "path": "messages[].toolCalls[].result[].functionResponse.response.error",
+         "example": "File not found: /private/var/folders/jk/…"
+-      },
+-      {
+-        "path": "toolCalls[].result[].functionResponse.response.output",
+-        "example": "Directory listing for /private/var/folde…"
+-      },
+-      {
+-        "path": "toolCalls[].status",
+-        "example": "success"
+-      },
+-      {
+-        "path": "toolCalls[].timestamp",
+-        "example": "2026-05-07T18:28:05.726Z"
+-      },
+-      {
+-        "path": "type",
+-        "example": "user"
+       }
+     ],
+     "gained": [
+       {
+         "path": "directories[]",
+         "example": "/"
+-      },
+-      {
+-        "path": "messages[].content",
+-        "example": "I will begin by listing the files in the…"
+-      },
+-      {
+-        "path": "messages[].content[].text",
+-        "example": "You're going to walk through a small set…"
+-      },
+-      {
+-        "path": "messages[].id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].model",
+-        "example": "gemini-3-flash-preview"
+-      },
+-      {
+-        "path": "messages[].thoughts[].description",
+-        "example": "I am now focusing on executing the plann…"
+-      },
+-      {
+-        "path": "messages[].thoughts[].subject",
+-        "example": "Processing Next Steps"
+-      },
+-      {
+-        "path": "messages[].thoughts[].timestamp",
+-        "example": "null"
+-      },
+-      {
+-        "path": "messages[].timestamp",
+-        "example": "2026-05-07T18:28:02.234Z"
+-      },
+-      {
+-        "path": "messages[].tokens.cached",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].tokens.input",
+-        "example": "8702"
+-      },
+-      {
+-        "path": "messages[].tokens.output",
+-        "example": "36"
+-      },
+-      {
+-        "path": "messages[].tokens.thoughts",
+-        "example": "329"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.agent_name",
+-        "example": "generalist"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.command",
+-        "example": "bash count.sh"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.content",
+-        "example": "scratch — feature elicitation this file …"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.context",
+-        "example": "50"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.description",
+-        "example": "Run the count.sh script"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.dir_path",
+-        "example": "."
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.file_path",
+-        "example": "notes.md"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.instruction",
+-        "example": "Change 'scratch' to 'fixture'"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.new_string",
+-        "example": "fixture"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.old_string",
+-        "example": "scratch"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.pattern",
+-        "example": "note*"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].args.prompt",
+-        "example": "Count the words in `notes.md` and report…"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].description",
+-        "example": "notes.md"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].displayName",
+-        "example": "ListDirectory"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].name",
+-        "example": "list_directory"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].renderOutputAsMarkdown",
+-        "example": "true"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].resultDisplay",
+-        "example": "Directory listing for /private/var/folde…"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].result[].functionResponse.id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].result[].functionResponse.name",
+-        "example": "list_directory"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].result[].functionResponse.response.output",
+-        "example": "Directory listing for /private/var/folde…"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].status",
+-        "example": "success"
+-      },
+-      {
+-        "path": "messages[].toolCalls[].timestamp",
+-        "example": "2026-05-07T18:28:05.711Z"
+-      },
+-      {
+-        "path": "messages[].type",
+-        "example": "user"
+       }
+     ]
+   }
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+index 628bdd48..5c6b1603 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+@@ -106,739 +106,130 @@ input_file: test-fixtures/opencode/convo-compacted.json
+     "bytes": 56639,
+     "event_types_shed": {},
+     "key_paths": {
+-      "source": 111,
++      "source": 101,
+       "after": 72,
+-      "lost": 110,
+-      "gained": 71
++      "lost": 29,
++      "gained": 0
+     },
+     "renamed": [],
+     "dropped": [
+       {
+-        "path": "info.agent",
+-        "example": "build"
+-      },
+-      {
+-        "path": "info.cost",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.directory",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.model.id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.model.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.model.variant",
+-        "example": "default"
+-      },
+-      {
+-        "path": "info.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.permission[].action",
+-        "example": "deny"
+-      },
+-      {
+-        "path": "info.permission[].pattern",
+-        "example": "*"
+-      },
+-      {
+-        "path": "info.permission[].permission",
+-        "example": "question"
+-      },
+-      {
+-        "path": "info.projectID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.slug",
+-        "example": "happy-cabin"
+-      },
+-      {
+-        "path": "info.summary.additions",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.summary.deletions",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.summary.files",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.time.created",
+-        "example": "1781117204943"
+-      },
+-      {
+-        "path": "info.time.updated",
+-        "example": "1781117249347"
+-      },
+-      {
+-        "path": "info.title",
+-        "example": "Exercising common tool categories"
+-      },
+-      {
+-        "path": "info.tokens.cache.read",
+-        "example": "96256"
+-      },
+-      {
+-        "path": "info.tokens.cache.write",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.tokens.input",
+-        "example": "13348"
+-      },
+-      {
+-        "path": "info.tokens.output",
+-        "example": "2020"
+-      },
+-      {
+-        "path": "info.tokens.reasoning",
+-        "example": "761"
+-      },
+-      {
+-        "path": "info.version",
+-        "example": "1.17.2"
+-      },
+-      {
+-        "path": "messages[].info.agent",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].info.cost",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].info.finish",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].info.id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.mode",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].info.model.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.model.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.parentID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.path.cwd",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.path.root",
+-        "example": "/"
+-      },
+-      {
+-        "path": "messages[].info.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.role",
+-        "example": "user"
+-      },
+-      {
+-        "path": "messages[].info.sessionID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.summary",
++        "path": "messages[].data.summary",
+         "example": "true"
+       },
+       {
+-        "path": "messages[].info.time.completed",
+-        "example": "1781117208323"
+-      },
+-      {
+-        "path": "messages[].info.time.created",
+-        "example": "1781117205230"
+-      },
+-      {
+-        "path": "messages[].info.tokens.cache.read",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].info.tokens.cache.write",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].info.tokens.input",
+-        "example": "8596"
+-      },
+-      {
+-        "path": "messages[].info.tokens.output",
+-        "example": "85"
+-      },
+-      {
+-        "path": "messages[].info.tokens.reasoning",
+-        "example": "133"
+-      },
+-      {
+-        "path": "messages[].info.tokens.total",
+-        "example": "8814"
+-      },
+-      {
+-        "path": "messages[].parts[].auto",
++        "path": "messages[].parts[].data.auto",
+         "example": "false"
+       },
+       {
+-        "path": "messages[].parts[].callID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].cost",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].messageID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].reason",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].parts[].sessionID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.error",
+-        "example": "File not found: /private/var/folders/jk/…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.command",
+-        "example": "bash count.sh"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.content",
+-        "example": "scratch — feature elicitation this file …"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.description",
+-        "example": "Run count.sh script"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.filePath",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.newString",
+-        "example": "fixture"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.oldString",
+-        "example": "scratch"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.pattern",
+-        "example": "note*"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.prompt",
+-        "example": "Count the words in `notes.md` and report…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.subagent_type",
+-        "example": "general"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.workdir",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.count",
++        "path": "messages[].parts[].data.state.metadata.count",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.description",
++        "path": "messages[].parts[].data.state.metadata.description",
+         "example": "Run count.sh script"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.diff",
+-        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.display.entries[]",
++        "path": "messages[].parts[].data.state.metadata.display.entries[]",
+         "example": ".stderr.log"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.lineEnd",
++        "path": "messages[].parts[].data.state.metadata.display.lineEnd",
+         "example": "2"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.lineStart",
++        "path": "messages[].parts[].data.state.metadata.display.lineStart",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.offset",
++        "path": "messages[].parts[].data.state.metadata.display.offset",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.path",
++        "path": "messages[].parts[].data.state.metadata.display.path",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.text",
++        "path": "messages[].parts[].data.state.metadata.display.text",
+         "example": "scratch — feature elicitation this file …"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.totalEntries",
++        "path": "messages[].parts[].data.state.metadata.display.totalEntries",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.totalLines",
++        "path": "messages[].parts[].data.state.metadata.display.totalLines",
+         "example": "2"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.truncated",
++        "path": "messages[].parts[].data.state.metadata.display.truncated",
+         "example": "false"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.display.type",
++        "path": "messages[].parts[].data.state.metadata.display.type",
+         "example": "directory"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.exists",
++        "path": "messages[].parts[].data.state.metadata.exists",
+         "example": "false"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.exit",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.filediff.additions",
++        "path": "messages[].parts[].data.state.metadata.filediff.additions",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filediff.deletions",
++        "path": "messages[].parts[].data.state.metadata.filediff.deletions",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filediff.file",
++        "path": "messages[].parts[].data.state.metadata.filediff.file",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filediff.patch",
++        "path": "messages[].parts[].data.state.metadata.filediff.patch",
+         "example": "Index: /private/var/folders/jk/4rycn96j1…"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filepath",
++        "path": "messages[].parts[].data.state.metadata.filepath",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.matches",
++        "path": "messages[].parts[].data.state.metadata.matches",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.model.modelID",
++        "path": "messages[].parts[].data.state.metadata.model.modelID",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.model.providerID",
++        "path": "messages[].parts[].data.state.metadata.model.providerID",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.output",
+-        "example": "1 2 3 4 5 "
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.parentSessionId",
++        "path": "messages[].parts[].data.state.metadata.parentSessionId",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.preview",
++        "path": "messages[].parts[].data.state.metadata.preview",
+         "example": ".stderr.log"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.sessionId",
++        "path": "messages[].parts[].data.state.metadata.sessionId",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.truncated",
+-        "example": "false"
+-      },
+-      {
+-        "path": "messages[].parts[].state.output",
+-        "example": "<path>/private/var/folders/jk/4rycn96j1r…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.status",
+-        "example": "completed"
+-      },
+-      {
+-        "path": "messages[].parts[].state.time.end",
+-        "example": "1781117208224"
+-      },
+-      {
+-        "path": "messages[].parts[].state.time.start",
+-        "example": "1781117208220"
+-      },
+-      {
+-        "path": "messages[].parts[].state.title",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].text",
+-        "example": "\"You're going to walk through a small se…"
+-      },
+-      {
+-        "path": "messages[].parts[].time.end",
+-        "example": "1781117207859"
+-      },
+-      {
+-        "path": "messages[].parts[].time.start",
+-        "example": "1781117206671"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.cache.read",
++        "path": "summary_additions",
+         "example": "0"
+       },
+       {
+-        "path": "messages[].parts[].tokens.cache.write",
++        "path": "summary_deletions",
+         "example": "0"
+       },
+       {
+-        "path": "messages[].parts[].tokens.input",
+-        "example": "8596"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.output",
+-        "example": "85"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.reasoning",
+-        "example": "133"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.total",
+-        "example": "8814"
+-      },
+-      {
+-        "path": "messages[].parts[].tool",
+-        "example": "read"
+-      },
+-      {
+-        "path": "messages[].parts[].type",
+-        "example": "text"
+-      }
+-    ],
+-    "gained": [
+-      {
+-        "path": "directory",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.agent",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].data.cost",
+-        "example": "0.0"
+-      },
+-      {
+-        "path": "messages[].data.finish",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].data.mode",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].data.model.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.model.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.parentID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.path.cwd",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.path.root",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.role",
+-        "example": "user"
+-      },
+-      {
+-        "path": "messages[].data.time.completed",
+-        "example": "1781117205243"
+-      },
+-      {
+-        "path": "messages[].data.time.created",
+-        "example": "1781117205230"
+-      },
+-      {
+-        "path": "messages[].data.tokens.cache.read",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].data.tokens.cache.write",
++        "path": "summary_files",
+         "example": "0"
+-      },
+-      {
+-        "path": "messages[].data.tokens.input",
+-        "example": "8596"
+-      },
+-      {
+-        "path": "messages[].data.tokens.output",
+-        "example": "218"
+-      },
+-      {
+-        "path": "messages[].data.tokens.reasoning",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].data.tokens.total",
+-        "example": "8814"
+-      },
+-      {
+-        "path": "messages[].id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.callID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.cost",
+-        "example": "0.0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.reason",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.error",
+-        "example": "File not found: /private/var/folders/jk/…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.command",
+-        "example": "bash count.sh"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.content",
+-        "example": "scratch — feature elicitation this file …"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.description",
+-        "example": "Run count.sh script"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.filePath",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.newString",
+-        "example": "fixture"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.oldString",
+-        "example": "scratch"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.pattern",
+-        "example": "note*"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.prompt",
+-        "example": "Count the words in `notes.md` and report…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.subagent_type",
+-        "example": "general"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.workdir",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.diff",
+-        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.exit",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.output",
+-        "example": "1 2 3 4 5 "
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.truncated",
+-        "example": "false"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.output",
+-        "example": "<path>/private/var/folders/jk/4rycn96j1r…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.status",
+-        "example": "completed"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.time.end",
+-        "example": "1781117205243"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.time.start",
+-        "example": "1781117205243"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.title",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.text",
+-        "example": "\"You're going to walk through a small se…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.time.end",
+-        "example": "1781117205243"
+-      },
+-      {
+-        "path": "messages[].parts[].data.time.start",
+-        "example": "1781117205243"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.cache.read",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.cache.write",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.input",
+-        "example": "8596"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.output",
+-        "example": "218"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.reasoning",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.total",
+-        "example": "8814"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tool",
+-        "example": "read"
+-      },
+-      {
+-        "path": "messages[].parts[].data.type",
+-        "example": "text"
+-      },
+-      {
+-        "path": "messages[].parts[].message_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].session_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].time_created",
+-        "example": "1781117205230"
+-      },
+-      {
+-        "path": "messages[].parts[].time_updated",
+-        "example": "1781117205230"
+-      },
+-      {
+-        "path": "messages[].session_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].time_created",
+-        "example": "1781117205230"
+-      },
+-      {
+-        "path": "messages[].time_updated",
+-        "example": "1781117205230"
+-      },
+-      {
+-        "path": "project_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "slug",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "time_created",
+-        "example": "1781117205230"
+-      },
+-      {
+-        "path": "time_updated",
+-        "example": "1781117241421"
+-      },
+-      {
+-        "path": "title",
+-        "example": "\"You're going to walk through a small se…"
+-      },
+-      {
+-        "path": "version",
+-        "example": "0.0.0-projected"
+       }
+-    ]
++    ],
++    "gained": []
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index c24ca5ba..bf709d10 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -108,645 +108,76 @@ input_file: test-fixtures/opencode/convo.json
+     "key_paths": {
+       "source": 88,
+       "after": 72,
+-      "lost": 87,
+-      "gained": 71
++      "lost": 16,
++      "gained": 0
+     },
+     "renamed": [],
+     "dropped": [
+       {
+-        "path": "info.directory",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.permission[].action",
+-        "example": "deny"
+-      },
+-      {
+-        "path": "info.permission[].pattern",
+-        "example": "*"
+-      },
+-      {
+-        "path": "info.permission[].permission",
+-        "example": "question"
+-      },
+-      {
+-        "path": "info.projectID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "info.slug",
+-        "example": "hidden-canyon"
+-      },
+-      {
+-        "path": "info.summary.additions",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.summary.deletions",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.summary.files",
+-        "example": "0"
+-      },
+-      {
+-        "path": "info.time.created",
+-        "example": "1778178631197"
+-      },
+-      {
+-        "path": "info.time.updated",
+-        "example": "1778178667810"
+-      },
+-      {
+-        "path": "info.title",
+-        "example": "Tool category exercise walkthrough"
+-      },
+-      {
+-        "path": "info.version",
+-        "example": "1.14.41"
+-      },
+-      {
+-        "path": "messages[].info.agent",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].info.cost",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].info.finish",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].info.id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.mode",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].info.model.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.model.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.parentID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.path.cwd",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.path.root",
+-        "example": "/"
+-      },
+-      {
+-        "path": "messages[].info.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.role",
+-        "example": "user"
+-      },
+-      {
+-        "path": "messages[].info.sessionID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].info.time.completed",
+-        "example": "1778178635293"
+-      },
+-      {
+-        "path": "messages[].info.time.created",
+-        "example": "1778178631267"
+-      },
+-      {
+-        "path": "messages[].info.tokens.cache.read",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].info.tokens.cache.write",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].info.tokens.input",
+-        "example": "11294"
+-      },
+-      {
+-        "path": "messages[].info.tokens.output",
+-        "example": "85"
+-      },
+-      {
+-        "path": "messages[].info.tokens.reasoning",
+-        "example": "100"
+-      },
+-      {
+-        "path": "messages[].info.tokens.total",
+-        "example": "11479"
+-      },
+-      {
+-        "path": "messages[].parts[].callID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].cost",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].messageID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].reason",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].parts[].sessionID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.error",
+-        "example": "File not found: /private/var/folders/jk/…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.command",
+-        "example": "bash count.sh"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.content",
+-        "example": "scratch — feature elicitation this file …"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.description",
+-        "example": "Run count.sh script"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.filePath",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.newString",
+-        "example": "fixture"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.oldString",
+-        "example": "scratch"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.pattern",
+-        "example": "note*"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.prompt",
+-        "example": "Count the words in `/private/var/folders…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.subagent_type",
+-        "example": "general"
+-      },
+-      {
+-        "path": "messages[].parts[].state.input.workdir",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.count",
++        "path": "messages[].parts[].data.state.metadata.count",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.description",
++        "path": "messages[].parts[].data.state.metadata.description",
+         "example": "Run count.sh script"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.diff",
+-        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.exists",
++        "path": "messages[].parts[].data.state.metadata.exists",
+         "example": "false"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.exit",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.filediff.additions",
++        "path": "messages[].parts[].data.state.metadata.filediff.additions",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filediff.deletions",
++        "path": "messages[].parts[].data.state.metadata.filediff.deletions",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filediff.file",
++        "path": "messages[].parts[].data.state.metadata.filediff.file",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filediff.patch",
++        "path": "messages[].parts[].data.state.metadata.filediff.patch",
+         "example": "Index: /private/var/folders/jk/4rycn96j1…"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.filepath",
++        "path": "messages[].parts[].data.state.metadata.filepath",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.matches",
++        "path": "messages[].parts[].data.state.metadata.matches",
+         "example": "1"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.model.modelID",
++        "path": "messages[].parts[].data.state.metadata.model.modelID",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.model.providerID",
++        "path": "messages[].parts[].data.state.metadata.model.providerID",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.output",
+-        "example": "1 2 3 4 5 "
+-      },
+-      {
+-        "path": "messages[].parts[].state.metadata.preview",
++        "path": "messages[].parts[].data.state.metadata.preview",
+         "example": ".stderr.log"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.sessionId",
++        "path": "messages[].parts[].data.state.metadata.sessionId",
+         "example": "<withheld>"
+       },
+       {
+-        "path": "messages[].parts[].state.metadata.truncated",
+-        "example": "false"
+-      },
+-      {
+-        "path": "messages[].parts[].state.output",
+-        "example": "<path>/private/var/folders/jk/4rycn96j1r…"
+-      },
+-      {
+-        "path": "messages[].parts[].state.status",
+-        "example": "completed"
+-      },
+-      {
+-        "path": "messages[].parts[].state.time.end",
+-        "example": "1778178635055"
+-      },
+-      {
+-        "path": "messages[].parts[].state.time.start",
+-        "example": "1778178635049"
+-      },
+-      {
+-        "path": "messages[].parts[].state.title",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].text",
+-        "example": "\"You're going to walk through a small se…"
+-      },
+-      {
+-        "path": "messages[].parts[].time.end",
+-        "example": "1778178634261"
+-      },
+-      {
+-        "path": "messages[].parts[].time.start",
+-        "example": "1778178632515"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.cache.read",
++        "path": "summary_additions",
+         "example": "0"
+       },
+       {
+-        "path": "messages[].parts[].tokens.cache.write",
++        "path": "summary_deletions",
+         "example": "0"
+       },
+       {
+-        "path": "messages[].parts[].tokens.input",
+-        "example": "11294"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.output",
+-        "example": "85"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.reasoning",
+-        "example": "100"
+-      },
+-      {
+-        "path": "messages[].parts[].tokens.total",
+-        "example": "11479"
+-      },
+-      {
+-        "path": "messages[].parts[].tool",
+-        "example": "read"
+-      },
+-      {
+-        "path": "messages[].parts[].type",
+-        "example": "text"
+-      }
+-    ],
+-    "gained": [
+-      {
+-        "path": "directory",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.agent",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].data.cost",
+-        "example": "0.0"
+-      },
+-      {
+-        "path": "messages[].data.finish",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].data.mode",
+-        "example": "build"
+-      },
+-      {
+-        "path": "messages[].data.model.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.model.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.modelID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.parentID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.path.cwd",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.path.root",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.providerID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].data.role",
+-        "example": "user"
+-      },
+-      {
+-        "path": "messages[].data.time.completed",
+-        "example": "1778178631278"
+-      },
+-      {
+-        "path": "messages[].data.time.created",
+-        "example": "1778178631267"
+-      },
+-      {
+-        "path": "messages[].data.tokens.cache.read",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].data.tokens.cache.write",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].data.tokens.input",
+-        "example": "11294"
+-      },
+-      {
+-        "path": "messages[].data.tokens.output",
+-        "example": "185"
+-      },
+-      {
+-        "path": "messages[].data.tokens.reasoning",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].data.tokens.total",
+-        "example": "11479"
+-      },
+-      {
+-        "path": "messages[].id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.callID",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.cost",
+-        "example": "0.0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.reason",
+-        "example": "tool-calls"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.error",
+-        "example": "File not found: /private/var/folders/jk/…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.command",
+-        "example": "bash count.sh"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.content",
+-        "example": "scratch — feature elicitation this file …"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.description",
+-        "example": "Run count.sh script"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.filePath",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.newString",
+-        "example": "fixture"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.oldString",
+-        "example": "scratch"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.pattern",
+-        "example": "note*"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.prompt",
+-        "example": "Count the words in `/private/var/folders…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.subagent_type",
+-        "example": "general"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.input.workdir",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.diff",
+-        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.exit",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.output",
+-        "example": "1 2 3 4 5 "
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.metadata.truncated",
+-        "example": "false"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.output",
+-        "example": "<path>/private/var/folders/jk/4rycn96j1r…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.status",
+-        "example": "completed"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.time.end",
+-        "example": "1778178631278"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.time.start",
+-        "example": "1778178631278"
+-      },
+-      {
+-        "path": "messages[].parts[].data.state.title",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].data.text",
+-        "example": "\"You're going to walk through a small se…"
+-      },
+-      {
+-        "path": "messages[].parts[].data.time.end",
+-        "example": "1778178631278"
+-      },
+-      {
+-        "path": "messages[].parts[].data.time.start",
+-        "example": "1778178631278"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.cache.read",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.cache.write",
+-        "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.input",
+-        "example": "11294"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.output",
+-        "example": "185"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.reasoning",
++        "path": "summary_files",
+         "example": "0"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tokens.total",
+-        "example": "11479"
+-      },
+-      {
+-        "path": "messages[].parts[].data.tool",
+-        "example": "read"
+-      },
+-      {
+-        "path": "messages[].parts[].data.type",
+-        "example": "text"
+-      },
+-      {
+-        "path": "messages[].parts[].message_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].session_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].parts[].time_created",
+-        "example": "1778178631267"
+-      },
+-      {
+-        "path": "messages[].parts[].time_updated",
+-        "example": "1778178631267"
+-      },
+-      {
+-        "path": "messages[].session_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "messages[].time_created",
+-        "example": "1778178631267"
+-      },
+-      {
+-        "path": "messages[].time_updated",
+-        "example": "1778178631267"
+-      },
+-      {
+-        "path": "project_id",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "slug",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "time_created",
+-        "example": "1778178631267"
+-      },
+-      {
+-        "path": "time_updated",
+-        "example": "1778178667806"
+-      },
+-      {
+-        "path": "title",
+-        "example": "\"You're going to walk through a small se…"
+-      },
+-      {
+-        "path": "version",
+-        "example": "0.0.0-projected"
+       }
+-    ]
++    ],
++    "gained": []
+   }
+ }
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index c9cfc726..6509511e 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -42,3 +42,6 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:28:45.937195Z","id":"c190e86e6fe971951c7af66c9e15c93a7fd7cb7e8c64746050856897f7f93e6e","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":634},"end":{"line":634},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"58b5e6bdac807b3915e960cbc83cd1fcbace9a3b6871693dd81cebd56fca4f38","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T21:32:31.419785Z","id":"87ad6294eac527a454cced7546cfedfaf9c9d327b5faa9691bea599428aaefba","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":646},"end":{"line":646},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"c190e86e6fe971951c7af66c9e15c93a7fd7cb7e8c64746050856897f7f93e6e","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T14:58:21.961033Z","id":"e0eb4e0349959957e22ed3f83628676201766af30798bfb9b93db46f18314ea4","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":645},"end":{"line":645},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"87ad6294eac527a454cced7546cfedfaf9c9d327b5faa9691bea599428aaefba","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-22T17:04:19.812455Z","id":"f2e575d5933e4eff6646b25160fc5d73833b51985d9fb0afaeda7bd245a46fcf","body":{"detail":"The other five agents' projections are byte-stable across runs and pinned raw. If copilot's export ever takes a fixed session id, or toolpath-cursor's `extra`/content_blobs maps become ordered (BTreeMap), drop the canonical form for that agent so the golden is the real bytes `p export -o` writes. (re-anchored: lines moved, pr/106)","kind":"concern","span":{"start":{"line":146},"end":{"line":146},"content_hash":"4a694e0ca91a31337ac7971bff42f9e146dbc6c66fe755a12cff8566198c2a4b"},"summary":"Copilot's projection is pinned in canonical form (sorted keys, session id masked) because p export copilot mints a session id per run; Cursor's is pinned with keys sorted because its composer rows carry hash maps written in a different order per run","supersedes":"57a5a8b83e8ba133550059550f098b830d769c5fd0a785d0d0771d6fbb22a0c0","tags":["review","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-22T17:04:19.865532Z","id":"add71811ff3a1d8b6c06a4730c99fe1ed4a0b03a8866050ebbf21677c16fc56b","body":{"detail":"test-fixtures/opencode/convo.json is what `opencode export <id>` prints (camelCase, nested info); toolpath_opencode reads rows from opencode-stable.db and has no reader for this file. A `Session::from_export` in the adapter would remove all three copies, and `path p derive opencode` could then take the file. (re-anchored: lines moved, pr/106)","kind":"concern","span":{"start":{"line":358},"end":{"line":358},"content_hash":"e1f0854ff123c1ce324417c98893618c5a16b9d4d7c747feadd81bba62cca511"},"summary":"The `opencode export` wrapper to Session translation is duplicated from path-cli/tests/cross_harness_matrix.rs and toolpath-opencode/tests/real_fixture_roundtrip.rs; the adapter should own it","supersedes":"dd6fa6f81587aad09aa3a348ba38b13c47fb63c43dfd2c699705b2e9a477282e","tags":["review","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-22T17:04:19.919138Z","id":"5541940f05157fa5d3c47621ff434c75953f216c04695c7e7eb9750bcce86a6d","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>. (re-anchored: lines moved, pr/106)","kind":"concern","span":{"start":{"line":659},"end":{"line":659},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"e0eb4e0349959957e22ed3f83628676201766af30798bfb9b93db46f18314ea4","tags":["review","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index e1d20ede..627d8634 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -110,8 +110,10 @@ pub fn run(set: &Set, scratch: &Path) -> Result<Stages, StageError> {
+             .iter()
+             .map(ToString::to_string),
+     );
++    let compared = convo.written_shape();
+     let shed = report(
+         &source,
++        compared.as_deref().unwrap_or(&source),
+         &document_json,
+         &document,
+         &projections,
+@@ -169,6 +171,18 @@ enum Conversation {
+ }
+ 
+ impl Conversation {
++    /// The source in the shape the writer gives back, when the recorded file has another: gemini
++    /// records a JSONL record stream and writes one chat document; opencode's export nests
++    /// `info`/`parts` where its rows nest `data`. The same-format comparison is made on this, so a
++    /// path that only moved does not count as lost. `None` when the recording is already in that shape.
++    fn written_shape(&self) -> Option<String> {
++        match self {
++            Conversation::Gemini(c) => serde_json::to_string_pretty(&c.main).ok(),
++            Conversation::Opencode(s) => serde_json::to_string_pretty(s).ok(),
++            _ => None,
++        }
++    }
++
+     /// Stage `ir`.
+     fn view(&self, scratch: &Path) -> ConversationView {
+         match self {
+diff --git a/crates/toolpath-goldens/src/shed.rs b/crates/toolpath-goldens/src/shed.rs
+index d63f0c8b..63522c4b 100644
+--- a/crates/toolpath-goldens/src/shed.rs
++++ b/crates/toolpath-goldens/src/shed.rs
+@@ -16,6 +16,8 @@ use crate::model::{
+ /// projected back to its own format.
+ pub fn report(
+     source: &str,
++    // The source in the shape the writer gives back (`source` itself when it already is).
++    compared: &str,
+     document_json: &str,
+     document: &Value,
+     projections: &BTreeMap<Agent, String>,
+@@ -35,7 +37,7 @@ pub fn report(
+             .iter()
+             .map(|(agent, text)| (*agent, transcript_stats(text)))
+             .collect(),
+-        same_format: compare_same_format(source, same_format),
++        same_format: compare_same_format(compared, same_format),
+     }
+ }
+ 
+diff --git a/crates/toolpath-goldens/tests/goldens.rs b/crates/toolpath-goldens/tests/goldens.rs
+index 2705cf3e..2a08febd 100644
+--- a/crates/toolpath-goldens/tests/goldens.rs
++++ b/crates/toolpath-goldens/tests/goldens.rs
+@@ -304,3 +304,37 @@ fn point_every_store_at(home: &Path) {
+         unsafe { std::env::set_var(k, v) };
+     }
+ }
++
++/// The same-format round trip is compared in the adapter's own shape. Gemini records a session as a
++/// JSONL record stream and writes it back as one chat document; opencode's export nests `info` and
++/// `parts` where its rows nest `data`. Compared raw, nearly every path "moved" and counted as lost
++/// (82 of 87, 87 of 88); compared after the adapter has read the source, only real losses show.
++#[test]
++fn same_format_is_compared_in_the_adapters_own_shape() {
++    let (_, home) = homes();
++    for rel in [
++        "test-fixtures/gemini/convo.jsonl",
++        "test-fixtures/opencode/convo.json",
++    ] {
++        let input = Path::new(env!("CARGO_MANIFEST_DIR"))
++            .join("../..")
++            .join(rel);
++        let set = Set::from_input_file(&input).expect("readable input");
++        let stages = run(&set, home.path()).unwrap_or_else(|e| panic!("{}: {e}", set.name));
++        // Fields every message of the format has and the round trip certainly writes back: if
++        // one is "lost" the comparison is across shapes (the path moved), not a loss.
++        let dropped: Vec<&str> = stages
++            .shed
++            .same_format
++            .dropped
++            .iter()
++            .map(|d| d.path.as_str())
++            .collect();
++        for always in ["id", "timestamp", "content[].text", "info.id", "info.title"] {
++            assert!(
++                !dropped.contains(&always),
++                "{rel}: `{always}` counted as lost: the comparison is across shapes"
++            );
++        }
++    }
++}
+-- 
+2.55.0
+

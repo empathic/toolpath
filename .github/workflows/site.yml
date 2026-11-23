@@ -1,0 +1,99 @@
+name: Site
+
+# The wasm `path`, the site build and the Cloudflare Pages deploy. Called by ci.yml after the gates
+# pass (it decides when to run: pushes to main and same-repo PRs). `github.event_name` and
+# `github.head_ref` here are the caller's: a PR deploys a preview on its branch, main deploys
+# production.
+on:
+  workflow_call:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install Rust
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-emscripten
+
+      - name: Cache cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-wasm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-wasm-
+
+      # Keyed on the pin, not a constant: a cache miss re-installs the same
+      # emscripten instead of silently picking up whatever `latest` resolves to
+      # that day, and bumping .emsdk-version invalidates the cache.
+      - name: Cache emsdk
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: local/emsdk
+          key: emsdk-${{ hashFiles('.emsdk-version') }}
+
+      - name: Build wasm
+        run: scripts/build-wasm.sh
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+
+      - name: Build site
+        run: cd site && pnpm install && pnpm run build
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Pinned: since v4 the action installs the latest Wrangler 4 when no version is given.
+          wranglerVersion: "4.153.0"
+          command: pages deploy site/_site --project-name=toolpath --branch=${{ github.head_ref || 'main' }}
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const body = `🔍 **Preview deployed:** ${process.env.DEPLOY_URL}`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes('Preview deployed:'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+        env:
+          DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}

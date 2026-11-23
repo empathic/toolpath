@@ -1,0 +1,1438 @@
+From c7d56661f0f842b7ac5136c88697ca4c2790a02e Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 13:35:41 -0400
+Subject: [PATCH] fix(convo): every source reader builds delegations from
+ delegation-type tool calls (pr/64)
+
+ToolInvocation::as_delegation is the one function; cursor, opencode and codex
+now use it, claude and gemini drop their copies, gemini categorises invoke_agent.
+Snapshots and graph-01-release.json re-recorded and reviewed. The copilot->codex
+roundtrip pin needs capture in the nix dev shell (see the record).
+---
+ crates/toolpath-claude/src/provider.rs        | 13 +---
+ crates/toolpath-codex/src/provider.rs         | 10 +++
+ crates/toolpath-convo/src/lib.rs              | 69 +++++++++++++++++++
+ crates/toolpath-cursor/src/provider.rs        | 12 +++-
+ crates/toolpath-gemini/src/provider.rs        | 24 ++-----
+ .../snapshots/document@cursor.snap            |  7 ++
+ .../snapshots/document@gemini.snap            |  9 ++-
+ .../snapshots/document@opencode.snap          |  7 ++
+ .../toolpath-goldens/snapshots/ir@cursor.snap |  9 ++-
+ .../toolpath-goldens/snapshots/ir@gemini.snap | 12 +++-
+ .../snapshots/ir@opencode.snap                |  9 ++-
+ .../snapshots/projection@cursor@copilot.snap  | 10 +--
+ .../snapshots/projection@gemini@claude.snap   |  2 +-
+ .../snapshots/projection@gemini@codex.snap    |  2 +-
+ .../snapshots/projection@gemini@copilot.snap  | 14 ++--
+ .../snapshots/projection@gemini@cursor.snap   |  6 +-
+ .../snapshots/projection@gemini@opencode.snap |  2 +-
+ .../snapshots/projection@gemini@pi.snap       |  4 +-
+ .../projection@opencode@copilot.snap          | 10 +--
+ .../snapshots/round_trip@claude@codex.snap    |  7 +-
+ .../snapshots/round_trip@claude@cursor.snap   |  5 +-
+ .../snapshots/round_trip@claude@opencode.snap |  5 +-
+ .../snapshots/round_trip@copilot@codex.snap   |  5 +-
+ .../snapshots/round_trip@copilot@cursor.snap  |  5 +-
+ .../round_trip@copilot@opencode.snap          |  5 +-
+ .../snapshots/round_trip@cursor@claude.snap   |  5 +-
+ .../snapshots/round_trip@cursor@codex.snap    |  4 +-
+ .../snapshots/round_trip@cursor@copilot.snap  |  4 +-
+ .../round_trip@cursor@cursor-agent.snap       |  5 +-
+ .../snapshots/round_trip@cursor@gemini.snap   |  8 +--
+ .../snapshots/round_trip@cursor@opencode.snap |  4 +-
+ .../snapshots/round_trip@cursor@pi.snap       |  5 +-
+ .../snapshots/round_trip@gemini@claude.snap   |  4 +-
+ .../snapshots/round_trip@gemini@codex.snap    |  4 +-
+ .../snapshots/round_trip@gemini@copilot.snap  |  4 +-
+ .../round_trip@gemini@cursor-agent.snap       |  5 +-
+ .../snapshots/round_trip@gemini@cursor.snap   |  5 +-
+ .../snapshots/round_trip@gemini@opencode.snap |  4 +-
+ .../snapshots/round_trip@gemini@pi.snap       |  5 +-
+ .../snapshots/round_trip@opencode@claude.snap |  5 +-
+ .../snapshots/round_trip@opencode@codex.snap  |  4 +-
+ .../round_trip@opencode@copilot.snap          |  4 +-
+ .../round_trip@opencode@cursor-agent.snap     |  5 +-
+ .../snapshots/round_trip@opencode@cursor.snap |  4 +-
+ .../snapshots/round_trip@opencode@gemini.snap |  8 +--
+ .../snapshots/round_trip@opencode@pi.snap     |  7 +-
+ .../snapshots/shed@cursor.snap                | 12 ++--
+ .../snapshots/shed@gemini.snap                | 34 ++++-----
+ .../snapshots/shed@opencode.snap              | 12 ++--
+ crates/toolpath-opencode/src/provider.rs      |  2 +
+ examples/graph-01-release.json                |  9 ++-
+ pr/64-delegations-from-tool-calls.md          | 43 ++++++++++++
+ 52 files changed, 309 insertions(+), 169 deletions(-)
+ create mode 100644 pr/64-delegations-from-tool-calls.md
+
+diff --git a/crates/toolpath-claude/src/provider.rs b/crates/toolpath-claude/src/provider.rs
+index a666f34a..cbf57e29 100644
+--- a/crates/toolpath-claude/src/provider.rs
++++ b/crates/toolpath-claude/src/provider.rs
+@@ -239,18 +239,7 @@ fn extract_file_path_for_tool(input: &serde_json::Value) -> Option<String> {
+ fn extract_delegations(tool_uses: &[ToolInvocation]) -> Vec<DelegatedWork> {
+     tool_uses
+         .iter()
+-        .filter(|tu| tu.category == Some(ToolCategory::Delegation))
+-        .map(|tu| DelegatedWork {
+-            agent_id: tu.id.clone(),
+-            prompt: tu
+-                .input
+-                .get("prompt")
+-                .and_then(|v| v.as_str())
+-                .unwrap_or("")
+-                .to_string(),
+-            turns: vec![],
+-            result: tu.result.as_ref().map(|r| r.content.clone()),
+-        })
++        .filter_map(ToolInvocation::as_delegation)
+         .collect()
+ }
+ 
+diff --git a/crates/toolpath-codex/src/provider.rs b/crates/toolpath-codex/src/provider.rs
+index e78a4ae3..4b513f60 100644
+--- a/crates/toolpath-codex/src/provider.rs
++++ b/crates/toolpath-codex/src/provider.rs
+@@ -318,6 +318,16 @@ impl<'a> Builder<'a> {
+         self.turns
+             .retain(|t| !(t.text.is_empty() && t.thinking.is_none() && t.tool_uses.is_empty()));
+ 
++        // A delegation-type tool call (`spawn_agent`) is the turn's delegation. Built here, after
++        // every output has been attached, so the delegation carries its result.
++        for t in self.turns.iter_mut() {
++            t.delegations = t
++                .tool_uses
++                .iter()
++                .filter_map(ToolInvocation::as_delegation)
++                .collect();
++        }
++
+         // Assign synthetic ids to turns whose source message didn't carry
+         // one, then link sequentially via `parent_id` so the shared
+         // `derive_path` can walk a connected DAG. Codex turns don't carry
+diff --git a/crates/toolpath-convo/src/lib.rs b/crates/toolpath-convo/src/lib.rs
+index 9d79a1a2..cd842408 100644
+--- a/crates/toolpath-convo/src/lib.rs
++++ b/crates/toolpath-convo/src/lib.rs
+@@ -331,6 +331,35 @@ pub struct Turn {
+     pub file_mutations: Vec<FileMutation>,
+ }
+ 
++impl ToolInvocation {
++    /// The delegation this call stands for, when it is a delegation-type tool call
++    /// (`category == Some(ToolCategory::Delegation)`): the call's id is the agent id,
++    /// its `prompt` input is the prompt, and its result, when the same turn has one, is the
++    /// result. `None` for every other tool.
++    ///
++    /// Every source reader builds a turn's `delegations` from its tool calls through this one
++    /// function, so a harness that dispatches sub-agents by tool call (Claude's `Task`,
++    /// Gemini's `invoke_agent`, Cursor's `task_v2`, Codex's `spawn_agent`, ...) reads the same
++    /// way as one that records them separately. A reader that also has the sub-agent's own
++    /// turns replaces `turns` afterwards.
++    pub fn as_delegation(&self) -> Option<DelegatedWork> {
++        if self.category != Some(ToolCategory::Delegation) {
++            return None;
++        }
++        Some(DelegatedWork {
++            agent_id: self.id.clone(),
++            prompt: self
++                .input
++                .get("prompt")
++                .and_then(|v| v.as_str())
++                .unwrap_or("")
++                .to_string(),
++            turns: vec![],
++            result: self.result.as_ref().map(|r| r.content.clone()),
++        })
++    }
++}
++
+ impl Turn {
+     /// True when the turn carries no renderable content of its own — no
+     /// visible text (ignoring whitespace), thinking, tool uses,
+@@ -595,6 +624,46 @@ pub use project::{AnyProjector, ConversationProjector};
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn a_delegation_tool_call_is_a_delegation_and_no_other_tool_is() {
++        let call = ToolInvocation {
++            id: "call-1".into(),
++            name: "task_v2".into(),
++            input: serde_json::json!({"prompt": "count the words"}),
++            result: Some(ToolResult {
++                content: "42".into(),
++                is_error: false,
++            }),
++            category: Some(ToolCategory::Delegation),
++        };
++        let d = call.as_delegation().expect("a delegation");
++        assert_eq!(d.agent_id, "call-1");
++        assert_eq!(d.prompt, "count the words");
++        assert_eq!(d.result.as_deref(), Some("42"));
++        assert!(d.turns.is_empty());
++
++        let no_prompt = ToolInvocation {
++            input: serde_json::json!({}),
++            result: None,
++            ..call.clone()
++        };
++        let d = no_prompt.as_delegation().expect("a delegation");
++        assert_eq!(d.prompt, "");
++        assert_eq!(d.result, None);
++
++        for category in [
++            None,
++            Some(ToolCategory::Shell),
++            Some(ToolCategory::FileRead),
++        ] {
++            let other = ToolInvocation {
++                category,
++                ..call.clone()
++            };
++            assert!(other.as_delegation().is_none(), "{category:?}");
++        }
++    }
++
+     fn sample_view() -> ConversationView {
+         ConversationView {
+             id: "sess-1".into(),
+diff --git a/crates/toolpath-cursor/src/provider.rs b/crates/toolpath-cursor/src/provider.rs
+index 342396db..b6d23d87 100644
+--- a/crates/toolpath-cursor/src/provider.rs
++++ b/crates/toolpath-cursor/src/provider.rs
+@@ -40,8 +40,8 @@ use crate::types::{
+ };
+ use toolpath_convo::{
+     ConversationMeta, ConversationProvider, ConversationView, ConvoError as ConvoTraitError,
+-    EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage, ToolCategory,
+-    ToolInvocation, ToolResult, Turn, unified_diff,
++    DelegatedWork, EnvironmentSnapshot, FileMutation, ProducerInfo, Role, SessionBase, TokenUsage,
++    ToolCategory, ToolInvocation, ToolResult, Turn, unified_diff,
+ };
+ 
+ /// The dispatch family used in `path.meta.source` and
+@@ -456,6 +456,12 @@ impl<'a> Builder<'a> {
+             .filter(|m| !m.is_empty())
+             .or_else(|| self.session.data.default_model().map(str::to_string));
+ 
++        // A delegation-type tool call (`task_v2`, `Task`, ...) is the turn's delegation.
++        let delegations: Vec<DelegatedWork> = tool_uses
++            .iter()
++            .filter_map(ToolInvocation::as_delegation)
++            .collect();
++
+         Turn {
+             provider: None,
+             id: bubble.bubble_id.clone(),
+@@ -471,7 +477,7 @@ impl<'a> Builder<'a> {
+             token_usage,
+             attributed_token_usage: None,
+             environment,
+-            delegations: Vec::new(),
++            delegations,
+             file_mutations,
+         }
+     }
+diff --git a/crates/toolpath-gemini/src/provider.rs b/crates/toolpath-gemini/src/provider.rs
+index 5ace87be..66da5763 100644
+--- a/crates/toolpath-gemini/src/provider.rs
++++ b/crates/toolpath-gemini/src/provider.rs
+@@ -40,7 +40,7 @@ pub fn tool_category(name: &str) -> Option<ToolCategory> {
+         "write_file" | "replace" | "edit" => Some(ToolCategory::FileWrite),
+         "run_shell_command" => Some(ToolCategory::Shell),
+         "web_fetch" | "google_web_search" => Some(ToolCategory::Network),
+-        "task" | "activate_skill" => Some(ToolCategory::Delegation),
++        "task" | "activate_skill" | "invoke_agent" => Some(ToolCategory::Delegation),
+         _ => None,
+     }
+ }
+@@ -360,22 +360,6 @@ fn first_user_text(chat: &ChatFile) -> Option<String> {
+         .filter(|t| !t.is_empty())
+ }
+ 
+-/// Build a fallback `DelegatedWork` from a `ToolInvocation` when no
+-/// sub-agent file was found — mirrors the Claude provider's behaviour.
+-fn tool_invocation_to_delegation(tu: &ToolInvocation) -> DelegatedWork {
+-    DelegatedWork {
+-        agent_id: tu.id.clone(),
+-        prompt: tu
+-            .input
+-            .get("prompt")
+-            .and_then(|v| v.as_str())
+-            .unwrap_or("")
+-            .to_string(),
+-        turns: vec![],
+-        result: tu.result.as_ref().map(|r| r.content.clone()),
+-    }
+-}
+-
+ // ── Conversation → View ──────────────────────────────────────────────
+ 
+ fn conversation_to_view(convo: &Conversation) -> ConversationView {
+@@ -401,9 +385,9 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
+         // For each delegation-category tool invocation, try to pull the
+         // next sub-agent off the queue.
+         for tu in &turn.tool_uses {
+-            if tu.category != Some(ToolCategory::Delegation) {
++            let Some(from_call) = tu.as_delegation() else {
+                 continue;
+-            }
++            };
+             let delegation = match sub_iter.next() {
+                 Some(sub) => {
+                     let prompt_fallback = tu
+@@ -413,7 +397,7 @@ fn conversation_to_view(convo: &Conversation) -> ConversationView {
+                         .unwrap_or("");
+                     sub_agent_to_delegation(sub, wd_ref, prompt_fallback, tu.result.as_ref())
+                 }
+-                None => tool_invocation_to_delegation(tu),
++                None => from_call,
+             };
+             turn.delegations.push(delegation);
+         }
+diff --git a/crates/toolpath-goldens/snapshots/document@cursor.snap b/crates/toolpath-goldens/snapshots/document@cursor.snap
+index c5f48902..67754e0f 100644
+--- a/crates/toolpath-goldens/snapshots/document@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/document@cursor.snap
+@@ -714,6 +714,13 @@ input_file: test-fixtures/cursor/convo.json
+           "change": {
+             "cursor://ad9f62d0-57b4-42f4-9310-b6fd3213af85": {
+               "structural": {
++                "delegations": [
++                  {
++                    "agent_id": "tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0",
++                    "prompt": "Count the words in `notes.md` and report the number. The file is at /Users/ben/projects/temp/cursortest2/notes.md",
++                    "result": "{\"agentId\":\"64cc0e23-6dc6-46c4-a155-5b55fc9c30e9\"}"
++                  }
++                ],
+                 "environment": {
+                   "working_dir": "/Users/ben/projects/temp/cursortest2"
+                 },
+diff --git a/crates/toolpath-goldens/snapshots/document@gemini.snap b/crates/toolpath-goldens/snapshots/document@gemini.snap
+index 66ce1bc2..86cfea1f 100644
+--- a/crates/toolpath-goldens/snapshots/document@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/document@gemini.snap
+@@ -483,6 +483,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+           "change": {
+             "gemini-cli://9534b902-4b8a-437e-ba2e-2e4db4b82fec": {
+               "structural": {
++                "delegations": [
++                  {
++                    "agent_id": "invoke_agent_1778178575008_0",
++                    "prompt": "Count the words in `notes.md` and report the number.",
++                    "result": "Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}"
++                  }
++                ],
+                 "role": "assistant",
+                 "text": "I will delegate the task of counting the words in `notes.md` to a generalist sub-agent.",
+                 "token_usage": {
+@@ -497,7 +504,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+                 },
+                 "tool_uses": [
+                   {
+-                    "category": null,
++                    "category": "delegation",
+                     "id": "invoke_agent_1778178575008_0",
+                     "input": {
+                       "agent_name": "generalist",
+diff --git a/crates/toolpath-goldens/snapshots/document@opencode.snap b/crates/toolpath-goldens/snapshots/document@opencode.snap
+index aca1425d..4b8c23a1 100644
+--- a/crates/toolpath-goldens/snapshots/document@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/document@opencode.snap
+@@ -530,6 +530,13 @@ input_file: test-fixtures/opencode/convo.json
+           "change": {
+             "opencode://ses_1fc4b59e2ffexZeA4VcZH8yV68": {
+               "structural": {
++                "delegations": [
++                  {
++                    "agent_id": "call_00_Q8ropZWVAUTqMZyQkYCI9889",
++                    "prompt": "Count the words in `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md` and report the number.",
++                    "result": "task_id: ses_1fc4ae43affekhOzm9Kf36uiwL (for resuming to continue this task if needed)\n\n<task_result>\n10\n</task_result>"
++                  }
++                ],
+                 "environment": {
+                   "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+                 },
+diff --git a/crates/toolpath-goldens/snapshots/ir@cursor.snap b/crates/toolpath-goldens/snapshots/ir@cursor.snap
+index fb0a4363..04413817 100644
+--- a/crates/toolpath-goldens/snapshots/ir@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/ir@cursor.snap
+@@ -561,7 +561,14 @@ input_file: test-fixtures/cursor/convo.json
+       "token_usage": null,
+       "environment": {
+         "working_dir": "/Users/ben/projects/temp/cursortest2"
+-      }
++      },
++      "delegations": [
++        {
++          "agent_id": "tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0",
++          "prompt": "Count the words in `notes.md` and report the number. The file is at /Users/ben/projects/temp/cursortest2/notes.md",
++          "result": "{\"agentId\":\"64cc0e23-6dc6-46c4-a155-5b55fc9c30e9\"}"
++        }
++      ]
+     },
+     {
+       "id": "806616f0-8bff-4afa-b561-609ba3ad59cf",
+diff --git a/crates/toolpath-goldens/snapshots/ir@gemini.snap b/crates/toolpath-goldens/snapshots/ir@gemini.snap
+index b4c71652..c5cabdeb 100644
+--- a/crates/toolpath-goldens/snapshots/ir@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/ir@gemini.snap
+@@ -381,7 +381,8 @@ input_file: test-fixtures/gemini/convo.jsonl
+           "result": {
+             "content": "Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}",
+             "is_error": false
+-          }
++          },
++          "category": "delegation"
+         }
+       ],
+       "model": "gemini-3-flash-preview",
+@@ -395,7 +396,14 @@ input_file: test-fixtures/gemini/convo.jsonl
+             "reasoning": 10
+           }
+         }
+-      }
++      },
++      "delegations": [
++        {
++          "agent_id": "invoke_agent_1778178575008_0",
++          "prompt": "Count the words in `notes.md` and report the number.",
++          "result": "Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}"
++        }
++      ]
+     },
+     {
+       "id": "0fc42771-3fa2-4a28-817f-811e0193cb21",
+diff --git a/crates/toolpath-goldens/snapshots/ir@opencode.snap b/crates/toolpath-goldens/snapshots/ir@opencode.snap
+index 88b5c8a9..65924208 100644
+--- a/crates/toolpath-goldens/snapshots/ir@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/ir@opencode.snap
+@@ -425,7 +425,14 @@ input_file: test-fixtures/opencode/convo.json
+       },
+       "environment": {
+         "working_dir": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode"
+-      }
++      },
++      "delegations": [
++        {
++          "agent_id": "call_00_Q8ropZWVAUTqMZyQkYCI9889",
++          "prompt": "Count the words in `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md` and report the number.",
++          "result": "task_id: ses_1fc4ae43affekhOzm9Kf36uiwL (for resuming to continue this task if needed)\n\n<task_result>\n10\n</task_result>"
++        }
++      ]
+     },
+     {
+       "id": "msg_e03b5351e003YCJK1HFZZldOSc",
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap b/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap
+index 6cc7288e..bfe7e56c 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap
+@@ -87,7 +87,9 @@ input_file: test-fixtures/cursor/convo.json
+ {"data":{"content":"","messageId":"00000000-0000-4000-8001-000000000013","model":"default","toolRequests":[{"arguments":{"description":"Count words in notes.md","model":"default","name":"general-purpose","prompt":"Count the words in `notes.md` and report the number. The file is at /Users/ben/projects/temp/cursortest2/notes.md","subagentType":"unspecified"},"name":"task","toolCallId":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0"}],"turnId":"19"},"id":"00000000-0000-4000-8000-00000000004e","parentId":"00000000-0000-4000-8000-00000000004d","timestamp":"2026-06-01T18:33:44.172Z","type":"assistant.message"}
+ {"data":{"arguments":{"description":"Count words in notes.md","model":"default","name":"general-purpose","prompt":"Count the words in `notes.md` and report the number. The file is at /Users/ben/projects/temp/cursortest2/notes.md","subagentType":"unspecified"},"toolCallId":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","toolName":"task","turnId":"19"},"id":"00000000-0000-4000-8000-00000000004f","parentId":"00000000-0000-4000-8000-00000000004e","timestamp":"2026-06-01T18:33:44.172Z","type":"tool.execution_start"}
+ {"data":{"result":{"content":"{\"agentId\":\"64cc0e23-6dc6-46c4-a155-5b55fc9c30e9\"}"},"success":true,"toolCallId":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","turnId":"19"},"id":"00000000-0000-4000-8000-000000000050","parentId":"00000000-0000-4000-8000-00000000004f","timestamp":"2026-06-01T18:33:44.172Z","type":"tool.execution_complete"}
+-{"data":{"messageId":"00000000-0000-4000-8001-000000000013","turnId":"19"},"id":"00000000-0000-4000-8000-000000000051","parentId":"00000000-0000-4000-8000-000000000050","timestamp":"2026-06-01T18:33:44.172Z","type":"assistant.turn_end"}
+-{"data":{"turnId":"20"},"id":"00000000-0000-4000-8000-000000000052","parentId":"00000000-0000-4000-8000-000000000051","timestamp":"2026-06-01T18:33:57.514Z","type":"assistant.turn_start"}
+-{"data":{"content":"**Step 1:** Listed the workspace with `ls` — it was empty.\n\n**Step 2–3:** Created `notes.md` with the Write tool (two lines) and read it back with Read; both lines were present.\n\n**Step 4:** Replaced `scratch` with `fixture` using StrReplace.\n\n**Step 5–6:** Glob found `notes.md` among `note*` files; Grep found `fixture` on line 1 of `notes.md`.\n\n**Step 7:** Read on `does-not-exist.txt` failed with `File not found`, as expected.\n\n**Step 8:** Wrote and ran `count.sh`; output was five lines (`1` through `5`).\n\n**Step 9:** The sub-agent reported **11 words** in `notes.md` (per `wc -w` on whitespace-separated tokens).\n\n**Summary:** I exercised listing, write, read, search/replace, glob, grep, intentional read failure, shell scripting, and a Task sub-agent — all inside `/Users/ben/projects/temp/cursortest2`. The workspace now has `notes.md` (with “fixture” instead of “scratch”), `count.sh`, and no other files from these steps.","messageId":"00000000-0000-4000-8001-000000000014","model":"default","turnId":"20"},"id":"00000000-0000-4000-8000-000000000053","parentId":"00000000-0000-4000-8000-000000000052","timestamp":"2026-06-01T18:33:57.514Z","type":"assistant.message"}
+-{"data":{"messageId":"00000000-0000-4000-8001-000000000014","turnId":"20"},"id":"00000000-0000-4000-8000-000000000054","parentId":"00000000-0000-4000-8000-000000000053","timestamp":"2026-06-01T18:33:57.514Z","type":"assistant.turn_end"}
++{"data":{"agentDescription":"Delegated sub-agent task","agentDisplayName":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","agentName":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","id":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","prompt":"Count the words in `notes.md` and report the number. The file is at /Users/ben/projects/temp/cursortest2/notes.md","toolCallId":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","turnId":"19"},"id":"00000000-0000-4000-8000-000000000051","parentId":"00000000-0000-4000-8000-000000000050","timestamp":"2026-06-01T18:33:44.172Z","type":"subagent.started"}
++{"data":{"agentDescription":"Delegated sub-agent task","agentDisplayName":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","agentName":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","id":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","result":"{\"agentId\":\"64cc0e23-6dc6-46c4-a155-5b55fc9c30e9\"}","toolCallId":"tool_348bef6d-d88c-44ff-b8a1-afa6e6c28a0","turnId":"19"},"id":"00000000-0000-4000-8000-000000000052","parentId":"00000000-0000-4000-8000-000000000051","timestamp":"2026-06-01T18:33:44.172Z","type":"subagent.completed"}
++{"data":{"messageId":"00000000-0000-4000-8001-000000000013","turnId":"19"},"id":"00000000-0000-4000-8000-000000000053","parentId":"00000000-0000-4000-8000-000000000052","timestamp":"2026-06-01T18:33:44.172Z","type":"assistant.turn_end"}
++{"data":{"turnId":"20"},"id":"00000000-0000-4000-8000-000000000054","parentId":"00000000-0000-4000-8000-000000000053","timestamp":"2026-06-01T18:33:57.514Z","type":"assistant.turn_start"}
++{"data":{"content":"**Step 1:** Listed the workspace with `ls` — it was empty.\n\n**Step 2–3:** Created `notes.md` with the Write tool (two lines) and read it back with Read; both lines were present.\n\n**Step 4:** Replaced `scratch` with `fixture` using StrReplace.\n\n**Step 5–6:** Glob found `notes.md` among `note*` files; Grep found `fixture` on line 1 of `notes.md`.\n\n**Step 7:** Read on `does-not-exist.txt` failed with `File not found`, as expected.\n\n**Step 8:** Wrote and ran `count.sh`; output was five lines (`1` through `5`).\n\n**Step 9:** The sub-agent reported **11 words** in `notes.md` (per `wc -w` on whitespace-separated tokens).\n\n**Summary:** I exercised listing, write, read, search/replace, glob, grep, intentional read failure, shell scripting, and a Task sub-agent — all inside `/Users/ben/projects/temp/cursortest2`. The workspace now has `notes.md` (with “fixture” instead of “scratch”), `count.sh`, and no other files from these steps.","messageId":"00000000-0000-4000-8001-000000000014","model":"default","turnId":"20"},"id":"00000000-0000-4000-8000-000000000055","parentId":"00000000-0000-4000-8000-000000000054","timestamp":"2026-06-01T18:33:57.514Z","type":"assistant.message"}
++{"data":{"messageId":"00000000-0000-4000-8001-000000000014","turnId":"20"},"id":"00000000-0000-4000-8000-000000000056","parentId":"00000000-0000-4000-8000-000000000055","timestamp":"2026-06-01T18:33:57.514Z","type":"assistant.turn_end"}
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@claude.snap b/crates/toolpath-goldens/snapshots/projection@gemini@claude.snap
+index c4b496bc..6706c5fe 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@claude.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@claude.snap
+@@ -27,6 +27,6 @@ input_file: test-fixtures/gemini/convo.jsonl
+ {"parentUuid":"12788125-1f02-41e9-b826-cdf296d6d46a","isSidechain":false,"type":"user","uuid":"12788125-1f02-41e9-b826-cdf296d6d46a-result-write_file_1778178555232_0","timestamp":"2026-05-07T18:29:15.234Z","sessionId":"9534b902-4b8a-437e-ba2e-2e4db4b82fec","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"write_file_1778178555232_0","content":"Successfully created and wrote to new file: /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/gemini/count.sh. Here is the updated code:\necho 1\necho 2\necho 3\necho 4\necho 5\n","is_error":false}]},"toolUseResult":{"content":"echo 1\necho 2\necho 3\necho 4\necho 5\n","filePath":"count.sh","type":"update"},"sourceToolAssistantUUID":"12788125-1f02-41e9-b826-cdf296d6d46a"}
+ {"parentUuid":"12788125-1f02-41e9-b826-cdf296d6d46a-result-write_file_1778178555232_0","isSidechain":false,"type":"assistant","uuid":"32831830-6324-411c-a923-b44ab4d4246c","timestamp":"2026-05-07T18:29:24.122Z","sessionId":"9534b902-4b8a-437e-ba2e-2e4db4b82fec","message":{"role":"assistant","content":[{"type":"text","text":"I will now execute the `count.sh` script and verify that it prints five lines of output."},{"type":"tool_use","id":"run_shell_command_1778178564078_0","name":"Bash","input":{"command":"bash count.sh","description":"Run the count.sh script"}}],"model":"gemini-3-flash-preview","usage":{"input_tokens":10098,"output_tokens":61,"cache_creation_input_tokens":null,"cache_read_input_tokens":7439,"cache_creation":null,"service_tier":null}}}
+ {"parentUuid":"32831830-6324-411c-a923-b44ab4d4246c","isSidechain":false,"type":"user","uuid":"32831830-6324-411c-a923-b44ab4d4246c-result-run_shell_command_1778178564078_0","timestamp":"2026-05-07T18:29:24.122Z","sessionId":"9534b902-4b8a-437e-ba2e-2e4db4b82fec","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"run_shell_command_1778178564078_0","content":"Output: 1\n2\n3\n4\n5\nProcess Group PGID: 996","is_error":false}]},"toolUseResult":{"interrupted":false,"isImage":false,"noOutputExpected":false,"stderr":"","stdout":"Output: 1\n2\n3\n4\n5\nProcess Group PGID: 996"},"sourceToolAssistantUUID":"32831830-6324-411c-a923-b44ab4d4246c"}
+-{"parentUuid":"32831830-6324-411c-a923-b44ab4d4246c-result-run_shell_command_1778178564078_0","isSidechain":false,"type":"assistant","uuid":"00cc1ffd-9fe0-440a-85ef-a22352feafd8","timestamp":"2026-05-07T18:29:35.060Z","sessionId":"9534b902-4b8a-437e-ba2e-2e4db4b82fec","message":{"role":"assistant","content":[{"type":"text","text":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent."},{"type":"tool_use","id":"invoke_agent_1778178575008_0","name":"invoke_agent","input":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."}}],"model":"gemini-3-flash-preview","usage":{"input_tokens":10180,"output_tokens":72,"cache_creation_input_tokens":null,"cache_read_input_tokens":7428,"cache_creation":null,"service_tier":null}}}
++{"parentUuid":"32831830-6324-411c-a923-b44ab4d4246c-result-run_shell_command_1778178564078_0","isSidechain":false,"type":"assistant","uuid":"00cc1ffd-9fe0-440a-85ef-a22352feafd8","timestamp":"2026-05-07T18:29:35.060Z","sessionId":"9534b902-4b8a-437e-ba2e-2e4db4b82fec","message":{"role":"assistant","content":[{"type":"text","text":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent."},{"type":"tool_use","id":"invoke_agent_1778178575008_0","name":"Task","input":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."}}],"model":"gemini-3-flash-preview","usage":{"input_tokens":10180,"output_tokens":72,"cache_creation_input_tokens":null,"cache_read_input_tokens":7428,"cache_creation":null,"service_tier":null}}}
+ {"parentUuid":"00cc1ffd-9fe0-440a-85ef-a22352feafd8","isSidechain":false,"type":"user","uuid":"00cc1ffd-9fe0-440a-85ef-a22352feafd8-result-invoke_agent_1778178575008_0","timestamp":"2026-05-07T18:29:35.060Z","sessionId":"9534b902-4b8a-437e-ba2e-2e4db4b82fec","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"invoke_agent_1778178575008_0","content":"Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}","is_error":false}]},"toolUseResult":"Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}","sourceToolAssistantUUID":"00cc1ffd-9fe0-440a-85ef-a22352feafd8"}
+ {"parentUuid":"00cc1ffd-9fe0-440a-85ef-a22352feafd8-result-invoke_agent_1778178575008_0","isSidechain":false,"type":"assistant","uuid":"0fc42771-3fa2-4a28-817f-811e0193cb21","timestamp":"2026-05-07T18:30:14.544Z","sessionId":"9534b902-4b8a-437e-ba2e-2e4db4b82fec","message":{"role":"assistant","content":[{"type":"text","text":"The sub-agent reported: \"There are 11 words in `notes.md`.\"\n\nI have completed the requested sequence of tasks, including file manipulation (listing, writing, reading, and editing), searching (glob and grep), handling intentional errors, and executing a shell script. I also successfully delegated a word count task to a sub-agent and confirmed its findings."}],"model":"gemini-3-flash-preview","usage":{"input_tokens":10289,"output_tokens":110,"cache_creation_input_tokens":null,"cache_read_input_tokens":0,"cache_creation":null,"service_tier":null}}}
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@codex.snap b/crates/toolpath-goldens/snapshots/projection@gemini@codex.snap
+index d6cec303..747becb6 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@codex.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@codex.snap
+@@ -69,7 +69,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+ {"timestamp":"2026-05-07T18:29:35.060Z","type":"turn_context","payload":{"cwd":"/","model":"gemini-3-flash-preview","turn_id":"9534b902-4b8a-437e-ba2e-2e4db4b82fec-t10"}}
+ {"timestamp":"2026-05-07T18:29:35.060Z","type":"response_item","payload":{"content":[{"text":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent.","type":"output_text"}],"phase":"commentary","role":"assistant","type":"message"}}
+ {"timestamp":"2026-05-07T18:29:35.060Z","type":"event_msg","payload":{"memory_citation":null,"message":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent.","phase":"commentary","type":"agent_message"}}
+-{"timestamp":"2026-05-07T18:29:35.060Z","type":"response_item","payload":{"arguments":"{\"agent_name\":\"generalist\",\"prompt\":\"Count the words in `notes.md` and report the number.\"}","call_id":"invoke_agent_1778178575008_0","name":"invoke_agent","type":"function_call"}}
++{"timestamp":"2026-05-07T18:29:35.060Z","type":"response_item","payload":{"arguments":"{\"agent_name\":\"generalist\",\"prompt\":\"Count the words in `notes.md` and report the number.\"}","call_id":"invoke_agent_1778178575008_0","name":"spawn_agent","type":"function_call"}}
+ {"timestamp":"2026-05-07T18:29:35.060Z","type":"response_item","payload":{"call_id":"invoke_agent_1778178575008_0","output":"Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}","type":"function_call_output"}}
+ {"timestamp":"2026-05-07T18:29:35.060Z","type":"event_msg","payload":{"info":{"total_token_usage":{"cached_input_tokens":67148,"input_tokens":95613,"output_tokens":970}},"rate_limits":null,"type":"token_count"}}
+ {"timestamp":"2026-05-07T18:30:14.544Z","type":"turn_context","payload":{"cwd":"/","model":"gemini-3-flash-preview","turn_id":"9534b902-4b8a-437e-ba2e-2e4db4b82fec-t11"}}
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@copilot.snap b/crates/toolpath-goldens/snapshots/projection@gemini@copilot.snap
+index f86b08c3..0b7d9db1 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@copilot.snap
+@@ -55,10 +55,12 @@ input_file: test-fixtures/gemini/convo.jsonl
+ {"data":{"result":{"content":"Output: 1\n2\n3\n4\n5\nProcess Group PGID: 996"},"success":true,"toolCallId":"run_shell_command_1778178564078_0","turnId":"8"},"id":"00000000-0000-4000-8000-00000000002e","parentId":"00000000-0000-4000-8000-00000000002d","timestamp":"2026-05-07T18:29:24.122Z","type":"tool.execution_complete"}
+ {"data":{"messageId":"00000000-0000-4000-8001-000000000008","turnId":"8"},"id":"00000000-0000-4000-8000-00000000002f","parentId":"00000000-0000-4000-8000-00000000002e","timestamp":"2026-05-07T18:29:24.122Z","type":"assistant.turn_end"}
+ {"data":{"turnId":"9"},"id":"00000000-0000-4000-8000-000000000030","parentId":"00000000-0000-4000-8000-00000000002f","timestamp":"2026-05-07T18:29:35.060Z","type":"assistant.turn_start"}
+-{"data":{"cacheReadTokens":7428,"content":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent.","inputTokens":10180,"messageId":"00000000-0000-4000-8001-000000000009","model":"gemini-3-flash-preview","outputTokens":72,"toolRequests":[{"arguments":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."},"name":"invoke_agent","toolCallId":"invoke_agent_1778178575008_0"}],"turnId":"9"},"id":"00000000-0000-4000-8000-000000000031","parentId":"00000000-0000-4000-8000-000000000030","timestamp":"2026-05-07T18:29:35.060Z","type":"assistant.message"}
+-{"data":{"arguments":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."},"toolCallId":"invoke_agent_1778178575008_0","toolName":"invoke_agent","turnId":"9"},"id":"00000000-0000-4000-8000-000000000032","parentId":"00000000-0000-4000-8000-000000000031","timestamp":"2026-05-07T18:29:35.060Z","type":"tool.execution_start"}
++{"data":{"cacheReadTokens":7428,"content":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent.","inputTokens":10180,"messageId":"00000000-0000-4000-8001-000000000009","model":"gemini-3-flash-preview","outputTokens":72,"toolRequests":[{"arguments":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."},"name":"task","toolCallId":"invoke_agent_1778178575008_0"}],"turnId":"9"},"id":"00000000-0000-4000-8000-000000000031","parentId":"00000000-0000-4000-8000-000000000030","timestamp":"2026-05-07T18:29:35.060Z","type":"assistant.message"}
++{"data":{"arguments":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."},"toolCallId":"invoke_agent_1778178575008_0","toolName":"task","turnId":"9"},"id":"00000000-0000-4000-8000-000000000032","parentId":"00000000-0000-4000-8000-000000000031","timestamp":"2026-05-07T18:29:35.060Z","type":"tool.execution_start"}
+ {"data":{"result":{"content":"Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}"},"success":true,"toolCallId":"invoke_agent_1778178575008_0","turnId":"9"},"id":"00000000-0000-4000-8000-000000000033","parentId":"00000000-0000-4000-8000-000000000032","timestamp":"2026-05-07T18:29:35.060Z","type":"tool.execution_complete"}
+-{"data":{"messageId":"00000000-0000-4000-8001-000000000009","turnId":"9"},"id":"00000000-0000-4000-8000-000000000034","parentId":"00000000-0000-4000-8000-000000000033","timestamp":"2026-05-07T18:29:35.060Z","type":"assistant.turn_end"}
+-{"data":{"turnId":"10"},"id":"00000000-0000-4000-8000-000000000035","parentId":"00000000-0000-4000-8000-000000000034","timestamp":"2026-05-07T18:30:14.544Z","type":"assistant.turn_start"}
+-{"data":{"cacheReadTokens":0,"content":"The sub-agent reported: \"There are 11 words in `notes.md`.\"\n\nI have completed the requested sequence of tasks, including file manipulation (listing, writing, reading, and editing), searching (glob and grep), handling intentional errors, and executing a shell script. I also successfully delegated a word count task to a sub-agent and confirmed its findings.","inputTokens":10289,"messageId":"00000000-0000-4000-8001-00000000000a","model":"gemini-3-flash-preview","outputTokens":110,"turnId":"10"},"id":"00000000-0000-4000-8000-000000000036","parentId":"00000000-0000-4000-8000-000000000035","timestamp":"2026-05-07T18:30:14.544Z","type":"assistant.message"}
+-{"data":{"messageId":"00000000-0000-4000-8001-00000000000a","turnId":"10"},"id":"00000000-0000-4000-8000-000000000037","parentId":"00000000-0000-4000-8000-000000000036","timestamp":"2026-05-07T18:30:14.544Z","type":"assistant.turn_end"}
++{"data":{"agentDescription":"Delegated sub-agent task","agentDisplayName":"invoke_agent_1778178575008_0","agentName":"invoke_agent_1778178575008_0","id":"invoke_agent_1778178575008_0","prompt":"Count the words in `notes.md` and report the number.","toolCallId":"invoke_agent_1778178575008_0","turnId":"9"},"id":"00000000-0000-4000-8000-000000000034","parentId":"00000000-0000-4000-8000-000000000033","timestamp":"2026-05-07T18:29:35.060Z","type":"subagent.started"}
++{"data":{"agentDescription":"Delegated sub-agent task","agentDisplayName":"invoke_agent_1778178575008_0","agentName":"invoke_agent_1778178575008_0","id":"invoke_agent_1778178575008_0","result":"Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}","toolCallId":"invoke_agent_1778178575008_0","turnId":"9"},"id":"00000000-0000-4000-8000-000000000035","parentId":"00000000-0000-4000-8000-000000000034","timestamp":"2026-05-07T18:29:35.060Z","type":"subagent.completed"}
++{"data":{"messageId":"00000000-0000-4000-8001-000000000009","turnId":"9"},"id":"00000000-0000-4000-8000-000000000036","parentId":"00000000-0000-4000-8000-000000000035","timestamp":"2026-05-07T18:29:35.060Z","type":"assistant.turn_end"}
++{"data":{"turnId":"10"},"id":"00000000-0000-4000-8000-000000000037","parentId":"00000000-0000-4000-8000-000000000036","timestamp":"2026-05-07T18:30:14.544Z","type":"assistant.turn_start"}
++{"data":{"cacheReadTokens":0,"content":"The sub-agent reported: \"There are 11 words in `notes.md`.\"\n\nI have completed the requested sequence of tasks, including file manipulation (listing, writing, reading, and editing), searching (glob and grep), handling intentional errors, and executing a shell script. I also successfully delegated a word count task to a sub-agent and confirmed its findings.","inputTokens":10289,"messageId":"00000000-0000-4000-8001-00000000000a","model":"gemini-3-flash-preview","outputTokens":110,"turnId":"10"},"id":"00000000-0000-4000-8000-000000000038","parentId":"00000000-0000-4000-8000-000000000037","timestamp":"2026-05-07T18:30:14.544Z","type":"assistant.message"}
++{"data":{"messageId":"00000000-0000-4000-8001-00000000000a","turnId":"10"},"id":"00000000-0000-4000-8000-000000000039","parentId":"00000000-0000-4000-8000-000000000038","timestamp":"2026-05-07T18:30:14.544Z","type":"assistant.turn_end"}
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap b/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
+index 7810becc..6436ef9c 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
+@@ -979,11 +979,11 @@ input_file: test-fixtures/gemini/convo.jsonl
+       },
+       "toolFormerData": {
+         "modelCallId": "",
+-        "name": "invoke_agent",
+-        "params": "{\"agent_name\":\"generalist\",\"prompt\":\"Count the words in `notes.md` and report the number.\"}",
++        "name": "task_v2",
++        "params": "{\"prompt\":\"Count the words in `notes.md` and report the number.\"}",
+         "result": "{\"output\":\"Subagent 'generalist' finished.\\nTermination Reason: GOAL\\nResult:\\n{\\n  \\\"response\\\": \\\"There are 11 words in `notes.md`.\\\"\\n}\"}",
+         "status": "completed",
+-        "tool": 0,
++        "tool": 48,
+         "toolCallId": "invoke_agent_1778178575008_0",
+         "toolIndex": 0
+       },
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@opencode.snap b/crates/toolpath-goldens/snapshots/projection@gemini@opencode.snap
+index 288f6b82..c26715c3 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@opencode.snap
+@@ -1114,7 +1114,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+           "time_updated": 1778178575060,
+           "data": {
+             "type": "tool",
+-            "tool": "invoke_agent",
++            "tool": "task",
+             "callID": "invoke_agent_1778178575008_0",
+             "state": {
+               "status": "completed",
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@pi.snap b/crates/toolpath-goldens/snapshots/projection@gemini@pi.snap
+index 0a5c3cf1..2810b199 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@pi.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@pi.snap
+@@ -27,6 +27,6 @@ input_file: test-fixtures/gemini/convo.jsonl
+ {"type":"message","id":"12788125-1f02-41e9-b826-cdf296d6d46a-tr-1","parentId":"12788125-1f02-41e9-b826-cdf296d6d46a","timestamp":"2026-05-07T18:29:15.234Z","message":{"role":"toolResult","toolCallId":"write_file_1778178555232_0","toolName":"write","content":[{"type":"text","text":"Successfully created and wrote to new file: /private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/gemini/count.sh. Here is the updated code:\necho 1\necho 2\necho 3\necho 4\necho 5\n"}],"isError":false,"timestamp":1778178555234}}
+ {"type":"message","id":"32831830-6324-411c-a923-b44ab4d4246c","parentId":"12788125-1f02-41e9-b826-cdf296d6d46a-tr-1","timestamp":"2026-05-07T18:29:24.122Z","message":{"role":"assistant","content":[{"type":"text","text":"I will now execute the `count.sh` script and verify that it prints five lines of output."},{"type":"toolCall","id":"run_shell_command_1778178564078_0","name":"bash","arguments":{"command":"bash count.sh","description":"Run the count.sh script"}}],"api":"anthropic","provider":"anthropic","model":"gemini-3-flash-preview","usage":{"input":10098,"output":61,"cacheRead":7439,"cacheWrite":0,"totalTokens":10159,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"stop","timestamp":1778178564122}}
+ {"type":"message","id":"32831830-6324-411c-a923-b44ab4d4246c-tr-1","parentId":"32831830-6324-411c-a923-b44ab4d4246c","timestamp":"2026-05-07T18:29:24.122Z","message":{"role":"toolResult","toolCallId":"run_shell_command_1778178564078_0","toolName":"bash","content":[{"type":"text","text":"Output: 1\n2\n3\n4\n5\nProcess Group PGID: 996"}],"isError":false,"timestamp":1778178564122}}
+-{"type":"message","id":"00cc1ffd-9fe0-440a-85ef-a22352feafd8","parentId":"32831830-6324-411c-a923-b44ab4d4246c-tr-1","timestamp":"2026-05-07T18:29:35.060Z","message":{"role":"assistant","content":[{"type":"text","text":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent."},{"type":"toolCall","id":"invoke_agent_1778178575008_0","name":"invoke_agent","arguments":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."}}],"api":"anthropic","provider":"anthropic","model":"gemini-3-flash-preview","usage":{"input":10180,"output":72,"cacheRead":7428,"cacheWrite":0,"totalTokens":10252,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"stop","timestamp":1778178575060}}
+-{"type":"message","id":"00cc1ffd-9fe0-440a-85ef-a22352feafd8-tr-1","parentId":"00cc1ffd-9fe0-440a-85ef-a22352feafd8","timestamp":"2026-05-07T18:29:35.060Z","message":{"role":"toolResult","toolCallId":"invoke_agent_1778178575008_0","toolName":"invoke_agent","content":[{"type":"text","text":"Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}"}],"isError":false,"timestamp":1778178575060}}
++{"type":"message","id":"00cc1ffd-9fe0-440a-85ef-a22352feafd8","parentId":"32831830-6324-411c-a923-b44ab4d4246c-tr-1","timestamp":"2026-05-07T18:29:35.060Z","message":{"role":"assistant","content":[{"type":"text","text":"I will delegate the task of counting the words in `notes.md` to a generalist sub-agent."},{"type":"toolCall","id":"invoke_agent_1778178575008_0","name":"task","arguments":{"agent_name":"generalist","prompt":"Count the words in `notes.md` and report the number."}}],"api":"anthropic","provider":"anthropic","model":"gemini-3-flash-preview","usage":{"input":10180,"output":72,"cacheRead":7428,"cacheWrite":0,"totalTokens":10252,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"stop","timestamp":1778178575060}}
++{"type":"message","id":"00cc1ffd-9fe0-440a-85ef-a22352feafd8-tr-1","parentId":"00cc1ffd-9fe0-440a-85ef-a22352feafd8","timestamp":"2026-05-07T18:29:35.060Z","message":{"role":"toolResult","toolCallId":"invoke_agent_1778178575008_0","toolName":"task","content":[{"type":"text","text":"Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}"}],"isError":false,"timestamp":1778178575060}}
+ {"type":"message","id":"0fc42771-3fa2-4a28-817f-811e0193cb21","parentId":"00cc1ffd-9fe0-440a-85ef-a22352feafd8-tr-1","timestamp":"2026-05-07T18:30:14.544Z","message":{"role":"assistant","content":[{"type":"text","text":"The sub-agent reported: \"There are 11 words in `notes.md`.\"\n\nI have completed the requested sequence of tasks, including file manipulation (listing, writing, reading, and editing), searching (glob and grep), handling intentional errors, and executing a shell script. I also successfully delegated a word count task to a sub-agent and confirmed its findings."}],"api":"anthropic","provider":"anthropic","model":"gemini-3-flash-preview","usage":{"input":10289,"output":110,"cacheRead":0,"cacheWrite":0,"totalTokens":10399,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"stop","timestamp":1778178614544}}
+diff --git a/crates/toolpath-goldens/snapshots/projection@opencode@copilot.snap b/crates/toolpath-goldens/snapshots/projection@opencode@copilot.snap
+index 09cf042a..7dca1651 100644
+--- a/crates/toolpath-goldens/snapshots/projection@opencode@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/projection@opencode@copilot.snap
+@@ -58,7 +58,9 @@ input_file: test-fixtures/opencode/convo.json
+ {"data":{"cacheReadTokens":12800,"content":"","inputTokens":122,"messageId":"00000000-0000-4000-8001-000000000009","model":"big-pickle","outputTokens":169,"reasoningText":"Step 8 done — five lines as expected. Step 9: I have the Task tool (sub-agent). Let me dispatch it to count words in notes.md.","toolRequests":[{"arguments":{"description":"Count words in notes.md","prompt":"Count the words in `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md` and report the number.","subagent_type":"general"},"name":"task","toolCallId":"call_00_Q8ropZWVAUTqMZyQkYCI9889"}],"turnId":"9"},"id":"00000000-0000-4000-8000-000000000031","parentId":"00000000-0000-4000-8000-000000000030","timestamp":"2026-05-07T18:30:58.018+00:00","type":"assistant.message"}
+ {"data":{"arguments":{"description":"Count words in notes.md","prompt":"Count the words in `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md` and report the number.","subagent_type":"general"},"toolCallId":"call_00_Q8ropZWVAUTqMZyQkYCI9889","toolName":"task","turnId":"9"},"id":"00000000-0000-4000-8000-000000000032","parentId":"00000000-0000-4000-8000-000000000031","timestamp":"2026-05-07T18:30:58.018+00:00","type":"tool.execution_start"}
+ {"data":{"result":{"content":"task_id: ses_1fc4ae43affekhOzm9Kf36uiwL (for resuming to continue this task if needed)\n\n<task_result>\n10\n</task_result>"},"success":true,"toolCallId":"call_00_Q8ropZWVAUTqMZyQkYCI9889","turnId":"9"},"id":"00000000-0000-4000-8000-000000000033","parentId":"00000000-0000-4000-8000-000000000032","timestamp":"2026-05-07T18:30:58.018+00:00","type":"tool.execution_complete"}
+-{"data":{"messageId":"00000000-0000-4000-8001-000000000009","turnId":"9"},"id":"00000000-0000-4000-8000-000000000034","parentId":"00000000-0000-4000-8000-000000000033","timestamp":"2026-05-07T18:30:58.018+00:00","type":"assistant.turn_end"}
+-{"data":{"turnId":"10"},"id":"00000000-0000-4000-8000-000000000035","parentId":"00000000-0000-4000-8000-000000000034","timestamp":"2026-05-07T18:31:07.806+00:00","type":"assistant.turn_start"}
+-{"data":{"cacheReadTokens":13056,"content":"The sub-agent reported that `notes.md` contains 10 words.\n\n**Summary:** I listed the directory, wrote `notes.md`, read it back, edited \"scratch\" → \"fixture\" with the edit tool, globbed for `note*` files, grepped for \"fixture\", confirmed the read tool errors on a missing file, wrote and ran `count.sh` (printed 1–5), and dispatched a sub-agent that counted 10 words in `notes.md`. All steps completed without incident.","inputTokens":89,"messageId":"00000000-0000-4000-8001-00000000000a","model":"big-pickle","outputTokens":125,"reasoningText":"The sub-agent reports the word count is 10. Step 10: summarize.","turnId":"10"},"id":"00000000-0000-4000-8000-000000000036","parentId":"00000000-0000-4000-8000-000000000035","timestamp":"2026-05-07T18:31:07.806+00:00","type":"assistant.message"}
+-{"data":{"messageId":"00000000-0000-4000-8001-00000000000a","turnId":"10"},"id":"00000000-0000-4000-8000-000000000037","parentId":"00000000-0000-4000-8000-000000000036","timestamp":"2026-05-07T18:31:07.806+00:00","type":"assistant.turn_end"}
++{"data":{"agentDescription":"Delegated sub-agent task","agentDisplayName":"call_00_Q8ropZWVAUTqMZyQkYCI9889","agentName":"call_00_Q8ropZWVAUTqMZyQkYCI9889","id":"call_00_Q8ropZWVAUTqMZyQkYCI9889","prompt":"Count the words in `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md` and report the number.","toolCallId":"call_00_Q8ropZWVAUTqMZyQkYCI9889","turnId":"9"},"id":"00000000-0000-4000-8000-000000000034","parentId":"00000000-0000-4000-8000-000000000033","timestamp":"2026-05-07T18:30:58.018+00:00","type":"subagent.started"}
++{"data":{"agentDescription":"Delegated sub-agent task","agentDisplayName":"call_00_Q8ropZWVAUTqMZyQkYCI9889","agentName":"call_00_Q8ropZWVAUTqMZyQkYCI9889","id":"call_00_Q8ropZWVAUTqMZyQkYCI9889","result":"task_id: ses_1fc4ae43affekhOzm9Kf36uiwL (for resuming to continue this task if needed)\n\n<task_result>\n10\n</task_result>","toolCallId":"call_00_Q8ropZWVAUTqMZyQkYCI9889","turnId":"9"},"id":"00000000-0000-4000-8000-000000000035","parentId":"00000000-0000-4000-8000-000000000034","timestamp":"2026-05-07T18:30:58.018+00:00","type":"subagent.completed"}
++{"data":{"messageId":"00000000-0000-4000-8001-000000000009","turnId":"9"},"id":"00000000-0000-4000-8000-000000000036","parentId":"00000000-0000-4000-8000-000000000035","timestamp":"2026-05-07T18:30:58.018+00:00","type":"assistant.turn_end"}
++{"data":{"turnId":"10"},"id":"00000000-0000-4000-8000-000000000037","parentId":"00000000-0000-4000-8000-000000000036","timestamp":"2026-05-07T18:31:07.806+00:00","type":"assistant.turn_start"}
++{"data":{"cacheReadTokens":13056,"content":"The sub-agent reported that `notes.md` contains 10 words.\n\n**Summary:** I listed the directory, wrote `notes.md`, read it back, edited \"scratch\" → \"fixture\" with the edit tool, globbed for `note*` files, grepped for \"fixture\", confirmed the read tool errors on a missing file, wrote and ran `count.sh` (printed 1–5), and dispatched a sub-agent that counted 10 words in `notes.md`. All steps completed without incident.","inputTokens":89,"messageId":"00000000-0000-4000-8001-00000000000a","model":"big-pickle","outputTokens":125,"reasoningText":"The sub-agent reports the word count is 10. Step 10: summarize.","turnId":"10"},"id":"00000000-0000-4000-8000-000000000038","parentId":"00000000-0000-4000-8000-000000000037","timestamp":"2026-05-07T18:31:07.806+00:00","type":"assistant.message"}
++{"data":{"messageId":"00000000-0000-4000-8001-00000000000a","turnId":"10"},"id":"00000000-0000-4000-8000-000000000039","parentId":"00000000-0000-4000-8000-000000000038","timestamp":"2026-05-07T18:31:07.806+00:00","type":"assistant.turn_end"}
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap
+index 4a14fc48..371f4f9e 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@codex.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_claude
+   agent: claude
+   input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
+-input_file: goldens/claude/input.jsonl
++input_file: test-fixtures/claude/convo.jsonl
+ ---
+ {
+   "outcome": "compared",
+@@ -19,16 +19,13 @@ input_file: goldens/claude/input.jsonl
+     "steps": 98,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 91
++    "key_paths": 94
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+     "paths[].path.base.branch",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+     "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
+index 3f6067db..52ca83d8 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 49
++    "key_paths": 52
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+@@ -33,9 +33,6 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+     "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+index 33160d1f..08ac21d5 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 56
++    "key_paths": 59
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+@@ -29,9 +29,6 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+     "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.content",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap
+index 89828193..5478ccfd 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@codex.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 48,
+     "text_chars": 4594,
+     "tool_uses": 11,
+-    "key_paths": 81
++    "key_paths": 84
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+@@ -31,8 +31,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.operation",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+     "paths[].steps[].change.<artifact>.structural.reasoningEffort",
+     "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens"
+@@ -46,6 +44,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+     "paths[].steps[].change.<artifact>.structural.command[]",
+     "paths[].steps[].change.<artifact>.structural.cwd",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.duration.nanos",
+     "paths[].steps[].change.<artifact>.structural.duration.secs",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+index 3d1fdc7d..5a920e6f 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+@@ -19,15 +19,13 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 12,
+     "text_chars": 4594,
+     "tool_uses": 10,
+-    "key_paths": 54
++    "key_paths": 57
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+@@ -43,6 +41,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+   "gained": [
+     "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.before",
+     "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.before",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.commandDescription",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+index 6738e16b..1bfdb295 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 12,
+     "text_chars": 4594,
+     "tool_uses": 11,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.provider",
+@@ -29,8 +29,6 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.after",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.newModel",
+@@ -38,6 +36,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+   ],
+   "gained": [
+     "paths[].path.base.ref",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason"
+   ]
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+index feee7c8d..4504c816 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 73
+   },
+   "after": {
+     "steps": 22,
+@@ -43,9 +43,6 @@ input_file: test-fixtures/cursor/convo.json
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+index 9e54db04..c7cf8070 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 73
+   },
+   "after": {
+     "steps": 56,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 95
++    "key_paths": 98
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+index 0cb51aa4..33d5aa17 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 73
+   },
+   "after": {
+     "steps": 21,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 64
++    "key_paths": 67
+   },
+   "lost": [
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+index 8f4ae23c..841b6872 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 73
+   },
+   "after": {
+     "steps": 21,
+@@ -29,6 +29,9 @@ input_file: test-fixtures/cursor/convo.json
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.operation",
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir"
+   ],
+   "gained": []
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+index ec67ce7b..b31331c9 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 73
+   },
+   "after": {
+     "steps": 22,
+@@ -26,9 +26,5 @@ input_file: test-fixtures/cursor/convo.json
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before"
+   ],
+-  "gained": [
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result"
+-  ]
++  "gained": []
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+index 0a16510b..ead6e455 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 73
+   },
+   "after": {
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 66
++    "key_paths": 69
+   },
+   "lost": [
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+index f3c10140..69951640 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 73
+   },
+   "after": {
+     "steps": 22,
+@@ -30,9 +30,6 @@ input_file: test-fixtures/cursor/convo.json
+   ],
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.stop_reason"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap
+index 4525f439..b79f99ba 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 13,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 53
++    "key_paths": 56
+   },
+   "lost": [
+     "paths[].meta.producer.name",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap
+index 6a78b460..e85cdb44 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 48,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 87
++    "key_paths": 90
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap
+index 682741ed..e267af6b 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
+index 3277b172..c753f665 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+@@ -24,6 +24,9 @@ input_file: test-fixtures/gemini/convo.jsonl
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.files_changed[]",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+     "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+     "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
+index c2aa7c7d..3a83f9f7 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
+@@ -13,17 +13,18 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 54
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+     "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
++    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.agent_name",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.context",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.description",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.dir_path",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
+index f76f5ac8..a35f5fea 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap
+index 826f01dd..66f7291a 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+@@ -30,9 +30,6 @@ input_file: test-fixtures/gemini/convo.jsonl
+   "gained": [
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.uri",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.notes.md.structural.before"
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+index a90678d3..299ae16b 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 13,
+@@ -37,9 +37,6 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.after",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.raw",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.after",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+index 7c010cd2..231f5c66 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 38,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 75
++    "key_paths": 78
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+index 30c811ce..c29e3420 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 55
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+index dffb4792..d79b41c5 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+@@ -35,6 +35,9 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.tool_id",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.type",
++    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
+index 01efdeef..e558448f 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 46
++    "key_paths": 49
+   },
+   "lost": [
+     "paths[].meta.producer.version",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+index e8904837..54587554 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+@@ -35,9 +35,5 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.structural.type",
+     "paths[].steps[].change.<artifact>.structural.stop_reason"
+   ],
+-  "gained": [
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result"
+-  ]
++  "gained": []
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+index 06bf7270..1c0af97e 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 51
++    "key_paths": 54
+   },
+   "after": {
+     "steps": 12,
+@@ -37,9 +37,6 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning"
+   ],
+   "gained": [
+-    "paths[].meta.actors.<actor>.provider",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+-    "paths[].steps[].change.<artifact>.structural.delegations[].result"
++    "paths[].meta.actors.<actor>.provider"
+   ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@cursor.snap b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+index 441a5cf9..8c18f093 100644
+--- a/crates/toolpath-goldens/snapshots/shed@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+@@ -17,8 +17,8 @@ input_file: test-fixtures/cursor/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 19164,
+-    "string_chars": 11867,
++    "bytes": 19427,
++    "string_chars": 12070,
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10
+@@ -50,14 +50,16 @@ input_file: test-fixtures/cursor/convo.json
+       }
+     },
+     "copilot": {
+-      "lines": 84,
+-      "bytes": 33120,
+-      "string_chars": 21561,
++      "lines": 86,
++      "bytes": 34215,
++      "string_chars": 22322,
+       "by_type": {
+         "assistant.message": 21,
+         "assistant.turn_end": 21,
+         "assistant.turn_start": 21,
+         "session.start": 1,
++        "subagent.completed": 1,
++        "subagent.started": 1,
+         "tool.execution_complete": 9,
+         "tool.execution_start": 10,
+         "user.message": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@gemini.snap b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+index 0bb5cd65..ddf29ce8 100644
+--- a/crates/toolpath-goldens/snapshots/shed@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+@@ -19,8 +19,8 @@ input_file: test-fixtures/gemini/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 14384,
+-    "string_chars": 9086,
++    "bytes": 14655,
++    "string_chars": 9294,
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10
+@@ -28,8 +28,8 @@ input_file: test-fixtures/gemini/convo.jsonl
+   "projections": {
+     "claude": {
+       "lines": 23,
+-      "bytes": 19444,
+-      "string_chars": 12143,
++      "bytes": 19436,
++      "string_chars": 12135,
+       "by_type": {
+         "assistant": 11,
+         "permission-mode": 1,
+@@ -38,8 +38,8 @@ input_file: test-fixtures/gemini/convo.jsonl
+     },
+     "codex": {
+       "lines": 69,
+-      "bytes": 22305,
+-      "string_chars": 14901,
++      "bytes": 22304,
++      "string_chars": 14900,
+       "by_type": {
+         "event_msg/agent_message": 11,
+         "event_msg/exec_command_end": 1,
+@@ -54,14 +54,16 @@ input_file: test-fixtures/gemini/convo.jsonl
+       }
+     },
+     "copilot": {
+-      "lines": 55,
+-      "bytes": 22847,
+-      "string_chars": 14666,
++      "lines": 57,
++      "bytes": 23840,
++      "string_chars": 15320,
+       "by_type": {
+         "assistant.message": 11,
+         "assistant.turn_end": 11,
+         "assistant.turn_start": 11,
+         "session.start": 1,
++        "subagent.completed": 1,
++        "subagent.started": 1,
+         "tool.execution_complete": 10,
+         "tool.execution_start": 10,
+         "user.message": 1
+@@ -69,8 +71,8 @@ input_file: test-fixtures/gemini/convo.jsonl
+     },
+     "cursor": {
+       "lines": 1372,
+-      "bytes": 65306,
+-      "string_chars": 25650,
++      "bytes": 65272,
++      "string_chars": 25619,
+       "by_type": {
+         "?": 1
+       }
+@@ -85,16 +87,16 @@ input_file: test-fixtures/gemini/convo.jsonl
+     },
+     "opencode": {
+       "lines": 1233,
+-      "bytes": 41332,
+-      "string_chars": 12721,
++      "bytes": 41324,
++      "string_chars": 12713,
+       "by_type": {
+         "?": 1
+       }
+     },
+     "pi": {
+       "lines": 23,
+-      "bytes": 16198,
+-      "string_chars": 9618,
++      "bytes": 16182,
++      "string_chars": 9602,
+       "by_type": {
+         "message": 22,
+         "session": 1
+@@ -103,7 +105,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+   },
+   "same_format": {
+     "lines": 439,
+-    "bytes": 18854,
++    "bytes": 18846,
+     "event_types_shed": {
+       "?": {
+         "source": 13,
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index 51c27ae4..fc036d2b 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -17,8 +17,8 @@ input_file: test-fixtures/opencode/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 15993,
+-    "string_chars": 9853,
++    "bytes": 16345,
++    "string_chars": 10145,
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10
+@@ -52,14 +52,16 @@ input_file: test-fixtures/opencode/convo.json
+       }
+     },
+     "copilot": {
+-      "lines": 55,
+-      "bytes": 25673,
+-      "string_chars": 17421,
++      "lines": 57,
++      "bytes": 26809,
++      "string_chars": 18223,
+       "by_type": {
+         "assistant.message": 11,
+         "assistant.turn_end": 11,
+         "assistant.turn_start": 11,
+         "session.start": 1,
++        "subagent.completed": 1,
++        "subagent.started": 1,
+         "tool.execution_complete": 10,
+         "tool.execution_start": 10,
+         "user.message": 1
+diff --git a/crates/toolpath-opencode/src/provider.rs b/crates/toolpath-opencode/src/provider.rs
+index 32c929df..a7627c5d 100644
+--- a/crates/toolpath-opencode/src/provider.rs
++++ b/crates/toolpath-opencode/src/provider.rs
+@@ -447,6 +447,8 @@ impl<'a> Builder<'a> {
+         //   2. For any file-write tool whose path wasn't covered by the
+         //      snapshot diff, add a tool-input-derived FileMutation
+         //      (catches gitignored paths and the no-repo case).
++        // A delegation-type tool call (`task`) is a delegation too, beside the `subtask` parts.
++        delegations.extend(tool_uses.iter().filter_map(ToolInvocation::as_delegation));
+         let file_mutations = self.compute_turn_mutations(&snapshots, &tool_uses);
+ 
+         self.turns.push(Turn {
+diff --git a/examples/graph-01-release.json b/examples/graph-01-release.json
+index 6988b3b3..527016b0 100644
+--- a/examples/graph-01-release.json
++++ b/examples/graph-01-release.json
+@@ -2113,6 +2113,13 @@
+           "change": {
+             "gemini-cli://9534b902-4b8a-437e-ba2e-2e4db4b82fec": {
+               "structural": {
++                "delegations": [
++                  {
++                    "agent_id": "invoke_agent_1778178575008_0",
++                    "prompt": "Count the words in `notes.md` and report the number.",
++                    "result": "Subagent 'generalist' finished.\nTermination Reason: GOAL\nResult:\n{\n  \"response\": \"There are 11 words in `notes.md`.\"\n}"
++                  }
++                ],
+                 "role": "assistant",
+                 "text": "I will delegate the task of counting the words in `notes.md` to a generalist sub-agent.",
+                 "token_usage": {
+@@ -2127,7 +2134,7 @@
+                 },
+                 "tool_uses": [
+                   {
+-                    "category": null,
++                    "category": "delegation",
+                     "id": "invoke_agent_1778178575008_0",
+                     "input": {
+                       "agent_name": "generalist",
+diff --git a/pr/64-delegations-from-tool-calls.md b/pr/64-delegations-from-tool-calls.md
+new file mode 100644
+index 00000000..4c8cda21
+--- /dev/null
++++ b/pr/64-delegations-from-tool-calls.md
+@@ -0,0 +1,43 @@
++# fix(convo): every source reader builds delegations from delegation-type tool calls
++
++Status: draft · Base: pr/63-opencode-reads-are-not-writes · Code + recorded snapshots (cursor, gemini, opencode rows and their columns)
++
++## Why
++Asked from the deck's "gains" slide. The target-side readers (claude `extract_delegations`, gemini, pi) turned a
++delegation-category tool call into a turn delegation; the others did not, so the same dispatch read differently by harness:
++- cursor: `task_v2` is categorised as delegation (provider.rs tool_category) but the turn's `delegations` was always empty.
++- opencode: only `subtask` parts produced delegations; the `task` tool call (the usual dispatch) produced none.
++- gemini: `tool_category` had no `invoke_agent`, the name Gemini uses for a sub-agent dispatch (the recording has one,
++  `invoke_agent_1778178575008_0`), so it was an uncategorised tool call and no delegation.
++- codex: `spawn_agent` is categorised as delegation; no delegation was built. (No codex recording dispatches one, so
++  no codex snapshot changes.)
++Bug on the read side, not documented as intended.
++
++## What changes
++- `toolpath-convo`: `ToolInvocation::as_delegation()` is the one function: for a call whose category is Delegation it
++  returns the delegation (agent id = call id, `prompt` input, result when the turn has one); `None` otherwise. Unit test.
++- Readers use it: claude (replaces its own copy), gemini (replaces `tool_invocation_to_delegation`, and now adds
++  `invoke_agent` to `tool_category`), cursor, opencode (added beside the `subtask` parts), codex (built at finish, after
++  tool outputs are attached so the result is present).
++- Snapshots re-recorded (INSTA_UPDATE=always, reviewed): 47 files. Every diff is one of: a `delegations` entry now present in
++  `ir`/`document` for cursor, gemini and opencode; gemini's `invoke_agent` call now carrying `category: delegation` and
++  projecting as a delegation to every target; the lost-key lists of round trips shrinking or the counts changing as a result
++  (`key_paths`, delegation keys now present in the source side).
++
++- `examples/graph-01-release.json` regenerated with `UPDATE_EXAMPLES=1` (its gemini step now has the delegation and
++  `category: delegation` instead of `null`).
++
++## Open: one manifest pin needs the dev shell
++`path d baseline check` (the path-cli `goldens` test) now reports one problem: `copilot -> codex -> IR: round trip gains 1 key
++path it did not before: paths[].steps[].change.<artifact>.structural.delegations[].result`. This is the intended gain (codex now
++reads back the `spawn_agent` call the writer made for copilot's delegation), but the pin is `goldens/roundtrip/copilot-codex.json`
++and the manifest lists its sha, and `capture` also rewrites the environment pins (Cargo.lock hash, nix store hash), which are only
++right in the nix dev shell. So the pin is NOT refreshed here: run `path d baseline capture --all` in `nix develop`, review the diff
++(expected: that one roundtrip file plus the environment lines) and commit it with this piece.
++
++## Not changed
++- pi keeps its own extraction: its prompt falls back through `input` and `instructions` and then the whole argument
++  object, and its result is attached later. Moving it onto `as_delegation` would change pi's prompt text; left for a decision.
++- copilot builds delegations from its own sub-agent events; untouched.
++- The sub-agent's own turns (`turns`) stay empty for these readers; only gemini fills them from its separate sub-agent files.
++- Nothing run unsandboxed: gitleaks, qualifier gate, `just baseline`, the pinned toolchain.
+-- 
+2.55.0
+

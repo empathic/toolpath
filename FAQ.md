@@ -37,8 +37,10 @@ Toolpath is not the right tool for:
 
 ### Can I use Toolpath without a VCS?
 
-Yes.  A path's `base` can use a `toolpath:` URI to branch from another path's
-step, creating a pure Toolpath chain with no VCS backing.  You can also use
+Yes.  A path's `base` can name another path's step with a `toolpath:` URI,
+describing a pure Toolpath chain with no VCS backing.  (Resolving such a URI to
+that step is not specified: the RFC says step references inside a path are
+resolved within it, and cross-path step references are not supported.)  You can also use
 `file:///` URIs for local-only provenance.
 
 ### How does Toolpath compare to W3C PROV?
@@ -143,7 +145,7 @@ What Toolpath adds beyond any VCS:
 3. **Multi-perspective changes** — raw diff + structural AST ops + semantic
    intent
 4. **Actor provenance** — link actors to external identities
-5. **Multi-party signatures** — author, reviewer, CI attestation on same
+5. **Multi-party signatures** — author and reviewer signatures on the same
    artifact
 6. **Tool-agnostic history** — changes from AI agents, formatters, linters that
    may not create VCS commits
@@ -155,32 +157,27 @@ What Toolpath adds beyond any VCS:
 These questions are not yet resolved.  They need more thought before the format
 stabilizes.
 
-### How should step IDs be generated?
+### How are step IDs generated?
 
-**Options under consideration:**
+The format requires only that a `step.id` is unique within its path.  How a
+tool chooses one is the tool's call, and the tools here do it three ways:
 
-1. **Content-addressed** — hash of (parent, actor, change, timestamp).  Good
-   for deduplication and verification, but you can't know the ID until you've
-   finalized the content.
-2. **UUID** — random, simple, but opaque.
-3. **Hierarchical** — `session-abc/turn-5/step-2`.  Readable but couples to
-   session structure.
-4. **Sequential** — `step-001`, `step-002` within some scope.
+- the git import names a step after its commit, `step-<short oid>`;
+- a conversation derive uses the turn's own ID, and `step-0001`, `step-0002`
+  when a turn has none;
+- the examples use sequential IDs for readability.
 
-The current examples use sequential IDs for readability.  No formal requirement
-yet.
+Content-addressed, UUID and hierarchical IDs remain possible; none is
+required.
 
 ### Who defines structural operation types?
 
-**Options under consideration:**
-
-1. **Central registry** — Toolpath org maintains canonical op types
-2. **Namespaced extensions** — `rust.add_method`, `typescript.add_interface`
-3. **Schema-per-language** — each language community maintains their own
-4. **Emergent** — let tools emit whatever, see what converges
-
-**Current leaning:** Namespaced with a `core` namespace for universal ops
-(e.g., `core.replace`, `core.insert`).
+A `structural` change carries a `type` string, and the format does not
+restrict it.  The shipped tools use two namespaces: `conversation.*` for
+session events (for example `conversation.append`) and `file.*` for file
+changes (for example `file.write`).  Those are the `core` namespaces; a
+language or tool can add its own, such as `rust.add_method`.  There is no
+central registry.
 
 ### How should the path tree be stored/transmitted?
 
@@ -199,6 +196,10 @@ small enough that this hasn't been a problem.
 **Scenarios:** Agent reasoning might contain proprietary information.  Human
 identity might need anonymization.  Refs might point to internal docs.
 
+**Today:** the format has no redaction marker, and the tools here do not redact
+anything on export.  What exists is `meta.refs`, which holds URIs rather than
+content.
+
 **Options under consideration:**
 
 1. **Reference, don't embed** — `meta.refs` stores URIs, not content
@@ -206,15 +207,10 @@ identity might need anonymization.  Refs might point to internal docs.
 3. **Access tiers** — different views for different audiences
 4. **Encryption** — sensitive fields encrypted, keys managed separately
 
-**Current leaning:** Reference by default, with optional redaction markers.
+This is open.
 
 ### How does the format evolve?
 
-**Options under consideration:**
-
-1. **Semver** — `1.2.3` with compatibility rules
-2. **Date-based** — `2026-01`
-3. **Extension-based** — core is frozen, everything else is extensions
-
-**Current leaning:** Semver for core schema, with "old readers ignore unknown
-fields" policy.
+Kinds are versioned by URI.  A kind URI is immutable: a revision ships at a new
+version URI (for example `agent-coding-session/v1.0.0` and `v1.1.0` both
+exist), and the old URI keeps its meaning.  See [the kinds page](https://toolpath.net/kinds/).

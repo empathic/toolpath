@@ -1,0 +1,10 @@
+---
+source: crates/toolpath-goldens/tests/opencode_db.rs
+expression: "json!({\n    \"resolved_file\": db_file.file_name().and_then(|n| n.to_str()), \"messages\":\n    session.messages.len(), \"parts\":\n    session.messages.iter().map(|m| m.parts.len()).sum::<usize>(),\n    \"ir_differs_from_export\": differs,\n})"
+---
+{
+  "ir_differs_from_export": {},
+  "messages": 12,
+  "parts": 45,
+  "resolved_file": "opencode-stable.db"
+}

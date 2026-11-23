@@ -1,0 +1,2045 @@
+From 01b41a4e78f43a21791bd21942948568d57feaf3 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:54:35 -0400
+Subject: [PATCH] test(baseline): each writer's transform declared up front as
+ a typed IR (schemars-described), checked both ways; loader rules from
+ validation.md as projection contracts
+
+---
+ crates/toolpath-claude/src/project.rs         |   6 +
+ crates/toolpath-codex/src/project.rs          |  10 +
+ .../fixtures/contract/claude.json             | 147 +++++++++
+ .../fixtures/contract/codex.json              | 308 ++++++++++++++++++
+ .../fixtures/contract/copilot.json            | 106 ++++++
+ .../fixtures/contract/cursor.json             | 142 ++++++++
+ .../fixtures/contract/gemini.json             | 125 +++++++
+ .../fixtures/contract/opencode.json           | 155 +++++++++
+ .../fixtures/contract/pi.json                 | 136 ++++++++
+ crates/toolpath-goldens/src/.qual             |   1 +
+ crates/toolpath-goldens/src/contracts.rs      |  73 ++++-
+ crates/toolpath-goldens/src/lib.rs            |   1 +
+ crates/toolpath-goldens/src/pipeline.rs       |   7 +
+ crates/toolpath-goldens/src/transform.rs      | 196 +++++++++++
+ crates/toolpath-goldens/tests/contract.rs     | 178 ++++++++++
+ crates/toolpath-pi/src/project.rs             |   6 +
+ docs/baseline/schemas/README.md               |   1 +
+ docs/baseline/schemas/transform.schema.json   | 184 +++++++++++
+ pr/54-writer-contracts.md                     |  58 ++++
+ 19 files changed, 1838 insertions(+), 2 deletions(-)
+ create mode 100644 crates/toolpath-goldens/fixtures/contract/claude.json
+ create mode 100644 crates/toolpath-goldens/fixtures/contract/codex.json
+ create mode 100644 crates/toolpath-goldens/fixtures/contract/copilot.json
+ create mode 100644 crates/toolpath-goldens/fixtures/contract/cursor.json
+ create mode 100644 crates/toolpath-goldens/fixtures/contract/gemini.json
+ create mode 100644 crates/toolpath-goldens/fixtures/contract/opencode.json
+ create mode 100644 crates/toolpath-goldens/fixtures/contract/pi.json
+ create mode 100644 crates/toolpath-goldens/src/transform.rs
+ create mode 100644 crates/toolpath-goldens/tests/contract.rs
+ create mode 100644 docs/baseline/schemas/transform.schema.json
+ create mode 100644 pr/54-writer-contracts.md
+
+diff --git a/crates/toolpath-claude/src/project.rs b/crates/toolpath-claude/src/project.rs
+index b5e8741d..e9670e2b 100644
+--- a/crates/toolpath-claude/src/project.rs
++++ b/crates/toolpath-claude/src/project.rs
+@@ -17,6 +17,12 @@ use toolpath_convo::{
+ 
+ // ── ClaudeProjector ───────────────────────────────────────────────────
+ 
++/// Values this writer invents because Claude Code needs them and the view
++/// does not carry them, as `(key, value)` in the written JSONL. The baseline
++/// checks each is really written, and that a round trip gains nothing else
++/// (`crates/toolpath-goldens/fixtures/contract/claude.json`).
++pub const SYNTHESIZED: &[(&str, &str)] = &[("permissionMode", "default")];
++
+ /// Project a [`ConversationView`] into a Claude [`Conversation`].
+ ///
+ /// Maps the provider-agnostic view back into Claude's JSONL wire format.
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index a96e2eb5..a7e266df 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -33,6 +33,16 @@ use crate::types::{
+ 
+ // ── CodexProjector ───────────────────────────────────────────────────
+ 
++/// Values this writer invents because codex needs them and the view does not
++/// carry them, as `(key, value)` in the written rollout. The baseline checks
++/// each is really written, and that a round trip gains nothing else
++/// (`crates/toolpath-goldens/fixtures/contract/codex.json`).
++pub const SYNTHESIZED: &[(&str, &str)] = &[
++    ("originator", "codex-toolpath"),
++    ("cli_version", "0.0.0-projected"),
++    ("model_provider", "openai"),
++];
++
+ /// Project a [`ConversationView`] into a Codex [`crate::types::Session`].
+ ///
+ /// Config fields are optional. Defaults match what Codex itself would
+diff --git a/crates/toolpath-goldens/fixtures/contract/claude.json b/crates/toolpath-goldens/fixtures/contract/claude.json
+new file mode 100644
+index 00000000..b46d36e1
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/contract/claude.json
+@@ -0,0 +1,147 @@
++{
++  "writer": "claude",
++  "ops": [
++    {
++      "op": "drop",
++      "path": "paths[].meta.producer.name",
++      "why": "toolpath's own producer stamp; the target format has no place for it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.producer.version",
++      "why": "toolpath's own producer stamp; the target format has no place for it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.vcs_remote",
++      "why": "claude's session records no vcs remote"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.ref",
++      "why": "claude's session records no ref"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++      "why": "claude reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++      "why": "claude reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++      "why": "claude's session format has no delegation record",
++      "defect": "Claude Code keeps sub-agent work as sidechain sessions; the writer could write them"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++      "why": "claude's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
++      "why": "claude's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++      "why": "claude's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++      "why": "claude records no VCS revision per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++      "why": "claude reports no reasoning-token breakdown"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.before",
++      "why": "a write in claude's format carries the new content only, not the prior file"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].meta.actors.<actor>.provider",
++      "value": "claude-code",
++      "why": "the read-back session names its harness as the provider of a non-agent actor"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.entry_type",
++      "value": "permission-mode",
++      "why": "the added permission-mode line read back as an event"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.event_source_id",
++      "value": "claude-preamble-0",
++      "why": "the added permission-mode line's event id"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
++      "value": "default",
++      "why": "Claude Code needs a permission-mode line to resume; the view carries none"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.raw.sessionId",
++      "value": "0b5d3c1e-7a2f-4c9e-9d41-5f6a7b8c9d0e",
++      "why": "the session id copied onto the added permission-mode line"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.raw.type",
++      "value": "permission-mode",
++      "why": "the permission-mode preamble line the writer adds"
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/fixtures/contract/codex.json b/crates/toolpath-goldens/fixtures/contract/codex.json
+new file mode 100644
+index 00000000..cdb09e60
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/contract/codex.json
+@@ -0,0 +1,308 @@
++{
++  "writer": "codex",
++  "ops": [
++    {
++      "op": "drop",
++      "path": "paths[].meta.files_changed[]",
++      "why": "derived from file changes the read-back session no longer carries in full"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.vcs_remote",
++      "why": "codex's session records no vcs remote"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.branch",
++      "why": "codex's session records no branch"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.ref",
++      "why": "codex's session records no ref"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++      "why": "codex's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++      "why": "codex's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
++      "why": "codex's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++      "why": "codex's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++      "why": "codex records no VCS branch per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++      "why": "codex records no VCS revision per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
++      "why": "codex's format records no stop reason"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++      "why": "codex reports no reasoning-token breakdown",
++      "defect": "codex's token_count has reasoning_output_tokens; the writer does not fill it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
++      "why": "codex reports no cache-write tokens"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.before",
++      "why": "a write in codex's format carries the new content only, not the prior file"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.operation",
++      "why": "codex's format does not name the file operation"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].meta.actors.<actor>.provider",
++      "value": "codex",
++      "why": "the read-back session names its harness as the provider of a non-agent actor"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.aggregated_output",
++      "value": "notes.txt\n",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.call_id",
++      "value": "call-ls",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.cli_version",
++      "value": "0.0.0-projected",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.command[]",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.cwd",
++      "value": "/",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.duration.nanos",
++      "value": 0,
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.duration.secs",
++      "value": 0,
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.entry_type",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.event_data_type",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.event_source_id",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.exit_code",
++      "value": 0,
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.formatted_output",
++      "value": "",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.id",
++      "value": "0b5d3c1e-7a2f-4c9e-9d41-5f6a7b8c9d0e",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.info.total_token_usage.cached_input_tokens",
++      "value": 15,
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.info.total_token_usage.input_tokens",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.info.total_token_usage.output_tokens",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.memory_citation",
++      "value": null,
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.message",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.model",
++      "value": "generated-model-1",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.model_provider",
++      "value": "openai",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.originator",
++      "value": "codex-toolpath",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.parsed_cmd[].cmd",
++      "value": "ls",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.parsed_cmd[].type",
++      "value": "unknown",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.phase",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.rate_limits",
++      "value": null,
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.source",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.status",
++      "value": "completed",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.stderr",
++      "value": "",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.stdout",
++      "value": "",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.timestamp",
++      "value": "2026-10-19T12:00:00.000Z",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.turn_id",
++      "why": "codex rollout field the writer emits for every turn, tool call or event (session_meta, turn_context, event_msg); read back as structural extras"
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/fixtures/contract/copilot.json b/crates/toolpath-goldens/fixtures/contract/copilot.json
+new file mode 100644
+index 00000000..74da7ed2
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/contract/copilot.json
+@@ -0,0 +1,106 @@
++{
++  "writer": "copilot",
++  "ops": [
++    {
++      "op": "rename",
++      "from": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
++      "to": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
++    },
++    {
++      "op": "rename",
++      "from": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
++      "to": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++      "why": "copilot reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++      "why": "copilot reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++      "why": "copilot's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++      "why": "copilot records no VCS branch per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++      "why": "copilot records no VCS revision per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.working_dir",
++      "why": "copilot's session carries no per-turn working directory",
++      "defect": "Copilot's session.start carries the cwd; the writer does not set it from the turn's environment"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.group_id",
++      "why": "an accounting grouping key the target format does not store"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
++      "why": "copilot's format records no stop reason"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++      "why": "copilot reports no reasoning-token breakdown"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.before",
++      "why": "a write in copilot's format carries the new content only, not the prior file"
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/fixtures/contract/cursor.json b/crates/toolpath-goldens/fixtures/contract/cursor.json
+new file mode 100644
+index 00000000..7527d961
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/contract/cursor.json
+@@ -0,0 +1,142 @@
++{
++  "writer": "cursor",
++  "ops": [
++    {
++      "op": "drop",
++      "path": "paths[].meta.producer.version",
++      "why": "toolpath's own producer stamp; the target format has no place for it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.vcs_remote",
++      "why": "cursor's session records no vcs remote"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.branch",
++      "why": "cursor's session records no branch"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.ref",
++      "why": "cursor's session records no ref"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++      "why": "cursor reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++      "why": "cursor reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++      "why": "cursor's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++      "why": "cursor's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
++      "why": "cursor's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++      "why": "cursor's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++      "why": "cursor records no VCS branch per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++      "why": "cursor records no VCS revision per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.group_id",
++      "why": "an accounting grouping key the target format does not store"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
++      "why": "cursor's format records no stop reason"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++      "why": "cursor reports no reasoning-token breakdown"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
++      "why": "cursor reports no cache-read tokens"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
++      "why": "cursor reports no cache-write tokens"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.cloudAgentEdit",
++      "value": false,
++      "why": "Cursor's edit-tool input flags the writer sets for every edit"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.noCodeblock",
++      "value": true,
++      "why": "Cursor's edit-tool input flags the writer sets for every edit"
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/fixtures/contract/gemini.json b/crates/toolpath-goldens/fixtures/contract/gemini.json
+new file mode 100644
+index 00000000..df2f329d
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/contract/gemini.json
+@@ -0,0 +1,125 @@
++{
++  "writer": "gemini",
++  "ops": [
++    {
++      "op": "drop",
++      "path": "paths[].meta.producer.version",
++      "why": "toolpath's own producer stamp; the target format has no place for it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.vcs_remote",
++      "why": "gemini's session records no vcs remote"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.branch",
++      "why": "gemini's session records no branch"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.ref",
++      "why": "gemini's session records no ref"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++      "why": "gemini reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++      "why": "gemini reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++      "why": "gemini's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++      "why": "gemini's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
++      "why": "gemini's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++      "why": "gemini's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++      "why": "gemini records no VCS branch per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++      "why": "gemini records no VCS revision per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.group_id",
++      "why": "an accounting grouping key the target format does not store"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
++      "why": "gemini's format records no stop reason"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
++      "why": "gemini reports no cache-write tokens"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.before",
++      "why": "a write in gemini's format carries the new content only, not the prior file"
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/fixtures/contract/opencode.json b/crates/toolpath-goldens/fixtures/contract/opencode.json
+new file mode 100644
+index 00000000..1f22beca
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/contract/opencode.json
+@@ -0,0 +1,155 @@
++{
++  "writer": "opencode",
++  "ops": [
++    {
++      "op": "rename",
++      "from": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
++      "to": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.filePath"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.vcs_remote",
++      "why": "opencode's session records no vcs remote"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.branch",
++      "why": "opencode's session records no branch"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++      "why": "opencode reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++      "why": "opencode reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++      "why": "opencode's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++      "why": "opencode's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
++      "why": "opencode's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++      "why": "opencode's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++      "why": "opencode records no VCS branch per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++      "why": "opencode records no VCS revision per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.group_id",
++      "why": "an accounting grouping key the target format does not store"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++      "why": "opencode reports no reasoning-token breakdown",
++      "defect": "opencode stores tokens.reasoning per message; the writer does not fill it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.raw",
++      "why": "opencode keeps file diffs outside the session (snapshot store) and the writer does not write them",
++      "defect": "the writer does not write opencode's snapshot repo, so a projected session's file diffs are gone"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.after",
++      "why": "opencode keeps file diffs outside the session (snapshot store) and the writer does not write them"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.before",
++      "why": "a write in opencode's format carries the new content only, not the prior file"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.does-not-exist.txt.structural.operation",
++      "value": "touch",
++      "why": "a read of a file that does not exist comes back as a file change",
++      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.does-not-exist.txt.structural.tool",
++      "value": "read",
++      "why": "a read of a file that does not exist comes back as a file change",
++      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.does-not-exist.txt.structural.tool_id",
++      "value": "call-read",
++      "why": "a read of a file that does not exist comes back as a file change",
++      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].steps[].change.does-not-exist.txt.structural.type",
++      "value": "file.write",
++      "why": "a read of a file that does not exist comes back as a file change",
++      "defect": "opencode's reader turns a failed read into a file.write change; nothing was written"
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/fixtures/contract/pi.json b/crates/toolpath-goldens/fixtures/contract/pi.json
+new file mode 100644
+index 00000000..8431419d
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/contract/pi.json
+@@ -0,0 +1,136 @@
++{
++  "writer": "pi",
++  "ops": [
++    {
++      "op": "drop",
++      "path": "paths[].meta.producer.name",
++      "why": "toolpath's own producer stamp; the target format has no place for it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.producer.version",
++      "why": "toolpath's own producer stamp; the target format has no place for it"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].meta.vcs_remote",
++      "why": "pi's session records no vcs remote"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.branch",
++      "why": "pi's session records no branch"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].path.base.ref",
++      "why": "pi's session records no ref"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
++      "why": "pi reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
++      "why": "pi reports usage per message, not per step"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
++      "why": "pi's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
++      "why": "pi's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].result",
++      "why": "pi's session format has no delegation record"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
++      "why": "pi's session format has no record of a sub-agent's own turns"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
++      "why": "pi records no VCS branch per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
++      "why": "pi records no VCS revision per turn"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.group_id",
++      "why": "an accounting grouping key the target format does not store"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
++      "why": "pi reports no reasoning-token breakdown"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.before",
++      "why": "a write in pi's format carries the new content only, not the prior file"
++    },
++    {
++      "op": "drop",
++      "path": "paths[].steps[].change.notes.md.structural.operation",
++      "why": "pi's format does not name the file operation"
++    },
++    {
++      "op": "synthesize",
++      "path": "paths[].meta.actors.<actor>.provider",
++      "value": "anthropic",
++      "why": "pi needs a provider on every assistant message; with none in the view the writer writes anthropic, which reads back as the provider"
++    }
++  ]
++}
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index ca1e2141..0367ccfa 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -27,3 +27,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:01:06.846375Z","id":"beccf27a693360a690f29582cb171406fccfdb93db45c3a5fe98b0864374d651","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":515},"end":{"line":515},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"cf4e2d360d37040594dddc82c2217bc51f4a62bec0651d7db679168935f12d90","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:07:28.661842Z","id":"bb6afd8866188eb99c3f66ce358f807ead6a02f3119c24e43ae1e7ec2809ac39","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":525},"end":{"line":525},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"526d3a25a88af2522546bf61d6230665aad73c4ad1fb82df1cd21e829d118d6c","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:07:28.661976Z","id":"3bddc20ddcbf075908a7433461e31eecec9c2997c4b5fc17a0c43e8469676822","body":{"kind":"resolve","summary":"Duplicate: the same concern was re-anchored twice from cf4e2d36 by two pieces landing together; the live record is the one re-anchored from 526d3a25","supersedes":"beccf27a693360a690f29582cb171406fccfdb93db45c3a5fe98b0864374d651","tags":["reason:duplicate","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:59:06.552928Z","id":"e89fe8d166931d0c2233e904548fcdc9c8184b18b6610abec48bda442bb8df42","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":532},"end":{"line":532},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"bb6afd8866188eb99c3f66ce358f807ead6a02f3119c24e43ae1e7ec2809ac39","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/src/contracts.rs b/crates/toolpath-goldens/src/contracts.rs
+index af880d67..318e8c96 100644
+--- a/crates/toolpath-goldens/src/contracts.rs
++++ b/crates/toolpath-goldens/src/contracts.rs
+@@ -19,7 +19,9 @@ use crate::model::Agent;
+ pub struct Violation {
+     /// The rule's name, stable for tests: `trailing-newline`,
+     /// `claude-null-signature`, `claude-empty-error-result`,
+-    /// `parent-chain`, `opencode-session-id`, `unique-step-ids`.
++    /// `parent-chain`, `opencode-session-id`, `unique-step-ids`,
++    /// `codex-timestamp`, `codex-session-meta-first`, `pi-header`,
++    /// `copilot-session-start-first`.
+     pub rule: &'static str,
+     /// The output it was found in: an agent name, or `document`.
+     pub target: String,
+@@ -87,13 +89,80 @@ pub fn check_projection(target: Agent, text: &str) -> Vec<Violation> {
+     }
+     match target {
+         Agent::Claude => claude(text, &mut out),
+-        Agent::Pi => parent_chain(target, text, "id", "parentId", true, &mut out),
++        Agent::Codex => codex(text, &mut out),
++        Agent::Pi => {
++            pi_header(text, &mut out);
++            parent_chain(target, text, "id", "parentId", true, &mut out)
++        }
++        Agent::Copilot => copilot_first(text, &mut out),
+         Agent::Opencode => opencode(text, &mut out),
+         _ => {}
+     }
+     out
+ }
+ 
++/// codex's loader skips a rollout line with no `timestamp`, and reads the
++/// session from a `session_meta` first line
++/// (docs/agents/formats/validation.md, S2).
++fn codex(text: &str, out: &mut Vec<Violation>) {
++    for (n, v) in lines(text) {
++        if v.get("timestamp").and_then(Value::as_str).is_none() {
++            out.push(violation(
++                "codex-timestamp",
++                Agent::Codex,
++                n,
++                "timestamp",
++                "codex skips a rollout line with no timestamp",
++            ));
++        }
++        if n == 1 && v.get("type").and_then(Value::as_str) != Some("session_meta") {
++            out.push(violation(
++                "codex-session-meta-first",
++                Agent::Codex,
++                n,
++                "type",
++                "a rollout starts with its session_meta line",
++            ));
++        }
++    }
++}
++
++/// pi rewrites a session whose header is not first or not version 3
++/// (docs/agents/formats/validation.md).
++fn pi_header(text: &str, out: &mut Vec<Violation>) {
++    let Some((n, v)) = lines(text).next() else {
++        return;
++    };
++    let ok = v.get("type").and_then(Value::as_str) == Some("session")
++        && v.get("id").is_some_and(Value::is_string)
++        && v.get("version").and_then(Value::as_u64) == Some(3);
++    if !ok {
++        out.push(violation(
++            "pi-header",
++            Agent::Pi,
++            n,
++            "type/id/version",
++            "a pi session starts with a version-3 session header with a string id",
++        ));
++    }
++}
++
++/// Copilot fails the whole resume unless the first event is
++/// `session.start` (docs/agents/formats/validation.md, S15).
++fn copilot_first(text: &str, out: &mut Vec<Violation>) {
++    if let Some((n, v)) = lines(text).next()
++        && v.get("type").and_then(Value::as_str) != Some("session.start")
++    {
++        out.push(violation(
++            "copilot-session-start-first",
++            Agent::Copilot,
++            n,
++            "type",
++            "Copilot's event stream starts with session.start",
++        ));
++    }
++}
++
+ fn lines(text: &str) -> impl Iterator<Item = (usize, Value)> + '_ {
+     text.lines()
+         .enumerate()
+diff --git a/crates/toolpath-goldens/src/lib.rs b/crates/toolpath-goldens/src/lib.rs
+index ae794c31..149698e7 100644
+--- a/crates/toolpath-goldens/src/lib.rs
++++ b/crates/toolpath-goldens/src/lib.rs
+@@ -43,4 +43,5 @@ pub mod observed;
+ pub mod pipeline;
+ pub mod schemas;
+ pub mod shed;
++pub mod transform;
+ pub mod validate;
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index c5646adc..382be859 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -493,6 +493,13 @@ pub fn writer(document_json: &str, target: Agent, scratch: &Path) -> Result<Roun
+     writer_with_document(document_json, target, scratch).map(|(trip, _)| trip)
+ }
+ 
++/// The raw projection of a document for `target`, as `path p export <target>
++/// -o` writes it: what a writer's declared synthesized values are checked in.
++pub fn projection(document_json: &str, target: Agent) -> Result<String, StageError> {
++    let path = single_path(document_json).map_err(|e| StageError::new(Stage::Derive, e))?;
++    project(&path, target).map_err(|e| StageError::new(Stage::Project, format!("-> {target}: {e}")))
++}
++
+ /// [`writer`], plus the document the writer's output derives back to (None
+ /// when its own adapter cannot read it), so the caller can validate it.
+ pub fn writer_with_document(
+diff --git a/crates/toolpath-goldens/src/transform.rs b/crates/toolpath-goldens/src/transform.rs
+new file mode 100644
+index 00000000..de11344e
+--- /dev/null
++++ b/crates/toolpath-goldens/src/transform.rs
+@@ -0,0 +1,196 @@
++//! A writer's contract as a small transform IR: what projecting a document
++//! for one agent, and reading it back with that agent's adapter, does to each
++//! key path. Written up front (`fixtures/contract/<agent>.json`) and checked
++//! against what the `writer@<agent>` stage measures, in both directions: a
++//! measured loss or gain no op explains fails, and so does an op with no
++//! effect.
++//!
++//! The ops are ours. `schemars` only describes their shape
++//! (`docs/baseline/schemas/transform.schema.json`); it does not run them.
++//! Paths are generalised key paths as [`crate::keypaths::key_paths`] writes
++//! them (`paths[].steps[].change.<artifact>.structural.text`).
++
++use std::collections::{BTreeMap, BTreeSet};
++
++use schemars::JsonSchema;
++use serde::{Deserialize, Serialize};
++use serde_json::Value;
++
++use crate::keypaths::key_paths;
++
++/// One writer's declared transform.
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
++#[serde(deny_unknown_fields)]
++pub struct Contract {
++    /// The agent whose writer (and reader) this describes.
++    pub writer: String,
++    /// What happens to each key path that changes. Paths not named are
++    /// expected to survive unchanged.
++    pub ops: Vec<Op>,
++}
++
++/// What a writer does to one key path.
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
++#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
++pub enum Op {
++    /// The path survives. Only needed to state it on purpose; checked to be
++    /// present before and after.
++    Keep { path: String },
++    /// The path is gone after the round trip. `defect` marks a loss that is
++    /// a bug to fix, not inherent to the target format.
++    Drop {
++        path: String,
++        why: String,
++        #[serde(default, skip_serializing_if = "Option::is_none")]
++        defect: Option<String>,
++    },
++    /// The same value comes back under another key (a field the target
++    /// names differently).
++    Rename { from: String, to: String },
++    /// The same value comes back somewhere else in the document.
++    Move { from: String, to: String },
++    /// The writer invents a value the source never had; it comes back under
++    /// `path`. With `value`, every occurrence equals it; without, the value
++    /// varies (per call, per turn) and only its presence is checked. `defect`
++    /// marks an invention that is a bug to fix.
++    Synthesize {
++        path: String,
++        #[serde(default, skip_serializing_if = "Option::is_none")]
++        value: Option<Value>,
++        why: String,
++        #[serde(default, skip_serializing_if = "Option::is_none")]
++        defect: Option<String>,
++    },
++    /// The path survives with its value converted, by a named conversion
++    /// (`how` names it; it is not code).
++    Convert { path: String, how: String },
++}
++
++/// What one writer stage measured: lost and gained key paths, and the
++/// document after the round trip.
++pub struct Measured<'a> {
++    pub before: &'a Value,
++    pub after: &'a Value,
++    pub lost: &'a BTreeSet<String>,
++    pub gained: &'a BTreeSet<String>,
++}
++
++/// Every way `measured` and `contract` disagree, empty when they match.
++pub fn check(contract: &Contract, m: &Measured) -> Vec<String> {
++    let mut out = Vec::new();
++    let mut lost: BTreeSet<String> = BTreeSet::new();
++    let mut gained: BTreeSet<String> = BTreeSet::new();
++    let before_paths: BTreeSet<String> = key_paths(m.before)
++        .into_iter()
++        .map(|k| k.as_str().to_owned())
++        .collect();
++    let after_paths: BTreeSet<String> = key_paths(m.after)
++        .into_iter()
++        .map(|k| k.as_str().to_owned())
++        .collect();
++    for op in &contract.ops {
++        match op {
++            Op::Keep { path } | Op::Convert { path, .. } => {
++                if !before_paths.contains(path) || !after_paths.contains(path) {
++                    out.push(format!(
++                        "{op:?}: {path} is not present both before and after"
++                    ));
++                }
++            }
++            Op::Drop { path, .. } => {
++                lost.insert(path.clone());
++            }
++            Op::Rename { from, to } | Op::Move { from, to } => {
++                lost.insert(from.clone());
++                gained.insert(to.clone());
++            }
++            Op::Synthesize { path, value, .. } => {
++                gained.insert(path.clone());
++                let seen = values_at(m.after, path);
++                if seen.is_empty() {
++                    out.push(format!("synthesize {path}: no value after the round trip"));
++                }
++                if let Some(value) = value {
++                    for v in seen {
++                        if &v != value {
++                            out.push(format!("synthesize {path}: declared {value}, found {v}"));
++                        }
++                    }
++                }
++            }
++        }
++    }
++    for p in m.lost.difference(&lost) {
++        out.push(format!("lost but not declared: {p}"));
++    }
++    for p in lost.difference(m.lost) {
++        out.push(format!("declared lost but kept: {p}"));
++    }
++    for p in m.gained.difference(&gained) {
++        out.push(format!("gained but not declared: {p}"));
++    }
++    for p in gained.difference(m.gained) {
++        out.push(format!("declared gained but absent: {p}"));
++    }
++    out
++}
++
++/// Every value at a generalised key path (array indices collapsed, artifact
++/// keys as `<artifact>`, actor keys as `<actor>`).
++pub fn values_at(doc: &Value, path: &str) -> Vec<Value> {
++    fn walk(prefix: &str, v: &Value, want: &str, out: &mut Vec<Value>) {
++        match v {
++            Value::Object(m) => {
++                for (k, x) in m {
++                    let seg = if k.contains("://") {
++                        "<artifact>"
++                    } else if prefix.ends_with("actors") {
++                        "<actor>"
++                    } else {
++                        k.as_str()
++                    };
++                    walk(&format!("{prefix}.{seg}"), x, want, out);
++                }
++            }
++            Value::Array(a) => a
++                .iter()
++                .for_each(|x| walk(&format!("{prefix}[]"), x, want, out)),
++            leaf => {
++                if prefix.trim_start_matches('.') == want {
++                    out.push(leaf.clone());
++                }
++            }
++        }
++    }
++    let mut out = Vec::new();
++    walk("", doc, path, &mut out);
++    out
++}
++
++/// The JSON Schema of [`Contract`], as committed under
++/// `docs/baseline/schemas/transform.schema.json`.
++pub fn schema() -> Value {
++    serde_json::to_value(schemars::schema_for!(Contract)).expect("schema serializes")
++}
++
++/// The ops marked as defects (bugs to fix, not inherent to the target
++/// format), by key path.
++pub fn defects(contract: &Contract) -> BTreeMap<String, String> {
++    contract
++        .ops
++        .iter()
++        .filter_map(|op| match op {
++            Op::Drop {
++                path,
++                defect: Some(d),
++                ..
++            }
++            | Op::Synthesize {
++                path,
++                defect: Some(d),
++                ..
++            } => Some((path.clone(), d.clone())),
++            _ => None,
++        })
++        .collect()
++}
+diff --git a/crates/toolpath-goldens/tests/contract.rs b/crates/toolpath-goldens/tests/contract.rs
+new file mode 100644
+index 00000000..b56fbd10
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/contract.rs
+@@ -0,0 +1,178 @@
++//! Each writer's declared transform (`fixtures/contract/<agent>.json`)
++//! against what the writer stage measures on the generated document
++//! (`fixtures/full-view.json`), in both directions: every measured loss and
++//! gain has an op that explains it, every op has an effect, and every
++//! synthesized value is the one declared. The contract is written up front;
++//! a snapshot is accepted after the fact.
++
++use std::collections::BTreeSet;
++
++use toolpath::v1::Graph;
++use toolpath_convo::{ConversationView, DeriveConfig, derive_path};
++use toolpath_goldens::model::{Agent, RoundTrip};
++use toolpath_goldens::pipeline::{projection, writer_with_document};
++use toolpath_goldens::transform::{Contract, Measured, check, schema};
++
++const VIEW: &str = include_str!("../fixtures/full-view.json");
++
++fn document() -> String {
++    let view: ConversationView =
++        serde_json::from_str(VIEW).expect("fixtures/full-view.json is a ConversationView");
++    let cfg = DeriveConfig {
++        include_thinking: true,
++        include_tool_uses: true,
++        ..DeriveConfig::default()
++    };
++    Graph::from_path(derive_path(&view, &cfg))
++        .to_json()
++        .expect("document serializes")
++}
++
++fn contract(agent: Agent) -> Contract {
++    let path = format!(
++        "{}/fixtures/contract/{}.json",
++        env!("CARGO_MANIFEST_DIR"),
++        agent.name()
++    );
++    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
++    let c: Contract = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path}: {e}"));
++    assert_eq!(c.writer, agent.name(), "{path} names another writer");
++    c
++}
++
++#[test]
++fn every_writer_matches_its_declared_transform() {
++    let home = tempfile::tempdir().expect("temp HOME");
++    let document_json = document();
++    let before: serde_json::Value = serde_json::from_str(&document_json).unwrap();
++    let mut failures = Vec::new();
++    for agent in Agent::ALL {
++        let (trip, after) = writer_with_document(&document_json, agent, home.path())
++            .unwrap_or_else(|e| panic!("writer {}: {e}", agent.name()));
++        let (RoundTrip::Compared { lost, gained, .. }, Some(after)) = (trip, after) else {
++            failures.push(format!("{}: its own adapter cannot read it", agent.name()));
++            continue;
++        };
++        let lost: BTreeSet<String> = lost.iter().map(|k| k.as_str().to_owned()).collect();
++        let gained: BTreeSet<String> = gained.iter().map(|k| k.as_str().to_owned()).collect();
++        let m = Measured {
++            before: &before,
++            after: &after,
++            lost: &lost,
++            gained: &gained,
++        };
++        for f in check(&contract(agent), &m) {
++            failures.push(format!("{}: {f}", agent.name()));
++        }
++    }
++    assert!(
++        failures.is_empty(),
++        "writers disagree with fixtures/contract/<agent>.json:\n{}",
++        failures.join("\n")
++    );
++}
++
++/// Each writer's declared synthesized defaults (`SYNTHESIZED` in its crate)
++/// are literally present in its projection of the generated document, so the
++/// table stays honest.
++#[test]
++fn declared_synthesized_values_are_written() {
++    let document_json = document();
++    let tables: [(Agent, &[(&str, &str)]); 3] = [
++        (Agent::Claude, toolpath_claude::project::SYNTHESIZED),
++        (Agent::Codex, toolpath_codex::project::SYNTHESIZED),
++        (Agent::Pi, toolpath_pi::project::SYNTHESIZED),
++    ];
++    for (agent, table) in tables {
++        let text = projection(&document_json, agent).expect("projects");
++        for (key, value) in table {
++            let needle = format!("\"{key}\":\"{value}\"");
++            assert!(
++                text.contains(&needle),
++                "{}: SYNTHESIZED declares {key}={value} but the projection has no {needle}",
++                agent.name()
++            );
++        }
++    }
++}
++
++/// The committed JSON Schema of the transform IR is what schemars derives.
++#[test]
++fn transform_schema_is_committed() {
++    let path = concat!(
++        env!("CARGO_MANIFEST_DIR"),
++        "/../../docs/baseline/schemas/transform.schema.json"
++    );
++    let want = serde_json::to_string_pretty(&schema()).unwrap() + "\n";
++    if std::env::var_os("UPDATE_SCHEMAS").is_some() {
++        std::fs::write(path, &want).unwrap();
++    }
++    let have = std::fs::read_to_string(path).unwrap_or_default();
++    assert_eq!(
++        have, want,
++        "regenerate with UPDATE_SCHEMAS=1 cargo test -p toolpath-goldens --test contract"
++    );
++}
++
++/// Negative controls: a changed codex default, an op with no effect and an
++/// undeclared loss are each named, so the check above cannot pass vacuously.
++#[test]
++fn the_check_names_what_disagrees() {
++    use toolpath_goldens::transform::Op;
++    let home = tempfile::tempdir().expect("temp HOME");
++    let document_json = document();
++    let before: serde_json::Value = serde_json::from_str(&document_json).unwrap();
++    let (trip, after) = writer_with_document(&document_json, Agent::Codex, home.path()).unwrap();
++    let (RoundTrip::Compared { lost, gained, .. }, Some(after)) = (trip, after) else {
++        panic!("codex reads its own projection");
++    };
++    let lost: BTreeSet<String> = lost.iter().map(|k| k.as_str().to_owned()).collect();
++    let gained: BTreeSet<String> = gained.iter().map(|k| k.as_str().to_owned()).collect();
++    let m = Measured {
++        before: &before,
++        after: &after,
++        lost: &lost,
++        gained: &gained,
++    };
++    let model_provider = "paths[].steps[].change.<artifact>.structural.model_provider";
++
++    // The writer's default changed (here: the contract says anthropic).
++    let mut c = contract(Agent::Codex);
++    for op in &mut c.ops {
++        if let Op::Synthesize { path, value, .. } = op
++            && path == model_provider
++        {
++            *value = Some("anthropic".into());
++        }
++    }
++    let f = check(&c, &m);
++    assert!(
++        f.iter()
++            .any(|x| x.contains(model_provider) && x.contains("\"openai\"")),
++        "{f:?}"
++    );
++
++    // An op with no effect: declaring a kept path lost.
++    let mut c = contract(Agent::Codex);
++    let kept = "paths[].steps[].change.<artifact>.structural.text";
++    c.ops.push(Op::Drop {
++        path: kept.into(),
++        why: "control".into(),
++        defect: None,
++    });
++    assert!(
++        check(&c, &m)
++            .iter()
++            .any(|x| x == &format!("declared lost but kept: {kept}"))
++    );
++
++    // An undeclared loss: removing a drop op.
++    let mut c = contract(Agent::Codex);
++    c.ops
++        .retain(|op| !matches!(op, Op::Drop { path, .. } if path == "paths[].meta.vcs_remote"));
++    assert!(
++        check(&c, &m)
++            .iter()
++            .any(|x| x == "lost but not declared: paths[].meta.vcs_remote")
++    );
++}
+diff --git a/crates/toolpath-pi/src/project.rs b/crates/toolpath-pi/src/project.rs
+index d25088b1..2fb6b28c 100644
+--- a/crates/toolpath-pi/src/project.rs
++++ b/crates/toolpath-pi/src/project.rs
+@@ -28,6 +28,12 @@ use crate::types::{
+ 
+ // ── PiProjector ───────────────────────────────────────────────────────
+ 
++/// Values this writer invents because pi needs them and the view does not
++/// carry them, as `(key, value)` in the written session. `provider` is only
++/// invented when the turn has none (`Turn::provider`). The baseline checks
++/// each is really written (`crates/toolpath-goldens/fixtures/contract/pi.json`).
++pub const SYNTHESIZED: &[(&str, &str)] = &[("api", "anthropic"), ("provider", "anthropic")];
++
+ /// Project a [`ConversationView`] into a Pi [`PiSession`].
+ ///
+ /// Config fields are optional. `cwd` overrides the source view's
+diff --git a/docs/baseline/schemas/README.md b/docs/baseline/schemas/README.md
+index 0a3e61aa..489cc343 100644
+--- a/docs/baseline/schemas/README.md
++++ b/docs/baseline/schemas/README.md
+@@ -23,6 +23,7 @@ the schema describes.
+ | `validate_transforms` | [validate_transforms.schema.json](validate_transforms.schema.json) | hand-written (body built with `json!`) |
+ | `opencode_db` | [opencode_db.schema.json](opencode_db.schema.json) | hand-written (body built with `json!`) |
+ | `projection` | none | harness-native files; see [docs/agents/formats/](../../agents/formats/README.md) |
++| writer contract (`fixtures/contract/<agent>.json`) | [transform.schema.json](transform.schema.json) | generated from `transform::Contract`, the writer transform IR (`tests/contract.rs` keeps it current) |
+ | `ir` | none | a `toolpath-convo` `ConversationView`, which has no JSON Schema yet |
+ 
+ Recording provenance (`crates/toolpath-webmock/cassettes/<harness>/provenance.json`)
+diff --git a/docs/baseline/schemas/transform.schema.json b/docs/baseline/schemas/transform.schema.json
+new file mode 100644
+index 00000000..4c06a626
+--- /dev/null
++++ b/docs/baseline/schemas/transform.schema.json
+@@ -0,0 +1,184 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "additionalProperties": false,
++  "definitions": {
++    "Op": {
++      "description": "What a writer does to one key path.",
++      "oneOf": [
++        {
++          "additionalProperties": false,
++          "description": "The path survives. Only needed to state it on purpose; checked to be present before and after.",
++          "properties": {
++            "op": {
++              "enum": [
++                "keep"
++              ],
++              "type": "string"
++            },
++            "path": {
++              "type": "string"
++            }
++          },
++          "required": [
++            "op",
++            "path"
++          ],
++          "type": "object"
++        },
++        {
++          "additionalProperties": false,
++          "description": "The path is gone after the round trip. `defect` marks a loss that is a bug to fix, not inherent to the target format.",
++          "properties": {
++            "defect": {
++              "type": [
++                "string",
++                "null"
++              ]
++            },
++            "op": {
++              "enum": [
++                "drop"
++              ],
++              "type": "string"
++            },
++            "path": {
++              "type": "string"
++            },
++            "why": {
++              "type": "string"
++            }
++          },
++          "required": [
++            "op",
++            "path",
++            "why"
++          ],
++          "type": "object"
++        },
++        {
++          "additionalProperties": false,
++          "description": "The same value comes back under another key (a field the target names differently).",
++          "properties": {
++            "from": {
++              "type": "string"
++            },
++            "op": {
++              "enum": [
++                "rename"
++              ],
++              "type": "string"
++            },
++            "to": {
++              "type": "string"
++            }
++          },
++          "required": [
++            "from",
++            "op",
++            "to"
++          ],
++          "type": "object"
++        },
++        {
++          "additionalProperties": false,
++          "description": "The same value comes back somewhere else in the document.",
++          "properties": {
++            "from": {
++              "type": "string"
++            },
++            "op": {
++              "enum": [
++                "move"
++              ],
++              "type": "string"
++            },
++            "to": {
++              "type": "string"
++            }
++          },
++          "required": [
++            "from",
++            "op",
++            "to"
++          ],
++          "type": "object"
++        },
++        {
++          "additionalProperties": false,
++          "description": "The writer invents a value the source never had; it comes back under `path`. With `value`, every occurrence equals it; without, the value varies (per call, per turn) and only its presence is checked. `defect` marks an invention that is a bug to fix.",
++          "properties": {
++            "defect": {
++              "type": [
++                "string",
++                "null"
++              ]
++            },
++            "op": {
++              "enum": [
++                "synthesize"
++              ],
++              "type": "string"
++            },
++            "path": {
++              "type": "string"
++            },
++            "value": true,
++            "why": {
++              "type": "string"
++            }
++          },
++          "required": [
++            "op",
++            "path",
++            "why"
++          ],
++          "type": "object"
++        },
++        {
++          "additionalProperties": false,
++          "description": "The path survives with its value converted, by a named conversion (`how` names it; it is not code).",
++          "properties": {
++            "how": {
++              "type": "string"
++            },
++            "op": {
++              "enum": [
++                "convert"
++              ],
++              "type": "string"
++            },
++            "path": {
++              "type": "string"
++            }
++          },
++          "required": [
++            "how",
++            "op",
++            "path"
++          ],
++          "type": "object"
++        }
++      ]
++    }
++  },
++  "description": "One writer's declared transform.",
++  "properties": {
++    "ops": {
++      "description": "What happens to each key path that changes. Paths not named are expected to survive unchanged.",
++      "items": {
++        "$ref": "#/definitions/Op"
++      },
++      "type": "array"
++    },
++    "writer": {
++      "description": "The agent whose writer (and reader) this describes.",
++      "type": "string"
++    }
++  },
++  "required": [
++    "ops",
++    "writer"
++  ],
++  "title": "Contract",
++  "type": "object"
++}
+diff --git a/pr/54-writer-contracts.md b/pr/54-writer-contracts.md
+new file mode 100644
+index 00000000..f123d90d
+--- /dev/null
++++ b/pr/54-writer-contracts.md
+@@ -0,0 +1,58 @@
++# test(baseline): each writer's transform declared up front as a small typed IR, checked both ways
++
++Status: planned (ruling 2026-10-19, design consultant: "declared synthesized values + value-aware gains"; refined by Bobby: "can transforms be explicit — is there an IR for transforms? in schemars") · Base: the goldens stack once merged
++
++## Why
++`writer@<agent>` pins what each writer, read back by its own adapter, loses and gains — after the fact. Nothing said up
++front what a writer is supposed to do, so a pinned loss looked the same whether it was inherent to the target format or a
++bug, and an invented value (codex `model_provider: "openai"`, Claude `permissionMode: "default"`) looked like data.
++On the deck's map the projection column was red for opencode, gemini and cursor for exactly this reason: losses nobody
++had declared.
++
++## What changes
++- `crates/toolpath-goldens/src/transform.rs`: a writer contract is a list of ops — `keep`, `drop {why, defect?}`,
++  `rename {from, to}`, `move {from, to}`, `synthesize {path, value?, why, defect?}`, `convert {path, how}` (`how` names a
++  conversion; it is not code). `serde` + `schemars::JsonSchema`; the JSON Schema is committed at
++  `docs/baseline/schemas/transform.schema.json`. schemars only describes the shape; the IR and its check are ours (the
++  Cambria idea without the library).
++- `fixtures/contract/<agent>.json` for all seven writers (opencode, gemini and cursor first): every measured loss and
++  gain on `fixtures/full-view.json` has an op with a reason.
++- `tests/contract.rs`: measured lost/gained key paths == what the ops imply, both directions (an op with no effect
++  fails); a `synthesize` with a `value` must match every occurrence after the round trip. Negative controls: a changed
++  codex default is named with its key and value; an op with no effect and an undeclared loss are named.
++- `SYNTHESIZED` in `toolpath-claude`, `toolpath-codex`, `toolpath-pi` `project.rs`: the `(key, value)` defaults each
++  writer invents; the test checks each is literally in that writer's projection.
++- `contracts.rs` gains the loader rules from `docs/agents/formats/validation.md` (pr/36): codex `timestamp` on every
++  line and `session_meta` first; pi version-3 session header first; Copilot `session.start` first. All current
++  projections pass.
++
++## Defects found (declared, to fix)
++| writer | key path | defect |
++|---|---|---|
++| claude | `delegations[]` | Claude Code keeps sub-agent work as sidechain sessions; the writer could write them |
++| codex | `token_usage.breakdowns.output.reasoning` | codex's token_count has `reasoning_output_tokens`; the writer does not fill it |
++| opencode | `token_usage.breakdowns.output.reasoning` | opencode stores `tokens.reasoning` per message; the writer does not fill it |
++| opencode | `change.notes.md.raw` | the writer does not write opencode's snapshot repo, so a projected session's file diffs are gone |
++| opencode | `change.does-not-exist.txt.*` (gained) | opencode's reader turns a failed read into a `file.write` change |
++| copilot | `environment.working_dir` | Copilot's `session.start` carries the cwd; the writer does not set it |
++
++Everything else lost is inherent to the target format (no stop reason, no cache-write tokens, per-message usage, no
++delegation record, toolpath's own producer stamp, …), each with its reason in the contract.
++
++## Verification
++- `cargo test -p toolpath-goldens --test contract` (4 tests); the goldens' contract checks over every projection.
++- Full gates with `--features path-cli/goldens,toolpath/verify`.
++
++## Paths
++```
++crates/toolpath-goldens/src/transform.rs
++crates/toolpath-goldens/src/contracts.rs
++crates/toolpath-goldens/src/pipeline.rs
++crates/toolpath-goldens/src/lib.rs
++crates/toolpath-goldens/Cargo.toml
++crates/toolpath-goldens/fixtures/contract/
++crates/toolpath-goldens/tests/contract.rs
++crates/toolpath-{claude,codex,pi}/src/project.rs
++docs/baseline/schemas/transform.schema.json
++Cargo.lock
++```
+-- 
+2.55.0
+

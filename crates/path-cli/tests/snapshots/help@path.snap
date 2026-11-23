@@ -1,0 +1,41 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path 
+Derive, query, and visualize Toolpath provenance documents
+
+Usage: path [OPTIONS] <COMMAND>
+
+Commands:
+  show    Show a single session as a markdown summary (used by fzf preview)
+  share   Share an agent session to Pathbase via an interactive picker
+  resume  Resume an agent session into the chosen harness, projecting the document and exec'ing the harness's resume command
+  query   Query the local cache: load every step into one JSON array and transform it with a jaq (jq) filter
+  kind    List bundled document kinds, or print a kind's schema (the field reference for `path query`)
+  auth    Manage Pathbase credentials for trace uploads
+  config  Edit the user configuration (~/.toolpath/config.toml)
+  p       Plumbing: lower-level operations on documents and sources (import, export, cache, list, render, merge, validate, derive, project, incept, track, query)
+  d       Develop: goldens, record/replay and other tools for working on toolpath itself (built only with the `develop` feature) [aliases: develop]
+  haiku   Print a random Toolpath haiku
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

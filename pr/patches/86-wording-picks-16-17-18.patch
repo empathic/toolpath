@@ -1,0 +1,318 @@
+From 03a9b1b0238e86c1fd30abf82ccfe8fe51dfcaf4 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 15:26:32 -0400
+Subject: [PATCH] docs(site): cut the unsourced 'majority of the decisions'
+ claim (consultant pick 19)
+
+---
+ docs/model/claims.json           | 7 -------
+ pr/74-claude-multi-config-dir.md | 2 +-
+ site/pages/.qual                 | 1 +
+ site/pages/format.md             | 2 +-
+ 4 files changed, 3 insertions(+), 9 deletions(-)
+
+diff --git a/docs/model/claims.json b/docs/model/claims.json
+index 0c99b515..da8af4ce 100644
+--- a/docs/model/claims.json
++++ b/docs/model/claims.json
+@@ -678,13 +678,6 @@
+         "document"
+       ]
+     },
+-    {
+-      "id": "format-agents-majority",
+-      "file": "site/pages/format.md",
+-      "quote": "Coding agents now make a majority of the decisions on a PR",
+-      "operations": [],
+-      "evidence_kinds": []
+-    },
+     {
+       "id": "format-no-neutral-format",
+       "file": "site/pages/format.md",
+diff --git a/pr/74-claude-multi-config-dir.md b/pr/74-claude-multi-config-dir.md
+index a569470a..dda1de4b 100644
+--- a/pr/74-claude-multi-config-dir.md
++++ b/pr/74-claude-multi-config-dir.md
+@@ -1,6 +1,6 @@
+ # feat(sync): CLAUDE_CONFIG_DIR may list several roots (cache sync)
+ 
+-Status: draft · Base: pr/73 · Code: commit 3942feb (Bobby's, 2026-10-18) cherry-picked unchanged as its own piece; this file is its record
++Status: draft · Base: pr/73 · Code: Bobby's 2026-10-18 commit "feat(sync): support ':'-separated CLAUDE_CONFIG_DIR list" (local branch claude-multi-config-dir) cherry-picked unchanged as its own piece; this file is its record
+ 
+ ## Why
+ `path query --source claude --project-under ~/.local/state/lobby-seats` returned nothing when `$CLAUDE_CONFIG_DIR` pointed at one account
+diff --git a/site/pages/.qual b/site/pages/.qual
+index 8a7e0763..0d2fd8d6 100644
+--- a/site/pages/.qual
++++ b/site/pages/.qual
+@@ -76,3 +76,4 @@
+ {"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:38:48.770739Z","id":"c3806b6aa1afd46f8ac2d8daac3d7a64b57ef28a7bd536e884e7c6b6c7457d43","body":{"detail":"Every structural.type producers write today: conversation.append, conversation.event, file.write (document@ snapshots); no core.* and no language AST ops.","kind":"concern","ref":"git:04afa53","span":{"start":{"line":103},"end":{"line":103},"content_hash":"765674ccdeae01acca35dd0d205d65c954f61e92b4a2ee0a0f5acf09b6708dce"},"summary":"FAQ open question 'who defines structural types?' — the types in use are not namespaced as leaned","supersedes":"acb700cfd8c435fd200cf35746ee28eab473b5e27797a7dc0885769f947115a7","tags":["claim:faq-open-structural-types","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:38:48.771068Z","id":"f6d3692495b4bdd7e7cf39988b23b2a3be8edf0c462ac3fb886b385f4719229c","body":{"detail":"Agent-session documents embed full text, reasoning and tool output; the only secret control is the no_secrets gate over committed fixtures (crates/toolpath-webmock tests/no_secrets.rs), not over documents users share.","kind":"concern","ref":"git:04afa53","span":{"start":{"line":107},"end":{"line":107},"content_hash":"9c78f1f27ffe878790428c15051bab3ea1265df3fd6b6fa6a94e5cd9a9651e61"},"summary":"FAQ open question 'privacy and redaction' — still open; no redaction marker exists","supersedes":"a6559ff1ff75386196aa77ac3ee7f287230f8cedaba2476b71a8e367df7d802f","tags":["claim:faq-open-privacy","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:39:07.729588Z","id":"a75e314a06b8fc2835161e5b7ec24ca5e7e73c57c48c522d5be34e33c85b6f7c","body":{"detail":"Moved out of Open design questions (it was stale: kinds already answer it). Each kind version ships its own schema at its own URI (crates/path-cli/kinds/agent-coding-session/<v>/schema.json, mirrored under site/kinds; kinds::parse_uri_extracts_name_and_version, bundled_kind_uris_parse); a superseded URI stays valid: cmd_validate::legacy_kind_warns_once_per_path_and_still_validates (v1.0.0 validates, with a warning). Same evidence as claim:kind-index-immutable (site/kinds/index.md:11). The v1.1.0 kind schema sets no additionalProperties: false, and validate@<set>.snap is valid for all 9 sets, so extra properties do not invalidate a path.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":85},"end":{"line":85},"content_hash":"beb034e288ac165f1bf7e726573a9faf76ffb2bf28eea4f82a8adf852889c567"},"summary":"FAQ: the format evolves through kinds — immutable, semver-versioned kind URIs; answered, no longer an open question","supersedes":"6eaf389b4d95244b057b96d6aca8d566af0e38fb62482508b6c3cb70cdce7d0c","tags":["claim:faq-open-evolution","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/pages/format.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:13:26.828753Z","id":"6f455f54f38ae9a202c08d3c451f135c7e5db7ce18b77345b7b20697e888013f","body":{"kind":"resolve","summary":"The sentence was reworded to claim nothing measurable (a growing share of the work); the unsourced majority claim is cut (consultant pick 19).","supersedes":"52b17c0a72b8b9928ad69a3642bc388c1741b9233aebae9a6c2b76c5c52ed154","tags":["reason:fixed","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/site/pages/format.md b/site/pages/format.md
+index b133a472..1ba91f1f 100644
+--- a/site/pages/format.md
++++ b/site/pages/format.md
+@@ -11,7 +11,7 @@ permalink: /format/
+ A format for what happens between commits.
+ </p>
+ 
+-Yesterday's tooling was a footnote. You manually ran `rustfmt` and it was incidental to the actual change. Coding agents now make a majority of the decisions on a PR — what to write, when to abandon an approach, how to phrase the test. That's a new class of information about how artifacts come to be: dense, branching, multi-actor. Nothing was built to capture it.
++Yesterday's tooling was a footnote. You manually ran `rustfmt` and it was incidental to the actual change. Coding agents now do a growing share of the work on a PR — what to write, when to abandon an approach, how to phrase the test. That's a new class of information about how artifacts come to be: dense, branching, multi-actor. Nothing was built to capture it.
+ 
+ Git stores the final snapshot. Chat logs live in proprietary formats. Tool decisions vanish into telemetry. There's no neutral format for **saving** what actually happened, **transforming** it between systems, or **analyzing** it after the fact.
+ 
+-- 
+2.55.0
+
+From 2c39dc58b8d0aef5364480a4746c4abdc46aae6a Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 10:36:27 -0400
+Subject: [PATCH] docs: FAQ answers what the code decided, CI dropped from the
+ signatures claim, provider-crate wording (picks 16, 17, 18; pr/86)
+
+---
+ .qual                           |  4 +++
+ FAQ.md                          | 60 +++++++++++++++------------------
+ RFC.md                          |  4 +--
+ docs/model/claims.json          |  4 +--
+ pr/86-wording-picks-16-17-18.md | 16 +++++++++
+ site/.qual                      |  1 +
+ site/index.md                   |  3 +-
+ site/pages/.qual                |  1 +
+ site/pages/format.md            |  2 +-
+ 9 files changed, 57 insertions(+), 38 deletions(-)
+ create mode 100644 pr/86-wording-picks-16-17-18.md
+
+diff --git a/.qual b/.qual
+index cea229a4..936d3f62 100644
+--- a/.qual
++++ b/.qual
+@@ -116,3 +116,7 @@
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:34:45.041029Z","id":"eef37dcf2a763faeb4c48ef303b764ddcf784a0321122d3d4e99a102564bcbda","body":{"detail":"Cargo.toml [workspace.package] rust-version = \"1.94\", inherited by every member crate (cargo metadata: rust_version 1.94 on all 20), so cargo refuses an older toolchain; rust-toolchain.toml pins 1.94.0. cargo check --offline --workspace --all-targets --features path-cli/develop,toolpath/verify passes on rustc 1.94.1 (the rustup toolchain installed here); the nix dev shell builds and tests on 1.97.1.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":441},"end":{"line":441},"content_hash":"91ee9ffc76cee5cc585c20dbe45e8438c4ab8097a01b3610a475e5c528aad22d"},"summary":"README: Rust 1.94+ — declared and built","supersedes":"09cda50b87c12dba1bb21a3e77b370c61ce03de8f38e9c5f84d470d3d0c0d023","tags":["claim:readme-rust-185","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:51:16.518843Z","id":"a23fe2b3c93965456f0b685ff55542d29d95b0610295d8707b7b005141acdce6","body":{"detail":"scripts/test-quickstart.sh (gate_quickstart) runs the README line verbatim after path p cache sync over seven harnesses' sessions and asserts it prints an integer. The fixtures carry no dead ends (producers emit none for agent sessions), so the count there is 0; the dead_end field itself is covered by query.rs dead_ends_as_jaq_form and plan.rs.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":103},"end":{"line":103},"content_hash":"8b05018411bc0049e0d9c69381c0b3eeff1e1e61a50dfcf2ca125f26cf0666b5"},"summary":"README quick start: path query 'map(select(.dead_end)) | length' — runs on a synced cache — backed","supersedes":"061fd066be5570ab9a7dec872ef55b08098ff763af250a93a81329b03562778b","tags":["claim:readme-quickstart-dead-end","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:51:26.773606Z","id":"fec70a7f8c3fa1691a37a6f869f002a2cd1412533d35f5fa23f7674d3c8c1c8d","body":{"detail":"scripts/test-quickstart.sh (gate_quickstart), after path p cache sync over seven harnesses' sessions: the README line runs verbatim and returns a JSON array with only claude rows (empty on the fixtures: no turn there exceeds 50000 input tokens), and --source claude 'map(.cache_id) | unique' is non-empty and all claude-*. The flag is also unit-tested (crates/path-cli/tests/query.rs source_selects_by_prefix).","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":104},"end":{"line":104},"content_hash":"0856950da7b1e3771a4f13917d51d04720b890d1a3777c854c579388aeb6e5fc"},"summary":"README quick start: path query --source claude — runs on a synced cache and scopes it to claude sessions — backed","supersedes":"5268530e3401ce57d82dac78e1db4de2f6223f44364631aba8008cfe411dbfd8","tags":["claim:readme-quickstart-source","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"FAQ.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T14:34:55.076780Z","id":"7576cd2908fc669bc3df5af428026b133d6bac48289016f3701b7dcebaaeb3ed","body":{"detail":"schema change keys; examples use bare paths and URLs; RFC Artifacts section.","kind":"pass","span":{"start":{"line":115},"end":{"line":115},"content_hash":"8508e185cb863eb854ba0b429018f86a6c172d4a9c0674bee4cd48501357de64"},"summary":"FAQ.md: artifacts are identified by URL, bare paths relative to base — backed by schema and examples","supersedes":"095e6d39a88bbe7d0a2b08d14003ebb9fac10b0b00680e16c232458fd35a510f","tags":["claim:faqmd-artifact-urls","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"FAQ.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T14:34:55.132514Z","id":"3bce87c362779848a23c9737224aad4e01c4663c5ffc5febad59281b29afb056","body":{"detail":"Granularity pass; abandoned paths, multi-perspective, actor identities, signatures, tool-agnostic capture are format-only or manual (see the RFC records).","kind":"concern","span":{"start":{"line":140},"end":{"line":140},"content_hash":"80e4002f621ef00f7712f598cfd17ae26de37c990f9fa7946fc2d43e6c345345"},"summary":"FAQ.md beyond-VCS list — same six claims as RFC.md; see the rfc-beyond-vcs-* records (1 pass, 5 concerns)","supersedes":"b41e31c54a646e901b73b216ccdbbb22492687e45aa19b2ebd231d2326bd77dd","tags":["claim:faqmd-beyond-vcs","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"FAQ.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T14:34:55.187629Z","id":"e92436b9d7fd94997c9af57fb081f23e053a8448016fda43d407dd67843f4181","body":{"detail":"Path.steps is a flat array with parents (schema, types.rs); query.rs computes ancestors/dead ends by scanning.","kind":"pass","span":{"start":{"line":186},"end":{"line":186},"content_hash":"eac069ed5dfe807422935e9dfca4d617266b059342ec05a87f7adbae2d91e300"},"summary":"FAQ.md open question 'storage': flat list with parent refs is the current approach — backed","supersedes":"d056fed48d981572c34c7283c08bd0cba12a371baf5826582da91400007a95ad","tags":["claim:faqmd-flat-list","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T14:35:42.210425Z","id":"db824441650db2a97b79ac4bb20596738d8ce2b9fd3d13edc91bf8f1cded6612","body":{"detail":"crates/toolpath/tests/signatures.rs (signed_step_and_path_verify, tampered_change_fails, moved_head_fails_both_path_signatures, missing_required_scope_fails, gpg_and_sigstore_are_not_verified, scopes_without_a_canonical_form_are_refused) and tests/jcs.rs (RFC 8785 reference vectors), feature 'verify' (810a58b). No producer signs documents. Dropped CI from the claim (consultant pick 17): the ci scope waits for the over proposal.","kind":"pass","span":{"start":{"line":941},"end":{"line":941},"content_hash":"a7b70bcfe9b64a32fd62a4c1b4b29eeadbabceae58782d358c2d19ed9fa9924f"},"summary":"RFC beyond-VCS 5, multi-party signatures: author and reviewer signatures verify (ssh Ed25519)","supersedes":"ad4488864d32f1f5aada4a6eb1a9c37fe96f0b0370f37ed4a9b3ae6e74228d3e","tags":["claim:rfc-beyond-vcs-signatures","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/FAQ.md b/FAQ.md
+index ad66d06c..f9886002 100644
+--- a/FAQ.md
++++ b/FAQ.md
+@@ -37,8 +37,10 @@ Toolpath is not the right tool for:
+ 
+ ### Can I use Toolpath without a VCS?
+ 
+-Yes.  A path's `base` can use a `toolpath:` URI to branch from another path's
+-step, creating a pure Toolpath chain with no VCS backing.  You can also use
++Yes.  A path's `base` can name another path's step with a `toolpath:` URI,
++describing a pure Toolpath chain with no VCS backing.  (Resolving such a URI to
++that step is not specified: the RFC says step references inside a path are
++resolved within it, and cross-path step references are not supported.)  You can also use
+ `file:///` URIs for local-only provenance.
+ 
+ ### How does Toolpath compare to W3C PROV?
+@@ -143,7 +145,7 @@ What Toolpath adds beyond any VCS:
+ 3. **Multi-perspective changes** — raw diff + structural AST ops + semantic
+    intent
+ 4. **Actor provenance** — link actors to external identities
+-5. **Multi-party signatures** — author, reviewer, CI attestation on same
++5. **Multi-party signatures** — author and reviewer signatures on the same
+    artifact
+ 6. **Tool-agnostic history** — changes from AI agents, formatters, linters that
+    may not create VCS commits
+@@ -155,32 +157,27 @@ What Toolpath adds beyond any VCS:
+ These questions are not yet resolved.  They need more thought before the format
+ stabilizes.
+ 
+-### How should step IDs be generated?
++### How are step IDs generated?
+ 
+-**Options under consideration:**
++The format requires only that a `step.id` is unique within its path.  How a
++tool chooses one is the tool's call, and the tools here do it three ways:
+ 
+-1. **Content-addressed** — hash of (parent, actor, change, timestamp).  Good
+-   for deduplication and verification, but you can't know the ID until you've
+-   finalized the content.
+-2. **UUID** — random, simple, but opaque.
+-3. **Hierarchical** — `session-abc/turn-5/step-2`.  Readable but couples to
+-   session structure.
+-4. **Sequential** — `step-001`, `step-002` within some scope.
++- the git import names a step after its commit, `step-<short oid>`;
++- a conversation derive uses the turn's own ID, and `step-0001`, `step-0002`
++  when a turn has none;
++- the examples use sequential IDs for readability.
+ 
+-The current examples use sequential IDs for readability.  No formal requirement
+-yet.
++Content-addressed, UUID and hierarchical IDs remain possible; none is
++required.
+ 
+ ### Who defines structural operation types?
+ 
+-**Options under consideration:**
+-
+-1. **Central registry** — Toolpath org maintains canonical op types
+-2. **Namespaced extensions** — `rust.add_method`, `typescript.add_interface`
+-3. **Schema-per-language** — each language community maintains their own
+-4. **Emergent** — let tools emit whatever, see what converges
+-
+-**Current leaning:** Namespaced with a `core` namespace for universal ops
+-(e.g., `core.replace`, `core.insert`).
++A `structural` change carries a `type` string, and the format does not
++restrict it.  The shipped tools use two namespaces: `conversation.*` for
++session events (for example `conversation.append`) and `file.*` for file
++changes (for example `file.write`).  Those are the `core` namespaces; a
++language or tool can add its own, such as `rust.add_method`.  There is no
++central registry.
+ 
+ ### How should the path tree be stored/transmitted?
+ 
+@@ -199,6 +196,10 @@ small enough that this hasn't been a problem.
+ **Scenarios:** Agent reasoning might contain proprietary information.  Human
+ identity might need anonymization.  Refs might point to internal docs.
+ 
++**Today:** the format has no redaction marker, and the tools here do not redact
++anything on export.  What exists is `meta.refs`, which holds URIs rather than
++content.
++
+ **Options under consideration:**
+ 
+ 1. **Reference, don't embed** — `meta.refs` stores URIs, not content
+@@ -206,15 +207,10 @@ identity might need anonymization.  Refs might point to internal docs.
+ 3. **Access tiers** — different views for different audiences
+ 4. **Encryption** — sensitive fields encrypted, keys managed separately
+ 
+-**Current leaning:** Reference by default, with optional redaction markers.
++This is open.
+ 
+ ### How does the format evolve?
+ 
+-**Options under consideration:**
+-
+-1. **Semver** — `1.2.3` with compatibility rules
+-2. **Date-based** — `2026-01`
+-3. **Extension-based** — core is frozen, everything else is extensions
+-
+-**Current leaning:** Semver for core schema, with "old readers ignore unknown
+-fields" policy.
++Kinds are versioned by URI.  A kind URI is immutable: a revision ships at a new
++version URI (for example `agent-coding-session/v1.0.0` and `v1.1.0` both
++exist), and the old URI keeps its meaning.  See [the kinds page](https://toolpath.net/kinds/).
+diff --git a/RFC.md b/RFC.md
+index 5939170f..9e7e3ab1 100644
+--- a/RFC.md
++++ b/RFC.md
+@@ -399,7 +399,7 @@ level (for one-offs or overrides).
+ Signatures can appear on both steps and paths, enabling:
+ - Author signatures on individual steps
+ - Reviewer signatures on paths (PR approval)
+-- CI attestation signatures
++- Several signers on one step or path
+ - Witness signatures for audit trails
+ 
+ ### Path Tree Structure
+@@ -938,7 +938,7 @@ other version control systems by capturing information they don't:
+    ends for reflection
+ 3. **Multi-perspective changes**: Raw diff + structural AST ops + semantic intent
+ 4. **Actor provenance**: Link actors to external identities (GitHub, email, etc.)
+-5. **Multi-party signatures**: Author, reviewer, CI attestation on same artifact
++5. **Multi-party signatures**: Author and reviewer signatures on the same artifact
+ 6. **Tool-agnostic history**: Capture changes from AI agents, formatters, linters
+    that may not create VCS commits
+ 
+diff --git a/docs/model/claims.json b/docs/model/claims.json
+index da8af4ce..1f5a0530 100644
+--- a/docs/model/claims.json
++++ b/docs/model/claims.json
+@@ -370,7 +370,7 @@
+     {
+       "id": "scoped-signatures",
+       "file": "site/pages/format.md",
+-      "quote": "Scoped signatures: author, reviewer, CI",
++      "quote": "Scoped signatures: author, reviewer",
+       "operations": [],
+       "evidence_kinds": []
+     },
+@@ -494,7 +494,7 @@
+     {
+       "id": "rfc-beyond-vcs-signatures",
+       "file": "RFC.md",
+-      "quote": "Author, reviewer, CI attestation on same artifact",
++      "quote": "Author and reviewer signatures on the same artifact",
+       "operations": [],
+       "evidence_kinds": []
+     },
+diff --git a/pr/86-wording-picks-16-17-18.md b/pr/86-wording-picks-16-17-18.md
+new file mode 100644
+index 00000000..77ba9031
+--- /dev/null
++++ b/pr/86-wording-picks-16-17-18.md
+@@ -0,0 +1,16 @@
++# docs: consultant picks 16, 17, 18 (wording)
++
++Status: draft · Base: pr/85 · Files: FAQ.md, RFC.md, site/index.md, site/pages/format.md, docs/model/claims.json, the .qual records they move
++
++- **16 (projection code location):** site/index.md says "a provider crate per harness (it reads sessions and writes them back; the CLI's `projection` modules in
++  `path_cli` wire the writers in)". The consultant's suggested "a reader crate plus a projector in path_cli" is not what the tree shows: the projectors (`project.rs`) are
++  in the provider crates; `path_cli/src/projection/*` is the CLI glue. No code moved.
++- **17 (CI signatures):** "CI" is dropped from the format page table, the FAQ and RFC beyond-VCS item 5 (now "author and reviewer signatures"), and the RFC's
++  "CI attestation signatures" bullet became "Several signers on one step or path" (same line count, so no RFC annotation drifts). The `ci` scope stays in the scope role
++  list, and `scopes_without_a_canonical_form_are_refused` is untouched. Two qualifier records went from concern to pass, because the unproven part is gone.
++- **18 (FAQ open questions):** step ids now answered from the code (git import `step-<short oid>`, conversation derive uses the turn id or `step-NNNN`); structural types
++  answered (`conversation.*` and `file.*` are the core namespaces shipped; no registry); evolution answered by versioned kind URIs; privacy reworded as open and honest (no
++  redaction marker exists today); the `toolpath:` base sentence now says it "names" a step and notes resolution is unspecified (RFC: no cross-path step references).
++  NOT done from the pick: making step ids "the RFC rule" with the id-uniqueness validator fix; that edits Alex's RFC and the validator, so it is a separate piece for him.
++
++Four FAQ/index records re-anchored (qualifier record --supersedes). Not run: pinned 1.94, gitleaks, nix-develop recapture.
+diff --git a/site/.qual b/site/.qual
+index 549cd7af..31085fc8 100644
+--- a/site/.qual
++++ b/site/.qual
+@@ -43,3 +43,4 @@
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:43:02.104627Z","id":"199f785a9380dcb900b45d5aa7d24679a31eaabc358bab88499b2b19b312bb53","body":{"kind":"resolve","summary":"Fixed: site/index.md:238 now uses the canonical /u/alex/repos/pathstash/graphs/<uuid> form; scripts/test-quickstart.sh runs that line with the host rewritten to the Pathbase stub and it resolves and execs codex resume (13 checks passed).","supersedes":"8f4d6db162f75592e06f5d2207573cecdcc41f1084020c1317b9766889c6e5f6","tags":["session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:fixed"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:43:03.176889Z","id":"83d80345daa2d9aa4d1517de4174ee3cb6df6a72ee5acc363ca6b0e0ee226577","body":{"detail":"scripts/test-quickstart.sh, a quality gate (scripts/quality_gates.sh gate_quickstart): path p cache sync over all seven harnesses (incremental), the site's query filter verbatim, path share against a stateful Pathbase stub (bare 'path share' is the interactive picker; the test drives its picker-free form), path resume <shared URL> --harness codex into a codex stub, and the page's own 'path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/<uuid> --harness codex' line, extracted from site/index.md with only the host rewritten to the stub, resolving and exec'ing 'codex resume'. 13 checks passed.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":238},"end":{"line":238},"content_hash":"727dc9ef41fa72bff01aa44bffa8e9e919177c32fd84b09c04e43f5a76767dba"},"summary":"Claim: the quickstart flow — sync, query, share and the page's own resume line all run offline — backed","supersedes":"3c79454a66d2dbe750ae59de89b42c83b37095cc4e0ffd0c120d8c4826bf6263","tags":["claim:quickstart-flow","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:51:43.098478Z","id":"c5ef76a0479c1d368498daaf6336521c0d5d57f27bbe447b8ef98c28c2eedcdc","body":{"detail":"Store/share/stats/read-back are pinned in pathbase-goldens (stored@, stats@, ir_back@, losses@) and toolpath's share tests. Resume from Pathbase: scripts/test-quickstart.sh (gate_quickstart; lines 287-318 at f308ab5, 288-319 here) runs path share against a stateful Pathbase stub, then path resume <the shared Pathbase URL> --harness codex --no-cache, which downloads the graph from the stub, writes a new rollout under ~/.codex/sessions with cwd = the resume directory, and execs 'codex resume <its session id>' (a codex stub records argv). The page's own resume line resolves the same way (lines 321-332).","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":142},"end":{"line":143},"content_hash":"020584061edffec370520ed5d3c6a18dbc110b0b46fe7a7a6858155a5fcd405f"},"summary":"Claim: Pathbase stores, shares and resumes sessions — share and resume from a shared Pathbase URL both run end to end — backed","supersedes":"1555fcd2b2ab7e656d62eeccee57e14e2313c3ffbc8a6445c33721f0151684ae","tags":["claim:pathbase-stores-shares-resumes","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"site/index.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T14:34:55.243514Z","id":"1e46e83b32a4f1a82f2466cb0d636c3d632602a471fb025ac375412e0e7957e1","body":{"detail":"scripts/test-plugin.sh and scripts/test-quickstart.sh, a quality gate (0464020) (the plugin's /path:share and /path:query through ensure-path.sh). Not run inside a real Claude Code.","kind":"pass","span":{"start":{"line":268},"end":{"line":269},"content_hash":"2c4ebe780e1e05a8ab845d789fb96560fecd1b5b7734e5910afd57baabf03d4d"},"summary":"Claim: /plugin install path@toolpath adds /path:share and /path:query and installs the CLI on first use — backed offline","supersedes":"67a883ca10b2aa5d639027f243200794ae8c0e6c8f4602bbc478367cad50a304","tags":["claim:claude-plugin","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/site/index.md b/site/index.md
+index 96e22b24..99f94a7f 100644
+--- a/site/index.md
++++ b/site/index.md
+@@ -257,7 +257,8 @@ path resume https://pathbase.dev/u/alex/repos/pathstash/graphs/4e865c65-7bb0-460
+     <div class="object-card">
+       <h3>Build on the crates</h3>
+       <p>Everything the CLI does is a library call: core types, a
+-      provider crate per harness, renderers for DOT and Markdown. See
++      provider crate per harness (it reads sessions and writes them back; the
++      CLI's <code>projection</code> modules in <code>path_cli</code> wire the writers in), renderers for DOT and Markdown. See
+       <a href="/crates/">the crates</a> or the
+       <a href="https://docs.rs/toolpath">API reference</a>.</p>
+     </div>
+diff --git a/site/pages/.qual b/site/pages/.qual
+index 0d2fd8d6..973360f9 100644
+--- a/site/pages/.qual
++++ b/site/pages/.qual
+@@ -77,3 +77,4 @@
+ {"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:38:48.771068Z","id":"f6d3692495b4bdd7e7cf39988b23b2a3be8edf0c462ac3fb886b385f4719229c","body":{"detail":"Agent-session documents embed full text, reasoning and tool output; the only secret control is the no_secrets gate over committed fixtures (crates/toolpath-webmock tests/no_secrets.rs), not over documents users share.","kind":"concern","ref":"git:04afa53","span":{"start":{"line":107},"end":{"line":107},"content_hash":"9c78f1f27ffe878790428c15051bab3ea1265df3fd6b6fa6a94e5cd9a9651e61"},"summary":"FAQ open question 'privacy and redaction' — still open; no redaction marker exists","supersedes":"a6559ff1ff75386196aa77ac3ee7f287230f8cedaba2476b71a8e367df7d802f","tags":["claim:faq-open-privacy","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/pages/faq.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T18:39:07.729588Z","id":"a75e314a06b8fc2835161e5b7ec24ca5e7e73c57c48c522d5be34e33c85b6f7c","body":{"detail":"Moved out of Open design questions (it was stale: kinds already answer it). Each kind version ships its own schema at its own URI (crates/path-cli/kinds/agent-coding-session/<v>/schema.json, mirrored under site/kinds; kinds::parse_uri_extracts_name_and_version, bundled_kind_uris_parse); a superseded URI stays valid: cmd_validate::legacy_kind_warns_once_per_path_and_still_validates (v1.0.0 validates, with a warning). Same evidence as claim:kind-index-immutable (site/kinds/index.md:11). The v1.1.0 kind schema sets no additionalProperties: false, and validate@<set>.snap is valid for all 9 sets, so extra properties do not invalidate a path.","kind":"pass","ref":"git:f308ab5","span":{"start":{"line":85},"end":{"line":85},"content_hash":"beb034e288ac165f1bf7e726573a9faf76ffb2bf28eea4f82a8adf852889c567"},"summary":"FAQ: the format evolves through kinds — immutable, semver-versioned kind URIs; answered, no longer an open question","supersedes":"6eaf389b4d95244b057b96d6aca8d566af0e38fb62482508b6c3cb70cdce7d0c","tags":["claim:faq-open-evolution","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"site/pages/format.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:13:26.828753Z","id":"6f455f54f38ae9a202c08d3c451f135c7e5db7ce18b77345b7b20697e888013f","body":{"kind":"resolve","summary":"The sentence was reworded to claim nothing measurable (a growing share of the work); the unsourced majority claim is cut (consultant pick 19).","supersedes":"52b17c0a72b8b9928ad69a3642bc388c1741b9233aebae9a6c2b76c5c52ed154","tags":["reason:fixed","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"site/pages/format.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T14:35:42.262875Z","id":"c7d62eec2a5b4e278200afb7f8d97e999f3af2f1352e15a2b1cef91939df6bd0","body":{"detail":"crates/toolpath/tests/signatures.rs (signed_step_and_path_verify, tampered_change_fails, moved_head_fails_both_path_signatures, missing_required_scope_fails, gpg_and_sigstore_are_not_verified, scopes_without_a_canonical_form_are_refused) and tests/jcs.rs (RFC 8785 reference vectors), feature 'verify' (810a58b): author and reviewer verify; a ci scope is refused (scopes_without_a_canonical_form_are_refused) because the RFC defines no canonical form for it; no producer signs anything. Dropped CI from the claim (consultant pick 17): the ci scope waits for the over proposal.","kind":"pass","span":{"start":{"line":141},"end":{"line":141},"content_hash":"85d1a48e4435d93da8f5d8153a9fe3b091feceb61b27683f0f2dc0bcb17b427f"},"summary":"Format page: scoped signatures author/reviewer: both verify (ssh Ed25519)","supersedes":"2d6d89ad16a32237b1d47816cf5a88aec6b23700946212f5fa0afc04f9a84457","tags":["claim:scoped-signatures","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/site/pages/format.md b/site/pages/format.md
+index 1ba91f1f..709beb58 100644
+--- a/site/pages/format.md
++++ b/site/pages/format.md
+@@ -138,7 +138,7 @@ The minimal example above shows the shape. To see what a Toolpath document looks
+ | Why they changed it    | Unstructured commit message | `meta.intent` + linked refs                      |
+ | Abandoned approaches   | Lost when branch is deleted | Dead ends preserved in the DAG                   |
+ | Multi-actor provenance | Collapsed into one commit   | Each actor gets their own step                   |
+-| Verification           | GPG on whole commit         | Scoped signatures: author, reviewer, CI          |
++| Verification           | GPG on whole commit         | Scoped signatures: author, reviewer              |
+ | Granularity            | Commit-level                | Sub-commit: multiple steps between commits       |
+ 
+ ## File extensions
+-- 
+2.55.0
+

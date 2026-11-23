@@ -1,0 +1,52 @@
+{
+ "agent": "codex",
+ "recorded_at": "2026-10-15T19:21:09.074Z",
+ "key": "b3b7b7bd0923bec8935d0fd5d3ff4ee047f8f90094f63fb2950a41cb079a6d5c",
+ "loose_key": "47ac8c10f54799fd89635b6cd77aab201683d69f3591759801d46ba861102a57",
+ "model": "",
+ "request": {
+  "method": "GET",
+  "url": "/backend-api/ps/plugins/suggested/codex?scope=GLOBAL",
+  "upstream": "https://chatgpt.com",
+  "headers": {
+   "accept": "*/*",
+   "authorization": "<redacted>",
+   "chatgpt-account-id": "<redacted>",
+   "oai-product-sku": "codex",
+   "originator": "codex_exec",
+   "user-agent": "codex_exec/0.162.1 (Mac OS 26.6.2; arm64) unknown"
+  },
+  "body": "",
+  "body_encoding": "identity",
+  "normalized": ""
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a4b12f683d3cf795-EWR",
+   "content-type": "application/json",
+   "cross-origin-opener-policy": "same-origin-allow-popups",
+   "date": "Thu, 15 Oct 2026 19:21:09 GMT",
+   "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+   "referrer-policy": "strict-origin-when-cross-origin",
+   "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=V5nl0mpWFc4Oj7fwxH5Nu32zinbQL8v6CsyEVPMqmCO%2FfhFLFFGO0oYvoA%2BZB2uHM%2BiPa9PDoxKqQPbypEivbM9mAoUCP7LxizseN3FqgRjSv4%2FZTnwb%2BoPyiNDG\"}]}",
+   "server": "cloudflare",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "x-content-type-options": "nosniff",
+   "x-oai-request-id": "32e9df03-40c7-4cc7-b224-b31a851a4903",
+   "x-openai-proxy-wasm": "v0.1",
+   "set-cookie": "<redacted>"
+  },
+  "chunks": [
+   {
+    "t_ms": 269,
+    "b64": "eyJlbmFibGVkIjp0cnVlLCJwbHVnaW5zIjpbeyJpZCI6InBsdWdpbl9jb25uZWN0b3JfMXBfOTVkMzk4ODE3MTNjODE5MTkzMTQ4MmE2MmQ2ZWRmZjkiLCJuYW1lIjoiZ21haWwiLCJkaXNwbGF5X25hbWUiOiJHbWFpbCJ9LHsiaWQiOiJwbHVnaW5fY29ubmVjdG9yXzFwX2FiMjFhNTUzYmZiYzgxOTE5ZWE4ZmQxODU4ZTNmZmE3IiwibmFtZSI6Imdvb2dsZS1kcml2ZSIsImRpc3BsYXlfbmFtZSI6Ikdvb2dsZSBEcml2ZSJ9LHsiaWQiOiJwbHVnaW5fY29ubmVjdG9yXzFwXzZiY2I1ODc5YzczYzgxOTE5NmFiYzcwMDE2MTY2MDk5IiwibmFtZSI6Im91dGxvb2stZW1haWwiLCJkaXNwbGF5X25hbWUiOiJPdXRsb29rIEVtYWlsIn0seyJpZCI6InBsdWdpbl9jb25uZWN0b3JfMXBfMWE2OTAzNWMyMzg4ODE5MTljNDE5MDkzMmIyZGY2OTkiLCJuYW1lIjoiZ2l0aHViIiwiZGlzcGxheV9uYW1lIjoiR2l0SHViIn0seyJpZCI6InBsdWdpbl9jb25uZWN0b3JfMXBfZGNhMDA5YWUyYzg0ODE5MWFlMTRkZjNhNDdjNWU3ZmQiLCJuYW1lIjoic2hhcmVwb2ludCIsImRpc3BsYXlfbmFtZSI6IlNoYXJlUG9pbnQifSx7ImlkIjoicGx1Z2luX2FzZGtfYXBwXzY5YTFkNzhlOTI5ODgxOTE5YmJhMGRiZGExZjY0MzZkIiwibmFtZSI6InNsYWNrIiwiZGlzcGxheV9uYW1lIjoiU2xhY2sifSx7ImlkIjoicGx1Z2luX2Nvbm5lY3Rvcl8xcF9lYmE4YjUyZmU1Mzg4MTkxODQwOGQ0YjQ2Yjk1NzY0NCIsIm5hbWUiOiJ0ZWFtcyIsImRpc3BsYXlfbmFtZSI6IlRlYW1zIn0seyJpZCI6InBsdWdpbl9jb25uZWN0b3JfMXBfZmQwZjRmNDFjYWE4ODE5MWE5NDU2NTE0YmJmZmEwNmQiLCJuYW1lIjoib3V0bG9vay1jYWxlbmRhciIsImRpc3BsYXlfbmFtZSI6Ik91dGxvb2sgQ2FsZW5kYXIifSx7ImlkIjoicGx1Z2luX2Nvbm5lY3Rvcl8xcF9mODUwOWRlOTAzMjg4MTkxYjE0YTE2MGM2YzVkMjBiMCIsIm5hbWUiOiJnb29nbGUtY2FsZW5kYXIiLCJkaXNwbGF5X25hbWUiOiJHb29nbGUgQ2FsZW5kYXIifSx7ImlkIjoicGx1Z2luX2FzZGtfYXBwXzY5YzE4YzI4ZjExODgxOTFiZjViODQ0NWM0YWIwYTJlIiwibmFtZSI6Im5vdGlvbiIsImRpc3BsYXlfbmFtZSI6Ik5vdGlvbiJ9LHsiaWQiOiJwbHVnaW5fY29ubmVjdG9yXzY4ZGYwMzhlMGJhNDgxOTE5MDhjODQzNDk5MWJiYWMyIiwibmFtZSI6ImZpZ21hIiwiZGlzcGxheV9uYW1lIjoiRmlnbWEifSx7ImlkIjoicGx1Z2luX2FzZGtfYXBwXzY5YTA4OWEzMjZkYzgxOTFiMzJhM2YyNTUzZjViZTJjIiwibmFtZSI6ImxpbmVhciIsImRpc3BsYXlfbmFtZSI6IkxpbmVhciJ9LHsiaWQiOiJwbHVnaW5fYXNka19hcHBfNjk1YmZjOTgwNzFjODE5MWJhYzdiYzQ3OWFhMjdkZTciLCJuYW1lIjoiYm94IiwiZGlzcGxheV9uYW1lIjoiQm94In0seyJpZCI6IlBsdWdpbl8xZTY0ODQ3M2JlOWM4MTkxYTkxYWMzOTQ3MTUxYWY1NSIsIm5hbWUiOiJjb2RleC1zZWN1cml0eSIsImRpc3BsYXlfbmFtZSI6IkNvZGV4IFNlY3VyaXR5In0seyJpZCI6InBsdWdpbl9jb25uZWN0b3JfMXBfMzJkYmE1YTcwOTVjODE5MWFkY2EwNGVlMzAyNzYzMDQiLCJuYW1lIjoib3BlbmFpLWRldmVsb3BlcnMiLCJkaXNwbGF5X25hbWUiOiJPcGVuQUkgRGV2ZWxvcGVycyJ9XX0="
+   }
+  ],
+  "bytes": 1622,
+  "duration_ms": 270,
+  "sse": false,
+  "text_preview": "{\"enabled\":true,\"plugins\":[{\"id\":\"plugin_connector_1p_95d39881713c8191931482a62d6edff9\",\"name\":\"gmail\",\"display_name\":\"Gmail\"},{\"id\":\"plugin_connector_1p_ab21a553bfbc81919ea8fd1858e3ffa7\",\"name\":\"google-drive\",\"display_name\":\"Google Drive\"},{\"id\":\"plugin_connector_1p_6bcb5879c73c819196abc70016166099\",\"name\":\"outlook-email\",\"display_name\":\"Outlook Email\"},{\"id\":\"plugin_connector_1p_1a69035c23888191"
+ }
+}

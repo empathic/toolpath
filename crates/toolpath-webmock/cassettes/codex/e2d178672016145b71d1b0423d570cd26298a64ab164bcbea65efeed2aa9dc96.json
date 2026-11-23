@@ -1,0 +1,50 @@
+{
+ "agent": "codex",
+ "recorded_at": "2026-10-15T19:21:09.074Z",
+ "key": "e2d178672016145b71d1b0423d570cd26298a64ab164bcbea65efeed2aa9dc96",
+ "loose_key": "653a648e1777cb71420e769c1721caefb866955a802a441093c0412584826264",
+ "model": "",
+ "request": {
+  "method": "GET",
+  "url": "/backend-api/wham/accounts/check",
+  "upstream": "https://chatgpt.com",
+  "headers": {
+   "accept": "*/*",
+   "authorization": "<redacted>",
+   "chatgpt-account-id": "<redacted>",
+   "user-agent": "codex_exec/0.162.1 (Mac OS 26.6.2; arm64) unknown (codex_exec; 0.162.1)"
+  },
+  "body": "",
+  "body_encoding": "identity",
+  "normalized": ""
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a4b12f683fc84251-EWR",
+   "content-type": "application/json",
+   "cross-origin-opener-policy": "same-origin-allow-popups",
+   "date": "Thu, 15 Oct 2026 19:21:09 GMT",
+   "nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+   "referrer-policy": "strict-origin-when-cross-origin",
+   "report-to": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=AL5Rr6Jdje1eBl5VzVqOVBeTa9qlvlgKjN%2BTnpNW%2BgkNI0y0kbBe%2BYJcuoqwXDlHaRTonOJ%2B3BfwCRanUwojjdvMOy9iRd0pgK0AM9ROR2gpjU7MRBFLZTXT9v3B\"}]}",
+   "server": "cloudflare",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "x-content-type-options": "nosniff",
+   "x-oai-request-id": "27b703e5-4bb5-434c-8f65-63d00ea37a57",
+   "x-openai-proxy-wasm": "v0.1",
+   "set-cookie": "<redacted>"
+  },
+  "chunks": [
+   {
+    "t_ms": 461,
+    "b64": "ewogICJhY2NvdW50cyI6IFsKICAgIHsKICAgICAgImlkIjogImQ3ZGJjNWIzLTE2NzMtNDRmMC04MjMwLWYwNjllMzc4ZWEwNSIsCiAgICAgICJhY2NvdW50X3VzZXJfaWQiOiAidXNlci1hTUV2YXU1NW9JUUxkNTQzV1hKS0lYTFhfX2Q3ZGJjNWIzLTE2NzMtNDRmMC04MjMwLWYwNjllMzc4ZWEwNSIsCiAgICAgICJhY2NvdW50X3VzZXJfcm9sZSI6ICJzdGFuZGFyZC11c2VyIiwKICAgICAgInN0cnVjdHVyZSI6ICJ3b3Jrc3BhY2UiLAogICAgICAicGxhbl90eXBlIjogInRlYW0iLAogICAgICAiaXNfemRyIjogZmFsc2UsCiAgICAgICJpc19vcGVuYWlfaW50ZXJuYWwiOiBmYWxzZSwKICAgICAgInRib19jb25maWciOiB7CiAgICAgICAgInBsYW5fZWxpZ2libGUiOiBmYWxzZSwKICAgICAgICAidGJvX2F2YWlsYWJsZSI6IGZhbHNlLAogICAgICAgICJ3YWl0bGlzdF9pbmZvIjogIk5PX1dBSVRMSVNUIgogICAgICB9LAogICAgICAiYWNjb3VudF9yZXNpZGVuY3lfcmVnaW9uIjogIm5vX2NvbnN0cmFpbnQiLAogICAgICAiY2FuX2FjY2Vzc193aXRoX3Nlc3Npb24iOiB0cnVlLAogICAgICAiZW5hYmxlX2FjY291bnRfc3dpdGNoaW5nIjogZmFsc2UsCiAgICAgICJpc19kZWFjdGl2YXRlZCI6IGZhbHNlLAogICAgICAiaXNfZmVkcmFtcF9jb21wbGlhbnRfd29ya3NwYWNlIjogZmFsc2UsCiAgICAgICJ3b3Jrc3BhY2VfYmFja2VuZF9vcmlnaW4iOiAiTk9fQ09OU1RSQUlOVCIsCiAgICAgICJhY2NvdW50X3JvdXRpbmdfb3ZlcnJpZGUiOiAiTk9fQ09OU1RSQUlOVCIsCiAgICAgICJuYW1lIjogIkVtcGF0aGljIiwKICAgICAgInByb2ZpbGVfcGljdHVyZV91cmwiOiBudWxsLAogICAgICAic3NvX2Nvbm5lY3Rpb25fbmFtZSI6IG51bGwKICAgIH0KICBdLAogICJkZWZhdWx0X2FjY291bnRfaWQiOiAiZDdkYmM1YjMtMTY3My00NGYwLTgyMzAtZjA2OWUzNzhlYTA1IiwKICAiYWNjb3VudF9vcmRlcmluZyI6IFsKICAgICJkN2RiYzViMy0xNjczLTQ0ZjAtODIzMC1mMDY5ZTM3OGVhMDUiCiAgXQp9"
+   }
+  ],
+  "bytes": 1020,
+  "duration_ms": 461,
+  "sse": false,
+  "text_preview": "{\n  \"accounts\": [\n    {\n      \"id\": \"d7dbc5b3-1673-44f0-8230-f069e378ea05\",\n      \"account_user_id\": \"user-aMEvau55oIQLd543WXJKIXLX__d7dbc5b3-1673-44f0-8230-f069e378ea05\",\n      \"account_user_role\": \"standard-user\",\n      \"structure\": \"workspace\",\n      \"plan_type\": \"team\",\n      \"is_zdr\": false,\n      \"is_openai_internal\": false,\n      \"tbo_config\": {\n        \"plan_eligible\": false,\n        \"tbo_"
+ }
+}

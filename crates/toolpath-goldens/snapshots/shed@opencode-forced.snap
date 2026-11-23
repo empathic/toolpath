@@ -1,0 +1,235 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: c521172607075bff33beea2d03530829bcc301a344caa66de59cf8061a0443df
+input_file: test-fixtures/opencode/convo-compacted.json
+---
+{
+  "source": {
+    "lines": 1332,
+    "bytes": 50832,
+    "string_chars": 22415,
+    "by_type": {
+      "?": 1
+    }
+  },
+  "ir": {
+    "bytes": 21809,
+    "string_chars": 15199,
+    "steps": 14,
+    "text_chars": 5740,
+    "tool_uses": 10
+  },
+  "projections": {
+    "claude": {
+      "lines": 25,
+      "bytes": 28089,
+      "string_chars": 19397,
+      "by_type": {
+        "assistant": 12,
+        "permission-mode": 1,
+        "user": 12
+      }
+    },
+    "codex": {
+      "lines": 83,
+      "bytes": 33282,
+      "string_chars": 24186,
+      "by_type": {
+        "event_msg/agent_message": 10,
+        "event_msg/exec_command_end": 1,
+        "event_msg/token_count": 12,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 10,
+        "response_item/message": 14,
+        "response_item/reasoning": 12,
+        "session_meta": 1,
+        "turn_context": 12
+      }
+    },
+    "copilot": {
+      "lines": 61,
+      "bytes": 32762,
+      "string_chars": 23614,
+      "by_type": {
+        "assistant.message": 12,
+        "assistant.turn_end": 12,
+        "assistant.turn_start": 12,
+        "session.start": 1,
+        "subagent.completed": 1,
+        "subagent.started": 1,
+        "tool.execution_complete": 10,
+        "tool.execution_start": 10,
+        "user.message": 2
+      }
+    },
+    "cursor": {
+      "lines": 1722,
+      "bytes": 89765,
+      "string_chars": 40693,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 157,
+      "bytes": 40578,
+      "string_chars": 34376,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 583,
+      "bytes": 26109,
+      "string_chars": 14146,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 25,
+      "bytes": 22173,
+      "string_chars": 14702,
+      "by_type": {
+        "message": 24,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 1485,
+    "bytes": 56639,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 101,
+      "after": 72,
+      "lost": 29,
+      "gained": 0
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "messages[].data.summary",
+        "example": "true"
+      },
+      {
+        "path": "messages[].parts[].data.auto",
+        "example": "false"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.count",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.description",
+        "example": "Run count.sh script"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.entries[]",
+        "example": ".stderr.log"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.lineEnd",
+        "example": "2"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.lineStart",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.offset",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.path",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.text",
+        "example": "scratch — feature elicitation this file …"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.totalEntries",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.totalLines",
+        "example": "2"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.truncated",
+        "example": "false"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.display.type",
+        "example": "directory"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.exists",
+        "example": "false"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.additions",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.deletions",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.file",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.patch",
+        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filepath",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.matches",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.model.modelID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.model.providerID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.parentSessionId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.preview",
+        "example": ".stderr.log"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.sessionId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "summary_additions",
+        "example": "0"
+      },
+      {
+        "path": "summary_deletions",
+        "example": "0"
+      },
+      {
+        "path": "summary_files",
+        "example": "0"
+      }
+    ],
+    "gained": []
+  }
+}

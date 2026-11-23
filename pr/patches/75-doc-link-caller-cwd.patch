@@ -1,0 +1,49 @@
+From c1e8cd918fbb86ec19119cb4e7d5762446526f58 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 15:25:45 -0400
+Subject: [PATCH] fix(goldens): CALLER_CWD's doc no longer links a private item
+ (pr/75)
+
+---
+ crates/toolpath-goldens/src/pipeline.rs |  2 +-
+ pr/75-doc-link-caller-cwd.md            | 15 +++++++++++++++
+ 2 files changed, 16 insertions(+), 1 deletion(-)
+ create mode 100644 pr/75-doc-link-caller-cwd.md
+
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index f46ba2d8..17c27c9b 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -35,7 +35,7 @@ use crate::validate::validate;
+ /// caller's (`--project`, `path resume -C`, else the shell's), not the source's. Not a defect: codex's
+ /// resume picker lists only sessions whose `cwd` is where it runs, pi and gemini key the project on it
+ /// (gemini's `projectHash`, `directories`). The pipeline resumes in the DOCUMENT's own working
+-/// directory ([`resume_dir`], as `path resume -C <project>` does for a user resuming where the
++/// directory (`resume_dir`, as `path resume -C <project>` does for a user resuming where the
+ /// session ran), so the written session can be read back with paths relative to it; this `/` (the
+ /// directory the hermetic tool ran from) is only the fallback for a document that names none.
+ pub const CALLER_CWD: &str = "/";
+diff --git a/pr/75-doc-link-caller-cwd.md b/pr/75-doc-link-caller-cwd.md
+new file mode 100644
+index 00000000..2b4bd6f0
+--- /dev/null
++++ b/pr/75-doc-link-caller-cwd.md
+@@ -0,0 +1,15 @@
++# fix(goldens): CALLER_CWD's doc no longer links a private item
++
++Status: draft · Base: pr/73 · crates/toolpath-goldens/src/pipeline.rs (one doc line)
++
++## Why
++`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/develop,toolpath/verify --no-deps` failed at
++pipeline.rs:38: the public `CALLER_CWD` doc (rewritten in pr/73) linked the private fn `resume_dir` with an intra-doc link
++(`rustdoc::private_intra_doc_links`).
++
++## What
++The link becomes plain code, `` `resume_dir` ``. No behaviour change.
++
++## Checked
++doc (the command above), fmt, clippy `--workspace --all-targets` with both features `-D warnings`, `cargo test -p toolpath-goldens`,
++`qualifier review` (0 drifted), `just baseline`.
+-- 
+2.55.0
+

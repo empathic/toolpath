@@ -1,0 +1,66 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: out
+---
+documented on the CLI page but not in the binary:
+
+in the binary but not on the CLI page:
+  path config
+  path config edit
+  path p cache sync
+  path p derive claude
+  path p derive codex
+  path p derive copilot
+  path p derive cursor
+  path p derive gemini
+  path p derive git
+  path p derive github
+  path p derive opencode
+  path p derive pathbase
+  path p derive pi
+  path p export codex
+  path p export copilot
+  path p export cursor
+  path p export gemini
+  path p export opencode
+  path p export pi
+  path p import codex
+  path p import copilot
+  path p import cursor
+  path p import gemini
+  path p import github
+  path p import opencode
+  path p import pathbase
+  path p import pi
+  path p incept claude
+  path p incept cursor
+  path p list codex
+  path p list copilot
+  path p list cursor
+  path p list gemini
+  path p list github
+  path p list opencode
+  path p list pi
+  path p project claude
+  path p render md
+  path show claude
+  path show codex
+  path show copilot
+  path show cursor
+  path show gemini
+  path show opencode
+  path show pi
+
+flags that differ (documented commands only):
+  path auth login: accepted, not documented: --code
+  path p export claude: accepted, not documented: --force --new-session-id --session-id
+  path p export pathbase: accepted, not documented: --anon --name --public --repo
+  path p import claude: accepted, not documented: --force --no-cache
+  path p import git: accepted, not documented: --force --no-cache
+  path p list claude: accepted, not documented: --format
+  path p list git: accepted, not documented: --format
+  path query: accepted, not documented: --no-sync --project-under
+  path resume: accepted, not documented: --cwd --force --harness --no-cache --url
+  path share: accepted, not documented: --anon --harness --name --no-cache --project --public --repo --session --timeout --url
+
+global flags every command accepts, not on the page: --picker

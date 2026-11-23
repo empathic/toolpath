@@ -1,0 +1,1075 @@
+From d32e275dcafdf3d0cb9f57f517cfc51b4706c091 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 15:27:29 -0400
+Subject: [PATCH] test(goldens): retire claude-to-codex-caller-cwd; the resume
+ directory is the codex cwd by design
+
+The pin said claude -> codex writes "/" where the source session's cwd
+was, and took the source cwd as what a fix would write. A real run
+(path resume --harness codex -C <dir>, export codex --project <dir>)
+writes <dir> into session_meta, every turn_context and the state_5
+thread row, and that is what codex needs: codex resume's picker lists
+only sessions whose cwd is the directory it runs in (--all disables
+the filter). The goldens wrote "/" because the hermetic run starts
+there. Not a defect: the pin, its Finding and the manifest entry go;
+write_defects now prunes retired defects from the manifest; a
+projection::codex unit test pins the -C dir as the written cwd; the
+qualifier concerns are resolved reason:invalid with the explanation.
+Behaviour unchanged; known_defects@claude.snap loses the one entry.
+---
+ crates/path-cli/src/.qual                     |   1 +
+ crates/path-cli/src/goldens.rs                |  85 ++-------
+ crates/path-cli/src/projection/codex.rs       |  86 +++++++++
+ crates/toolpath-codex/src/.qual               |   1 +
+ .../snapshots/known_defects@claude.snap       |  13 +-
+ crates/toolpath-goldens/src/.qual             |   3 +
+ crates/toolpath-goldens/src/defects.rs        |  37 +---
+ crates/toolpath-goldens/src/model.rs          |   7 +-
+ crates/toolpath-goldens/src/pipeline.rs       |   8 +-
+ docs/GOLDENS.md                               |   6 +-
+ goldens/DEMO.md                               |   2 +-
+ .../claude-to-codex-caller-cwd.tsv            |   2 -
+ goldens/manifest.json                         | 177 +++++++++---------
+ pr/22-codex-resume-cwd.md                     |  74 ++++++++
+ 14 files changed, 279 insertions(+), 223 deletions(-)
+ delete mode 100644 goldens/known-defect/claude-to-codex-caller-cwd.tsv
+ create mode 100644 pr/22-codex-resume-cwd.md
+
+diff --git a/crates/path-cli/src/.qual b/crates/path-cli/src/.qual
+index 4b1adf8b..087afb08 100644
+--- a/crates/path-cli/src/.qual
++++ b/crates/path-cli/src/.qual
+@@ -3,3 +3,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-15T15:15:28.105271Z","id":"e580209a94dabe0a5d889b621187858d9775136771f255609d69077674e235bf","body":{"detail":"The claude driver scopes tools to Bash(ls); pi runs unconstrained too. Scope copilot and pi the same way, or record why not. From the practice review against Alex's rubric, 2026-10-14.","kind":"concern","span":{"start":{"line":3024},"end":{"line":3024},"content_hash":"a01ee23a651ad92094a0dfc2d846c5ecec998156df7aded5b33542f7ad81feda"},"summary":"capture-live runs copilot with --allow-all-tools while a real token is in the environment","tags":["review","capture-live","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/lib.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-15T15:15:28.115421Z","id":"6a443c2893a9d332e9be4828a7bed4bc786993d740c2f15a634d22465f124ebf","body":{"detail":"It should be a dev crate (crates/toolpath-goldens); capture-live is the only part that needs the CLI. The insta rewrite moves it. Alex's ownership-boundary pattern (#340, #324).","kind":"concern","span":{"start":{"line":38},"end":{"line":38},"content_hash":"3b6f2e5a016cf9867124af8319012e075b5e54d661e871dd95def2b38d5b0eba"},"summary":"goldens machinery (3.8k lines) lives inside path-cli, the shipped binary","tags":["review","placement","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-16T02:05:46.899193Z","id":"91531b5a1aa7c4f43ccfbc80ef3e9b1cbd57d17ea9b6a8330ce2570edc4b4206","body":{"detail":"The claude driver scopes tools to Bash(ls); pi runs unconstrained too. Scope copilot and pi the same way, or record why not. From the practice review against Alex's rubric, 2026-10-14.","kind":"concern","span":{"start":{"line":3029},"end":{"line":3029},"content_hash":"a01ee23a651ad92094a0dfc2d846c5ecec998156df7aded5b33542f7ad81feda"},"summary":"capture-live runs copilot with --allow-all-tools while a real token is in the environment","supersedes":"e580209a94dabe0a5d889b621187858d9775136771f255609d69077674e235bf","tags":["review","capture-live","session:claude-code:3414fc87-8428-410a-a91d-02d468d93d81"]}}
++{"metabox":"1","type":"annotation","subject":"crates/path-cli/src/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:48.228067Z","id":"d1aee1d04329a3a37277bae7d289d7b557c070bda84bbc5c16f68f51e38788cd","body":{"detail":"The claude driver scopes tools to Bash(ls); pi runs unconstrained too. Scope copilot and pi the same way, or record why not. From the practice review against Alex's rubric, 2026-10-14.","kind":"concern","span":{"start":{"line":2981},"end":{"line":2981},"content_hash":"a01ee23a651ad92094a0dfc2d846c5ecec998156df7aded5b33542f7ad81feda"},"summary":"capture-live runs copilot with --allow-all-tools while a real token is in the environment","supersedes":"91531b5a1aa7c4f43ccfbc80ef3e9b1cbd57d17ea9b6a8330ce2570edc4b4206","tags":["review","capture-live","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/path-cli/src/goldens.rs b/crates/path-cli/src/goldens.rs
+index 240d30d5..51ed21a6 100644
+--- a/crates/path-cli/src/goldens.rs
++++ b/crates/path-cli/src/goldens.rs
+@@ -380,7 +380,6 @@ struct TargetRun {
+ }
+ 
+ struct SetRun {
+-    source_cwd: Option<String>,
+     /// The transcript the run started from.
+     input: Vec<u8>,
+     /// The Toolpath document derived from the input (IR1).
+@@ -477,9 +476,10 @@ impl Goldens {
+ 
+     // -- hermetic execution -----------------------------------------------------------------
+ 
+-    /// An empty environment pointing every store at `home`; nothing is inherited. `p export codex -o`
+-    /// records the CALLER's cwd as the session cwd (see the known defects), so the working directory
+-    /// is part of the input: pinned to `/`.
++    /// An empty environment pointing every store at `home`; nothing is inherited. `p export
++    /// codex|pi|copilot|gemini` records the CALLER's cwd as the session cwd (the directory the
++    /// session is resumed in, which is where codex's resume picker and pi/gemini's project keys look
++    /// for it; not a defect, see pr/22), so the working directory is part of the input: pinned to `/`.
+     fn hermetic(&self, home: &Path) -> Command {
+         let mut c = Command::new(&self.exe);
+         c.current_dir("/")
+@@ -512,14 +512,13 @@ impl Goldens {
+         }
+     }
+ 
+-    /// Place `input` where `harness`'s adapter discovers it inside `home`; returns the derive args
+-    /// and the session's cwd when it has one.
++    /// Place `input` where `harness`'s adapter discovers it inside `home`; returns the derive args.
+     fn place(
+         harness: Harness,
+         input: &[u8],
+         home: &Path,
+         project: Option<&str>,
+-    ) -> Result<(Vec<String>, Option<String>)> {
++    ) -> Result<Vec<String>> {
+         let pick = |f: &dyn Fn(&Value) -> Option<Value>| -> Result<Value> {
+             String::from_utf8_lossy(input)
+                 .lines()
+@@ -549,10 +548,7 @@ impl Goldens {
+                     &dir.join(format!("rollout-{date}T{time}-{id}.jsonl")),
+                     input,
+                 )?;
+-                (
+-                    args(&["p", "derive", "codex", "--all"]),
+-                    meta["cwd"].as_str().map(str::to_string),
+-                )
++                args(&["p", "derive", "codex", "--all"])
+             }
+             Harness::Copilot => {
+                 let sid = pick(&|v| v.get("data")?.get("sessionId").cloned())?;
+@@ -563,11 +559,7 @@ impl Goldens {
+                         .join("events.jsonl"),
+                     input,
+                 )?;
+-                let cwd = pick(&|v| v.get("data")?.get("context")?.get("cwd").cloned()).ok();
+-                (
+-                    args(&["p", "derive", "copilot", "--all"]),
+-                    cwd.and_then(|c| c.as_str().map(str::to_string)),
+-                )
++                args(&["p", "derive", "copilot", "--all"])
+             }
+             Harness::Pi => {
+                 let head = pick(&|v| (v["type"] == "session").then(|| v.clone()))?;
+@@ -581,8 +573,8 @@ impl Goldens {
+                 let file = format!("{ts}_{}.jsonl", s(&head["id"])?);
+                 write(&home.join(".pi/agent/sessions").join(enc).join(file), input)?;
+                 let mut a = args(&["p", "derive", "pi", "--project"]);
+-                a.extend([cwd.clone(), "--all".into()]);
+-                (a, Some(cwd))
++                a.extend([cwd, "--all".into()]);
++                a
+             }
+             Harness::Claude => {
+                 let cwd = match project {
+@@ -602,8 +594,8 @@ impl Goldens {
+                     input,
+                 )?;
+                 let mut a = args(&["p", "derive", "claude", "--project"]);
+-                a.extend([cwd.clone(), "--all".into()]);
+-                (a, Some(cwd))
++                a.extend([cwd, "--all".into()]);
++                a
+             }
+         })
+     }
+@@ -612,7 +604,7 @@ impl Goldens {
+     fn run_set(&self, harness: Harness, input: &[u8], project: Option<&str>) -> Result<SetRun> {
+         let tmp = tempfile::tempdir()?;
+         let home = tmp.path().canonicalize()?;
+-        let (derive_args, source_cwd) = Self::place(harness, input, &home, project)?;
++        let derive_args = Self::place(harness, input, &home, project)?;
+         let ir = home.join("ir.json");
+         let ir_bytes = Self::exec(self.hermetic(&home).args(&derive_args))
+             .map_err(|e| anyhow!("derive failed: {e}"))?;
+@@ -662,7 +654,6 @@ impl Goldens {
+             });
+         }
+         Ok(SetRun {
+-            source_cwd,
+             input: input.to_vec(),
+             ir: ir_bytes,
+             targets,
+@@ -854,6 +845,10 @@ impl Goldens {
+     }
+ 
+     fn write_defects(&self, m: &mut Value, name: &str, run: &SetRun) -> Result<()> {
++        // A defect retired from `DEFECTS` (fixed, or found not to be one) leaves the manifest too.
++        if let Some(list) = m["known_defects"].as_array_mut() {
++            list.retain(|d| DEFECTS.iter().any(|def| d["file"] == def.file));
++        }
+         for def in DEFECTS.iter().filter(|d| d.set == name) {
+             let Some(out) = self.defect_output(def, run) else {
+                 continue;
+@@ -1447,20 +1442,6 @@ fn judge_counts(_: &SetRun, _: &[u8], pinned: &str, fresh: &str) -> Verdict {
+     }
+ }
+ 
+-/// `source_cwd` / `written_cwd` lines: fixed only when every written cwd is the source cwd.
+-fn judge_cwd(run: &SetRun, _: &[u8], _: &str, fresh: &str) -> Verdict {
+-    let src = run.source_cwd.as_deref().unwrap_or("<none>");
+-    let written: Vec<&str> = fresh
+-        .lines()
+-        .filter_map(|l| l.strip_prefix("written_cwd\t"))
+-        .collect();
+-    if !written.is_empty() && written.iter().all(|w| *w == src) {
+-        Verdict::Fixed("every written cwd is the source cwd".into())
+-    } else {
+-        Verdict::Worse(format!("written cwd now {:?}, source {src}", written))
+-    }
+-}
+-
+ /// `source<TAB>written` rename lines: a pinned rename is fixed only when the source path is written
+ /// again under its own name; if neither name is written the field is lost outright (worse).
+ fn judge_renames(_: &SetRun, out: &[u8], pinned: &str, fresh: &str) -> Verdict {
+@@ -1501,16 +1482,6 @@ const DEFECTS: &[Defect] = &[
+         compute: |_, out| illegal_types(out),
+         judge: judge_counts,
+     },
+-    // Found 2026-10-08: `p export codex -o` writes the CALLER's cwd into every codex `cwd` field instead
+-    // of the source session's. The harness runs from `/`, so the wrong value is `/`.
+-    Defect {
+-        file: "goldens/known-defect/claude-to-codex-caller-cwd.tsv",
+-        set: "claude",
+-        target: "codex",
+-        report: "~/.lobby/ops/REPORT-demo-goldens-toolpath-2026-10-08.md (found 2026-10-08)",
+-        compute: caller_cwd,
+-        judge: judge_cwd,
+-    },
+     // Found by `shed` 2026-10-08: the claude projection renames `message.stop_reason` (the API field
+     // Claude Code reads) to `message.stopReason`; the docs (jsonl-envelope.md) say `stopReason` is a
+     // different, hook-provided envelope field. Pinned as the renames the projection currently makes
+@@ -1580,25 +1551,6 @@ fn illegal_types(output: &[u8]) -> String {
+     counts.iter().map(|(t, n)| format!("{t}\t{n}\n")).collect()
+ }
+ 
+-fn caller_cwd(run: &SetRun, output: &[u8]) -> String {
+-    let mut written = BTreeSet::new();
+-    for line in String::from_utf8_lossy(output).lines() {
+-        if let Ok(v) = serde_json::from_str::<Value>(line)
+-            && let Some(c) = v["payload"]["cwd"].as_str()
+-        {
+-            written.insert(c.to_string());
+-        }
+-    }
+-    let mut out = format!(
+-        "source_cwd\t{}\n",
+-        run.source_cwd.as_deref().unwrap_or("<none>")
+-    );
+-    for w in written {
+-        out += &format!("written_cwd\t{w}\n");
+-    }
+-    out
+-}
+-
+ // ---------------------------------------------------------------------------------------------
+ // Canonical form, diff, pin comparison
+ // ---------------------------------------------------------------------------------------------
+@@ -1984,7 +1936,7 @@ impl Goldens {
+                 let adapter = Harness::parse(t.target)?;
+                 let tmp = tempfile::tempdir()?;
+                 let home = tmp.path().canonicalize()?;
+-                let (args, _) = Self::place(adapter, bytes, &home, None)?;
++                let args = Self::place(adapter, bytes, &home, None)?;
+                 let ir2 = Self::exec(self.hermetic(&home).args(&args))
+                     .map_err(|e| anyhow!("derive from {} failed: {e}", t.target))?;
+                 let ir2: Value = serde_json::from_slice(&ir2)?;
+@@ -3556,7 +3508,6 @@ mod tests {
+                 .unwrap();
+         let input = fs::read_to_string(root.join("goldens/claude/input.jsonl")).unwrap();
+         let run = SetRun {
+-            source_cwd: None,
+             input: input.clone().into_bytes(),
+             ir: Vec::new(),
+             targets: Vec::new(),
+diff --git a/crates/path-cli/src/projection/codex.rs b/crates/path-cli/src/projection/codex.rs
+index 764e193d..1cbf90ff 100644
+--- a/crates/path-cli/src/projection/codex.rs
++++ b/crates/path-cli/src/projection/codex.rs
+@@ -242,4 +242,90 @@ mod tests {
+         let codex_sessions = fake_home.join(".codex/sessions");
+         assert!(codex_sessions.exists(), "codex sessions dir missing");
+     }
++
++    /// The rollout is placed where it will be resumed: every `cwd` codex reads
++    /// (`session_meta.payload.cwd`, `turn_context.payload.cwd`) is the `-C`
++    /// project directory, not the source session's own cwd. `codex resume`
++    /// lists only sessions whose cwd is the directory it runs in, so the
++    /// source cwd would hide the session from the picker launched in `-C`.
++    #[test]
++    fn project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd() {
++        let temp = tempfile::tempdir().unwrap();
++        let fake_home = temp.path().join("home");
++        std::fs::create_dir_all(&fake_home).unwrap();
++        let cwd = temp.path().join("proj");
++        std::fs::create_dir_all(&cwd).unwrap();
++        let want = std::fs::canonicalize(&cwd)
++            .unwrap()
++            .to_string_lossy()
++            .into_owned();
++
++        let source_cwd = "/source/session/project";
++        let mut path = make_convo_path("codex://019dabc6-cccc-dddd-eeee-000000000001");
++        for change in path.steps[0].change.values_mut() {
++            let s = change.structural.as_mut().unwrap();
++            s.extra
++                .insert("cwd".to_string(), serde_json::json!(source_cwd));
++        }
++        let view = toolpath_convo::extract_conversation(&path);
++        assert_eq!(
++            view.turns[0]
++                .environment
++                .as_ref()
++                .and_then(|e| e.working_dir.as_deref()),
++            Some(source_cwd),
++            "the source carries its own cwd"
++        );
++
++        let _g = crate::config::TEST_ENV_LOCK
++            .lock()
++            .unwrap_or_else(|e| e.into_inner());
++        let prior_home = std::env::var_os("HOME");
++        unsafe {
++            std::env::set_var("HOME", &fake_home);
++        }
++        let result = project_codex(&path, &cwd);
++        unsafe {
++            match prior_home {
++                Some(v) => std::env::set_var("HOME", v),
++                None => std::env::remove_var("HOME"),
++            }
++        }
++        result.expect("project_codex should succeed");
++
++        let rollout = walkdir_jsonl(&fake_home.join(".codex/sessions"));
++        let text = std::fs::read_to_string(&rollout).unwrap();
++        let written: Vec<(String, String)> = text
++            .lines()
++            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
++            .filter_map(|v| {
++                let cwd = v["payload"]["cwd"].as_str()?.to_string();
++                Some((v["type"].as_str().unwrap_or("").to_string(), cwd))
++            })
++            .collect();
++        let kinds: Vec<&str> = written.iter().map(|(t, _)| t.as_str()).collect();
++        assert!(kinds.contains(&"session_meta"), "{kinds:?}");
++        assert!(kinds.contains(&"turn_context"), "{kinds:?}");
++        for (kind, written_cwd) in &written {
++            assert_eq!(written_cwd, &want, "{kind} cwd");
++        }
++    }
++
++    /// The one `*.jsonl` file under `dir` (codex's `YYYY/MM/DD` layout).
++    fn walkdir_jsonl(dir: &std::path::Path) -> std::path::PathBuf {
++        let mut found = Vec::new();
++        let mut stack = vec![dir.to_path_buf()];
++        while let Some(d) = stack.pop() {
++            for e in std::fs::read_dir(&d).unwrap() {
++                let p = e.unwrap().path();
++                if p.is_dir() {
++                    stack.push(p);
++                } else if p.extension().is_some_and(|x| x == "jsonl") {
++                    found.push(p);
++                }
++            }
++        }
++        assert_eq!(found.len(), 1, "{found:?}");
++        found.remove(0)
++    }
+ }
+diff --git a/crates/toolpath-codex/src/.qual b/crates/toolpath-codex/src/.qual
+index 6779c5f3..589674bc 100644
+--- a/crates/toolpath-codex/src/.qual
++++ b/crates/toolpath-codex/src/.qual
+@@ -1 +1,2 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-codex/src/project.rs","issuer":"mailto:bobby-scratch","issuer_type":"ai","created_at":"2026-10-08T21:43:20.375104Z","id":"3ed731d5a2b3610426dde826aa0e582549971d72674b08bcd45a038edda0bfa2","body":{"kind":"concern","summary":"claude -> codex projection writes cwd / where the source session had the caller cwd. Known defect goldens/known-defect/claude-to-codex-caller-cwd.tsv","tags":["shed","demo","known-defect","session:claude-code:77642186-b5fe-4a62-9a4f-c01656ed6335"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-codex/src/project.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:48.253492Z","id":"d86463e21e27ce9fc5e1403258b68e2bee5a4a74727ad8fb3d44f3b279991ab5","body":{"kind":"resolve","summary":"Not a defect. path resume --harness codex -C <dir> (cmd_resume -> projection::codex::project_codex) and path export codex --project <dir> write the -C/--project directory into session_meta.cwd, every turn_context.cwd and the state_5.sqlite thread row; export -o without --project uses the shell's cwd. That is what codex needs: codex resume's picker lists only sessions whose cwd is the directory it runs in (--all disables the cwd filter), so the source cwd would hide a resumed session from the picker in the directory the user resumed in, and is usually a path that does not exist on the resuming machine. The goldens wrote / because the hermetic harness runs from / (CALLER_CWD); the pin compared against the source cwd, so a change to write the source cwd would have been judged FIXED while breaking resume. Pin and Finding::CallerCwd removed; contract pinned by path-cli projection::codex::tests::project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd. pr/22.","supersedes":"3ed731d5a2b3610426dde826aa0e582549971d72674b08bcd45a038edda0bfa2","tags":["known-defect","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:invalid"]}}
+diff --git a/crates/toolpath-goldens/snapshots/known_defects@claude.snap b/crates/toolpath-goldens/snapshots/known_defects@claude.snap
+index de8600fa..f8cb1594 100644
+--- a/crates/toolpath-goldens/snapshots/known_defects@claude.snap
++++ b/crates/toolpath-goldens/snapshots/known_defects@claude.snap
+@@ -5,20 +5,9 @@ info:
+   adapter: toolpath_claude
+   agent: claude
+   input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
+-input_file: goldens/claude/input.jsonl
++input_file: test-fixtures/claude/convo.jsonl
+ ---
+ [
+-  {
+-    "name": "claude-to-codex-caller-cwd",
+-    "target": "codex",
+-    "finding": {
+-      "kind": "caller_cwd",
+-      "source_cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude",
+-      "written_cwd": [
+-        "/"
+-      ]
+-    }
+-  },
+   {
+     "name": "claude-roundtrip-renames",
+     "target": "self",
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index 4ecdd7ea..4993c158 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -13,3 +13,6 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T18:20:55.799041Z","id":"c62500a0424141c0245c783c7fb7344dea0c045c097071b3eb279373cc61dea7","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":481},"end":{"line":481},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"207c648136a27f9351d94a4c4db84a28d8b042d46b7662455c404a2467d20101","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T18:20:55.799161Z","id":"2fd56e2601b246b0cd173b564877b9690b12b6b4f924a3f8a9b9c157abcb76dd","body":{"detail":"test-fixtures/opencode/convo.json is what `opencode export <id>` prints (camelCase, nested info); toolpath_opencode reads rows from opencode-stable.db and has no reader for this file. A `Session::from_export` in the adapter would remove all three copies, and `path p derive opencode` could then take the file.","kind":"concern","span":{"start":{"line":292},"end":{"line":292},"content_hash":"e1f0854ff123c1ce324417c98893618c5a16b9d4d7c747feadd81bba62cca511"},"summary":"The `opencode export` wrapper to Session translation is duplicated from path-cli/tests/cross_harness_matrix.rs and toolpath-opencode/tests/real_fixture_roundtrip.rs; the adapter should own it","supersedes":"9cab016c6cb69f9e3bfbbfd32ae7c6cbb861a2784210064ffb51490828c0b46d","tags":["goldens","opencode","duplication","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T18:20:55.817235Z","id":"48316e5455f9661818809fc6564b6f6e18dffb4edc2441f11516c011c5ab0ac9","body":{"kind":"resolve","summary":"Fixed: toolpath_gemini::ConversationReader reads the 0.47 record stream (upsert by id, $set, $rewindTo); the pipeline, cross_harness_matrix and real_fixture_roundtrip all call it","supersedes":"0b188981a320abccdc1fe377e1ef33b8719cb53679fb2d9ead78c61dd4b426ed","tags":["session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:fixed"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:48.240684Z","id":"1bca87fd8af4880a2661d3ab9fc2324f35984821b17ff4a18a0ff4139ce104a5","body":{"kind":"resolve","summary":"Not a defect. path resume --harness codex -C <dir> (cmd_resume -> projection::codex::project_codex) and path export codex --project <dir> write the -C/--project directory into session_meta.cwd, every turn_context.cwd and the state_5.sqlite thread row; export -o without --project uses the shell's cwd. That is what codex needs: codex resume's picker lists only sessions whose cwd is the directory it runs in (--all disables the cwd filter), so the source cwd would hide a resumed session from the picker in the directory the user resumed in, and is usually a path that does not exist on the resuming machine. The goldens wrote / because the hermetic harness runs from / (CALLER_CWD); the pin compared against the source cwd, so a change to write the source cwd would have been judged FIXED while breaking resume. Pin and Finding::CallerCwd removed; contract pinned by path-cli projection::codex::tests::project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd. pr/22.","supersedes":"90e64df3125f4d1524949c2e13fb9e19b7c31d40018941fb8df9a61d419d8298","tags":["known-defect","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","reason:invalid"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:48.259994Z","id":"b839958fe42d822f01f5667e1e873da8cce97aa34e4f89fbb635e4e6bb7133c5","body":{"detail":"Not a defect. path resume --harness codex -C <dir> (cmd_resume -> projection::codex::project_codex) and path export codex --project <dir> write the -C/--project directory into session_meta.cwd, every turn_context.cwd and the state_5.sqlite thread row; export -o without --project uses the shell's cwd. That is what codex needs: codex resume's picker lists only sessions whose cwd is the directory it runs in (--all disables the cwd filter), so the source cwd would hide a resumed session from the picker in the directory the user resumed in, and is usually a path that does not exist on the resuming machine. The goldens wrote / because the hermetic harness runs from / (CALLER_CWD); the pin compared against the source cwd, so a change to write the source cwd would have been judged FIXED while breaking resume. Pin and Finding::CallerCwd removed; contract pinned by path-cli projection::codex::tests::project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd. pr/22.","kind":"comment","span":{"start":{"line":35},"end":{"line":35},"content_hash":"0beee873aef40908b4e7e97e085fcd88e7802bd043a4260b138f92949e0799bd"},"summary":"CALLER_CWD is the directory a projection is resumed in, not a stand-in for a defect: the caller's cwd is the contract for codex, pi, copilot and gemini","tags":["goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/defects.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:21:58.510877Z","id":"122da212472671c8e0d215332a5fda04abd602a91ace0a60d6cc56bd40efe017","body":{"detail":"The old tool's judge functions (Fixed vs Worse) classified a changed body; here the classification is the reviewer's, guided by tests/goldens.rs's doc comment. An accounting defect that goes to an empty mismatches list is fixed: accept the snapshot, delete the Defect, and the invariant in tests/goldens.rs tightens by itself. Resolve this record when every defect is fixed and its snapshot accepted. claude-to-codex-caller-cwd was retired 2026-10-19 as not a defect (pr/22): a pin's reference value is itself a claim to check.","kind":"concern","span":{"start":{"line":54},"end":{"line":54},"content_hash":"2e1040b296bb70b5e4614fe3f886af2ddb83174dab983c22fda92737fc98ffe0"},"summary":"Five defects pinned as expected current behaviour (three of them accounting gaps that also exempt their set from the accounting invariant); a diff in known_defects@<set>.snap is FIXED or WORSE and must be read, insta cannot tell the two apart","supersedes":"2ac0a1e747def033b9a72aa0296d25d88184ef7c48ef1f5456f2fedb42f0fa00","tags":["goldens","known-defect","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-goldens/src/defects.rs b/crates/toolpath-goldens/src/defects.rs
+index 3b47608e..107b55ae 100644
+--- a/crates/toolpath-goldens/src/defects.rs
++++ b/crates/toolpath-goldens/src/defects.rs
+@@ -2,7 +2,7 @@
+ //! measurement over a set's outputs; the snapshot holds the measurement, so a
+ //! fix (or a regression on top of the defect) shows as a snapshot diff.
+ 
+-use std::collections::{BTreeMap, BTreeSet};
++use std::collections::BTreeMap;
+ 
+ use serde_json::Value;
+ use toolpath_convo::ConversationView;
+@@ -63,15 +63,6 @@ const DEFECTS: &[Defect] = &[
+         target: Target::Projection(Agent::Claude),
+         measure: |e| illegal_claude_types(&e.projections[&Agent::Claude]),
+     },
+-    // `path p export codex -o` writes the CALLER's cwd into every codex `cwd`
+-    // field instead of the source session's. The pipeline projects from
+-    // [`crate::pipeline::CALLER_CWD`], so the wrong value is that.
+-    Defect {
+-        name: "claude-to-codex-caller-cwd",
+-        set: "claude",
+-        target: Target::Projection(Agent::Codex),
+-        measure: |e| caller_cwd(&e.set.text(), &e.projections[&Agent::Codex]),
+-    },
+     // The claude projection renames `message.stop_reason` (the API field
+     // Claude Code reads) to `message.stopReason`; the docs
+     // (jsonl-envelope.md) say `stopReason` is a different, hook-provided
+@@ -174,19 +165,6 @@ pub fn illegal_claude_types(projection: &str) -> Finding {
+     Finding::IllegalClaudeTypes { counts }
+ }
+ 
+-/// The session's own cwd (the first `cwd` in the transcript) against every
+-/// `payload.cwd` a codex projection writes.
+-pub fn caller_cwd(source: &str, projection: &str) -> Finding {
+-    let source_cwd = json_values(source).find_map(|v| v["cwd"].as_str().map(str::to_owned));
+-    let written_cwd: BTreeSet<String> = json_values(projection)
+-        .filter_map(|v| v["payload"]["cwd"].as_str().map(str::to_owned))
+-        .collect();
+-    Finding::CallerCwd {
+-        source_cwd,
+-        written_cwd,
+-    }
+-}
+-
+ /// Every field the same-format round trip writes under the other spelling.
+ pub fn round_trip_renames(source: &str, back: &str) -> Finding {
+     let (before, after) = (raw_paths(source), raw_paths(back));
+@@ -213,19 +191,6 @@ mod tests {
+         assert_eq!(counts.get("user"), None);
+     }
+ 
+-    #[test]
+-    fn caller_cwd_pairs_the_source_cwd_with_every_written_one() {
+-        let source = "{\"type\":\"user\",\"cwd\":\"/work\"}\n";
+-        let projection = "{\"type\":\"session_meta\",\"payload\":{\"cwd\":\"/\"}}\n{\"type\":\"turn_context\",\"payload\":{\"cwd\":\"/\"}}\n";
+-        assert_eq!(
+-            caller_cwd(source, projection),
+-            Finding::CallerCwd {
+-                source_cwd: Some("/work".into()),
+-                written_cwd: BTreeSet::from(["/".to_owned()]),
+-            }
+-        );
+-    }
+-
+     #[test]
+     fn a_rename_is_a_lost_path_written_again_in_the_other_spelling() {
+         let source = "{\"message\":{\"stop_reason\":\"end\"}}\n";
+diff --git a/crates/toolpath-goldens/src/model.rs b/crates/toolpath-goldens/src/model.rs
+index d90a05ac..5c752643 100644
+--- a/crates/toolpath-goldens/src/model.rs
++++ b/crates/toolpath-goldens/src/model.rs
+@@ -1,7 +1,7 @@
+ //! What a golden is: an input transcript from one agent, and what each stage
+ //! of toolpath's cross-harness pipeline produces from it.
+ 
+-use std::collections::{BTreeMap, BTreeSet};
++use std::collections::BTreeMap;
+ use std::fmt;
+ use std::path::Path;
+ 
+@@ -426,11 +426,6 @@ pub enum Finding {
+     /// Top-level `type` values a Claude projection writes that Claude Code
+     /// does not define, with how many lines carry each.
+     IllegalClaudeTypes { counts: BTreeMap<String, usize> },
+-    /// The `cwd` a codex projection writes, against the session's own.
+-    CallerCwd {
+-        source_cwd: Option<String>,
+-        written_cwd: BTreeSet<String>,
+-    },
+     /// Fields the same-format round trip writes under another spelling.
+     Renames { renames: Vec<Rename> },
+     /// Fields of the session's token accounting on which the sum over
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index 05068989..bf327d1e 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -28,10 +28,10 @@ use crate::model::{Agent, RoundTrip, Set, Stage, StageError, Stages, Validate, V
+ use crate::shed::report;
+ use crate::validate::validate;
+ 
+-/// The working directory `path p export codex|pi|copilot|gemini` records as
+-/// the session's: the caller's, not the source session's (a known defect;
+-/// gemini bakes it into `projectHash` and `directories`). The hermetic tool
+-/// ran from `/`; the pipeline passes the same value.
++/// The working directory `path p export codex|pi|copilot|gemini` records as the session's: the
++/// caller's (`--project`, `path resume -C`, else the shell's), not the source's. Not a defect: codex's
++/// resume picker lists only sessions whose `cwd` is where it runs, pi and gemini key the project on it
++/// (gemini's `projectHash`, `directories`). The hermetic tool ran from `/`; the pipeline passes it.
+ pub const CALLER_CWD: &str = "/";
+ 
+ /// Run every stage over `set`. `scratch` is a directory the adapters' readers
+diff --git a/docs/GOLDENS.md b/docs/GOLDENS.md
+index d882920d..add6a9a9 100644
+--- a/docs/GOLDENS.md
++++ b/docs/GOLDENS.md
+@@ -81,6 +81,6 @@ Findings (rule 11): `qualifier review` runs and fails closed: no binary (`$TOOLP
+ One test is tagged `// FABRICATED:`: `crates/path-cli/tests/roundtrip.rs::test_cli_project_command` (a hand-built Path document; replace with a derived golden IR or a generated document). The golden factory `golden(set)` (`crates/toolpath-golden`) is what new tests use. The full audit of older tests is not done, so this count is a floor.
+ 
+ ## Known defects pinned (rule 11)
+-`goldens/known-defect/codex-to-claude-illegal-types.tsv` (codex events leak into claude output as foreign `type`s),
+-`goldens/known-defect/claude-to-codex-caller-cwd.tsv` (`p export codex -o` writes the caller's cwd), and
+-`goldens/known-defect/claude-roundtrip-renames.tsv` (claude -> IR -> claude writes `message.stop_reason` as `message.stopReason`). Round-trip losses and gains are pinned in `goldens/roundtrip/`, shed in `goldens/shed/`.
++`goldens/known-defect/codex-to-claude-illegal-types.tsv` (codex events leak into claude output as foreign `type`s) and
++`goldens/known-defect/claude-roundtrip-renames.tsv` (claude -> IR -> claude writes `message.stop_reason` as `message.stopReason`).
++`claude-to-codex-caller-cwd` was retired 2026-10-19 as not a defect (pr/22): `p export codex` and `path resume -C` write the directory the session is resumed in, which is where `codex resume` looks; the goldens write `/` because the hermetic run starts there. Round-trip losses and gains are pinned in `goldens/roundtrip/`, shed in `goldens/shed/`.
+diff --git a/goldens/DEMO.md b/goldens/DEMO.md
+index e0825d79..97df21df 100644
+--- a/goldens/DEMO.md
++++ b/goldens/DEMO.md
+@@ -15,7 +15,7 @@ Each set's `harness` records the AGENT that wrote the input. Fixtures of unknown
+ | claude-compacted | claude | unknown (synthetic) | 1682861 | as claude |
+ | claude-session | claude | 2.1.285, live capture (binary sha pinned) | 15668e3 | same binary |
+ | not yet: cursor, gemini, opencode | | | | cursor-agent 2026.08.11-e8db854, opencode 1.18.18 installed; gemini not installed; no goldens yet (queued) |
+-Known defects (`goldens/known-defect/`): codex->claude emits foreign entry types; `export codex -o` writes the caller's cwd; claude -> IR -> claude renames `message.stop_reason` to `message.stopReason`. A fix fails check with `looks FIXED` and a diff: recapture to acknowledge. Any other change fails with `CHANGED and is NOT fixed`.
++Known defects (`goldens/known-defect/`): codex->claude emits foreign entry types; claude -> IR -> claude renames `message.stop_reason` to `message.stopReason`. A fix fails check with `looks FIXED` and a diff: recapture to acknowledge. Any other change fails with `CHANGED and is NOT fixed`.
+ 
+ Regressions check catches, shown (each a throwaway edit, then reverted): dropping `user_type` in `crates/toolpath-claude/src/provider.rs` gives `FAIL claude shed: newly dropped on the same-format round trip (1): userType` (and the same for `claude-session`, plus `IR string_chars … text lost`), where before this gate all output goldens still matched. Projecting `stop_reason: None` in `crates/toolpath-claude/src/project.rs` gives `known defect …claude-roundtrip-renames.tsv CHANGED and is NOT fixed (message.stop_reason is no longer written under either name)`, where it used to say the defect may be FIXED.
+ Findings: `export copilot` is nondeterministic (random session id, key order), so capture's two-run probe stores canonical form; the claude adapter needs the file named `<sessionId>.jsonl`. Needs `nix` for the wrapper; the nix pin is verified only where its store path exists; repo rev and rustc are recorded, not pinned.
+diff --git a/goldens/known-defect/claude-to-codex-caller-cwd.tsv b/goldens/known-defect/claude-to-codex-caller-cwd.tsv
+deleted file mode 100644
+index 8951c9b8..00000000
+--- a/goldens/known-defect/claude-to-codex-caller-cwd.tsv
++++ /dev/null
+@@ -1,2 +0,0 @@
+-source_cwd	/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude
+-written_cwd	/
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 848d8ab7..648cdcdb 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -2,16 +2,16 @@
+   "goldens": [
+     {
+       "environment": {
+-        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
++        "cargo_lock_sha256": "b9cfd79a5e23ed27c402ca3c7aab7bdcf4c994d937913fd9d786e8ebcb469e84",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
+-          "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
+-          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
++          "crates/path-cli/src/goldens.rs": "eb84d2d6d9db2cf9258d4abcdf96ab4d3b673338982ef2798882d51644795e2a",
++          "docs/GOLDENS.md": "e8614e03954109862a8bdb354d2d194298d6c8da2e6928a16f3f57813dd6f043",
++          "scripts/goldens.sh": "47c34af99181b450fe65f348802ebb732407e15f60c6eaa2abc4576d2c60ffa2"
+         },
+         "nix_pinned_binary": {
+-          "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
+-          "store_path": "/nix/store/5d7v5m8h1sipk7h9mys21myyc6qfqiag-toolpath-path-0.30.0"
++          "nar_hash": "sha256-KKUpEM8FTZpAClkK4zezJ+fTGOndHpRHcU43YBwLd08=",
++          "store_path": "/nix/store/m3y743g3cg9z3qa1ylarrk9wys59hx20-toolpath-path-0.30.0"
+         },
+         "path_version": "0.30.0",
+         "rust_toolchain": {
+@@ -30,10 +30,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++          "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++          "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+         }
+       },
+       "project": null,
+@@ -66,16 +66,16 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
++        "cargo_lock_sha256": "b9cfd79a5e23ed27c402ca3c7aab7bdcf4c994d937913fd9d786e8ebcb469e84",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
+-          "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
+-          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
++          "crates/path-cli/src/goldens.rs": "eb84d2d6d9db2cf9258d4abcdf96ab4d3b673338982ef2798882d51644795e2a",
++          "docs/GOLDENS.md": "e8614e03954109862a8bdb354d2d194298d6c8da2e6928a16f3f57813dd6f043",
++          "scripts/goldens.sh": "47c34af99181b450fe65f348802ebb732407e15f60c6eaa2abc4576d2c60ffa2"
+         },
+         "nix_pinned_binary": {
+-          "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
+-          "store_path": "/nix/store/5d7v5m8h1sipk7h9mys21myyc6qfqiag-toolpath-path-0.30.0"
++          "nar_hash": "sha256-KKUpEM8FTZpAClkK4zezJ+fTGOndHpRHcU43YBwLd08=",
++          "store_path": "/nix/store/m3y743g3cg9z3qa1ylarrk9wys59hx20-toolpath-path-0.30.0"
+         },
+         "path_version": "0.30.0",
+         "rust_toolchain": {
+@@ -94,10 +94,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++          "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++          "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+         }
+       },
+       "project": null,
+@@ -130,16 +130,16 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
++        "cargo_lock_sha256": "b9cfd79a5e23ed27c402ca3c7aab7bdcf4c994d937913fd9d786e8ebcb469e84",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
+-          "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
+-          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
++          "crates/path-cli/src/goldens.rs": "eb84d2d6d9db2cf9258d4abcdf96ab4d3b673338982ef2798882d51644795e2a",
++          "docs/GOLDENS.md": "e8614e03954109862a8bdb354d2d194298d6c8da2e6928a16f3f57813dd6f043",
++          "scripts/goldens.sh": "47c34af99181b450fe65f348802ebb732407e15f60c6eaa2abc4576d2c60ffa2"
+         },
+         "nix_pinned_binary": {
+-          "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
+-          "store_path": "/nix/store/5d7v5m8h1sipk7h9mys21myyc6qfqiag-toolpath-path-0.30.0"
++          "nar_hash": "sha256-KKUpEM8FTZpAClkK4zezJ+fTGOndHpRHcU43YBwLd08=",
++          "store_path": "/nix/store/m3y743g3cg9z3qa1ylarrk9wys59hx20-toolpath-path-0.30.0"
+         },
+         "path_version": "0.30.0",
+         "rust_toolchain": {
+@@ -171,10 +171,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++          "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++          "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+         }
+       },
+       "project": null,
+@@ -207,16 +207,16 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
++        "cargo_lock_sha256": "b9cfd79a5e23ed27c402ca3c7aab7bdcf4c994d937913fd9d786e8ebcb469e84",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
+-          "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
+-          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
++          "crates/path-cli/src/goldens.rs": "eb84d2d6d9db2cf9258d4abcdf96ab4d3b673338982ef2798882d51644795e2a",
++          "docs/GOLDENS.md": "e8614e03954109862a8bdb354d2d194298d6c8da2e6928a16f3f57813dd6f043",
++          "scripts/goldens.sh": "47c34af99181b450fe65f348802ebb732407e15f60c6eaa2abc4576d2c60ffa2"
+         },
+         "nix_pinned_binary": {
+-          "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
+-          "store_path": "/nix/store/5d7v5m8h1sipk7h9mys21myyc6qfqiag-toolpath-path-0.30.0"
++          "nar_hash": "sha256-KKUpEM8FTZpAClkK4zezJ+fTGOndHpRHcU43YBwLd08=",
++          "store_path": "/nix/store/m3y743g3cg9z3qa1ylarrk9wys59hx20-toolpath-path-0.30.0"
+         },
+         "path_version": "0.30.0",
+         "rust_toolchain": {
+@@ -235,10 +235,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++          "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++          "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+         }
+       },
+       "project": null,
+@@ -271,16 +271,16 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
++        "cargo_lock_sha256": "b9cfd79a5e23ed27c402ca3c7aab7bdcf4c994d937913fd9d786e8ebcb469e84",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
+-          "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
+-          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
++          "crates/path-cli/src/goldens.rs": "eb84d2d6d9db2cf9258d4abcdf96ab4d3b673338982ef2798882d51644795e2a",
++          "docs/GOLDENS.md": "e8614e03954109862a8bdb354d2d194298d6c8da2e6928a16f3f57813dd6f043",
++          "scripts/goldens.sh": "47c34af99181b450fe65f348802ebb732407e15f60c6eaa2abc4576d2c60ffa2"
+         },
+         "nix_pinned_binary": {
+-          "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
+-          "store_path": "/nix/store/5d7v5m8h1sipk7h9mys21myyc6qfqiag-toolpath-path-0.30.0"
++          "nar_hash": "sha256-KKUpEM8FTZpAClkK4zezJ+fTGOndHpRHcU43YBwLd08=",
++          "store_path": "/nix/store/m3y743g3cg9z3qa1ylarrk9wys59hx20-toolpath-path-0.30.0"
+         },
+         "path_version": "0.30.0",
+         "rust_toolchain": {
+@@ -299,10 +299,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++          "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++          "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+         }
+       },
+       "project": null,
+@@ -335,16 +335,16 @@
+     },
+     {
+       "environment": {
+-        "cargo_lock_sha256": "70fa8902986e31b8071aa0b94892a496165848287d76f277aeae4cf7cf7179d1",
++        "cargo_lock_sha256": "b9cfd79a5e23ed27c402ca3c7aab7bdcf4c994d937913fd9d786e8ebcb469e84",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "f98f3715c72b35ab9159889e3b9720ad5ca3d4663fabc6c553018f99d34b1f73",
+-          "docs/GOLDENS.md": "046a162aea72fece43587a76f999b10bda280c3ea6854d645bbba9b75bf94347",
+-          "scripts/goldens.sh": "fc5ec8ea8388849a81472f7abad7b75c5f88bc3497a6d10f868e515dc3431f19"
++          "crates/path-cli/src/goldens.rs": "eb84d2d6d9db2cf9258d4abcdf96ab4d3b673338982ef2798882d51644795e2a",
++          "docs/GOLDENS.md": "e8614e03954109862a8bdb354d2d194298d6c8da2e6928a16f3f57813dd6f043",
++          "scripts/goldens.sh": "47c34af99181b450fe65f348802ebb732407e15f60c6eaa2abc4576d2c60ffa2"
+         },
+         "nix_pinned_binary": {
+-          "nar_hash": "sha256-xRucjiAVURCB4RsoxUdZpbCj8G3080cvi9WImeACQXY=",
+-          "store_path": "/nix/store/5d7v5m8h1sipk7h9mys21myyc6qfqiag-toolpath-path-0.30.0"
++          "nar_hash": "sha256-KKUpEM8FTZpAClkK4zezJ+fTGOndHpRHcU43YBwLd08=",
++          "store_path": "/nix/store/m3y743g3cg9z3qa1ylarrk9wys59hx20-toolpath-path-0.30.0"
+         },
+         "path_version": "0.30.0",
+         "rust_toolchain": {
+@@ -363,10 +363,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++          "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++          "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+         }
+       },
+       "project": null,
+@@ -401,7 +401,7 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": false,
+-    "toolpath_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++    "toolpath_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+   },
+   "known_defects": [
+     {
+@@ -411,13 +411,6 @@
+       "sha256": "f0673d93c556d4827039db1fddef6ca0b7242241e173d3b92c8d8a6e7f1e70ff",
+       "target": "claude"
+     },
+-    {
+-      "file": "goldens/known-defect/claude-to-codex-caller-cwd.tsv",
+-      "report": "~/.lobby/ops/REPORT-demo-goldens-toolpath-2026-10-08.md (found 2026-10-08)",
+-      "set": "claude",
+-      "sha256": "8816483354bf0336ffbab64e358ef191a5854cf3242ccdd4f16ad97b2d93bf58",
+-      "target": "codex"
+-    },
+     {
+       "file": "goldens/known-defect/claude-roundtrip-renames.tsv",
+       "report": "shed finding 2026-10-08; docs/agents/formats/claude-code/jsonl-envelope.md; qualifier concern on the claude projection",
+@@ -430,180 +423,180 @@
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "7e6ea9e6d866e4bee9885c3f2fe836981e8228dc33dd07015da013cbba65ef89"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "29be8cb8c53fa3d9a49ec74c4f3c373adc973f8f03a9113a7accaaa74692d6f0"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "9c72e3e059c6ba73c3e75e8be9f28242cfbd8d23ce6112daf0310c5880f5d7b8"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "1a7c14aa1d5521511d710acaa9aa43f8c6b91ce1433fffe91a911fbe75c3c0ec"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "d5fee6928c95df428b1688f48949b4280b92022abe2e2254640e55dcb5f01273"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "90b16b3f49f9b48e546d0f9c55b8109b0a076b65fa0baf4fb44bf7a70de34e80"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "bc8ae191b9776da0470eefacb6dd084fc7eb733505b6dc1612aa582a3fca8eec"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "8a1d7742939d8a32b2d97eb56eb02e8cdaafe6f5cdeb05a4fc2350d37e9003d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "7df3f81e3dd637aabee9ee606c3b2387541a6d62b86c333b6048936c2a5d573f"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "c55f0de8d0b297de18a1201c8d57560e8fc9d3c7f6fffb6b89d73e1dceafd809"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "d7e405a24064cf585263d7fc443b7cf330694d27c4611fce46f098d95a4cf9e5"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "7d8d14d53f5638528bcf05c4536968ddb16fba7f479a33719631055cf39f47ee",
++        "binary_sha256": "206c97bd6f7dae688971f3d57458c3d8e345a5fa35fc3af901b44c690cc315e1",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "23f48da1130a49de425757008e36f3ff8dd8809f"
++        "repo_rev": "0c41b1a182b8a429e7a6438e00aa8cf34a794729"
+       },
+       "sha256": "cfdc5a9e5091fa29e5b2fa4e276c4c4b65a04cb931206f6fc536730010af901a"
+     }
+diff --git a/pr/22-codex-resume-cwd.md b/pr/22-codex-resume-cwd.md
+new file mode 100644
+index 00000000..f918b4d9
+--- /dev/null
++++ b/pr/22-codex-resume-cwd.md
+@@ -0,0 +1,74 @@
++# test(goldens): retire claude-to-codex-caller-cwd; the resume directory is the codex cwd by design
++
++Status: planned (defect sweep 2026-10-19: "projecting a claude session to codex writes the source cwd as `/`") · Base: the goldens stack once merged (pr/17)
++
++## Why
++`goldens/known-defect/claude-to-codex-caller-cwd.tsv` and `known_defects@claude.snap` pinned "claude -> codex writes
++`/` where the source session's cwd was `…/toolpath-elicit.nu6ZWB/claude`" as a defect, with the source cwd as the
++value a fix would write. Checked against what a real user run does and what codex needs, it is not a defect:
++
++- **What a real run writes.** `path resume --harness codex -C <dir>` (`cmd_resume::project_into_harness` ->
++  `projection::codex::project_codex`) canonicalizes `<dir>` and hands it to `CodexProjector::with_cwd`;
++  `path export codex --project <dir>` does the same, and `-o` without `--project` uses the shell's cwd. That value is
++  every `session_meta.payload.cwd`, every `turn_context.payload.cwd` and the `cwd` of the `state_5.sqlite` thread
++  row. The source session's cwd is only the projector's fallback when no cwd is given. Unchanged since the projector
++  landed; the `--project` help says so ("the session_meta line carries this path as `cwd`, so `codex resume` invoked
++  from the same directory will resolve it").
++- **What codex needs.** `codex resume`'s picker lists only sessions whose cwd is the directory it runs in
++  (`codex resume --help`, codex 0.162: "`--all` Show all sessions (disables cwd filtering …)"). A rollout carrying the
++  source cwd would be missing from the picker in the directory the user resumed in, and the source cwd is usually a
++  path that does not exist on the resuming machine (here a deleted macOS temp dir). Pi and gemini key their project
++  on the same directory (pi's `--<cwd>--` session dir, gemini's `projectHash` and `directories`).
++- **Why the goldens wrote `/`.** The hermetic harness runs every `p export` from `/` (`Goldens::hermetic`), and the
++  in-process pipeline passes the same value (`toolpath_goldens::pipeline::CALLER_CWD`). `/` is the caller's
++  directory there, i.e. the contract working as intended. The pin compared it to the source cwd, so a change that
++  wrote the source cwd would have been judged FIXED by `judge_cwd` while breaking resume.
++
++Neither the projector nor the harness setup is wrong; the pin's reference value was. Behaviour is unchanged.
++
++## What changes
++- `crates/toolpath-goldens`: the `claude-to-codex-caller-cwd` defect, `defects::caller_cwd`, its unit test and
++  `Finding::CallerCwd` are removed; `CALLER_CWD`'s doc says what `/` stands for (same line count, so the other anchors
++  in `pipeline.rs` stay fresh). `snapshots/known_defects@claude.snap` loses that one entry (accepted with
++  `INSTA_UPDATE=always`); every other snapshot is byte-identical.
++- `crates/path-cli/src/goldens.rs`: the same defect is removed from `DEFECTS` with `caller_cwd`, `judge_cwd` and the
++  `SetRun.source_cwd` / `place()` plumbing that only fed it; `write_defects` now drops manifest `known_defects` entries
++  whose defect is no longer in `DEFECTS` (before, a retired defect stayed in the manifest forever).
++  `goldens/known-defect/claude-to-codex-caller-cwd.tsv` is deleted; `goldens/manifest.json` recaptured with
++  `path goldens capture --all` (the entry gone, environment pins refreshed; no output sha moved).
++- `crates/path-cli/src/projection/codex.rs`: `project_codex_writes_the_resume_directory_as_cwd_not_the_source_cwd`
++  pins the contract: a source whose turns carry `/source/session/project` projected with `-C <tmp>/proj` writes the
++  canonical `-C` dir in `session_meta` and every `turn_context`, never the source cwd.
++- `docs/GOLDENS.md`, `goldens/DEMO.md`: the defect list drops it and says why.
++- qualifier: the concerns on `toolpath-codex/src/project.rs` (3ed731d5) and on `CALLER_CWD` (90e64df3) are resolved
++  `reason:invalid` with the explanation above; a `comment` on `CALLER_CWD` keeps it at the code; the defect-count
++  concern on `defects.rs` is superseded (six -> five); the `--allow-all-tools` concern in `goldens.rs` is re-anchored
++  (its line moved, text unchanged).
++
++## Open
++- `p export codex -o <file>` with no `--project` writes the shell's cwd. That is consistent with the other modes and
++  with what `codex resume` needs when the file is then dropped into `~/.codex/sessions` from the same shell, but an
++  export meant to be read elsewhere might prefer the source cwd. A product decision, not pinned either way here.
++
++## Verification
++`scripts/quality_gates.sh` with `--features path-cli/goldens`: fmt, clippy `--workspace --all-targets -D warnings`,
++`RUSTFLAGS=-D warnings cargo test --workspace`, `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps`,
++shellcheck; `path goldens check` 0 problems before and after the recapture; `qualifier review` all fresh.
++
++## Paths
++```
++crates/toolpath-goldens/src/defects.rs
++crates/toolpath-goldens/src/model.rs
++crates/toolpath-goldens/src/pipeline.rs
++crates/toolpath-goldens/src/.qual
++crates/toolpath-goldens/snapshots/known_defects@claude.snap
++crates/path-cli/src/goldens.rs
++crates/path-cli/src/projection/codex.rs
++crates/path-cli/src/.qual
++crates/toolpath-codex/src/.qual
++goldens/known-defect/claude-to-codex-caller-cwd.tsv
++goldens/manifest.json
++goldens/DEMO.md
++docs/GOLDENS.md
++pr/22-codex-resume-cwd.md
++```
+-- 
+2.55.0
+

@@ -1,6 +1,6 @@
 {
   "graph": {
-    "id": "graph-step-001"
+    "id": "path-step-001"
   },
   "paths": [
     {
@@ -17,7 +17,7 @@
           },
           "change": {
             "src/main.rs": {
-              "raw": "@@ -12,1 +12,1 @@\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");"
+              "raw": "@@ -1,3 +1,3 @@\n fn main() {\n-    println!(\"Hello world\");\n+    println!(\"Hello, world!\");\n }\n"
             }
           }
         }

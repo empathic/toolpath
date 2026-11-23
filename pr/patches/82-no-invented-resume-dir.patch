@@ -1,0 +1,175 @@
+From 6a1c6b092c464c0ef88743a5dba592e89a7049d7 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 17:33:04 -0400
+Subject: [PATCH] fix(goldens): a cursor-agent read-back gets no working
+ directory the document never named (pr/82)
+
+---
+ .../round_trip@gemini@cursor-agent.snap       |  6 +--
+ crates/toolpath-goldens/src/.qual             |  1 +
+ crates/toolpath-goldens/src/pipeline.rs       | 43 +++++++++++++------
+ pr/76-cursor-agent-reads-the-resume-dir.md    |  3 +-
+ pr/82-no-invented-resume-dir.md               | 27 ++++++++++++
+ 5 files changed, 62 insertions(+), 18 deletions(-)
+ create mode 100644 pr/82-no-invented-resume-dir.md
+
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
+index 3ee6852d..c753f665 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 34
++    "key_paths": 33
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+@@ -44,7 +44,5 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "paths[].steps[].change.notes.md.structural.tool_id",
+     "paths[].steps[].change.notes.md.structural.type"
+   ],
+-  "gained": [
+-    "paths[].path.base.uri"
+-  ]
++  "gained": []
+ }
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index e8fd16ae..23d5b87d 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -40,3 +40,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:08:07.628223Z","id":"dd6fa6f81587aad09aa3a348ba38b13c47fb63c43dfd2c699705b2e9a477282e","body":{"detail":"test-fixtures/opencode/convo.json is what `opencode export <id>` prints (camelCase, nested info); toolpath_opencode reads rows from opencode-stable.db and has no reader for this file. A `Session::from_export` in the adapter would remove all three copies, and `path p derive opencode` could then take the file.","kind":"concern","span":{"start":{"line":344},"end":{"line":344},"content_hash":"e1f0854ff123c1ce324417c98893618c5a16b9d4d7c747feadd81bba62cca511"},"summary":"The `opencode export` wrapper to Session translation is duplicated from path-cli/tests/cross_harness_matrix.rs and toolpath-opencode/tests/real_fixture_roundtrip.rs; the adapter should own it","supersedes":"47310d3f314a60bba43dc5aef995ddc6bdadb6ba48fa75d1ec1e0fb445c96fc8","tags":["goldens","opencode","duplication","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:08:07.697202Z","id":"58b5e6bdac807b3915e960cbc83cd1fcbace9a3b6871693dd81cebd56fca4f38","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":611},"end":{"line":611},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"f8cea86a68f25837bed5b2abb3c04d8608fdbbc2447a44beaf566abf8297654f","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:28:45.937195Z","id":"c190e86e6fe971951c7af66c9e15c93a7fd7cb7e8c64746050856897f7f93e6e","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":634},"end":{"line":634},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"58b5e6bdac807b3915e960cbc83cd1fcbace9a3b6871693dd81cebd56fca4f38","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T21:32:31.419785Z","id":"87ad6294eac527a454cced7546cfedfaf9c9d327b5faa9691bea599428aaefba","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":646},"end":{"line":646},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"c190e86e6fe971951c7af66c9e15c93a7fd7cb7e8c64746050856897f7f93e6e","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index 5ccfca5a..e99bffd7 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -440,24 +440,31 @@ fn resume_dir(path: &Document) -> String {
+         .to_owned()
+ }
+ 
+-/// [`resume_dir`] for a document still in JSON form.
+-fn value_cwd(document: &Value) -> String {
++/// The document's own working directory (its base `file://` uri), still in JSON form; None when
++/// it names none. Unlike [`resume_dir`] there is no [`CALLER_CWD`] fallback: that `/` is where
++/// the hermetic tool ran, not where the session did, so a read-back must not report it.
++fn value_cwd(document: &Value) -> Option<String> {
+     document
+         .pointer("/paths/0/path/base/uri")
+         .and_then(Value::as_str)
+         .and_then(|u| u.strip_prefix("file://"))
+         .filter(|d| d.starts_with('/'))
+-        .unwrap_or(CALLER_CWD)
+-        .to_owned()
++        .map(str::to_owned)
+ }
+ 
+ /// [`read`], then tell a reader whose format keeps no working directory where the session was
+ /// resumed. A cursor-agent store holds only md5(cwd) in its path, so a reader handed the bare
+ /// store cannot make file keys relative; the caller, who chose the directory (`path resume -C`),
+-/// says it. Other formats record their own and are read as they are.
+-fn read_in(agent: Agent, input: &[u8], scratch: &Path, cwd: &str) -> Result<Conversation, String> {
++/// says it. A document that named no directory gets none (it would be invented). Other formats
++/// record their own and are read as they are.
++fn read_in(
++    agent: Agent,
++    input: &[u8],
++    scratch: &Path,
++    cwd: Option<&str>,
++) -> Result<Conversation, String> {
+     let mut convo = read(agent, input, scratch)?;
+-    if let Conversation::CursorAgent(v) = &mut convo {
++    if let (Conversation::CursorAgent(v), Some(cwd)) = (&mut convo, cwd) {
+         v.base.get_or_insert_with(Default::default).working_dir = Some(cwd.to_owned());
+     }
+     Ok(convo)
+@@ -607,9 +614,14 @@ fn second_pass(first: Option<&Value>, target: Agent, scratch: &Path) -> TwiceAro
+     let second = single_path(&first.to_string())
+         .and_then(|path| project(&path, target))
+         .and_then(|text| {
+-            read_in(target, text.as_bytes(), scratch, &value_cwd(first))
+-                .and_then(|c| c.derive(&text, scratch))
+-                .and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()))
++            read_in(
++                target,
++                text.as_bytes(),
++                scratch,
++                value_cwd(first).as_deref(),
++            )
++            .and_then(|c| c.derive(&text, scratch))
++            .and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()))
+         });
+     match second {
+         Ok(second) => compare_passes(first, &second),
+@@ -637,9 +649,14 @@ fn round_trip(
+     projection: &str,
+     scratch: &Path,
+ ) -> (RoundTrip, Option<Value>) {
+-    let again = read_in(target, projection.as_bytes(), scratch, &value_cwd(document))
+-        .and_then(|c| c.derive(projection, scratch))
+-        .and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()));
++    let again = read_in(
++        target,
++        projection.as_bytes(),
++        scratch,
++        value_cwd(document).as_deref(),
++    )
++    .and_then(|c| c.derive(projection, scratch))
++    .and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()));
+     match again {
+         Ok(after) => (compare(document, &after), Some(after)),
+         Err(error) => (RoundTrip::Unreadable { error }, None),
+diff --git a/pr/76-cursor-agent-reads-the-resume-dir.md b/pr/76-cursor-agent-reads-the-resume-dir.md
+index 3b9a4ee0..c34aba7f 100644
+--- a/pr/76-cursor-agent-reads-the-resume-dir.md
++++ b/pr/76-cursor-agent-reads-the-resume-dir.md
+@@ -14,7 +14,8 @@ in round_trip and twice_around. The store format and reader are unchanged. The c
+ 
+ ## Result
+ The double key is gone from claude -> cursor-agent (0 `/var/folders` keys in the snapshot). Note this is the caller's directory, not
+-one read out of the store: a bare `cursor-agent` store read with no directory still has absolute keys, as before.
++one read out of the store: a bare `cursor-agent` store read with no directory still has absolute keys, as before. pr/82: a document that names no directory is read with none
++(the `/` fallback had gemini -> cursor-agent gain `path.base.uri`).
+ 
+ ## Not run
+ Pinned 1.94, gitleaks, nix-develop recapture.
+diff --git a/pr/82-no-invented-resume-dir.md b/pr/82-no-invented-resume-dir.md
+new file mode 100644
+index 00000000..9588e3d2
+--- /dev/null
++++ b/pr/82-no-invented-resume-dir.md
+@@ -0,0 +1,27 @@
++# fix(goldens): a cursor-agent read-back gets no working directory the document never named
++
++Status: draft · Base: pr/76 · Code (toolpath-goldens pipeline.rs `value_cwd`, `read_in`) + 1 snapshot
++
++## Why (plain words)
++pr/76 tells the cursor-agent reader the directory the session was resumed in. For a document that names none, `value_cwd` fell
++back to `CALLER_CWD` (`/`, where the hermetic tool ran), so gemini -> cursor-agent came back with a `file:///` base it never had:
++`paths[].path.base.uri` gained. That directory was invented, not the source's.
++
++## What
++`value_cwd` returns the document's own `file://` directory or None (no fallback); `read_in` sets the cursor-agent view's
++working_dir only when there is one. `resume_dir` (what a projection is resumed in) keeps its `CALLER_CWD` fallback; the writers
++are unchanged. Sources with a cwd read back as in pr/76.
++
++## Snapshots
++- `round_trip@gemini@cursor-agent`: `gained` `[paths[].path.base.uri]` -> `[]`; after key_paths 34 -> 33. Steps, text and
++  tool uses unchanged.
++- Nothing else moved: every other cursor-agent round trip and twice-around comes from a source with a cwd; `capture --all` moved
++  no output sha.
++
++## Verification
++`INSTA_UPDATE=always cargo test -p toolpath-goldens` then a clean run; gates as for pr/81. One qualifier record re-anchored
++(toolpath-goldens pipeline.rs, the `round_trip` concern moved 12 lines).
++
++## Not fixed here
++gemini -> cursor (the IDE writer) still gains `paths[].path.base.uri` and `environment.working_dir`: `CursorProjector` falls
++back to workspace `/` when the view has none. A writer change, separate from this read-back.
+-- 
+2.55.0
+

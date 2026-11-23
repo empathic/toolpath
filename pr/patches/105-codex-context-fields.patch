@@ -1,0 +1,655 @@
+From ff34bc5e5764297000f58bc62fc951acf439239c Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 10:38:31 -0400
+Subject: [PATCH] fix(codex): a codex -> codex round trip keeps current_date,
+ timezone, workspace_roots, thread_source (pr/103)
+
+---
+ crates/toolpath-codex/src/project.rs          |  65 +++++++++++-
+ .../snapshots/shed@codex-forced.snap          |  22 +---
+ .../snapshots/shed@codex.snap                 |  14 +--
+ goldens/manifest.json                         | 100 +++++++++---------
+ goldens/shed/codex.json                       |  14 +--
+ pr/103-codex-context-fields.md                |  22 ++++
+ 6 files changed, 142 insertions(+), 95 deletions(-)
+ create mode 100644 pr/103-codex-context-fields.md
+
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index af0d305b..d128325c 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -309,7 +309,13 @@ fn make_session_meta_line(
+         dynamic_tools: None,
+         memory_mode: None,
+         git: None,
+-        extra: HashMap::new(),
++        // What Codex states on session_meta beyond the typed fields (a Codex view only).
++        extra: (view.provider_id.as_deref() == Some("codex"))
++            .then(|| view.events.iter().find(|e| e.event_type == "session_meta"))
++            .flatten()
++            .and_then(|e| e.data.get("thread_source").cloned())
++            .map(|v| HashMap::from([("thread_source".to_string(), v)]))
++            .unwrap_or_default(),
+     };
+     RolloutLine {
+         timestamp: timestamp.to_string(),
+@@ -333,6 +339,12 @@ struct TurnSettings {
+     permission_profile: Option<Value>,
+     file_system_sandbox_policy: Option<Value>,
+     personality: Option<String>,
++    current_date: Option<String>,
++    timezone: Option<String>,
++    /// The workspace roots as Codex wrote them, and the cwd that turn_context named: when the
++    /// roots were just that cwd, they follow the cwd the session is written for.
++    workspace_roots: Option<Vec<String>>,
++    source_cwd: Option<String>,
+     collaboration_mode: Option<Value>,
+ }
+ 
+@@ -356,6 +368,10 @@ impl TurnSettings {
+             permission_profile: event.data.get("permission_profile").cloned(),
+             file_system_sandbox_policy: event.data.get("file_system_sandbox_policy").cloned(),
+             personality: field(&event.data, "personality"),
++            current_date: field(&event.data, "current_date"),
++            timezone: field(&event.data, "timezone"),
++            workspace_roots: field(&event.data, "workspace_roots"),
++            source_cwd: field(&event.data, "cwd"),
+             collaboration_mode: field(&event.data, "collaboration_mode"),
+         }
+     }
+@@ -375,11 +391,23 @@ fn make_turn_context_line(
+     if let Some(v) = &settings.file_system_sandbox_policy {
+         extra.insert("file_system_sandbox_policy".to_string(), v.clone());
+     }
++    if let Some(roots) = &settings.workspace_roots {
++        let just_the_cwd = settings
++            .source_cwd
++            .as_ref()
++            .is_some_and(|c| roots == std::slice::from_ref(c));
++        let roots = if just_the_cwd {
++            vec![cwd.to_string()]
++        } else {
++            roots.clone()
++        };
++        extra.insert("workspace_roots".to_string(), serde_json::json!(roots));
++    }
+     let tc = TurnContext {
+         turn_id: turn_id.to_string(),
+         cwd: PathBuf::from(cwd),
+-        current_date: None,
+-        timezone: None,
++        current_date: settings.current_date.clone(),
++        timezone: settings.timezone.clone(),
+         approval_policy: settings.approval_policy.clone(),
+         sandbox_policy: settings.sandbox_policy.clone(),
+         model: Some(model.to_string()),
+@@ -961,6 +989,9 @@ mod tests {
+                 "entries": [{"access": "write", "path": {"type": "path", "path": "/tmp/proj"}}]
+             },
+             "personality": "pragmatic",
++            "current_date": "2026-04-20",
++            "timezone": "America/New_York",
++            "workspace_roots": ["/tmp/proj", "/tmp/other"],
+             "collaboration_mode": {"mode": "default", "settings": {"model": "gpt-5.4"}},
+         });
+         view.events.push(toolpath_convo::ConversationEvent {
+@@ -1000,6 +1031,9 @@ mod tests {
+             assert_eq!(tc["sandbox_policy"]["type"], "workspace-write");
+             assert_eq!(tc["sandbox_policy"]["network_access"], false);
+             assert_eq!(tc["personality"], "pragmatic");
++            assert_eq!(tc["current_date"], "2026-04-20");
++            assert_eq!(tc["timezone"], "America/New_York");
++            assert_eq!(tc["workspace_roots"][1], "/tmp/other");
+             assert_eq!(tc["collaboration_mode"]["mode"], "default");
+             // the permission settings Codex states besides `sandbox_policy`
+             assert_eq!(tc["permission_profile"]["type"], "managed");
+@@ -1091,7 +1125,8 @@ mod tests {
+         ev(
+             "2026-04-20T16:00:00.000Z",
+             "session_meta",
+-            json!({"id": "s", "base_instructions": {"text": "You are Codex."}}),
++            json!({"id": "s", "thread_source": "user",
++                   "base_instructions": {"text": "You are Codex."}}),
+         );
+         ev(
+             "2026-04-20T16:00:01.000Z",
+@@ -1125,6 +1160,7 @@ mod tests {
+         let meta = &s.lines[0];
+         assert_eq!(meta.kind, "session_meta");
+         assert_eq!(meta.payload["base_instructions"]["text"], "You are Codex.");
++        assert_eq!(meta.payload["thread_source"], "user");
+     }
+ 
+     #[test]
+@@ -1147,6 +1183,24 @@ mod tests {
+         );
+     }
+ 
++    /// When Codex's workspace roots were only its cwd, they follow the cwd the session is
++    /// written for (a resume in another directory must not point at the old one).
++    #[test]
++    fn workspace_roots_that_were_just_the_cwd_follow_the_new_cwd() {
++        let mut view = with_turn_context(view_with(vec![assistant_turn("a1", "hello")]));
++        for e in &mut view.events {
++            e.data
++                .insert("workspace_roots".into(), json!(["/tmp/proj"]));
++        }
++        let s = CodexProjector::new()
++            .with_cwd("/work/new")
++            .project(&view)
++            .unwrap();
++        for tc in turn_contexts(&s) {
++            assert_eq!(tc["workspace_roots"], json!(["/work/new"]));
++        }
++    }
++
+     #[test]
+     fn other_harness_settings_are_not_copied() {
+         let mut view = with_turn_context(view_with(vec![assistant_turn("a1", "hello")]));
+@@ -1159,6 +1213,9 @@ mod tests {
+                 "permission_profile",
+                 "file_system_sandbox_policy",
+                 "personality",
++                "current_date",
++                "timezone",
++                "workspace_roots",
+                 "collaboration_mode",
+             ] {
+                 assert!(tc.get(key).is_none(), "{key} copied from a claude view");
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index f00e6e35..15f7f80e 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -112,7 +112,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+   },
+   "same_format": {
+     "lines": 93,
+-    "bytes": 90513,
++    "bytes": 90852,
+     "event_types_shed": {
+       "event_msg/context_compacted": {
+         "source": 1,
+@@ -137,8 +137,8 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     },
+     "key_paths": {
+       "source": 152,
+-      "after": 118,
+-      "lost": 42,
++      "after": 122,
++      "lost": 38,
+       "gained": 8
+     },
+     "renamed": [],
+@@ -175,10 +175,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.completed_at",
+         "example": "1781117035"
+       },
+-      {
+-        "path": "payload.current_date",
+-        "example": "2026-06-10"
+-      },
+       {
+         "path": "payload.duration_ms",
+         "example": "64403"
+@@ -295,21 +291,9 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.summary",
+         "example": "auto"
+       },
+-      {
+-        "path": "payload.thread_source",
+-        "example": "user"
+-      },
+       {
+         "path": "payload.time_to_first_token_ms",
+         "example": "<withheld>"
+-      },
+-      {
+-        "path": "payload.timezone",
+-        "example": "America/New_York"
+-      },
+-      {
+-        "path": "payload.workspace_roots[]",
+-        "example": "<withheld>"
+       }
+     ],
+     "gained": [
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index 7fc9902b..f23f67a3 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -103,7 +103,7 @@ input_file: test-fixtures/codex/convo.jsonl
+   },
+   "same_format": {
+     "lines": 19,
+-    "bytes": 43756,
++    "bytes": 43814,
+     "event_types_shed": {
+       "event_msg/agent_message": {
+         "source": 13,
+@@ -132,8 +132,8 @@ input_file: test-fixtures/codex/convo.jsonl
+     },
+     "key_paths": {
+       "source": 94,
+-      "after": 63,
+-      "lost": 43,
++      "after": 65,
++      "lost": 41,
+       "gained": 12
+     },
+     "renamed": [],
+@@ -154,10 +154,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.content",
+         "example": "null"
+       },
+-      {
+-        "path": "payload.current_date",
+-        "example": "2026-05-07"
+-      },
+       {
+         "path": "payload.duration_ms",
+         "example": "13024"
+@@ -298,10 +294,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.time_to_first_token_ms",
+         "example": "<withheld>"
+       },
+-      {
+-        "path": "payload.timezone",
+-        "example": "America/New_York"
+-      },
+       {
+         "path": "payload.truncation_policy.limit",
+         "example": "10000"
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 896ed680..6a4bc074 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++    "toolpath_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "3a85d4e35265f5125c116d4c7cd2fe2debe408531ea731729624d690dad263e2",
++        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9bde99b04ad46dfa0198a49ace4a45c72b7a3013"
++        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+@@ -583,7 +583,7 @@
+     },
+     {
+       "file": "goldens/shed/codex.json",
+-      "sha256": "915f052b74d35dc3c013df9a8ca69a43c8e81ff2387d66ee9ab3d1557ee889ab"
++      "sha256": "86ac1298060ca763aca0e5ee14351536b7988d231cc33eae08b4d8f133496f07"
+     },
+     {
+       "file": "goldens/shed/copilot.json",
+diff --git a/goldens/shed/codex.json b/goldens/shed/codex.json
+index a7bbe26c..7efc210d 100644
+--- a/goldens/shed/codex.json
++++ b/goldens/shed/codex.json
+@@ -47,7 +47,7 @@
+     }
+   ],
+   "same_format": {
+-    "bytes": 43528,
++    "bytes": 43586,
+     "dropped": [
+       {
+         "example": "Confucius",
+@@ -65,10 +65,6 @@
+         "example": "null",
+         "path": "payload.content"
+       },
+-      {
+-        "example": "2026-05-07",
+-        "path": "payload.current_date"
+-      },
+       {
+         "example": "13024",
+         "path": "payload.duration_ms"
+@@ -209,10 +205,6 @@
+         "example": "<withheld>",
+         "path": "payload.time_to_first_token_ms"
+       },
+-      {
+-        "example": "America/New_York",
+-        "path": "payload.timezone"
+-      },
+       {
+         "example": "10000",
+         "path": "payload.truncation_policy.limit"
+@@ -299,9 +291,9 @@
+       }
+     ],
+     "key_paths": {
+-      "after": 63,
++      "after": 65,
+       "gained": 12,
+-      "lost": 43,
++      "lost": 41,
+       "source": 94
+     },
+     "lines": 19,
+diff --git a/pr/103-codex-context-fields.md b/pr/103-codex-context-fields.md
+new file mode 100644
+index 00000000..9553e5dc
+--- /dev/null
++++ b/pr/103-codex-context-fields.md
+@@ -0,0 +1,22 @@
++# fix(codex): a codex -> codex round trip keeps current_date, timezone, workspace_roots and thread_source
++
++Status: draft · Base: pr/102 · Source: pr/99 recommendation 1, group 3; controller-core's order
++
++## Why
++After pr/102 codex-forced still lost 42 paths on codex -> codex. Group 3 is the context Codex states on its `turn_context` (`current_date`, `timezone`, `workspace_roots[]`) and `thread_source` on `session_meta`.
++The writer had typed slots for the first two and left them `None`; the others had no slot. Codex holds all four: writer bugs.
++
++## What changes (toolpath-codex/src/project.rs, Codex-recorded views only, read from the view's first `turn_context` / `session_meta` event)
++- `TurnSettings` carries `current_date`, `timezone`, `workspace_roots`; written on every `turn_context`.
++- `workspace_roots` that were exactly the source's `cwd` follow the cwd the session is written for (a resume in another directory must not point at the old one); other roots go back verbatim. Tested both ways.
++- `thread_source` goes back on `session_meta`.
++- Other harnesses' views get none (the existing negative test now lists the three keys).
++
++## Verification (sandbox, cargo 1.97.1, offline)
++- Test first: `codex_session_keeps_its_turn_settings` (extended) and `codex_compaction_and_base_instructions_are_written_back` (extended with thread_source) failed on the new keys (Null), then passed; `workspace_roots_that_were_just_the_cwd_follow_the_new_cwd` is new.
++- shed@codex-forced: lost 42 -> 38 key paths; shed@codex and goldens/shed/codex.json the same paths gone; no cross-agent snapshot or table changed.
++- Slices (toolpath, toolpath-convo, toolpath-codex, toolpath-goldens, path-cli --lib, path-cli --features develop --test goldens), fmt, clippy -D warnings (workspace, nix clippy 1.97.1), qualifier: see the report.
++- NOT run: path-cli integration tests, pinned 1.94, gitleaks, nix, live codex resume.
++
++## For the next PR
++Group 4: rate_limits, token `info`, timings (`started_at`, `completed_at`, `duration_ms`, `time_to_first_token_ms`), `model_context_window`, `collaboration_mode_kind`, exec/patch result fields.
+-- 
+2.55.0
+

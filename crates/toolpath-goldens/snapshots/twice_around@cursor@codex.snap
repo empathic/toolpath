@@ -1,0 +1,17 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: "stages.twice_around[agent]"
+info:
+  adapter: toolpath_cursor
+  agent: cursor
+  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
+input_file: test-fixtures/cursor/convo.json
+---
+{
+  "outcome": "compared",
+  "lost": [],
+  "gained": [],
+  "changed": [
+    "paths[].steps[].change.<artifact>.structural.turn_id"
+  ]
+}

@@ -1,0 +1,296 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: "transcript(\"two committed examples into one graph\",\n&[\"p\", \"merge\", \"examples/path-01-pr.path.json\",\n\"examples/path-04-exploration.path.json\", \"--title\", \"'Release v2'\",\n\"--pretty\"], &merged, Some(home.path()))"
+---
+$ path p merge examples/path-01-pr.path.json examples/path-04-exploration.path.json --title 'Release v2' --pretty
+exit: 0
+--- stdout
+{
+  "graph": {
+    "id": "graph-merged-2"
+  },
+  "meta": {
+    "title": "Release v2"
+  },
+  "paths": [
+    {
+      "meta": {
+        "source": "github:myorg/myrepo/pull/42",
+        "title": "Add email validation"
+      },
+      "path": {
+        "base": {
+          "branch": "main",
+          "ref": "abc123def456789",
+          "uri": "github:myorg/myrepo"
+        },
+        "head": "step-005",
+        "id": "path-pr-42"
+      },
+      "steps": [
+        {
+          "change": {
+            "src/auth/validator.rs": {
+              "raw": "@@ -0,0 +1,3 @@\n+pub fn validate_email(input: &str) -> bool {\n+    todo!()\n+}\n"
+            }
+          },
+          "meta": {
+            "intent": "Scaffold the validator",
+            "refs": [
+              {
+                "href": "issue://github/myorg/myrepo/issues/42",
+                "rel": "fixes"
+              }
+            ]
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-001",
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/auth/validator.rs": {
+              "raw": "@@ -1,3 +1,5 @@\n+use regex::Regex;\n+\n pub fn validate_email(input: &str) -> bool {\n-    todo!()\n+    Regex::new(r\"^[^@]+@[^@]+$\").unwrap().is_match(input)\n }\n"
+            }
+          },
+          "meta": {
+            "intent": "Regex-based validation (abandoned)"
+          },
+          "step": {
+            "actor": "agent:claude-code/session-abc123",
+            "id": "step-002",
+            "parents": [
+              "step-001"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/auth/validator.rs": {
+              "raw": "@@ -1,3 +1,7 @@\n-pub fn validate_email(input: &str) -> bool {\n-    todo!()\n+#[derive(Debug)]\n+pub struct ValidationError { pub field: String, pub message: String }\n+\n+pub fn validate_email(input: &str) -> Result<(), ValidationError> {\n+    if !input.contains('@') { return Err(ValidationError { field: \"email\".to_string(), message: \"invalid\".to_string() }); }\n+    Ok(())\n }\n"
+            }
+          },
+          "meta": {
+            "intent": "Add email validation with custom error type"
+          },
+          "step": {
+            "actor": "agent:claude-code/session-abc123",
+            "id": "step-003",
+            "parents": [
+              "step-001"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/auth/validator.rs": {
+              "raw": "@@ -1,7 +1,15 @@\n #[derive(Debug)]\n-pub struct ValidationError { pub field: String, pub message: String }\n+pub struct ValidationError {\n+    pub field: String,\n+    pub message: String,\n+}\n \n pub fn validate_email(input: &str) -> Result<(), ValidationError> {\n-    if !input.contains('@') { return Err(ValidationError { field: \"email\".to_string(), message: \"invalid\".to_string() }); }\n+    if !input.contains('@') {\n+        return Err(ValidationError {\n+            field: \"email\".to_string(),\n+            message: \"invalid\".to_string(),\n+        });\n+    }\n     Ok(())\n }\n"
+            }
+          },
+          "meta": {
+            "intent": "Auto-format"
+          },
+          "step": {
+            "actor": "tool:rustfmt/1.7.0",
+            "id": "step-004",
+            "parents": [
+              "step-003"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/auth/validator.rs": {
+              "raw": "@@ -8,7 +8,7 @@\n     if !input.contains('@') {\n         return Err(ValidationError {\n             field: \"email\".to_string(),\n-            message: \"invalid\".to_string(),\n+            message: \"must contain @\".to_string(),\n         });\n     }\n     Ok(())\n"
+            }
+          },
+          "meta": {
+            "intent": "Refine error messages"
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-005",
+            "parents": [
+              "step-004"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        }
+      ]
+    },
+    {
+      "meta": {
+        "actors": {
+          "agent:claude-code/session-exp1": {
+            "model": "claude-sonnet-4-20250514",
+            "name": "Claude Code",
+            "provider": "Anthropic"
+          },
+          "human:alex": {
+            "identities": [
+              {
+                "id": "alexk",
+                "system": "github"
+              }
+            ],
+            "name": "Alex"
+          }
+        },
+        "source": "agent://claude-code/session-exp1",
+        "title": "Explore CLI argument parsing approaches"
+      },
+      "path": {
+        "base": {
+          "ref": "main",
+          "uri": "github:myorg/myrepo"
+        },
+        "head": "step-004",
+        "id": "path-explore-cli-args"
+      },
+      "steps": [
+        {
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -1,3 +1,8 @@\n+use std::process;\n+\n fn main() {\n-    println!(\"Hello, world!\");\n+    let args: Vec<String> = std::env::args().collect();\n+    if args.len() < 2 {\n+        eprintln!(\"usage: mytool <command>\");\n+        process::exit(1);\n+    }\n }"
+            }
+          },
+          "meta": {
+            "intent": "Scaffold CLI entry point with basic arg check"
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-001",
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "Cargo.toml": {
+              "raw": "@@ -6,0 +7,2 @@\n+[dependencies]\n+clap = { version = \"4\", features = [\"derive\"] }"
+            },
+            "src/main.rs": {
+              "raw": "@@ -1,8 +1,15 @@\n+use clap::Parser;\n+\n+#[derive(Parser)]\n+struct Cli {\n+    command: String,\n+}\n+\n fn main() {\n-    let args: Vec<String> = std::env::args().collect();\n-    if args.len() < 2 {\n-        eprintln!(\"usage: mytool <command>\");\n-        process::exit(1);\n-    }\n+    let cli = Cli::parse();\n+    println!(\"Running: {}\", cli.command);\n }"
+            }
+          },
+          "meta": {
+            "intent": "Try clap derive macros (abandoned: too much codegen)"
+          },
+          "step": {
+            "actor": "agent:claude-code/session-exp1",
+            "id": "step-002a",
+            "parents": [
+              "step-001"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -1,8 +1,20 @@\n-use std::process;\n+use std::process;\n+use std::env;\n \n fn main() {\n-    let args: Vec<String> = std::env::args().collect();\n-    if args.len() < 2 {\n-        eprintln!(\"usage: mytool <command>\");\n-        process::exit(1);\n-    }\n+    let args: Vec<String> = env::args().collect();\n+    let cmd = args.get(1).map(|s| s.as_str());\n+    match cmd {\n+        Some(\"run\") => run(&args[2..]),\n+        Some(\"help\") | None => print_usage(),\n+        Some(other) => {\n+            eprintln!(\"unknown command: {other}\");\n+            process::exit(1);\n+        }\n+    }\n+}\n+\n+fn run(_args: &[String]) { todo!() }\n+fn print_usage() { println!(\"usage: mytool <run|help>\"); }"
+            }
+          },
+          "meta": {
+            "intent": "Try manual arg parsing with match"
+          },
+          "step": {
+            "actor": "agent:claude-code/session-exp1",
+            "id": "step-002b",
+            "parents": [
+              "step-001"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/main.rs": {
+              "structural": {
+                "from": "_args",
+                "to": "args",
+                "type": "rust.rename"
+              }
+            }
+          },
+          "meta": {
+            "intent": "Fix clippy: unused variable prefix"
+          },
+          "step": {
+            "actor": "tool:clippy/0.1.84",
+            "id": "step-003b",
+            "parents": [
+              "step-002b"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "Cargo.toml": {
+              "raw": "@@ -6,0 +7,2 @@\n+[dependencies]\n+clap = \"4\""
+            },
+            "src/main.rs": {
+              "raw": "@@ -1,8 +1,18 @@\n-use std::process;\n+use clap::{Command, Arg};\n \n fn main() {\n-    let args: Vec<String> = std::env::args().collect();\n-    if args.len() < 2 {\n-        eprintln!(\"usage: mytool <command>\");\n-        process::exit(1);\n-    }\n+    let matches = Command::new(\"mytool\")\n+        .subcommand(Command::new(\"run\")\n+            .about(\"Run the tool\")\n+            .arg(Arg::new(\"verbose\").short('v')))\n+        .subcommand(Command::new(\"help\")\n+            .about(\"Print help\"))\n+        .get_matches();\n+\n+    match matches.subcommand() {\n+        Some((\"run\", sub)) => run(sub),\n+        _ => println!(\"usage: mytool <run|help>\"),\n+    }\n+}\n+\n+fn run(_sub: &clap::ArgMatches) { todo!() }"
+            }
+          },
+          "meta": {
+            "intent": "Try clap builder API (no derive macros)"
+          },
+          "step": {
+            "actor": "agent:claude-code/session-exp1",
+            "id": "step-002c",
+            "parents": [
+              "step-001"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -4,6 +4,10 @@\n-    let matches = Command::new(\"mytool\")\n-        .subcommand(Command::new(\"run\")\n-            .about(\"Run the tool\")\n-            .arg(Arg::new(\"verbose\").short('v')))\n-        .subcommand(Command::new(\"help\")\n-            .about(\"Print help\"))\n+    let matches = Command::new(\"mytool\")\n+        .subcommand(\n+            Command::new(\"run\")\n+                .about(\"Run the tool\")\n+                .arg(Arg::new(\"verbose\").short('v')),\n+        )\n+        .subcommand(Command::new(\"help\").about(\"Print help\"))"
+            }
+          },
+          "meta": {
+            "intent": "Auto-format"
+          },
+          "step": {
+            "actor": "tool:rustfmt/1.7.0",
+            "id": "step-003c",
+            "parents": [
+              "step-002c"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        },
+        {
+          "change": {
+            "src/main.rs": {
+              "raw": "@@ -1,18 +1,25 @@\n-use clap::{Command, Arg};\n+use clap::{Arg, Command};\n+use std::env;\n \n fn main() {\n     let matches = Command::new(\"mytool\")\n         .subcommand(\n             Command::new(\"run\")\n                 .about(\"Run the tool\")\n                 .arg(Arg::new(\"verbose\").short('v')),\n         )\n         .subcommand(Command::new(\"help\").about(\"Print help\"))\n         .get_matches();\n \n     match matches.subcommand() {\n-        Some((\"run\", sub)) => run(sub),\n+        Some((\"run\", sub)) => {\n+            let verbose = sub.get_flag(\"verbose\");\n+            run(verbose);\n+        }\n         _ => println!(\"usage: mytool <run|help>\"),\n     }\n }\n \n-fn run(_sub: &clap::ArgMatches) { todo!() }\n+fn run(verbose: bool) {\n+    if verbose { println!(\"verbose mode\"); }\n+    println!(\"running\");\n+}"
+            }
+          },
+          "meta": {
+            "intent": "Merge builder API with manual match dispatch, wire up verbose flag"
+          },
+          "step": {
+            "actor": "human:alex",
+            "id": "step-004",
+            "parents": [
+              "step-003b",
+              "step-003c"
+            ],
+            "timestamp": "<timestamp>"
+          }
+        }
+      ]
+    }
+  ]
+}
+--- stderr
+
+# two committed examples into one graph

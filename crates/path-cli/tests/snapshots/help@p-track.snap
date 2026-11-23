@@ -1,0 +1,297 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path p track
+Incrementally build a Toolpath Path document
+
+Usage: path p track [OPTIONS] <COMMAND>
+
+Commands:
+  init      Start a tracking session; reads initial content from stdin
+  step      Record a new step; reads current content from stdin
+  visit     Cache content at a sequence number without creating a step; reads content from stdin. Used when navigating history (undo/redo)
+  note      Set intent on the current head step
+  annotate  Set metadata on a step (intent, source, refs)
+  export    Emit the session as a Toolpath Path document
+  close     Export and delete the session state file
+  list      List active tracking sessions
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track annotate
+Set metadata on a step (intent, source, refs)
+
+Usage: path p track annotate [OPTIONS] --session <SESSION>
+
+Options:
+      --session <SESSION>
+          Path to session state file
+
+      --step <STEP>
+          Step ID to annotate (defaults to head)
+
+      --intent <INTENT>
+          Intent text
+
+      --source <SOURCE>
+          VCS source as JSON (e.g. '{"type":"git","revision":"abc123"}')
+
+      --ref <REFS>
+          Reference as JSON (e.g. '{"rel":"issue","href":"https://..."}'), repeatable
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track close
+Export and delete the session state file
+
+Usage: path p track close [OPTIONS] --session <SESSION>
+
+Options:
+      --session <SESSION>
+          Path to session state file
+
+      --output <OUTPUT>
+          Write output to a file instead of stdout
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track export
+Emit the session as a Toolpath Path document
+
+Usage: path p track export [OPTIONS] --session <SESSION>
+
+Options:
+      --session <SESSION>
+          Path to session state file
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track init
+Start a tracking session; reads initial content from stdin
+
+Usage: path p track init [OPTIONS] --file <FILE> --actor <ACTOR>
+
+Options:
+      --file <FILE>
+          Artifact path (used as the change-map key)
+
+      --actor <ACTOR>
+          Default actor (e.g. "human:alex")
+
+      --actor-def <ACTOR_DEF>
+          Actor definition as JSON (e.g. '{"human:alex": {"name": "Alex"}}')
+
+      --title <TITLE>
+          Path title (appears in meta.title)
+
+      --source <SOURCE>
+          Path source tag (appears in meta.source)
+
+      --base-uri <BASE_URI>
+          Base URI for the path (e.g. "github:org/repo")
+
+      --base-ref <BASE_REF>
+          Base ref (e.g. commit hash)
+
+      --base-branch <BASE_BRANCH>
+          Branch the path was opened against (appears in path.base.branch)
+
+      --id <ID>
+          Path and graph id (default: a fresh `track-<time>-<pid>`); also names the session file, so a fixed id makes the output reproducible
+
+      --session-dir <SESSION_DIR>
+          Directory for session state files (default: $TMPDIR)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track list
+List active tracking sessions
+
+Usage: path p track list [OPTIONS]
+
+Options:
+      --session-dir <SESSION_DIR>
+          Directory to scan for sessions (default: $TMPDIR)
+
+      --json
+          Output as JSON
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track note
+Set intent on the current head step
+
+Usage: path p track note [OPTIONS] --session <SESSION> --intent <INTENT>
+
+Options:
+      --session <SESSION>
+          Path to session state file
+
+      --intent <INTENT>
+          Intent text
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track step
+Record a new step; reads current content from stdin
+
+Usage: path p track step [OPTIONS] --session <SESSION> --seq <SEQ> --parent-seq <PARENT_SEQ>
+
+Options:
+      --session <SESSION>
+          Path to session state file
+
+      --seq <SEQ>
+          Sequence number for this state
+
+      --parent-seq <PARENT_SEQ>
+          Parent sequence number (state this was derived from)
+
+      --actor <ACTOR>
+          Override actor for this step
+
+      --time <TIME>
+          Override timestamp (ISO 8601)
+
+      --source <SOURCE>
+          VCS source as JSON (e.g. '{"type":"git","revision":"abc123"}')
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p track visit
+Cache content at a sequence number without creating a step; reads content from stdin. Used when navigating history (undo/redo)
+
+Usage: path p track visit [OPTIONS] --session <SESSION> --seq <SEQ>
+
+Options:
+      --session <SESSION>
+          Path to session state file
+
+      --seq <SEQ>
+          Sequence number to cache
+
+      --inherit-from <INHERIT_FROM>
+          Inherit seq_to_step mapping from this ancestor seq
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

@@ -1,0 +1,26 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: "format!(\"{}\\n{}\",\ntranscript(\"a committed example\",\n&[\"p\", \"validate\", \"--input\", \"examples/path-04-exploration.path.json\"], &ok,\nSome(home.path())),\ntranscript(\"a step with a dangling parent (the RFC resolves parents within the path; validate does not check it)\",\n&[\"p\", \"validate\", \"--input\", \"<home>/invalid.path.json\"], &bad,\nSome(home.path())),) +\n&transcript(\"a step without the required actor\",\n&[\"p\", \"validate\", \"--input\", \"<home>/no-actor.path.json\"], &missing_actor,\nSome(home.path()))"
+---
+$ path p validate --input examples/path-04-exploration.path.json
+exit: 0
+--- stdout
+Valid: Graph (id: graph-path-explore-cli-args, 1 path)
+--- stderr
+
+# a committed example
+
+$ path p validate --input <home>/invalid.path.json
+exit: 0
+--- stdout
+Valid: Graph (id: g, 1 path)
+--- stderr
+
+# a step with a dangling parent (the RFC resolves parents within the path; validate does not check it)
+$ path p validate --input <home>/no-actor.path.json
+exit: 1
+--- stdout
+
+--- stderr
+Error: Invalid: failed to parse <home>/no-actor.path.json
+# a step without the required actor

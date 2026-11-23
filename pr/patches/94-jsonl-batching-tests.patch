@@ -1,0 +1,773 @@
+From d3d62a402ede75f60297f11c6ca09af2aa9253a3 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 13:34:25 -0400
+Subject: [PATCH] test(path-cli): tests for #305's pack_batches over the
+ baseline's documents (pr/94)
+
+Base: #305 (ben/jsonl-streaming-upload). Ben's code is unchanged except one
+cfg(test) mod line that mounts the new test file.
+---
+ Cargo.lock                                    |  67 ++-
+ crates/path-cli/Cargo.toml                    |   1 +
+ crates/path-cli/src/.qual                     |   1 +
+ crates/path-cli/src/cmd_pathbase.rs           |   4 +
+ .../src/cmd_pathbase_batching_tests.rs        | 517 ++++++++++++++++++
+ pr/94-jsonl-batching-tests.md                 |  40 ++
+ 6 files changed, 623 insertions(+), 7 deletions(-)
+ create mode 100644 crates/path-cli/src/.qual
+ create mode 100644 crates/path-cli/src/cmd_pathbase_batching_tests.rs
+ create mode 100644 pr/94-jsonl-batching-tests.md
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 3f21a082..1eb94aae 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1288,7 +1288,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+ dependencies = [
+  "libc",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -2983,9 +2983,9 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+ 
+ [[package]]
+ name = "openssl-src"
+-version = "300.6.0+3.6.2"
++version = "300.6.1+3.6.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "a8e8cbfd3a4a8c8f089147fd7aaa33cf8c7450c4d09f8f80698a0cf093abeff4"
++checksum = "46eb8fb9fb3b61ce1c0f8a026c4c1a0714d3a9e138e7fbde78753ce2babc3846"
+ dependencies = [
+  "cc",
+ ]
+@@ -3136,6 +3136,7 @@ dependencies = [
+  "jsonschema",
+  "pathbase-client",
+  "predicates",
++ "proptest",
+  "rand 0.9.4",
+  "ratatui",
+  "rayon",
+@@ -3659,6 +3660,31 @@ dependencies = [
+  "syn 2.0.117",
+ ]
+ 
++[[package]]
++name = "proptest"
++version = "1.11.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
++dependencies = [
++ "bit-set 0.8.0",
++ "bit-vec 0.8.0",
++ "bitflags 2.11.1",
++ "num-traits",
++ "rand 0.9.4",
++ "rand_chacha",
++ "rand_xorshift",
++ "regex-syntax",
++ "rusty-fork",
++ "tempfile",
++ "unarray",
++]
++
++[[package]]
++name = "quick-error"
++version = "1.2.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
++
+ [[package]]
+ name = "quinn"
+ version = "0.11.9"
+@@ -3797,6 +3823,15 @@ version = "0.10.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+ 
++[[package]]
++name = "rand_xorshift"
++version = "0.4.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
++dependencies = [
++ "rand_core 0.9.5",
++]
++
+ [[package]]
+ name = "ratatui"
+ version = "0.30.0"
+@@ -4265,7 +4300,7 @@ dependencies = [
+  "errno",
+  "libc",
+  "linux-raw-sys",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -4322,7 +4357,7 @@ dependencies = [
+  "security-framework",
+  "security-framework-sys",
+  "webpki-root-certs",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -4349,6 +4384,18 @@ version = "1.0.22"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+ 
++[[package]]
++name = "rusty-fork"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
++dependencies = [
++ "fnv",
++ "quick-error",
++ "tempfile",
++ "wait-timeout",
++]
++
+ [[package]]
+ name = "ryu"
+ version = "1.0.23"
+@@ -5054,7 +5101,7 @@ dependencies = [
+  "getrandom 0.4.2",
+  "once_cell",
+  "rustix",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -5659,6 +5706,12 @@ version = "0.1.7"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971"
+ 
++[[package]]
++name = "unarray"
++version = "0.1.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
++
+ [[package]]
+ name = "uncased"
+ version = "0.9.10"
+@@ -6154,7 +6207,7 @@ version = "0.1.11"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+ dependencies = [
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+diff --git a/crates/path-cli/Cargo.toml b/crates/path-cli/Cargo.toml
+index d5320777..a9075594 100644
+--- a/crates/path-cli/Cargo.toml
++++ b/crates/path-cli/Cargo.toml
+@@ -107,4 +107,5 @@ assert_cmd = "2"
+ predicates = "3"
+ insta = { workspace = true }
+ toolpath-convo = { workspace = true }
++proptest = "1"
+ figment = { version = "0.10", features = ["env", "test"] }
+diff --git a/crates/path-cli/src/.qual b/crates/path-cli/src/.qual
+new file mode 100644
+index 00000000..125ce170
+--- /dev/null
++++ b/crates/path-cli/src/.qual
+@@ -0,0 +1 @@
++{"metabox":"1","type":"annotation","subject":"crates/path-cli/src/cmd_pathbase.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T17:32:51.700045Z","id":"2f0b372d79b3d70fc847e85cfecd0d1ab2294ff197bce945fae09faf9858a9e1","body":{"detail":"Found by the batching tests (cmd_pathbase_batching_tests.rs, ignored test no_batch_is_ever_without_a_step): on path-04-exploration at budget 1 the last batch is [Head, PathClose]. The doc comment says a batch is only closed once it holds a step, but the batch that FOLLOWS can hold none. Whether the server accepts a step-less append is not known. Fix idea: do not close for a trailing non-Step unit (only close before a Step).","kind":"concern","span":{"start":{"line":664},"end":{"line":664},"content_hash":"b80e8fcc95c193f9855086f4366f66a0955b0c0e997b3225c2ce9ee972332a08"},"summary":"pack_batches can close a full batch before the closing lines (Head, PathClose, path-level Signature) and send them as a final batch with no Step","tags":["review","batching","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/crates/path-cli/src/cmd_pathbase.rs b/crates/path-cli/src/cmd_pathbase.rs
+index eb0c04a2..761fdff9 100644
+--- a/crates/path-cli/src/cmd_pathbase.rs
++++ b/crates/path-cli/src/cmd_pathbase.rs
+@@ -1131,6 +1131,10 @@ pub(crate) fn clear_session(path: &Path) -> Result<()> {
+     }
+ }
+ 
++#[cfg(test)]
++#[path = "cmd_pathbase_batching_tests.rs"]
++mod batching_tests;
++
+ #[cfg(test)]
+ pub(crate) mod tests {
+     use super::*;
+diff --git a/crates/path-cli/src/cmd_pathbase_batching_tests.rs b/crates/path-cli/src/cmd_pathbase_batching_tests.rs
+new file mode 100644
+index 00000000..87908978
+--- /dev/null
++++ b/crates/path-cli/src/cmd_pathbase_batching_tests.rs
+@@ -0,0 +1,517 @@
++//! Tests of `pack_batches` (empathic/toolpath#305, Ben Barber's streamed upload) over the
++//! documents the baseline holds. `pack_batches` is pure: no server, no network. Nothing in
++//! #305's code is changed by this module; it is mounted from `cmd_pathbase.rs` by one
++//! `#[cfg(test)] #[path = ...] mod` line.
++//!
++//! What it pins:
++//! 1. reassembly: the batches concatenate back to exactly the writer's output, for every
++//!    document;
++//! 2. each batch is valid on its own, in the shape the server's routes expect;
++//! 3. the edges: an oversize step alone, a small document in one request, a path with no steps;
++//! 4. a property test with a fixed seed: random step sizes, parents and budgets;
++//! 5. an input over 4 MiB built from a real document so the batching path really runs.
++//!
++//! Where the recordings come from: `examples/*.path.json` always; and, when the baseline is in
++//! the tree, every `crates/toolpath-goldens/snapshots/document@*.snap` (13 recordings, including
++//! the four forced compactions). A tree without the baseline tests only the examples.
++
++use super::*;
++use std::path::{Path as FsPath, PathBuf};
++use toolpath::v1::{Graph, Path, PathOrRef};
++
++fn repo() -> PathBuf {
++    FsPath::new(env!("CARGO_MANIFEST_DIR")).join("../..")
++}
++
++/// `(name, path)` for every path (not `$ref`) of every document available.
++fn documents() -> Vec<(String, Path)> {
++    let mut out = Vec::new();
++    let mut add = |name: String, json: &str| {
++        let graph = Graph::from_json(json).unwrap_or_else(|e| panic!("{name}: {e}"));
++        for (i, p) in graph.paths.into_iter().enumerate() {
++            if let PathOrRef::Path(p) = p {
++                out.push((format!("{name}#{i}"), *p));
++            }
++        }
++    };
++    let examples = repo().join("examples");
++    for entry in std::fs::read_dir(&examples).expect("examples") {
++        let p = entry.unwrap().path();
++        let name = p.file_name().unwrap().to_string_lossy().into_owned();
++        if name.ends_with(".path.json") || name.starts_with("graph-") {
++            add(name, &std::fs::read_to_string(&p).unwrap());
++        }
++    }
++    let snaps = repo().join("crates/toolpath-goldens/snapshots");
++    if let Ok(rd) = std::fs::read_dir(&snaps) {
++        for entry in rd.flatten() {
++            let name = entry.file_name().to_string_lossy().into_owned();
++            if name.starts_with("document@") && name.ends_with(".snap") {
++                let text = std::fs::read_to_string(entry.path()).unwrap();
++                let body = text.splitn(3, "---\n").nth(2).expect("snapshot body");
++                add(name, body);
++            }
++        }
++    }
++    out
++}
++
++/// What `stream_paths` does before packing: parents first, then the writer's JSONL.
++fn jsonl_and_ids(path: &Path) -> (String, Vec<String>) {
++    let reordered;
++    let path = match parents_first_order(&path.steps) {
++        Some(order) => {
++            reordered = Path {
++                path: path.path.clone(),
++                steps: order.iter().map(|&i| path.steps[i].clone()).collect(),
++                meta: path.meta.clone(),
++            };
++            &reordered
++        }
++        None => path,
++    };
++    let ids = path.steps.iter().map(|s| s.step.id.clone()).collect();
++    (path.to_jsonl_string().unwrap(), ids)
++}
++
++fn pack(jsonl: &str, ids: &[String], budget: usize) -> Vec<Batch> {
++    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
++    pack_batches(jsonl, &ids, budget)
++}
++
++fn kind(line: &str) -> String {
++    let v: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{line}: {e}"));
++    v.as_object()
++        .and_then(|o| o.keys().next().cloned())
++        .expect("a JSONL line is an object with one key")
++}
++
++/// The lines a path ends with after its last step: path-level signatures, `Head`, `PathClose`.
++fn is_closing_tail(kinds: &[String]) -> bool {
++    !kinds.is_empty()
++        && kinds
++            .iter()
++            .all(|k| k == "Signature" || k == "Head" || k == "PathClose")
++}
++
++/// FINDING for #305 (not fixed here, Ben's code is untouched): `pack_batches` closes a batch
++/// when the NEXT line would put it over budget and it already holds a step. When that next line
++/// is one of the closing lines (`Head`, `PathClose`, a path-level `Signature`), the batch before
++/// it is full, so the closing lines become a batch of their own with NO step, sent to the steps
++/// route as a request whose body is `{"Head":..}\n{"PathClose":..}\n`. The doc comment says "a
++/// batch is only closed once it contains a step", which is true of the batch being closed, not
++/// of the one that follows. Whether the server accepts a step-less append is not known here.
++/// The two tests above allow exactly this tail and nothing else; this one is the strict form
++/// and fails today.
++#[test]
++#[ignore = "finding in #305: the closing lines can become a batch with no step (see the doc comment)"]
++fn no_batch_is_ever_without_a_step() {
++    for (name, path) in documents() {
++        if path.steps.is_empty() {
++            continue;
++        }
++        let (jsonl, ids) = jsonl_and_ids(&path);
++        for budget in BUDGETS {
++            for (bi, b) in pack(&jsonl, &ids, budget).iter().enumerate() {
++                assert!(
++                    b.body.lines().any(|l| kind(l) == "Step"),
++                    "{name}@{budget}: batch {bi} has no step"
++                );
++            }
++        }
++    }
++}
++
++/// The budgets the checks run under: tiny (every step alone), mid, and the real one.
++const BUDGETS: [usize; 4] = [1, 700, 20_000, BATCH_BUDGET];
++
++#[test]
++fn there_are_documents_to_test() {
++    let docs = documents();
++    assert!(docs.len() >= 4, "found {} paths", docs.len());
++    if repo().join("crates/toolpath-goldens/snapshots").exists() {
++        assert!(
++            docs.len() >= 17,
++            "the baseline is in the tree: {} paths",
++            docs.len()
++        );
++    }
++}
++
++#[test]
++fn the_batches_concatenate_to_the_writer_output_for_every_document() {
++    for (name, path) in documents() {
++        let (jsonl, ids) = jsonl_and_ids(&path);
++        for budget in BUDGETS {
++            let all: String = pack(&jsonl, &ids, budget)
++                .iter()
++                .map(|b| b.body.as_str())
++                .collect();
++            assert_eq!(all, jsonl, "{name} at budget {budget}");
++        }
++    }
++}
++
++#[test]
++fn every_batch_is_valid_on_its_own() {
++    for (name, path) in documents() {
++        if path.steps.is_empty() {
++            continue;
++        }
++        let (jsonl, ids) = jsonl_and_ids(&path);
++        for budget in BUDGETS {
++            let batches = pack(&jsonl, &ids, budget);
++            let mut seen: std::collections::HashSet<String> = Default::default();
++            let step_parents: std::collections::HashMap<String, Vec<String>> = path
++                .steps
++                .iter()
++                .map(|s| (s.step.id.clone(), s.step.parents.clone()))
++                .collect();
++            for (bi, b) in batches.iter().enumerate() {
++                assert!(b.body.ends_with('\n'), "{name}@{budget} batch {bi}");
++                let lines: Vec<&str> = b.body.lines().collect();
++                let kinds: Vec<String> = lines.iter().map(|l| kind(l)).collect();
++                // the first batch opens the path, and only the first
++                assert_eq!(
++                    kinds.first().map(String::as_str) == Some("PathOpen"),
++                    bi == 0,
++                    "{name}@{budget}: PathOpen belongs to batch 0 only (batch {bi} starts {:?})",
++                    kinds.first()
++                );
++                // a batch with no step: allowed only as the closing tail (see FINDING below)
++                assert!(
++                    kinds.iter().any(|k| k == "Step")
++                        || (bi + 1 == batches.len() && is_closing_tail(&kinds)),
++                    "{name}@{budget}: batch {bi} of {} has no step ({kinds:?})",
++                    batches.len()
++                );
++                // actors are declared in the first batch, before its first step
++                if bi == 0 {
++                    let first_step = kinds.iter().position(|k| k == "Step").unwrap();
++                    assert!(
++                        kinds[..first_step]
++                            .iter()
++                            .all(|k| k == "PathOpen" || k == "ActorDef")
++                    );
++                }
++                // parents come before children, across batches
++                for l in &lines {
++                    if kind(l) == "Step" {
++                        let v: serde_json::Value = serde_json::from_str(l).unwrap();
++                        let id = v["Step"]["step"]["id"].as_str().unwrap().to_string();
++                        for p in &step_parents[&id] {
++                            if step_parents.contains_key(p) {
++                                assert!(
++                                    seen.contains(p),
++                                    "{name}@{budget}: {id} before its parent {p}"
++                                );
++                            }
++                        }
++                        seen.insert(id);
++                    }
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn a_steps_signatures_stay_in_its_batch() {
++    for (name, path) in documents() {
++        let (jsonl, ids) = jsonl_and_ids(&path);
++        let lines: Vec<&str> = jsonl.lines().collect();
++        for budget in BUDGETS {
++            let batches = pack(&jsonl, &ids, budget);
++            for b in &batches {
++                let kinds: Vec<String> = b.body.lines().map(kind).collect();
++                for (i, l) in b.body.lines().enumerate() {
++                    if l.starts_with(r#"{"Signature":{"target":"step:"#) {
++                        assert!(
++                            kinds[..i].iter().any(|k| k == "Step"),
++                            "{name}@{budget}: a step signature leads its batch"
++                        );
++                    }
++                }
++            }
++            let _ = &lines;
++        }
++    }
++}
++
++#[test]
++fn a_small_document_is_one_request() {
++    for (name, path) in documents() {
++        let (jsonl, ids) = jsonl_and_ids(&path);
++        if jsonl.len() <= BATCH_BUDGET && !path.steps.is_empty() {
++            assert_eq!(pack(&jsonl, &ids, BATCH_BUDGET).len(), 1, "{name}");
++        }
++    }
++}
++
++#[test]
++fn a_path_with_no_steps_packs_to_at_most_one_batch_and_loses_nothing() {
++    let path = Path {
++        path: toolpath::v1::PathIdentity {
++            id: "empty".into(),
++            base: None,
++            head: "none".into(),
++            graph_ref: None,
++        },
++        steps: vec![],
++        meta: None,
++    };
++    let (jsonl, ids) = jsonl_and_ids(&path);
++    let batches = pack(&jsonl, &ids, BATCH_BUDGET);
++    assert!(batches.len() <= 1, "{} batches", batches.len());
++    let all: String = batches.iter().map(|b| b.body.as_str()).collect();
++    assert_eq!(all, jsonl);
++}
++
++#[test]
++fn a_step_over_the_budget_goes_alone_and_everything_still_reassembles() {
++    let mut path = documents()
++        .into_iter()
++        .find(|(_, p)| p.steps.len() >= 3)
++        .unwrap()
++        .1;
++    let big = "y".repeat(5 * 1024 * 1024);
++    path.steps[1] = path.steps[1].clone().with_raw_change("big.bin", big);
++    let (jsonl, ids) = jsonl_and_ids(&path);
++    let batches = pack(&jsonl, &ids, BATCH_BUDGET);
++    let big_batch = batches
++        .iter()
++        .find(|b| b.body.len() > BATCH_BUDGET)
++        .expect("the 5 MiB step is sent over budget, in a batch of its own");
++    assert_eq!(
++        big_batch
++            .body
++            .lines()
++            .filter(|l| l.starts_with(r#"{"Step":"#))
++            .count(),
++        1
++    );
++    let all: String = batches.iter().map(|b| b.body.as_str()).collect();
++    assert_eq!(all, jsonl);
++}
++
++#[test]
++fn a_real_document_repeated_past_4_mib_runs_the_batching_path() {
++    // the largest real path available, its steps repeated under fresh ids until the JSONL is > 4 MiB
++    let (name, base) = documents()
++        .into_iter()
++        .max_by_key(|(_, p)| p.to_jsonl_string().map_or(0, |s| s.len()))
++        .unwrap();
++    let mut path = base.clone();
++    let mut copy = 0;
++    while path.to_jsonl_string().unwrap().len() <= BATCH_BUDGET + 1024 {
++        copy += 1;
++        let tail = path.steps.last().map(|s| s.step.id.clone());
++        for (i, s) in base.steps.iter().enumerate() {
++            let mut s = s.clone();
++            s.step.id = format!("{}~{copy}", s.step.id);
++            s.step.parents = if i == 0 {
++                tail.iter().cloned().collect()
++            } else {
++                s.step
++                    .parents
++                    .iter()
++                    .map(|p| format!("{p}~{copy}"))
++                    .collect()
++            };
++            path.steps.push(s);
++        }
++    }
++    let (jsonl, ids) = jsonl_and_ids(&path);
++    assert!(jsonl.len() > BATCH_BUDGET, "{name}: {} bytes", jsonl.len());
++    let batches = pack(&jsonl, &ids, BATCH_BUDGET);
++    assert!(
++        batches.len() >= 2,
++        "{name}: {} batch(es) for {} bytes",
++        batches.len(),
++        jsonl.len()
++    );
++    assert!(
++        batches.iter().all(|b| b.body.len() <= BATCH_BUDGET
++            || b.body
++                .lines()
++                .filter(|l| l.starts_with(r#"{"Step":"#))
++                .count()
++                == 1),
++        "a batch is over budget with more than one step"
++    );
++    let all: String = batches.iter().map(|b| b.body.as_str()).collect();
++    assert_eq!(all, jsonl);
++}
++
++mod property {
++    use super::*;
++    use proptest::prelude::*;
++    use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
++
++    /// A path of `sizes.len()` steps; step i's parents are earlier steps picked by `links`.
++    fn random_path(sizes: &[usize], links: &[usize]) -> Path {
++        let steps = sizes
++            .iter()
++            .enumerate()
++            .map(|(i, &n)| {
++                let mut s =
++                    toolpath::v1::Step::new(format!("s{i}"), "human:alex", "2024-01-01T00:00:00Z")
++                        .with_raw_change("f.rs", "z".repeat(n));
++                if i > 0 {
++                    s = s.with_parent(format!("s{}", links[i] % i));
++                }
++                s
++            })
++            .collect::<Vec<_>>();
++        Path {
++            path: toolpath::v1::PathIdentity {
++                id: "p".into(),
++                base: None,
++                head: format!("s{}", sizes.len() - 1),
++                graph_ref: None,
++            },
++            steps,
++            meta: None,
++        }
++    }
++
++    /// Fixed seed: a failure replays.
++    #[test]
++    fn random_sizes_orders_and_budgets_keep_every_property() {
++        let mut runner = TestRunner::new_with_rng(
++            Config {
++                cases: 200,
++                ..Config::default()
++            },
++            TestRng::from_seed(RngAlgorithm::ChaCha, &[7u8; 32]),
++        );
++        let strat = (
++            prop::collection::vec(0usize..4000, 1..24),
++            prop::collection::vec(0usize..1000, 24),
++            1usize..9000,
++            any::<bool>(),
++        );
++        runner
++            .run(&strat, |(sizes, links, budget, shuffle)| {
++                let mut path = random_path(&sizes, &links);
++                if shuffle {
++                    path.steps.reverse(); // children before parents: stream_paths reorders
++                }
++                let (jsonl, ids) = jsonl_and_ids(&path);
++                let batches = pack(&jsonl, &ids, budget);
++                let all: String = batches.iter().map(|b| b.body.as_str()).collect();
++                prop_assert_eq!(&all, &jsonl);
++                let mut seen = std::collections::HashSet::new();
++                for (bi, b) in batches.iter().enumerate() {
++                    let kinds: Vec<String> = b.body.lines().map(kind).collect();
++                    prop_assert_eq!(
++                        kinds.first().map(String::as_str) == Some("PathOpen"),
++                        bi == 0
++                    );
++                    prop_assert!(
++                        kinds.iter().any(|k| k == "Step")
++                            || (bi + 1 == batches.len() && is_closing_tail(&kinds)),
++                        "batch {} has no step: {:?}",
++                        bi,
++                        kinds
++                    );
++                    let steps = kinds.iter().filter(|k| *k == "Step").count();
++                    prop_assert!(
++                        b.body.len() <= budget || steps == 1,
++                        "batch {} over budget with {} steps",
++                        bi,
++                        steps
++                    );
++                    for l in b.body.lines().filter(|l| l.starts_with(r#"{"Step":"#)) {
++                        let v: serde_json::Value = serde_json::from_str(l).unwrap();
++                        for p in v["Step"]["step"]["parents"]
++                            .as_array()
++                            .into_iter()
++                            .flatten()
++                        {
++                            prop_assert!(seen.contains(p.as_str().unwrap()), "child before parent");
++                        }
++                        seen.insert(v["Step"]["step"]["id"].as_str().unwrap().to_string());
++                    }
++                }
++                Ok(())
++            })
++            .unwrap();
++    }
++}
++
++mod wire {
++    use super::*;
++    use crate::cmd_pathbase::tests::{
++        MockServer, graph_document_json, path_opened, steps_appended,
++    };
++
++    fn body_of(req: &[u8]) -> String {
++        let text = String::from_utf8_lossy(req).into_owned();
++        text.split_once("\r\n\r\n")
++            .map(|(_, b)| b.to_string())
++            .unwrap_or_default()
++    }
++
++    /// With a stub Pathbase that answers every batch, the bodies a streamed upload actually puts
++    /// on the wire (after the graph shell) concatenate to the writer's JSONL for the document:
++    /// the same content a single-request upload carries, in pieces. Only one-path documents,
++    /// so the stub's answers line up with the batches; budget small enough for several batches.
++    #[test]
++    fn a_streamed_upload_puts_the_writers_jsonl_on_the_wire() {
++        let mut checked = 0;
++        for (name, path) in documents() {
++            if path.steps.len() < 2 {
++                continue;
++            }
++            let (jsonl, ids) = jsonl_and_ids(&path);
++            let budget = 4000;
++            let batches = pack(&jsonl, &ids, budget);
++            if batches.len() < 2 {
++                continue;
++            }
++            let n_steps = |b: &Batch| {
++                b.body
++                    .lines()
++                    .filter(|l| l.starts_with(r#"{"Step":"#))
++                    .count()
++            };
++            let mut responses = vec![
++                ("HTTP/1.1 201 Created", graph_document_json()),
++                (
++                    "HTTP/1.1 201 Created",
++                    path_opened(n_steps(&batches[0]), None),
++                ),
++            ];
++            responses.extend(
++                batches[1..]
++                    .iter()
++                    .map(|b| ("HTTP/1.1 200 OK", steps_appended(n_steps(b), None))),
++            );
++            let server = MockServer::start_sequence(responses);
++            let doc = Graph::from_path(path.clone());
++            graphs_post_streamed(
++                &server.base(),
++                "tok",
++                "alex",
++                "pathstash",
++                Some("big"),
++                &doc,
++                false,
++                budget,
++            )
++            .unwrap_or_else(|e| panic!("{name}: {e}"));
++            let reqs = server.requests();
++            let wire: String = reqs[1..].iter().map(|r| body_of(r)).collect();
++            assert_eq!(
++                wire, jsonl,
++                "{name}: the wire carries something other than the writer's JSONL"
++            );
++            checked += 1;
++        }
++        assert!(
++            checked >= 2,
++            "only {checked} documents were large enough to batch"
++        );
++    }
++}
+diff --git a/pr/94-jsonl-batching-tests.md b/pr/94-jsonl-batching-tests.md
+new file mode 100644
+index 00000000..a17db4b7
+--- /dev/null
++++ b/pr/94-jsonl-batching-tests.md
+@@ -0,0 +1,40 @@
++# test(path-cli): tests for #305's pack_batches over the baseline's documents
++
++Status: draft · Base: #305 (ben/jsonl-streaming-upload) at a84386a2 · Author of the tests: toolpath-author; the code under test is Ben Barber's and is NOT changed
++
++## Why
++Ben's streamed upload (#305) is going to merge. `pack_batches` is pure (no server, no network), so it can be tested against every real document the baseline holds, not only the
++synthetic paths its own tests build. Bobby asked for this before the Ben-first rebase.
++
++## What changes
++- `crates/path-cli/src/cmd_pathbase_batching_tests.rs` (new), mounted by ONE `#[cfg(test)] #[path = ...] mod batching_tests;` line in `cmd_pathbase.rs` (the only edit to Ben's file, so the tests can see the private `pack_batches`).
++- `proptest = "1"` as a dev-dependency of path-cli (Cargo.toml, Cargo.lock).
++- A qualifier concern on `pack_batches`' closing condition (`crates/path-cli/src/.qual`), see "Finding".
++
++Recordings: `examples/*.path.json` always; when the baseline is in the tree, every `crates/toolpath-goldens/snapshots/document@*.snap` (13 recordings incl. the four forced compactions).
++On Ben's head alone only the examples (4 paths) are found, so the "every baseline recording" run happens once this rides on a tree that has the baseline.
++
++## Verification (sandbox, cargo 1.97.1, offline)
++Run on Ben's head a84386a2 plus this piece:
++- reassembly: the batches concatenate to exactly the writer's output (after `parents_first_order`, as `stream_paths` does), at budgets 1, 700, 20000 and 4 MiB: PASS
++- each batch valid alone (PathOpen only in batch 0, actors before the first step, parents before children across batches, a step's signatures stay behind its step; every batch holds a step except an allowed closing tail): PASS
++- a small document is one request; a path with no steps packs to at most one batch and loses nothing: PASS
++- a 5 MiB step goes alone and everything still reassembles: PASS
++- a real document repeated past 4 MiB runs the batching path (>= 2 batches, over budget only for a lone step): PASS
++- proptest (fixed seed, 200 cases: random step sizes, parent links, order, budget): PASS
++- Ben's own tests, unchanged: 458 pass; the 31 that fail all fail with `PermissionDenied` at the mock server's `bind` (this sandbox forbids opening a port): his 30 `MockServer` tests and my one wire test.
++  NOT verified here: `wire::a_streamed_upload_puts_the_writers_jsonl_on_the_wire` (stub Pathbase, bodies on the wire concatenate to the writer's JSONL): compiles, could not run; to be run by scratch-main-82.
++- NOT done: a Pathbase read-back comparison with a real server ("streamed upload reads back equal to single-request"); that needs Pathbase and is the pathbase-side run.
++
++## Finding for Ben (not fixed here)
++`pack_batches` closes a full batch when the NEXT line would exceed the budget and the batch already holds a step. When that next line is a closing line (`Head`, `PathClose`, a path-level `Signature`),
++the closing lines become a batch of their own with NO step: on `path-04-exploration` at budget 1 the last batch is `[Head, PathClose]`. The doc comment says a batch is only closed once it holds a step; that
++is true of the batch being closed, not the one that follows. With the real 4 MiB budget it needs the last step to land within ~60 bytes of the limit. Whether the server accepts a step-less append is unknown.
++The strict test `no_batch_is_ever_without_a_step` is `#[ignore]`d and fails today; the other tests allow exactly this tail and nothing else. Idea: only close before a `Step` line. Recorded as a qualifier concern at `cmd_pathbase.rs:664`.
++Also: Bobby's brief mentions `Head` lines added per batch and non-final batches ending with one; #305's `pack_batches` adds nothing ("the bodies concatenate back to the input") and relies on the writer's single closing `Head`. Tested as it is.
++
++## For the next PR
++Run the wire test and the baseline-wide run where a port can be bound and the baseline is present; decide with Ben whether the step-less tail is a bug.
++
++## Not run
++Pinned 1.94, gitleaks, clippy/fmt of the whole workspace (Ben's tree: `cargo fmt -p path-cli` only), nix.
+-- 
+2.55.0
+

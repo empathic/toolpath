@@ -1,0 +1,736 @@
+From 2660ec19b9eb24157c57706ecc33d65ecca92261 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 10:19:37 -0400
+Subject: [PATCH] fix(codex): a codex -> codex round trip keeps the tool-search
+ items (pr/100)
+
+---
+ crates/toolpath-codex/src/project.rs          |  92 ++++++++
+ .../snapshots/shed@codex-forced.snap          | 220 +-----------------
+ goldens/manifest.json                         |  98 ++++----
+ pr/100-codex-tool-search-items.md             |  21 ++
+ 4 files changed, 166 insertions(+), 265 deletions(-)
+ create mode 100644 pr/100-codex-tool-search-items.md
+
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index 6b4fd004..1ab8f989 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -198,7 +198,12 @@ fn project_view(
+     // emit it after the turn, so a re-read differences it back to the same
+     // per-step spend.
+     let mut running = toolpath_convo::TokenUsage::default();
++    let mut passthrough = codex_passthrough(view).into_iter().peekable();
+     for (idx, turn) in view.turns.iter().enumerate() {
++        // Codex's own items, in time order, ahead of the first turn that follows them.
++        while let Some(line) = passthrough.next_if(|l| l.timestamp <= turn.timestamp) {
++            lines.push(line);
++        }
+         let codex_extra = codex_extras(turn).cloned().unwrap_or_default();
+         // A turn that writes no line must not open a group: its turn_context would be
+         // stamped on nothing, and the reader would move it (and its step id) to the next turn.
+@@ -229,6 +234,8 @@ fn project_view(
+         );
+     }
+ 
++    lines.extend(passthrough);
++
+     Ok(crate::types::Session {
+         id: view.id.clone(),
+         file_path: PathBuf::new(),
+@@ -236,6 +243,23 @@ fn project_view(
+     })
+ }
+ 
++/// The response items Codex wrote that the IR keeps only as events (`tool_search_call` and
++/// `tool_search_output`, whose output holds the tool definitions it found), as rollout lines.
++/// Only for a view Codex recorded: no other harness has them. In event order.
++fn codex_passthrough(view: &ConversationView) -> Vec<RolloutLine> {
++    if view.provider_id.as_deref() != Some("codex") {
++        return Vec::new();
++    }
++    view.events
++        .iter()
++        .filter_map(|e| {
++            let kind = e.event_type.strip_prefix("response_item.")?;
++            let payload = Value::Object(e.data.clone().into_iter().collect());
++            Some(response_item_line(&e.timestamp, kind, payload))
++        })
++        .collect()
++}
++
+ fn make_session_meta_line(
+     cfg: &CodexProjector,
+     view: &ConversationView,
+@@ -978,6 +1002,74 @@ mod tests {
+         }
+     }
+ 
++    fn tool_search_events(mut view: ConversationView) -> ConversationView {
++        let ev = |ts: &str, kind: &str, payload: Value| toolpath_convo::ConversationEvent {
++            id: format!("{kind}-{ts}"),
++            timestamp: ts.into(),
++            parent_id: None,
++            event_type: format!("response_item.{kind}"),
++            data: payload
++                .as_object()
++                .unwrap()
++                .iter()
++                .map(|(k, v)| (k.clone(), v.clone()))
++                .collect(),
++        };
++        view.events.push(ev(
++            "2026-04-20T16:00:01.000Z",
++            "tool_search_call",
++            json!({"type": "tool_search_call", "call_id": "c1", "status": "completed",
++                   "execution": "client", "arguments": {"query": "spawn agent", "limit": 8}}),
++        ));
++        view.events.push(ev(
++            "2026-04-20T16:00:01.500Z",
++            "tool_search_output",
++            json!({"type": "tool_search_output", "call_id": "c1", "status": "completed",
++                   "execution": "client",
++                   "tools": [{"type": "namespace", "name": "multi_agent_v1",
++                              "tools": [{"name": "spawn_agent", "strict": false}]}]}),
++        ));
++        view
++    }
++
++    /// Codex's own tool-search items hold the tool definitions it found; a Codex view gives them
++    /// back, the call before its output, ahead of the first turn that follows them.
++    #[test]
++    fn codex_tool_search_items_are_written_back() {
++        let mut u = user_turn("u1", "hi");
++        u.timestamp = "2026-04-20T16:00:00.000Z".into();
++        let mut a = assistant_turn("a1", "hello");
++        a.timestamp = "2026-04-20T16:00:02.000Z".into();
++        let view = tool_search_events(view_with(vec![u, a]));
++        let s = CodexProjector::default().project(&view).unwrap();
++        let kinds = inner_types(&s);
++        let call = kinds
++            .iter()
++            .position(|k| k == "tool_search_call")
++            .expect("call");
++        let out = kinds
++            .iter()
++            .position(|k| k == "tool_search_output")
++            .expect("output");
++        assert_eq!(out, call + 1, "the output follows its call: {kinds:?}");
++        let line = &s.lines[out];
++        assert_eq!(line.kind, "response_item");
++        assert_eq!(line.timestamp, "2026-04-20T16:00:01.500Z");
++        assert_eq!(line.payload["tools"][0]["tools"][0]["name"], "spawn_agent");
++        assert_eq!(line.payload["call_id"], "c1");
++    }
++
++    #[test]
++    fn other_harness_tool_search_items_are_not_copied() {
++        let mut view = tool_search_events(view_with(vec![assistant_turn("a1", "hello")]));
++        view.provider_id = Some("claude".into());
++        let s = CodexProjector::default().project(&view).unwrap();
++        assert!(
++            !inner_types(&s).iter().any(|k| k.starts_with("tool_search")),
++            "copied from a claude view"
++        );
++    }
++
+     #[test]
+     fn other_harness_settings_are_not_copied() {
+         let mut view = with_turn_context(view_with(vec![assistant_turn("a1", "hello")]));
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index 83dd8399..3caf7235 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -111,8 +111,8 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     }
+   },
+   "same_format": {
+-    "lines": 90,
+-    "bytes": 50390,
++    "lines": 92,
++    "bytes": 62701,
+     "event_types_shed": {
+       "compacted": {
+         "source": 1,
+@@ -137,32 +137,16 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+       "response_item/reasoning": {
+         "source": 3,
+         "after": 0
+-      },
+-      "response_item/tool_search_call": {
+-        "source": 1,
+-        "after": 0
+-      },
+-      "response_item/tool_search_output": {
+-        "source": 1,
+-        "after": 0
+       }
+     },
+     "key_paths": {
+       "source": 152,
+-      "after": 61,
+-      "lost": 99,
++      "after": 112,
++      "lost": 48,
+       "gained": 8
+     },
+     "renamed": [],
+     "dropped": [
+-      {
+-        "path": "payload.arguments.limit",
+-        "example": "8"
+-      },
+-      {
+-        "path": "payload.arguments.query",
+-        "example": "sub-agent task dispatch spawn agent"
+-      },
+       {
+         "path": "payload.base_instructions.text",
+         "example": "You are Codex, a coding agent based on G…"
+@@ -211,10 +195,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.encrypted_content",
+         "example": "<withheld>"
+       },
+-      {
+-        "path": "payload.execution",
+-        "example": "client"
+-      },
+       {
+         "path": "payload.info.last_token_usage.cached_input_tokens",
+         "example": "<withheld>"
+@@ -355,198 +335,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.timezone",
+         "example": "America/New_York"
+       },
+-      {
+-        "path": "payload.tools[].description",
+-        "example": "Tools for spawning and managing sub-agen…"
+-      },
+-      {
+-        "path": "payload.tools[].name",
+-        "example": "multi_agent_v1"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].defer_loading",
+-        "example": "true"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].description",
+-        "example": "                  Available model overri…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].name",
+-        "example": "spawn_agent"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.additionalProperties",
+-        "example": "false"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.agent_type.description",
+-        "example": "Optional type name for the new agent. If…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.agent_type.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.fork_context.description",
+-        "example": "True forks the current thread history in…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.fork_context.type",
+-        "example": "boolean"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.id.description",
+-        "example": "Agent id to resume."
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.id.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.interrupt.description",
+-        "example": "True interrupts the current task and han…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.interrupt.type",
+-        "example": "boolean"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.description",
+-        "example": "Structured input items. Use this to pass…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.additionalProperties",
+-        "example": "false"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.image_url.description",
+-        "example": "Image URL when type is image."
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.image_url.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.name.description",
+-        "example": "Display name when type is skill or menti…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.name.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.path.description",
+-        "example": "Path when type is local_image/skill, or …"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.path.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.text.description",
+-        "example": "Text content when type is text."
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.text.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.type.description",
+-        "example": "Input item type: text, image, local_imag…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.properties.type.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.items.type",
+-        "example": "object"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.items.type",
+-        "example": "array"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.message.description",
+-        "example": "Initial plain-text task for the new agen…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.message.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.model.description",
+-        "example": "Model override for the new agent. Omit u…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.model.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.reasoning_effort.description",
+-        "example": "Reasoning effort override for the new ag…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.reasoning_effort.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.service_tier.description",
+-        "example": "Service tier override for the new agent.…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.service_tier.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.target.description",
+-        "example": "Agent id to close (from spawn_agent)."
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.target.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.targets.description",
+-        "example": "Agent ids to wait on. Pass multiple ids …"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.targets.items.type",
+-        "example": "string"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.targets.type",
+-        "example": "array"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.timeout_ms.description",
+-        "example": "Timeout in milliseconds. Defaults to 300…"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.properties.timeout_ms.type",
+-        "example": "number"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.required[]",
+-        "example": "target"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].parameters.type",
+-        "example": "object"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].strict",
+-        "example": "false"
+-      },
+-      {
+-        "path": "payload.tools[].tools[].type",
+-        "example": "function"
+-      },
+-      {
+-        "path": "payload.tools[].type",
+-        "example": "namespace"
+-      },
+       {
+         "path": "payload.workspace_roots[]",
+         "example": "<withheld>"
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 26437622..72de28b1 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++          "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++          "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++    "toolpath_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
++        "binary_sha256": "384418ce3069b650a34f7e2d1c88f598ef7bd39b36f76ccd0486b020a755b1a5",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
++        "repo_rev": "da0930ab33abd21ff24eb47aa242a916ae5dad5b"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+diff --git a/pr/100-codex-tool-search-items.md b/pr/100-codex-tool-search-items.md
+new file mode 100644
+index 00000000..98ca11ec
+--- /dev/null
++++ b/pr/100-codex-tool-search-items.md
+@@ -0,0 +1,21 @@
++# fix(codex): a codex -> codex round trip keeps the tool-search items (the tool definitions)
++
++Status: draft · Base: pr/99 · Source: pr/99 recommendation 1, group 1 (tool definitions); controller-core's order
++
++## Why
++pr/99: codex-forced loses 48 `tools[]...` paths on every target, and codex -> codex loses the same ones. They are the `tool_search_output` response item (the tool definitions Codex found) and
++its `tool_search_call` (`arguments.query/limit`, `execution`, `status`). The reader keeps both as `response_item.<kind>` events; the writer only read the `turn_context` event and wrote the rest from turns, so the items vanished.
++Codex's format holds them: a writer bug.
++
++## What changes
++`codex_passthrough` (toolpath-codex/src/project.rs): for a view Codex recorded (`provider_id == "codex"`), every `response_item.<kind>` event goes back as a `response_item` line with its payload verbatim,
++in event order, each ahead of the first turn whose timestamp is not earlier (the remainder at the end). Other harnesses' views get none (tested). Same rule as the turn settings (pr/95): what the target cannot hold is declared in the writer contract, not copied.
++
++## Verification (sandbox, cargo 1.97.1, offline)
++- Test first: `codex_tool_search_items_are_written_back` failed (no `tool_search_call` line), passes now; `other_harness_tool_search_items_are_not_copied` guards the other direction.
++- shed@codex-forced: lost 99 -> 48 key paths (the 48 tool-definition paths and the `tool_search_call` fields are gone from the dropped list), `response_item/tool_search_*` no longer in the shed event types; no other snapshot or table changed (the cross-agent projections never got them).
++- toolpath-codex, toolpath-goldens (incl. contract and twice-around), `path-cli --features develop --test goldens`, qualifier review, fmt, clippy -D warnings (workspace, all targets, nix-store clippy 1.97.1), workspace tests (only the known sandbox port-bind failures).
++- NOT run: pinned 1.94, gitleaks, nix, a live codex resume of the written session.
++
++## For the next PR
++pr/99 groups 2-4: replacement_history + base_instructions; current_date, timezone, workspace_roots; rate_limits + token info + timings. Placement caveat: an item whose timestamp falls between two lines of one turn is written before the next turn, not inside it.
+-- 
+2.55.0
+

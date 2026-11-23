@@ -1,0 +1,54 @@
+From 7f8a70342e9bd74c13d1bab9f63fc6e119c1c703 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 22:19:26 -0400
+Subject: [PATCH] docs(rfc): JCS key ordering is by UTF-16 code units, not
+ UTF-8 bytes (pr/60)
+
+---
+ RFC.md                     |  4 +++-
+ pr/60-rfc-jcs-key-order.md | 18 ++++++++++++++++++
+ 2 files changed, 21 insertions(+), 1 deletion(-)
+ create mode 100644 pr/60-rfc-jcs-key-order.md
+
+diff --git a/RFC.md b/RFC.md
+index 7b7457ba..4dc64573 100644
+--- a/RFC.md
++++ b/RFC.md
+@@ -716,7 +716,9 @@ Signatures require a canonical byte representation. Toolpath uses **JCS (RFC
+ 
+ To produce a signable byte sequence:
+ 
+-1. **Key Ordering**: Object keys sorted lexicographically by UTF-8 bytes
++1. **Key Ordering**: Object keys sorted by UTF-16 code units (RFC 8785 §3.2.3).
++   This differs from UTF-8 byte order only for keys with characters outside the
++   Basic Multilingual Plane, whose surrogate pairs sort before U+E000–U+FFFF
+ 2. **No Whitespace**: No spaces, newlines, or indentation
+ 3. **Unicode**: Literal characters when valid; escape only `"`, `\`, and control
+    characters (U+0000-U+001F); lowercase hex in escapes (`\u001f` not `\u001F`)
+diff --git a/pr/60-rfc-jcs-key-order.md b/pr/60-rfc-jcs-key-order.md
+new file mode 100644
+index 00000000..d61aab8d
+--- /dev/null
++++ b/pr/60-rfc-jcs-key-order.md
+@@ -0,0 +1,18 @@
++# docs(rfc): JCS key ordering is by UTF-16 code units, not UTF-8 bytes
++
++Status: draft · Base: pr/33-signatures · RFC.md text only
++
++## Why
++RFC.md:719 said object keys are "sorted lexicographically by UTF-8 bytes". RFC 8785 (§3.2.3) sorts by UTF-16 code units.
++The two orders agree except for keys with characters outside the BMP (surrogate pairs sort before U+E000-U+FFFF in UTF-16,
++after them in UTF-8). The implementation already follows RFC 8785 (its reference vector `weird.json` requires it), so only
++the text was false. pr/33 recorded this as a blocker; pr/45 listed it as still open.
++
++## What changes
++- RFC.md "Canonicalization Rules" rule 1 now states UTF-16 code unit order and says where it differs from byte order.
++
++## Not changed
++- The `.qual` blocker annotation for RFC.md:719 is the qualifier's, not hand-edited here: resolve it with the qualifier tool
++  after this lands. The rest of the signatures findings in pr/33 (path signature covers ids, key material, witness/ci forms,
++  SSHSIG namespace) are untouched.
++- `cargo test` was not needed for a text-only change; the signature tests that pin `weird.json` are unaffected.
+-- 
+2.55.0
+

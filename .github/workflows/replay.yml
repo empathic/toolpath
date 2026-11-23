@@ -1,0 +1,27 @@
+name: Replay
+
+# Runs the record/replay tests with no keys. Also what `just act replay <agent>` runs locally.
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: agent to replay (opencode, copilot, claude, pi, codex, cursor)
+        required: true
+
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install Rust
+        run: rustup show # installs toolchain from rust-toolchain.toml
+      # `just replay <agent>`'s command, spelled out: neither GitHub's ubuntu-24.04 image nor the
+      # act runner image ships `just`. The agent comes in through the environment, not the script.
+      - name: Replay
+        env:
+          AGENT: ${{ inputs.agent }}
+          # Fail, not skip, when the agent's binary or cells are missing: a replay that skips
+          # must never read as green. Goes green once the hermetic harness install lands.
+          WEBMOCK_REQUIRE: ${{ inputs.agent }}
+        # replay_zz_coverage is the check that fails on a skip; it must run after the agent's test.
+        run: cargo test -p toolpath-webmock --test replay_agents -- "replay_${AGENT}" replay_zz_coverage --test-threads=1

@@ -1,0 +1,2589 @@
+diff --git a/crates/toolpath-cursor/src/lib.rs b/crates/toolpath-cursor/src/lib.rs
+index 15981418..79d86a9b 100644
+--- a/crates/toolpath-cursor/src/lib.rs
++++ b/crates/toolpath-cursor/src/lib.rs
+@@ -21,7 +21,7 @@ pub use project::CursorProjector;
+ pub use provider::{CursorConvo, PROVIDER_ID, session_to_view, tool_category};
+ pub use reader::DbReader;
+ pub use types::{
+-    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader,
++    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader, BubbleThinking,
+     CAPABILITY_THINKING, CAPABILITY_TOOL, ComposerData, ComposerHead, ComposerHeaders,
+     CursorSession, CursorSessionMetadata, ModelConfig, ModelInfo, SelectedModel, TOOL_EDIT_FILE_V2,
+     TOOL_GLOB_FILE_SEARCH, TOOL_READ_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2, ThinkingBlock,
+diff --git a/crates/toolpath-cursor/src/project.rs b/crates/toolpath-cursor/src/project.rs
+index 6c5d2c26..53b963ec 100644
+--- a/crates/toolpath-cursor/src/project.rs
++++ b/crates/toolpath-cursor/src/project.rs
+@@ -13,10 +13,11 @@ use toolpath_convo::{
+ 
+ use crate::reader::CONTENT_PREFIX;
+ use crate::types::{
+-    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader, CAPABILITY_TOOL,
+-    ComposerData, ComposerHead, CursorSession, ModelConfig, ModelInfo, SelectedModel,
+-    TOOL_EDIT_FILE_V2, TOOL_GLOB_FILE_SEARCH, TOOL_READ_FILE_V2, TOOL_RUN_TERMINAL_COMMAND_V2,
+-    TOOL_TASK_V2, ThinkingBlock, TokenCount, ToolFormerData, WorkspaceIdentifier, WorkspaceUri,
++    BUBBLE_TYPE_ASSISTANT, BUBBLE_TYPE_USER, Bubble, BubbleGrouping, BubbleHeader, BubbleThinking,
++    CAPABILITY_TOOL, ComposerData, ComposerHead, CursorSession, ModelConfig, ModelInfo,
++    SelectedModel, TOOL_EDIT_FILE_V2, TOOL_GLOB_FILE_SEARCH, TOOL_READ_FILE_V2,
++    TOOL_RUN_TERMINAL_COMMAND_V2, TOOL_TASK_V2, ThinkingBlock, TokenCount, ToolFormerData,
++    WorkspaceIdentifier, WorkspaceUri,
+ };
+ 
+ const DEFAULT_MODEL_NAME: &str = "default";
+@@ -351,6 +352,23 @@ fn build_bubble(turn: &Turn, content_blobs: &mut HashMap<String, String>) -> Bub
+         token_count,
+         model_info,
+         tool_former_data,
++        // Cursor's own `thinking` object, as real bubbles carry it; the signature goes back only
++        // when this turn's thinking is the text Cursor signed.
++        thinking: turn
++            .thinking
++            .as_ref()
++            .filter(|t| !t.is_empty())
++            .map(|t| BubbleThinking {
++                text: t.clone(),
++                signature: Some(
++                    turn.thinking_signature
++                        .as_ref()
++                        .and_then(|s| s.value_for("cursor", t))
++                        .unwrap_or_default()
++                        .to_string(),
++                ),
++                extra: HashMap::new(),
++            }),
+         all_thinking_blocks,
+         tool_results: Vec::new(),
+         extra: bubble_required_extras(is_tool_bubble),
+diff --git a/crates/toolpath-cursor/src/provider.rs b/crates/toolpath-cursor/src/provider.rs
+index 0a6507a2..6e832c8c 100644
+--- a/crates/toolpath-cursor/src/provider.rs
++++ b/crates/toolpath-cursor/src/provider.rs
+@@ -492,11 +492,20 @@ impl<'a> Builder<'a> {
+             .filter(|t| !t.text.is_empty())
+             .map(|t| t.text.clone())
+             .collect();
+-        let thinking = if thinking_chunks.is_empty() {
+-            None
+-        } else {
++        // In practice the text is on the bubble's own `thinking` object, with
++        // `allThinkingBlocks` empty; blocks win when present.
++        let own = bubble.thinking.as_ref().filter(|t| !t.text.is_empty());
++        let thinking = if !thinking_chunks.is_empty() {
+             Some(thinking_chunks.join("\n\n"))
++        } else {
++            own.map(|t| t.text.clone())
+         };
++        // Cursor's signature, tagged with who issued it; only a cursor writer returns it.
++        let thinking_signature = thinking.as_deref().and_then(|text| {
++            own.and_then(|t| t.signature.as_deref())
++                .filter(|s| !s.is_empty())
++                .map(|s| toolpath_convo::ThinkingSignature::new("cursor", s, text))
++        });
+ 
+         // Tool call (at most one per bubble in observed data).
+         let mut tool_uses = Vec::new();
+@@ -567,7 +576,7 @@ impl<'a> Builder<'a> {
+             timestamp: bubble.created_at.clone().unwrap_or_default(),
+             text: bubble.text.clone(),
+             thinking,
+-            thinking_signature: None,
++            thinking_signature,
+             tool_uses,
+             model,
+             stop_reason: None,
+diff --git a/crates/toolpath-cursor/src/types.rs b/crates/toolpath-cursor/src/types.rs
+index 9b3abc99..8d0a2812 100644
+--- a/crates/toolpath-cursor/src/types.rs
++++ b/crates/toolpath-cursor/src/types.rs
+@@ -407,6 +407,9 @@ pub struct Bubble {
+     /// `Object.entries(undefined)` on the thinking-blocks indexer.
+     #[serde(rename = "allThinkingBlocks", default)]
+     pub all_thinking_blocks: Vec<ThinkingBlock>,
++    /// The bubble's own thinking text and signature, when Cursor recorded one.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub thinking: Option<BubbleThinking>,
+     /// Must serialize as `[]` when empty — same renderer trap as
+     /// `allThinkingBlocks`.
+     #[serde(rename = "toolResults", default)]
+@@ -469,6 +472,18 @@ pub struct ModelInfo {
+     pub extra: HashMap<String, Value>,
+ }
+ 
++/// A bubble's own `thinking` object: what Cursor records for a thinking step in practice
++/// (`allThinkingBlocks` is empty beside it). `signature` is Cursor's, empty when it signs nothing.
++#[derive(Debug, Clone, Default, Serialize, Deserialize)]
++pub struct BubbleThinking {
++    #[serde(default)]
++    pub text: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub signature: Option<String>,
++    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
++    pub extra: HashMap<String, Value>,
++}
++
+ #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+ pub struct ThinkingBlock {
+     #[serde(default)]
+diff --git a/crates/toolpath-cursor/tests/projection_roundtrip.rs b/crates/toolpath-cursor/tests/projection_roundtrip.rs
+index 4dee21f0..b7f399ad 100644
+--- a/crates/toolpath-cursor/tests/projection_roundtrip.rs
++++ b/crates/toolpath-cursor/tests/projection_roundtrip.rs
+@@ -310,3 +310,70 @@ fn projector_accepts_foreign_view_shape() {
+     // Both content blobs registered.
+     assert_eq!(rebuilt.content_blobs.len(), 2);
+ }
++
++// ── Thinking text ────────────────────────────────────────────────────
++
++/// A real Cursor bubble carries its thinking as `thinking: {text, signature}` (and a
++/// `thinkingDurationMs`), with `allThinkingBlocks` empty.
++const THINKING_SQL: &str = r#"
++    CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
++    CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);
++
++    INSERT INTO ItemTable (key, value) VALUES
++      ('composer.composerHeaders',
++       '{"allComposers":[{"type":"head","composerId":"824686cd-875e-47da-a90b-dbc3e523efb8","name":"Think","createdAt":1000,"lastUpdatedAt":2500,"unifiedMode":"agent","workspaceIdentifier":{"id":"ws-hash","uri":{"$mid":1,"fsPath":"/proj","external":"file:///proj","path":"/proj","scheme":"file"}}}]}');
++
++    INSERT INTO cursorDiskKV (key, value) VALUES
++      ('composerData:824686cd-875e-47da-a90b-dbc3e523efb8',
++       '{"_v":16,"composerId":"824686cd-875e-47da-a90b-dbc3e523efb8","name":"Think","createdAt":1000,"lastUpdatedAt":2500,"isAgentic":true,"unifiedMode":"agent","agentBackend":"cursor-agent","modelConfig":{"modelName":"default","maxMode":false,"selectedModels":[{"modelId":"default","parameters":[]}]},"fullConversationHeadersOnly":[{"bubbleId":"11111111-1111-4111-a111-111111111111","type":1},{"bubbleId":"22222222-2222-4222-a222-222222222222","type":2}]}'),
++      ('bubbleId:824686cd-875e-47da-a90b-dbc3e523efb8:11111111-1111-4111-a111-111111111111',
++       '{"_v":3,"type":1,"bubbleId":"11111111-1111-4111-a111-111111111111","createdAt":"2026-06-01T00:00:00.000Z","text":"what is 2+2","conversationState":"~"}'),
++      ('bubbleId:824686cd-875e-47da-a90b-dbc3e523efb8:22222222-2222-4222-a222-222222222222',
++       '{"_v":3,"type":2,"bubbleId":"22222222-2222-4222-a222-222222222222","createdAt":"2026-06-01T00:00:01.000Z","text":"4","modelInfo":{"modelName":"claude-opus-4-7"},"allThinkingBlocks":[],"thinking":{"signature":"sig-from-cursor","text":"Two plus two is four."},"thinkingDurationMs":1200}')
++      ;
++"#;
++
++fn load_thinking_source() -> CursorSession {
++    let dir = TempDir::new().unwrap();
++    let db_path = dir.path().join("state.vscdb");
++    let conn = Connection::open(&db_path).unwrap();
++    conn.execute_batch(THINKING_SQL).unwrap();
++    drop(conn);
++    let session = DbReader::open(&db_path)
++        .unwrap()
++        .load_session("824686cd-875e-47da-a90b-dbc3e523efb8")
++        .unwrap();
++    std::mem::forget(dir);
++    session
++}
++
++/// The thinking text lives in `bubble.thinking.text`; the reader must lift it into the turn.
++#[test]
++fn a_bubbles_thinking_object_is_the_turns_thinking() {
++    let source = load_thinking_source();
++    let view = session_to_view(&source);
++    let t = view.turns.iter().find(|t| t.text == "4").expect("answer");
++    assert_eq!(t.thinking.as_deref(), Some("Two plus two is four."));
++}
++
++/// cursor -> cursor keeps the thinking text, and the signature Cursor issued for it.
++#[test]
++fn cursor_to_cursor_keeps_the_thinking_text_and_signature() {
++    let source = load_thinking_source();
++    let (view_back, rebuilt, _) = roundtrip(&source);
++    let t = view_back.turns.iter().find(|t| t.text == "4").unwrap();
++    assert_eq!(t.thinking.as_deref(), Some("Two plus two is four."));
++    let b = rebuilt
++        .bubbles
++        .iter()
++        .find(|b| b.text == "4")
++        .expect("rebuilt answer bubble");
++    assert_eq!(
++        b.thinking.as_ref().map(|t| t.text.as_str()),
++        Some("Two plus two is four.")
++    );
++    assert_eq!(
++        b.thinking.as_ref().and_then(|t| t.signature.as_deref()),
++        Some("sig-from-cursor")
++    );
++}
+diff --git a/crates/toolpath-goldens/snapshots/document@cursor.snap b/crates/toolpath-goldens/snapshots/document@cursor.snap
+index 4146701f..586aba66 100644
+--- a/crates/toolpath-goldens/snapshots/document@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/document@cursor.snap
+@@ -71,6 +71,7 @@ input_file: test-fixtures/cursor/convo.json
+                 },
+                 "role": "assistant",
+                 "text": "",
++                "thinking": "The user wants me to complete a series of tasks that test different tool categories.\n\nI will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\n\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\n\nStep 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.\n\nStep 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  \n\nThe content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```",
+                 "type": "conversation.append"
+               }
+             }
+diff --git a/crates/toolpath-goldens/snapshots/ir@cursor.snap b/crates/toolpath-goldens/snapshots/ir@cursor.snap
+index 04413817..213d51ab 100644
+--- a/crates/toolpath-goldens/snapshots/ir@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/ir@cursor.snap
+@@ -33,7 +33,7 @@ input_file: test-fixtures/cursor/convo.json
+       "role": "Assistant",
+       "timestamp": "2026-06-01T18:33:26.400Z",
+       "text": "",
+-      "thinking": null,
++      "thinking": "The user wants me to complete a series of tasks that test different tool categories.\n\nI will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\n\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\n\nStep 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.\n\nStep 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  \n\nThe content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```",
+       "tool_uses": [],
+       "model": "default",
+       "stop_reason": null,
+diff --git a/crates/toolpath-goldens/snapshots/projection@copilot@cursor.snap b/crates/toolpath-goldens/snapshots/projection@copilot@cursor.snap
+index 1dfccdd6..fe00cc08 100644
+--- a/crates/toolpath-goldens/snapshots/projection@copilot@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@copilot@cursor.snap
+@@ -216,6 +216,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "I'll work through these steps systematically, using the appropriate tools at each stage.\n\n**Step 1: List files in current directory**\nI'll use the `view` tool to list files in the directory.",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories\n2. Write notes.md - I should use `create` tool\n3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did\n\nLet me start by listing files and thinking through my approach."
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 324
+@@ -303,6 +307,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "The directory appears to be empty. Now I'll proceed with the remaining steps.\n\n**Step 2: Write notes.md**\nI'll use the `create` tool to write the file with exactly the two lines specified.\n\n**Step 3: Read it back**\nI'll use `view` to confirm both lines are present.\n\n**Step 4: Edit it** \nI'll use `edit` to replace \"scratch\" with \"fixture\".\n\n**Step 5: Find files starting with \"note\"**\nI'll use `glob` to find matching files.\n\n**Step 6: Search for \"fixture\"**\nI'll use `grep` to search file contents.\n\nLet me start with creating the file:",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories\n2. Write notes.md - I should use `create` tool\n3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did\n\nLet me start by listing files and thinking through my approach."
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 264
+@@ -391,6 +399,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "**Step 3: Read notes.md back**",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories\n2. Write notes.md - I should use `create` tool\n3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did\n\nLet me start by listing files and thinking through my approach."
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 87
+@@ -478,6 +490,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Confirmed—both lines are present.\n\n**Step 4: Edit notes.md to replace \"scratch\" with \"fixture\"**",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I didLet me start by listing files and thinking through my approach."
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 362
+@@ -566,6 +582,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "**Step 5: Find files starting with \"note\"**",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:\n\n1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I didLet me start by listing files and thinking through my approach."
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 66
+@@ -653,6 +673,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Good.\n\n**Step 6: Search for \"fixture\" in files**",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did"
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 264
+@@ -740,6 +764,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Perfect—\"fixture\" is in notes.md as expected.\n\n**Step 7: Read a non-existent file**",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did"
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 303
+@@ -826,6 +854,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Acknowledged—the file does not exist, and the read correctly reported the failure.\n\n**Step 8: Write and run count.sh**",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did"
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 345
+@@ -914,6 +946,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Now run it:",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool7. Read non-existent file - I should use `view` tool (it will fail)8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did"
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 299
+@@ -1001,6 +1037,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Perfect—exactly five lines of output.\n\n**Step 9: Dispatch a sub-agent to count words in notes.md**",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through these steps carefully, following the tool-selection rules:1. List files in current directory - I should use `view` tool for directories2. Write notes.md - I should use `create` tool3. Read notes.md - I should use `view` tool\n4. Edit notes.md - I should use `edit` tool\n5. Find files starting with \"note\" - I should use `glob` tool\n6. Search for \"fixture\" - I should use `grep` tool\n7. Read non-existent file - I should use `view` tool (it will fail)\n8. Write shell script and run it - I should use `create` for the script, then `bash` to run it\n9. Dispatch sub-agent - I should use `task` tool\n10. Summarize what I did"
++      },
+       "todos": [],
+       "tokenCount": {
+         "outputTokens": 654
+@@ -1217,6 +1257,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "The sub-agent reported that `notes.md` contains **16 words** total.\n\n**Step 10: Summary**\n\nI completed all nine steps: listed the empty directory, created and read `notes.md`, edited it to replace \"scratch\" with \"fixture\", found the file via glob matching, confirmed the search found \"fixture\", attempted to read a non-existent file (which correctly failed), created and executed a shell script that output five lines, and dispatched a sub-agent which counted 16 words in the file. All tools worked as expected and stayed within the current working directory throughout.",
++      "thinking": {
++        "signature": "",
++        "text": "The sub-agent counted 16 words total in the file. Let me quote that result in one sentence for step 10."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 54,
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@claude.snap b/crates/toolpath-goldens/snapshots/projection@cursor@claude.snap
+index 2d5d8864..dc63b026 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@claude.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@claude.snap
+@@ -9,7 +9,8 @@ input_file: test-fixtures/cursor/convo.json
+ ---
+ {"permissionMode":"default","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","type":"permission-mode"}
+ {"isSidechain":false,"type":"user","uuid":"afc40009-9378-4bef-9730-29d98c4056dc","timestamp":"2026-06-01T18:33:24.592Z","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","cwd":"/Users/ben/projects/temp/cursortest2","message":{"role":"user","content":"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.\n"}}
+-{"parentUuid":"afc40009-9378-4bef-9730-29d98c4056dc","isSidechain":false,"type":"assistant","uuid":"32bb4bdc-e840-4e06-bf11-ef70a25efbb3","timestamp":"2026-06-01T18:33:31.139Z","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","cwd":"/Users/ben/projects/temp/cursortest2","message":{"role":"assistant","content":[{"type":"text","text":"Starting step 1: I'll list the current directory contents first, then work through the remaining steps in order.\n"}],"model":"default"}}
++{"parentUuid":"afc40009-9378-4bef-9730-29d98c4056dc","isSidechain":false,"type":"assistant","uuid":"c91881d0-c0e1-4632-b522-4b2c65b9342f","timestamp":"2026-06-01T18:33:26.400Z","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","cwd":"/Users/ben/projects/temp/cursortest2","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants me to complete a series of tasks that test different tool categories.\n\nI will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\n\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\n\nStep 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.\n\nStep 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  \n\nThe content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```"}],"model":"default"}}
++{"parentUuid":"c91881d0-c0e1-4632-b522-4b2c65b9342f","isSidechain":false,"type":"assistant","uuid":"32bb4bdc-e840-4e06-bf11-ef70a25efbb3","timestamp":"2026-06-01T18:33:31.139Z","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","cwd":"/Users/ben/projects/temp/cursortest2","message":{"role":"assistant","content":[{"type":"text","text":"Starting step 1: I'll list the current directory contents first, then work through the remaining steps in order.\n"}],"model":"default"}}
+ {"parentUuid":"32bb4bdc-e840-4e06-bf11-ef70a25efbb3","isSidechain":false,"type":"assistant","uuid":"724d68c5-84f0-462c-9b45-68750241911c","timestamp":"2026-06-01T18:33:31.520Z","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","cwd":"/Users/ben/projects/temp/cursortest2","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool_6debf531-4ee7-4c8c-afe6-22236682a78","name":"Bash","input":{"command":"ls -la /Users/ben/projects/temp/cursortest2"}}],"model":"default"}}
+ {"parentUuid":"724d68c5-84f0-462c-9b45-68750241911c","isSidechain":false,"type":"user","uuid":"724d68c5-84f0-462c-9b45-68750241911c-result-tool_6debf531-4ee7-4c8c-afe6-22236682a78","timestamp":"2026-06-01T18:33:31.520Z","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","cwd":"/Users/ben/projects/temp/cursortest2","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_6debf531-4ee7-4c8c-afe6-22236682a78","content":"total 0\ndrwxr-xr-x 2 ben staff  64 Jun  1 14:33 .\ndrwxr-xr-x 5 ben staff 160 Jun  1 14:33 ..\n","is_error":false}]},"toolUseResult":{"interrupted":false,"isImage":false,"noOutputExpected":false,"stderr":"","stdout":"total 0\ndrwxr-xr-x 2 ben staff  64 Jun  1 14:33 .\ndrwxr-xr-x 5 ben staff 160 Jun  1 14:33 ..\n"},"sourceToolAssistantUUID":"724d68c5-84f0-462c-9b45-68750241911c"}
+ {"parentUuid":"724d68c5-84f0-462c-9b45-68750241911c-result-tool_6debf531-4ee7-4c8c-afe6-22236682a78","isSidechain":false,"type":"assistant","uuid":"b8feb1b6-6ae7-4d0c-b672-8c6a5eaf0c3f","timestamp":"2026-06-01T18:33:32.978Z","sessionId":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","cwd":"/Users/ben/projects/temp/cursortest2","message":{"role":"assistant","content":[{"type":"text","text":"Directory is empty. Step 2: creating `notes.md` with the Write tool and exactly those two lines.\n"}],"model":"default"}}
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@codex.snap b/crates/toolpath-goldens/snapshots/projection@cursor@codex.snap
+index 0cdd1221..df9e522d 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@codex.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@codex.snap
+@@ -8,9 +8,12 @@ info:
+ input_file: test-fixtures/cursor/convo.json
+ ---
+ {"timestamp":"2026-06-01T18:33:24.592Z","type":"session_meta","payload":{"cli_version":"0.0.0-projected","cwd":"/Users/ben/projects/temp/cursortest2","id":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","model_provider":"openai","originator":"codex-toolpath","source":"cli","timestamp":"2026-06-01T18:33:24.592Z"}}
+-{"timestamp":"2026-06-01T18:33:24.592Z","type":"turn_context","payload":{"cwd":"/Users/ben/projects/temp/cursortest2","model":"default","turn_id":"ad9f62d0-57b4-42f4-9310-b6fd3213af85-t2"}}
++{"timestamp":"2026-06-01T18:33:24.592Z","type":"turn_context","payload":{"cwd":"/Users/ben/projects/temp/cursortest2","model":"default","turn_id":"ad9f62d0-57b4-42f4-9310-b6fd3213af85-t1"}}
+ {"timestamp":"2026-06-01T18:33:24.592Z","type":"response_item","payload":{"content":[{"text":"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.\n","type":"input_text"}],"role":"user","type":"message"}}
+ {"timestamp":"2026-06-01T18:33:24.592Z","type":"event_msg","payload":{"images":[],"local_images":[],"message":"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.\n","text_elements":[],"type":"user_message"}}
++{"timestamp":"2026-06-01T18:33:26.400Z","type":"response_item","payload":{"content":null,"summary":[{"text":"The user wants me to complete a series of tasks that test different tool categories.\n\nI will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\n\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\n\nStep 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.\n\nStep 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  \n\nThe content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```","type":"summary_text"}],"type":"reasoning"}}
++{"timestamp":"2026-06-01T18:33:26.400Z","type":"response_item","payload":{"content":[{"text":"","type":"output_text"}],"phase":"commentary","role":"assistant","type":"message"}}
++{"timestamp":"2026-06-01T18:33:31.139Z","type":"turn_context","payload":{"cwd":"/Users/ben/projects/temp/cursortest2","model":"default","turn_id":"ad9f62d0-57b4-42f4-9310-b6fd3213af85-t2"}}
+ {"timestamp":"2026-06-01T18:33:31.139Z","type":"response_item","payload":{"content":[{"text":"Starting step 1: I'll list the current directory contents first, then work through the remaining steps in order.\n","type":"output_text"}],"phase":"commentary","role":"assistant","type":"message"}}
+ {"timestamp":"2026-06-01T18:33:31.139Z","type":"event_msg","payload":{"memory_citation":null,"message":"Starting step 1: I'll list the current directory contents first, then work through the remaining steps in order.\n","phase":"commentary","type":"agent_message"}}
+ {"timestamp":"2026-06-01T18:33:31.520Z","type":"turn_context","payload":{"cwd":"/Users/ben/projects/temp/cursortest2","model":"default","turn_id":"ad9f62d0-57b4-42f4-9310-b6fd3213af85-t3"}}
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap b/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap
+index ac23cbb1..c0a914c7 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@copilot.snap
+@@ -10,7 +10,7 @@ input_file: test-fixtures/cursor/convo.json
+ {"data":{"alreadyInUse":false,"context":{"cwd":"/Users/ben/projects/temp/cursortest2","gitRoot":"/Users/ben/projects/temp/cursortest2"},"contextTier":null,"copilotVersion":"1.0.67","producer":"cursor","remoteSteerable":false,"sessionId":"<session-id>","startTime":"2026-06-01T18:33:24.592Z","version":1},"id":"00000000-0000-4000-8000-000000000001","parentId":null,"timestamp":"2026-06-01T18:33:24.592Z","type":"session.start"}
+ {"data":{"content":"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.\n"},"id":"00000000-0000-4000-8000-000000000002","parentId":"00000000-0000-4000-8000-000000000001","timestamp":"2026-06-01T18:33:24.592Z","type":"user.message"}
+ {"data":{"turnId":"0"},"id":"00000000-0000-4000-8000-000000000003","parentId":"00000000-0000-4000-8000-000000000002","timestamp":"2026-06-01T18:33:26.400Z","type":"assistant.turn_start"}
+-{"data":{"content":"","messageId":"00000000-0000-4000-8001-000000000000","model":"default","turnId":"0"},"id":"00000000-0000-4000-8000-000000000004","parentId":"00000000-0000-4000-8000-000000000003","timestamp":"2026-06-01T18:33:26.400Z","type":"assistant.message"}
++{"data":{"content":"","messageId":"00000000-0000-4000-8001-000000000000","model":"default","reasoningText":"The user wants me to complete a series of tasks that test different tool categories.\n\nI will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\n\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\n\nStep 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.\n\nStep 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  \n\nThe content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```","turnId":"0"},"id":"00000000-0000-4000-8000-000000000004","parentId":"00000000-0000-4000-8000-000000000003","timestamp":"2026-06-01T18:33:26.400Z","type":"assistant.message"}
+ {"data":{"messageId":"00000000-0000-4000-8001-000000000000","turnId":"0"},"id":"00000000-0000-4000-8000-000000000005","parentId":"00000000-0000-4000-8000-000000000004","timestamp":"2026-06-01T18:33:26.400Z","type":"assistant.turn_end"}
+ {"data":{"turnId":"1"},"id":"00000000-0000-4000-8000-000000000006","parentId":"00000000-0000-4000-8000-000000000005","timestamp":"2026-06-01T18:33:31.139Z","type":"assistant.turn_start"}
+ {"data":{"content":"Starting step 1: I'll list the current directory contents first, then work through the remaining steps in order.\n","messageId":"00000000-0000-4000-8001-000000000001","model":"default","turnId":"1"},"id":"00000000-0000-4000-8000-000000000007","parentId":"00000000-0000-4000-8000-000000000006","timestamp":"2026-06-01T18:33:31.139Z","type":"assistant.message"}
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@cursor-agent.snap b/crates/toolpath-goldens/snapshots/projection@cursor@cursor-agent.snap
+index 031b4463..6f91b650 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@cursor-agent.snap
+@@ -10,7 +10,7 @@ input_file: test-fixtures/cursor/convo.json
+ {
+   "meta": {
+     "agentId": "ad9f62d0-57b4-42f4-9310-b6fd3213af85",
+-    "latestRootBlobId": "3167df650a4852030ed5cea55c255910ebe4ca188d7b8f0c301dcc4f0c64e0b2",
++    "latestRootBlobId": "ca813195c97e56ab6b2a0bd5b01c5db6526e58c2a9483d3549bf971445e2b988",
+     "name": "You're going to walk through a small set of tasks designed t",
+     "mode": "default",
+     "isRunEverything": false,
+@@ -54,8 +54,8 @@ input_file: test-fixtures/cursor/convo.json
+     "2f5c940ad311f3f73542a77a1ebe7f8b60818755b80af309b2533d3ba8288e37": {
+       "text": "{\"content\":[{\"args\":{\"globPattern\":\"note*\",\"targetDirectory\":\"/Users/ben/projects/temp/cursortest2\"},\"toolCallId\":\"tool_202b677b-0b66-4f3a-a923-4c4759f7c9e\",\"toolName\":\"glob_file_search\",\"type\":\"tool-call\"}],\"id\":\"d41dd50e-0e6e-4895-b2b4-4f32d98f394f\",\"role\":\"assistant\"}"
+     },
+-    "3167df650a4852030ed5cea55c255910ebe4ca188d7b8f0c301dcc4f0c64e0b2": {
+-      "hex": "0a2099a3fdeae6bcfc2b306dd84bbd316e341eb730737e99117e1d9e1aefed1f56410a20080b3dd5fc50b8577891fce95ae433b8b9bd948fcbe8f02d7f41fde1696432ac0a202756e24455bec9e83d3855ccfc80ae424a06ac4e14078a8adb718457e45e30100a20f75416d376659aeef9fd27f33d1e02e158ed40b3c1f7d5e6299bfea6967dcccd0a2001845e7b32ef177dbf81f854d179159a5a2edf43f57d1d46aa683de817718b550a20af3a861acdc05a7407bad5c250ff174b2f184b8594fcebe149b09fc9f768ea7d0a204a8ba49c10aa858b4be1ca2e1d02b816143f0aa8d029d1c77eb9f6488a472f650a202b9726ff8da816df93200a9eca7d0b5a3f4f82bb1ee27b9db3390aa1740e37370a2064eee39e6a11ac5b3c090d77112bcd3583426b510b011f33a523b09ac09ddf070a20ac8dc81a5b2360ac609f100a330766ae8c52e033b4fbbd048f9692eef49c11430a20f38bd542ae3d1bc975c33227b98155183eb53085a1677f79181fcbe9041335430a20a8ea8e0865b646ce384e1d7eaa091156f749adeaae82002b60ff466cf5f48d100a209e47654422aed0ed3c56f44f5467f174b2d97de0c18398e132297f1c817a2e9c0a20bc06655f44f9c22f551ee1b93bf080c62e8831c923028c348b056bf67a0a355f0a202f5c940ad311f3f73542a77a1ebe7f8b60818755b80af309b2533d3ba8288e370a20fed2b35a185f9296c86f5fef3a317bb0ff91e2dfbaab07cc8f1d3947b37034270a2063fd6012d0c6598448a36dab4b81a5affa11c36ea881d9b55b783f1b827ca1e10a20b68c99f0972550192820c7acccb8df36085658c9a8fe61653f2af0058e26a6960a20d1f16229ebbad8de20c2c5ed5dc60e2f75364b29e41f82250488addc7eaebc990a20fbcb1b50aa6c7069e8181fe8525c6b4ff71dd28d29d410079dce607a311894510a209f842b40b663515755b723e7291ea29f71f04e193bca7ab81ce73e2dd47745f70a201447027c2a96036112ddec68ea562794218a67b57a16699dd69f8f543e4ae4cf0a200e33d898d72dc8ed002384082d012c9dff6666d6ff08a8210cc19b255699bbe90a2081f3f1c8d4ce885b834a9a6f1aa5d6c12899f05234088f28418cf01a325513d00a20ec1d876d9a997b6f4c7f4f73fe33b7cc5f28ec8c5833081792292419fb57d01d0a207d0c380fa143bee827336272b0c99cf79f313197120bf688d10e6841488d89de0a203d0b7b77783e176d81bfbd5bf53e06f4e1254facbe636f78ccd94023f3f1e8400a2027d0c5b33d4972f2efb6e26d9ad59c4eb8b6ac05b72e7bf91f609dc138ab6f110a2069f6607c1a6272707c4380e6e0f990350d601508c66472d9fbc7f47bd490d7260a2039762eff912edf42ccae7a775a14a67e32aa972c36ff6d82d6d55b86b84157ea4220e60b07b903bc3260bfa0a67584cbd979b790493c6061d1ed6c798bab623f3a69"
++    "36e6c2bd62a977cd99d2c95a484dfccdec2142af19fa10e6eebbc949bfc3c865": {
++      "hex": "0a98030a207786df35011871f87315ff8ea032781436ad9357e400e06acc26fc516acceda512204b834ea342b50dbaf1cf7f873a109384b52382a2e12291a8c2f721928f61410d12203c2abc41d7bb99857afa399d758b1d28eb8e9ec4d2aa0fc9c8e3d287b865df72122012c221f5c9cec8c3158607e7ecc6e9124afb9811ebb4f24c046e8fd5ff547ec01220665dc0011269f878cc6b44094c67d3d917eb967d99da05106eca579fc653582b12200aafa8a204dacbe1c738273f4ac6d73961653e2241ebe52f4fdf701b4d3f602b1220175faa16560d62abd37e00507524e8776513bec330faccec771ff25e2b838b1712202940443af10d9a844c1295318bb1881733e0451c37e9993b65d525961ca5b6f4122043870f84d613eed1e6c217e662bca1147f80122ae1f4716e920b5fc772b731a61220f84573f5e95cffffdb203158657fee39e70a8080ec1bdc6af1b8d1746b8081711220c017b6f6c3e91613d8703787aad0373e75eeae2288ade49e94b434f98770d04d1220a552460c26a5fe8675e7b865eb17d5d0b6880a7f255bb30fac92950100f4107b"
+     },
+     "39762eff912edf42ccae7a775a14a67e32aa972c36ff6d82d6d55b86b84157ea": {
+       "text": "{\"content\":[{\"text\":\"**Step 1:** Listed the workspace with `ls` — it was empty.\\n\\n**Step 2–3:** Created `notes.md` with the Write tool (two lines) and read it back with Read; both lines were present.\\n\\n**Step 4:** Replaced `scratch` with `fixture` using StrReplace.\\n\\n**Step 5–6:** Glob found `notes.md` among `note*` files; Grep found `fixture` on line 1 of `notes.md`.\\n\\n**Step 7:** Read on `does-not-exist.txt` failed with `File not found`, as expected.\\n\\n**Step 8:** Wrote and ran `count.sh`; output was five lines (`1` through `5`).\\n\\n**Step 9:** The sub-agent reported **11 words** in `notes.md` (per `wc -w` on whitespace-separated tokens).\\n\\n**Summary:** I exercised listing, write, read, search/replace, glob, grep, intentional read failure, shell scripting, and a Task sub-agent — all inside `/Users/ben/projects/temp/cursortest2`. The workspace now has `notes.md` (with “fixture” instead of “scratch”), `count.sh`, and no other files from these steps.\",\"type\":\"text\"}],\"id\":\"806616f0-8bff-4afa-b561-609ba3ad59cf\",\"role\":\"assistant\"}"
+@@ -72,6 +72,9 @@ input_file: test-fixtures/cursor/convo.json
+     "4a8ba49c10aa858b4be1ca2e1d02b816143f0aa8d029d1c77eb9f6488a472f65": {
+       "text": "{\"content\":[{\"isError\":false,\"result\":\"edited /Users/ben/projects/temp/cursortest2/notes.md\",\"toolCallId\":\"tool_269dc5dd-1b25-4573-996c-30447b24d6b\",\"toolName\":\"edit_file_v2\",\"type\":\"tool-result\"}],\"role\":\"tool\"}"
+     },
++    "4b834ea342b50dbaf1cf7f873a109384b52382a2e12291a8c2f721928f61410d": {
++      "hex": "1acd090aca0954686520757365722077616e7473206d6520746f20636f6d706c657465206120736572696573206f66207461736b732074686174207465737420646966666572656e7420746f6f6c2063617465676f726965732e0a0a492077696c6c206669727374206c697374207468652066696c657320696e207468652063757272656e74206469726563746f7279207573696e67206569746865722074686520476c6f6220746f6f6c2077697468206120222a22207061747465726e206f7220746865205368656c6c20746f6f6c207769746820746865206c7320636f6d6d616e642c2061732074686573652061726520746865206d6f737420617070726f707269617465206f7074696f6e7320616d6f6e67206d7920617661696c61626c6520746f6f6c732e0a0a54686520757365722070726566657273206120646564696361746564206469726563746f7279206c697374696e6720746f6f6c2c20736f20492077696c6c2075736520746865205368656c6c20746f6f6c207769746820746865206c7320636f6d6d616e6420746f206c697374206469726563746f727920636f6e74656e74732e2049276c6c20757365206c73202d6c6120666f722064657461696c6564206f75747075742e0a0a5374657020313a204c697374206469726563746f727920636f6e74656e7473207573696e67205368656c6c206c7320636f6d6d616e642e0a5374657020323a20437265617465206e6f7465732e6d642066696c6520776974682074776f206c696e6573206f6620746578742c206d61696e7461696e696e672070726f70657220696e64656e746174696f6e206173207370656369666965642e0a5374657020333a20526561642074686520636f6e74656e7473206f66206e6f7465732e6d642066696c652e0a0a5374657020343a205265706c6163652022736372617463682220776974682022666978747572652220696e207468652066696c6520636f6e74656e74732e20200a5374657020353a2055736520476c6f6220746f6f6c20746f2066696e642066696c6573206d61746368696e6720746865207061747465726e20226e6f74652a222e20200a5374657020363a2053656172636820666f7220746865207465726d20226669787475726522207573696e6720746865204772657020746f6f6c2e20200a5374657020373a20417474656d707420746f20726561642061206e6f6e2d6578697374656e742066696c652c2077686963682073686f756c6420726573756c7420696e20616e206572726f722e20200a5374657020383a2043726561746520616e6420657865637574652061207368656c6c20736372697074206e616d656420636f756e742e73682e20200a5374657020393a2044656c65676174652074686520776f726420636f756e74207461736b20746f2061207375622d6167656e742e20200a537465702031303a2050726f7669646520612066696e616c2073756d6d617279206f6620616c6c20636f6d706c657465642073746570732e20200a0a54686520636f6e74656e74206f66206e6f7465732e6d642069733a0a6060600a202020202020207363726174636820206665617475726520656c696369746174696f6e0a20202020202020746869732066696c652077696c6c2062652065646974656420616e642073656172636865642e0a606060"
++    },
+     "63fd6012d0c6598448a36dab4b81a5affa11c36ea881d9b55b783f1b827ca1e1": {
+       "text": "{\"content\":[{\"text\":\"Step 6: searching file contents for \\\"fixture\\\" with Grep.\\n\",\"type\":\"text\"}],\"id\":\"1a54e988-c7e7-4a2d-83f0-7a6d6f19a425\",\"role\":\"assistant\"}"
+     },
+@@ -93,6 +96,9 @@ input_file: test-fixtures/cursor/convo.json
+     "81f3f1c8d4ce885b834a9a6f1aa5d6c12899f05234088f28418cf01a325513d0": {
+       "text": "{\"content\":[{\"isError\":false,\"result\":\"edited /Users/ben/projects/temp/cursortest2/count.sh\",\"toolCallId\":\"tool_4c9a0bd1-dd04-4b3b-b532-eb9f7429a74\",\"toolName\":\"edit_file_v2\",\"type\":\"tool-result\"}],\"role\":\"tool\"}"
+     },
++    "8790c3094bf68a9aaceaa9e14de0b23b0790a65d56759d22443605f26c06dbaf": {
++      "text": "{\"content\":[{\"text\":\"The user wants me to complete a series of tasks that test different tool categories.\\n\\nI will first list the files in the current directory using either the Glob tool with a \\\"*\\\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\\n\\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\\n\\nStep 1: List directory contents using Shell ls command.\\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\\nStep 3: Read the contents of notes.md file.\\n\\nStep 4: Replace \\\"scratch\\\" with \\\"fixture\\\" in the file contents.  \\nStep 5: Use Glob tool to find files matching the pattern \\\"note*\\\".  \\nStep 6: Search for the term \\\"fixture\\\" using the Grep tool.  \\nStep 7: Attempt to read a non-existent file, which should result in an error.  \\nStep 8: Create and execute a shell script named count.sh.  \\nStep 9: Delegate the word count task to a sub-agent.  \\nStep 10: Provide a final summary of all completed steps.  \\n\\nThe content of notes.md is:\\n```\\n       scratch  feature elicitation\\n       this file will be edited and searched.\\n```\",\"type\":\"reasoning\"}],\"id\":\"c91881d0-c0e1-4632-b522-4b2c65b9342f\",\"role\":\"assistant\"}"
++    },
+     "99a3fdeae6bcfc2b306dd84bbd316e341eb730737e99117e1d9e1aefed1f5641": {
+       "text": "{\"content\":[{\"text\":\"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\\n\\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\\n       scratch — feature elicitation\\n       this file will be edited and searched.\\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \\\"scratch\\\" to \\\"fixture\\\" in `notes.md`.\\n5. Find every file in the current directory whose name starts with \\\"note\\\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\\n6. Search the contents of files in the current directory for the word \\\"fixture\\\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \\\"Count the words in `notes.md` and report the number.\\\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.\\n\",\"type\":\"text\"}],\"role\":\"user\"}"
+     },
+@@ -123,12 +129,12 @@ input_file: test-fixtures/cursor/convo.json
+     "c017b6f6c3e91613d8703787aad0373e75eeae2288ade49e94b434f98770d04d": {
+       "text": "\np\nn`count.sh` printed exactly five lines. Step 9: dispatching a sub-agent via Task to count words in `notes.md`.\n"
+     },
++    "ca813195c97e56ab6b2a0bd5b01c5db6526e58c2a9483d3549bf971445e2b988": {
++      "hex": "0a2099a3fdeae6bcfc2b306dd84bbd316e341eb730737e99117e1d9e1aefed1f56410a208790c3094bf68a9aaceaa9e14de0b23b0790a65d56759d22443605f26c06dbaf0a20080b3dd5fc50b8577891fce95ae433b8b9bd948fcbe8f02d7f41fde1696432ac0a202756e24455bec9e83d3855ccfc80ae424a06ac4e14078a8adb718457e45e30100a20f75416d376659aeef9fd27f33d1e02e158ed40b3c1f7d5e6299bfea6967dcccd0a2001845e7b32ef177dbf81f854d179159a5a2edf43f57d1d46aa683de817718b550a20af3a861acdc05a7407bad5c250ff174b2f184b8594fcebe149b09fc9f768ea7d0a204a8ba49c10aa858b4be1ca2e1d02b816143f0aa8d029d1c77eb9f6488a472f650a202b9726ff8da816df93200a9eca7d0b5a3f4f82bb1ee27b9db3390aa1740e37370a2064eee39e6a11ac5b3c090d77112bcd3583426b510b011f33a523b09ac09ddf070a20ac8dc81a5b2360ac609f100a330766ae8c52e033b4fbbd048f9692eef49c11430a20f38bd542ae3d1bc975c33227b98155183eb53085a1677f79181fcbe9041335430a20a8ea8e0865b646ce384e1d7eaa091156f749adeaae82002b60ff466cf5f48d100a209e47654422aed0ed3c56f44f5467f174b2d97de0c18398e132297f1c817a2e9c0a20bc06655f44f9c22f551ee1b93bf080c62e8831c923028c348b056bf67a0a355f0a202f5c940ad311f3f73542a77a1ebe7f8b60818755b80af309b2533d3ba8288e370a20fed2b35a185f9296c86f5fef3a317bb0ff91e2dfbaab07cc8f1d3947b37034270a2063fd6012d0c6598448a36dab4b81a5affa11c36ea881d9b55b783f1b827ca1e10a20b68c99f0972550192820c7acccb8df36085658c9a8fe61653f2af0058e26a6960a20d1f16229ebbad8de20c2c5ed5dc60e2f75364b29e41f82250488addc7eaebc990a20fbcb1b50aa6c7069e8181fe8525c6b4ff71dd28d29d410079dce607a311894510a209f842b40b663515755b723e7291ea29f71f04e193bca7ab81ce73e2dd47745f70a201447027c2a96036112ddec68ea562794218a67b57a16699dd69f8f543e4ae4cf0a200e33d898d72dc8ed002384082d012c9dff6666d6ff08a8210cc19b255699bbe90a2081f3f1c8d4ce885b834a9a6f1aa5d6c12899f05234088f28418cf01a325513d00a20ec1d876d9a997b6f4c7f4f73fe33b7cc5f28ec8c5833081792292419fb57d01d0a207d0c380fa143bee827336272b0c99cf79f313197120bf688d10e6841488d89de0a203d0b7b77783e176d81bfbd5bf53e06f4e1254facbe636f78ccd94023f3f1e8400a2027d0c5b33d4972f2efb6e26d9ad59c4eb8b6ac05b72e7bf91f609dc138ab6f110a2069f6607c1a6272707c4380e6e0f990350d601508c66472d9fbc7f47bd490d7260a2039762eff912edf42ccae7a775a14a67e32aa972c36ff6d82d6d55b86b84157ea422036e6c2bd62a977cd99d2c95a484dfccdec2142af19fa10e6eebbc949bfc3c865"
++    },
+     "d1f16229ebbad8de20c2c5ed5dc60e2f75364b29e41f82250488addc7eaebc99": {
+       "text": "{\"content\":[{\"text\":\"Step 7: reading `does-not-exist.txt` with Read — this should fail so we can report the error.\\n\",\"type\":\"text\"}],\"id\":\"31d8c082-052c-4525-8508-6a01ca938ece\",\"role\":\"assistant\"}"
+     },
+-    "e60b07b903bc3260bfa0a67584cbd979b790493c6061d1ed6c798bab623f3a69": {
+-      "hex": "0af6020a207786df35011871f87315ff8ea032781436ad9357e400e06acc26fc516acceda512203c2abc41d7bb99857afa399d758b1d28eb8e9ec4d2aa0fc9c8e3d287b865df72122012c221f5c9cec8c3158607e7ecc6e9124afb9811ebb4f24c046e8fd5ff547ec01220665dc0011269f878cc6b44094c67d3d917eb967d99da05106eca579fc653582b12200aafa8a204dacbe1c738273f4ac6d73961653e2241ebe52f4fdf701b4d3f602b1220175faa16560d62abd37e00507524e8776513bec330faccec771ff25e2b838b1712202940443af10d9a844c1295318bb1881733e0451c37e9993b65d525961ca5b6f4122043870f84d613eed1e6c217e662bca1147f80122ae1f4716e920b5fc772b731a61220f84573f5e95cffffdb203158657fee39e70a8080ec1bdc6af1b8d1746b8081711220c017b6f6c3e91613d8703787aad0373e75eeae2288ade49e94b434f98770d04d1220a552460c26a5fe8675e7b865eb17d5d0b6880a7f255bb30fac92950100f4107b"
+-    },
+     "ec1d876d9a997b6f4c7f4f73fe33b7cc5f28ec8c5833081792292419fb57d01d": {
+       "text": "{\"content\":[{\"args\":{\"command\":\"bash /Users/ben/projects/temp/cursortest2/count.sh\",\"commandDescription\":\"Run count.sh and print lines 1-5\",\"cwd\":\"\",\"options\":{\"timeout\":30000},\"parsingResult\":{\"executableCommands\":[{\"args\":[{\"type\":\"word\",\"value\":\"/Users/ben/projects/temp/cursortest2/count.sh\"}],\"fullText\":\"bash /Users/ben/projects/temp/cursortest2/count.sh\",\"name\":\"bash\"}]},\"requestedSandboxPolicy\":{\"additionalReadwritePaths\":[\"/Users/ben/projects/temp/cursortest2\"],\"enableSharedBuildCache\":true,\"networkAccess\":false,\"type\":\"TYPE_WORKSPACE_READWRITE\"}},\"toolCallId\":\"tool_09e6440c-74d2-41b7-a669-0694d3e6442\",\"toolName\":\"run_terminal_command_v2\",\"type\":\"tool-call\"}],\"id\":\"a47863fa-418b-4785-bdbf-5dd38ee33e38\",\"role\":\"assistant\"}"
+     },
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@gemini.snap b/crates/toolpath-goldens/snapshots/projection@cursor@gemini.snap
+index 03b2386a..46b706be 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@gemini.snap
+@@ -32,6 +32,38 @@ input_file: test-fixtures/cursor/convo.json
+       "timestamp": "2026-06-01T18:33:26.400Z",
+       "type": "gemini",
+       "content": "",
++      "thoughts": [
++        {
++          "subject": null,
++          "description": "The user wants me to complete a series of tasks that test different tool categories.",
++          "timestamp": null
++        },
++        {
++          "subject": null,
++          "description": "I will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.",
++          "timestamp": null
++        },
++        {
++          "subject": null,
++          "description": "The user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.",
++          "timestamp": null
++        },
++        {
++          "subject": null,
++          "description": "Step 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.",
++          "timestamp": null
++        },
++        {
++          "subject": null,
++          "description": "Step 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  ",
++          "timestamp": null
++        },
++        {
++          "subject": null,
++          "description": "The content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```",
++          "timestamp": null
++        }
++      ],
+       "model": "default"
+     },
+     {
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@opencode.snap b/crates/toolpath-goldens/snapshots/projection@cursor@opencode.snap
+index f1a195a6..ac058a12 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@opencode.snap
+@@ -98,6 +98,21 @@ input_file: test-fixtures/cursor/convo.json
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338806400,
+           "time_updated": 1780338806400,
++          "data": {
++            "type": "reasoning",
++            "text": "The user wants me to complete a series of tasks that test different tool categories.\n\nI will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\n\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\n\nStep 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.\n\nStep 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  \n\nThe content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```",
++            "time": {
++              "start": 1780338806400,
++              "end": 1780338806400
++            }
++          }
++        },
++        {
++          "id": "prt_e84764e80006f9y6hN4Ae1A70V",
++          "message_id": "msg_e84764e80003r367VESHjAgiSM",
++          "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
++          "time_created": 1780338806400,
++          "time_updated": 1780338806400,
+           "data": {
+             "type": "step-finish",
+             "reason": "stop",
+@@ -116,7 +131,7 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84766103006nZ3dnStLrtKluk",
++      "id": "msg_e84766103007QvpHIrPRIyuGGT",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338811139,
+       "time_updated": 1780338811139,
+@@ -148,8 +163,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84766103007VK8ym84jKGxAkO",
+-          "message_id": "msg_e84766103006nZ3dnStLrtKluk",
++          "id": "prt_e84766103008yIljQNGR4m2k2C",
++          "message_id": "msg_e84766103007QvpHIrPRIyuGGT",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338811139,
+           "time_updated": 1780338811139,
+@@ -158,8 +173,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766103008yIljQNGR4m2k2C",
+-          "message_id": "msg_e84766103006nZ3dnStLrtKluk",
++          "id": "prt_e84766103009k2ZB7YCkBhwNgd",
++          "message_id": "msg_e84766103007QvpHIrPRIyuGGT",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338811139,
+           "time_updated": 1780338811139,
+@@ -173,8 +188,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766103009k2ZB7YCkBhwNgd",
+-          "message_id": "msg_e84766103006nZ3dnStLrtKluk",
++          "id": "prt_e8476610300aAtTIuSGQISQmaT",
++          "message_id": "msg_e84766103007QvpHIrPRIyuGGT",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338811139,
+           "time_updated": 1780338811139,
+@@ -196,13 +211,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e8476628000aXrkN0AihsvAkI5",
++      "id": "msg_e8476628000bLv3JgYnBWUdZUa",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338811520,
+       "time_updated": 1780338811520,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84766103006nZ3dnStLrtKluk",
++        "parentID": "msg_e84766103007QvpHIrPRIyuGGT",
+         "time": {
+           "created": 1780338811520,
+           "completed": 1780338811520
+@@ -228,8 +243,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e8476628000bJB2KRnxHAaAcq2",
+-          "message_id": "msg_e8476628000aXrkN0AihsvAkI5",
++          "id": "prt_e8476628000cih1dvRBdt4SFrQ",
++          "message_id": "msg_e8476628000bLv3JgYnBWUdZUa",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338811520,
+           "time_updated": 1780338811520,
+@@ -238,8 +253,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476628000cih1dvRBdt4SFrQ",
+-          "message_id": "msg_e8476628000aXrkN0AihsvAkI5",
++          "id": "prt_e8476628000dIwJb0xypNkfev6",
++          "message_id": "msg_e8476628000bLv3JgYnBWUdZUa",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338811520,
+           "time_updated": 1780338811520,
+@@ -298,8 +313,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476628000dIwJb0xypNkfev6",
+-          "message_id": "msg_e8476628000aXrkN0AihsvAkI5",
++          "id": "prt_e8476628000ehAJZmR524YDgtX",
++          "message_id": "msg_e8476628000bLv3JgYnBWUdZUa",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338811520,
+           "time_updated": 1780338811520,
+@@ -321,13 +336,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e8476683200eyPpL6546Duu7Nh",
++      "id": "msg_e8476683200fMCkRiWceA39LPO",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338812978,
+       "time_updated": 1780338812978,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e8476628000aXrkN0AihsvAkI5",
++        "parentID": "msg_e8476628000bLv3JgYnBWUdZUa",
+         "time": {
+           "created": 1780338812978,
+           "completed": 1780338812978
+@@ -353,8 +368,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e8476683200fon1QoPydLGbX0s",
+-          "message_id": "msg_e8476683200eyPpL6546Duu7Nh",
++          "id": "prt_e84766832010ojOElXnO7m0kQw",
++          "message_id": "msg_e8476683200fMCkRiWceA39LPO",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338812978,
+           "time_updated": 1780338812978,
+@@ -363,8 +378,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766832010ojOElXnO7m0kQw",
+-          "message_id": "msg_e8476683200eyPpL6546Duu7Nh",
++          "id": "prt_e84766832011y6n5qoceKQMtMH",
++          "message_id": "msg_e8476683200fMCkRiWceA39LPO",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338812978,
+           "time_updated": 1780338812978,
+@@ -378,8 +393,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766832011y6n5qoceKQMtMH",
+-          "message_id": "msg_e8476683200eyPpL6546Duu7Nh",
++          "id": "prt_e84766832012oySExsVbTSLY6a",
++          "message_id": "msg_e8476683200fMCkRiWceA39LPO",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338812978,
+           "time_updated": 1780338812978,
+@@ -401,13 +416,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84766893012IdD9UWkXKDgu5Z",
++      "id": "msg_e84766893013W66Ns9VMi2URvz",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338813075,
+       "time_updated": 1780338813075,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e8476683200eyPpL6546Duu7Nh",
++        "parentID": "msg_e8476683200fMCkRiWceA39LPO",
+         "time": {
+           "created": 1780338813075,
+           "completed": 1780338813075
+@@ -433,8 +448,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84766893013gItHUA73kBsL3F",
+-          "message_id": "msg_e84766893012IdD9UWkXKDgu5Z",
++          "id": "prt_e847668930140Ec7bpMVKzK4NG",
++          "message_id": "msg_e84766893013W66Ns9VMi2URvz",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338813075,
+           "time_updated": 1780338813075,
+@@ -443,8 +458,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847668930140Ec7bpMVKzK4NG",
+-          "message_id": "msg_e84766893012IdD9UWkXKDgu5Z",
++          "id": "prt_e84766893015rqhQHjnih5z7GO",
++          "message_id": "msg_e84766893013W66Ns9VMi2URvz",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338813075,
+           "time_updated": 1780338813075,
+@@ -473,8 +488,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766893015rqhQHjnih5z7GO",
+-          "message_id": "msg_e84766893012IdD9UWkXKDgu5Z",
++          "id": "prt_e847668930166PmowndypAhff0",
++          "message_id": "msg_e84766893013W66Ns9VMi2URvz",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338813075,
+           "time_updated": 1780338813075,
+@@ -496,13 +511,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84766db10169POnkJLzRW0Mpy",
++      "id": "msg_e84766db1017oHQUaVvz4JMynj",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338814385,
+       "time_updated": 1780338814385,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84766893012IdD9UWkXKDgu5Z",
++        "parentID": "msg_e84766893013W66Ns9VMi2URvz",
+         "time": {
+           "created": 1780338814385,
+           "completed": 1780338814385
+@@ -528,8 +543,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84766db1017uPkfcbpI5p2FyL",
+-          "message_id": "msg_e84766db10169POnkJLzRW0Mpy",
++          "id": "prt_e84766db1018KN0fVae9Hnip3O",
++          "message_id": "msg_e84766db1017oHQUaVvz4JMynj",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338814385,
+           "time_updated": 1780338814385,
+@@ -538,8 +553,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766db1018KN0fVae9Hnip3O",
+-          "message_id": "msg_e84766db10169POnkJLzRW0Mpy",
++          "id": "prt_e84766db1019jZdKAqyDOzTi08",
++          "message_id": "msg_e84766db1017oHQUaVvz4JMynj",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338814385,
+           "time_updated": 1780338814385,
+@@ -553,8 +568,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766db1019jZdKAqyDOzTi08",
+-          "message_id": "msg_e84766db10169POnkJLzRW0Mpy",
++          "id": "prt_e84766db101a1VPNlpoWOpgLo1",
++          "message_id": "msg_e84766db1017oHQUaVvz4JMynj",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338814385,
+           "time_updated": 1780338814385,
+@@ -576,13 +591,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84766e6e01a6HD3FAdLGLNoBi",
++      "id": "msg_e84766e6e01bVhpJ7pe1F5lTgd",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338814574,
+       "time_updated": 1780338814574,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84766db10169POnkJLzRW0Mpy",
++        "parentID": "msg_e84766db1017oHQUaVvz4JMynj",
+         "time": {
+           "created": 1780338814574,
+           "completed": 1780338814574
+@@ -608,8 +623,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84766e6e01bfAuy1zPFHBSXsn",
+-          "message_id": "msg_e84766e6e01a6HD3FAdLGLNoBi",
++          "id": "prt_e84766e6e01cGDBItI24r0NQKO",
++          "message_id": "msg_e84766e6e01bVhpJ7pe1F5lTgd",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338814574,
+           "time_updated": 1780338814574,
+@@ -618,8 +633,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766e6e01cGDBItI24r0NQKO",
+-          "message_id": "msg_e84766e6e01a6HD3FAdLGLNoBi",
++          "id": "prt_e84766e6e01duZwcRzgEYQCBEO",
++          "message_id": "msg_e84766e6e01bVhpJ7pe1F5lTgd",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338814574,
+           "time_updated": 1780338814574,
+@@ -647,8 +662,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84766e6e01duZwcRzgEYQCBEO",
+-          "message_id": "msg_e84766e6e01a6HD3FAdLGLNoBi",
++          "id": "prt_e84766e6e01epktrHUGtgXsFqt",
++          "message_id": "msg_e84766e6e01bVhpJ7pe1F5lTgd",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338814574,
+           "time_updated": 1780338814574,
+@@ -670,13 +685,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e8476726f01eX8mKRvTLhTVu0q",
++      "id": "msg_e8476726f01f461r9QUD8krVd3",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338815599,
+       "time_updated": 1780338815599,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84766e6e01a6HD3FAdLGLNoBi",
++        "parentID": "msg_e84766e6e01bVhpJ7pe1F5lTgd",
+         "time": {
+           "created": 1780338815599,
+           "completed": 1780338815599
+@@ -702,8 +717,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e8476726f01fAje5mOa8taejCe",
+-          "message_id": "msg_e8476726f01eX8mKRvTLhTVu0q",
++          "id": "prt_e8476726f020KuTkdYxBBWcn5a",
++          "message_id": "msg_e8476726f01f461r9QUD8krVd3",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338815599,
+           "time_updated": 1780338815599,
+@@ -712,8 +727,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476726f020KuTkdYxBBWcn5a",
+-          "message_id": "msg_e8476726f01eX8mKRvTLhTVu0q",
++          "id": "prt_e8476726f021eu5OEEcXv6EP4a",
++          "message_id": "msg_e8476726f01f461r9QUD8krVd3",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338815599,
+           "time_updated": 1780338815599,
+@@ -727,8 +742,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476726f021eu5OEEcXv6EP4a",
+-          "message_id": "msg_e8476726f01eX8mKRvTLhTVu0q",
++          "id": "prt_e8476726f022kqRDoHA0DkkQON",
++          "message_id": "msg_e8476726f01f461r9QUD8krVd3",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338815599,
+           "time_updated": 1780338815599,
+@@ -750,13 +765,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e847673b802227z3Phw0niHIUN",
++      "id": "msg_e847673b8023jkHcVFsF6tpUiq",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338815928,
+       "time_updated": 1780338815928,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e8476726f01eX8mKRvTLhTVu0q",
++        "parentID": "msg_e8476726f01f461r9QUD8krVd3",
+         "time": {
+           "created": 1780338815928,
+           "completed": 1780338815928
+@@ -782,8 +797,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e847673b8023p2dN583EsC2V1u",
+-          "message_id": "msg_e847673b802227z3Phw0niHIUN",
++          "id": "prt_e847673b80243OG5mW9MQrhrEo",
++          "message_id": "msg_e847673b8023jkHcVFsF6tpUiq",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338815928,
+           "time_updated": 1780338815928,
+@@ -792,8 +807,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847673b80243OG5mW9MQrhrEo",
+-          "message_id": "msg_e847673b802227z3Phw0niHIUN",
++          "id": "prt_e847673b8025wo3P1hSChbb5cX",
++          "message_id": "msg_e847673b8023jkHcVFsF6tpUiq",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338815928,
+           "time_updated": 1780338815928,
+@@ -824,8 +839,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847673b8025wo3P1hSChbb5cX",
+-          "message_id": "msg_e847673b802227z3Phw0niHIUN",
++          "id": "prt_e847673b8026mMdeWwSsnZZJeA",
++          "message_id": "msg_e847673b8023jkHcVFsF6tpUiq",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338815928,
+           "time_updated": 1780338815928,
+@@ -847,13 +862,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84767925026Z357U13wELgW0y",
++      "id": "msg_e84767925027LDPSRsjq0G55cJ",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338817317,
+       "time_updated": 1780338817317,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e847673b802227z3Phw0niHIUN",
++        "parentID": "msg_e847673b8023jkHcVFsF6tpUiq",
+         "time": {
+           "created": 1780338817317,
+           "completed": 1780338817317
+@@ -879,8 +894,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e847679250271qNIgq8mqTVxb0",
+-          "message_id": "msg_e84767925026Z357U13wELgW0y",
++          "id": "prt_e84767925028ip3mJf8x345orW",
++          "message_id": "msg_e84767925027LDPSRsjq0G55cJ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338817317,
+           "time_updated": 1780338817317,
+@@ -889,8 +904,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84767925028ip3mJf8x345orW",
+-          "message_id": "msg_e84767925026Z357U13wELgW0y",
++          "id": "prt_e84767925029O3af6DzUZGI3r8",
++          "message_id": "msg_e84767925027LDPSRsjq0G55cJ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338817317,
+           "time_updated": 1780338817317,
+@@ -904,8 +919,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84767925029O3af6DzUZGI3r8",
+-          "message_id": "msg_e84767925026Z357U13wELgW0y",
++          "id": "prt_e8476792502aFq708qDz2WePBv",
++          "message_id": "msg_e84767925027LDPSRsjq0G55cJ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338817317,
+           "time_updated": 1780338817317,
+@@ -927,13 +942,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e8476794202abv7dAAgpxQ21GJ",
++      "id": "msg_e8476794202b3DTmKwn9tjxlh1",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338817346,
+       "time_updated": 1780338817346,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84767925026Z357U13wELgW0y",
++        "parentID": "msg_e84767925027LDPSRsjq0G55cJ",
+         "time": {
+           "created": 1780338817346,
+           "completed": 1780338817346
+@@ -959,8 +974,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e8476794202bvbmBOMk4kU4FOZ",
+-          "message_id": "msg_e8476794202abv7dAAgpxQ21GJ",
++          "id": "prt_e8476794202c27ebVi7rR3JoQD",
++          "message_id": "msg_e8476794202b3DTmKwn9tjxlh1",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338817346,
+           "time_updated": 1780338817346,
+@@ -969,8 +984,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476794202c27ebVi7rR3JoQD",
+-          "message_id": "msg_e8476794202abv7dAAgpxQ21GJ",
++          "id": "prt_e8476794202dNhPzrMshdzHRuo",
++          "message_id": "msg_e8476794202b3DTmKwn9tjxlh1",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338817346,
+           "time_updated": 1780338817346,
+@@ -995,8 +1010,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476794202dNhPzrMshdzHRuo",
+-          "message_id": "msg_e8476794202abv7dAAgpxQ21GJ",
++          "id": "prt_e8476794202e7l0EGdd1I71MHL",
++          "message_id": "msg_e8476794202b3DTmKwn9tjxlh1",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338817346,
+           "time_updated": 1780338817346,
+@@ -1018,13 +1033,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84767d3502eawduLMALTsaVP4",
++      "id": "msg_e84767d3502f0ognPGOrRN7pWH",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338818357,
+       "time_updated": 1780338818357,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e8476794202abv7dAAgpxQ21GJ",
++        "parentID": "msg_e8476794202b3DTmKwn9tjxlh1",
+         "time": {
+           "created": 1780338818357,
+           "completed": 1780338818357
+@@ -1050,8 +1065,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84767d3502fn9TPjdQEjQNC49",
+-          "message_id": "msg_e84767d3502eawduLMALTsaVP4",
++          "id": "prt_e84767d35030cR10Zj0SZMzc8d",
++          "message_id": "msg_e84767d3502f0ognPGOrRN7pWH",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338818357,
+           "time_updated": 1780338818357,
+@@ -1060,8 +1075,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84767d35030cR10Zj0SZMzc8d",
+-          "message_id": "msg_e84767d3502eawduLMALTsaVP4",
++          "id": "prt_e84767d350313JA51wNmEo21rs",
++          "message_id": "msg_e84767d3502f0ognPGOrRN7pWH",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338818357,
+           "time_updated": 1780338818357,
+@@ -1075,8 +1090,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84767d350313JA51wNmEo21rs",
+-          "message_id": "msg_e84767d3502eawduLMALTsaVP4",
++          "id": "prt_e84767d35032YMImt4w9JTHA0d",
++          "message_id": "msg_e84767d3502f0ognPGOrRN7pWH",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338818357,
+           "time_updated": 1780338818357,
+@@ -1098,13 +1113,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84767d57032D01W2fL02aWHF9",
++      "id": "msg_e84767d57033gjD4KEE26xpnFZ",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338818391,
+       "time_updated": 1780338818391,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84767d3502eawduLMALTsaVP4",
++        "parentID": "msg_e84767d3502f0ognPGOrRN7pWH",
+         "time": {
+           "created": 1780338818391,
+           "completed": 1780338818391
+@@ -1130,8 +1145,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84767d57033wm8XEdgpH3Af40",
+-          "message_id": "msg_e84767d57032D01W2fL02aWHF9",
++          "id": "prt_e84767d57034rm30IWyFhYT6i5",
++          "message_id": "msg_e84767d57033gjD4KEE26xpnFZ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338818391,
+           "time_updated": 1780338818391,
+@@ -1140,8 +1155,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84767d57034rm30IWyFhYT6i5",
+-          "message_id": "msg_e84767d57032D01W2fL02aWHF9",
++          "id": "prt_e84767d57035wSkrasDY6k0szh",
++          "message_id": "msg_e84767d57033gjD4KEE26xpnFZ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338818391,
+           "time_updated": 1780338818391,
+@@ -1167,8 +1182,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84767d57035wSkrasDY6k0szh",
+-          "message_id": "msg_e84767d57032D01W2fL02aWHF9",
++          "id": "prt_e84767d57036qqaSKTBWh0S5pc",
++          "message_id": "msg_e84767d57033gjD4KEE26xpnFZ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338818391,
+           "time_updated": 1780338818391,
+@@ -1190,13 +1205,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e8476851d036Nqy7xenLh8sMxU",
++      "id": "msg_e8476851d0378IOVcvW0FYi2pV",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338820381,
+       "time_updated": 1780338820381,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84767d57032D01W2fL02aWHF9",
++        "parentID": "msg_e84767d57033gjD4KEE26xpnFZ",
+         "time": {
+           "created": 1780338820381,
+           "completed": 1780338820381
+@@ -1222,8 +1237,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e8476851d037Fn7gwgkdm1R720",
+-          "message_id": "msg_e8476851d036Nqy7xenLh8sMxU",
++          "id": "prt_e8476851d038NXsWL35940jlhJ",
++          "message_id": "msg_e8476851d0378IOVcvW0FYi2pV",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338820381,
+           "time_updated": 1780338820381,
+@@ -1232,8 +1247,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476851d038NXsWL35940jlhJ",
+-          "message_id": "msg_e8476851d036Nqy7xenLh8sMxU",
++          "id": "prt_e8476851d039b9RAiot7cI3HM3",
++          "message_id": "msg_e8476851d0378IOVcvW0FYi2pV",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338820381,
+           "time_updated": 1780338820381,
+@@ -1247,8 +1262,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476851d039b9RAiot7cI3HM3",
+-          "message_id": "msg_e8476851d036Nqy7xenLh8sMxU",
++          "id": "prt_e8476851d03aGw3Q7IBA40jo3x",
++          "message_id": "msg_e8476851d0378IOVcvW0FYi2pV",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338820381,
+           "time_updated": 1780338820381,
+@@ -1270,13 +1285,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e847685d003aTmdJIaZairyj0B",
++      "id": "msg_e847685d003b536r0auIEevLkG",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338820560,
+       "time_updated": 1780338820560,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e8476851d036Nqy7xenLh8sMxU",
++        "parentID": "msg_e8476851d0378IOVcvW0FYi2pV",
+         "time": {
+           "created": 1780338820560,
+           "completed": 1780338820560
+@@ -1302,8 +1317,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e847685d003bTXTPOfnf6h53w2",
+-          "message_id": "msg_e847685d003aTmdJIaZairyj0B",
++          "id": "prt_e847685d003c16gf5pKX4Hpa3w",
++          "message_id": "msg_e847685d003b536r0auIEevLkG",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338820560,
+           "time_updated": 1780338820560,
+@@ -1312,8 +1327,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847685d003c16gf5pKX4Hpa3w",
+-          "message_id": "msg_e847685d003aTmdJIaZairyj0B",
++          "id": "prt_e847685d003doYCgbg814n1rpW",
++          "message_id": "msg_e847685d003b536r0auIEevLkG",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338820560,
+           "time_updated": 1780338820560,
+@@ -1337,8 +1352,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847685d003doYCgbg814n1rpW",
+-          "message_id": "msg_e847685d003aTmdJIaZairyj0B",
++          "id": "prt_e847685d003eCvvqWVH4Wpt3ZL",
++          "message_id": "msg_e847685d003b536r0auIEevLkG",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338820560,
+           "time_updated": 1780338820560,
+@@ -1360,13 +1375,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84768ae403e5vm5eQ6Srt6woS",
++      "id": "msg_e84768ae403fbRTU8ly09qui93",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338821860,
+       "time_updated": 1780338821860,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e847685d003aTmdJIaZairyj0B",
++        "parentID": "msg_e847685d003b536r0auIEevLkG",
+         "time": {
+           "created": 1780338821860,
+           "completed": 1780338821860
+@@ -1392,8 +1407,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84768ae403fI1TpfrPOyuf2kV",
+-          "message_id": "msg_e84768ae403e5vm5eQ6Srt6woS",
++          "id": "prt_e84768ae4040LfMilfOdjDfH5M",
++          "message_id": "msg_e84768ae403fbRTU8ly09qui93",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338821860,
+           "time_updated": 1780338821860,
+@@ -1402,8 +1417,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84768ae4040LfMilfOdjDfH5M",
+-          "message_id": "msg_e84768ae403e5vm5eQ6Srt6woS",
++          "id": "prt_e84768ae404123SXwoH8xso2D6",
++          "message_id": "msg_e84768ae403fbRTU8ly09qui93",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338821860,
+           "time_updated": 1780338821860,
+@@ -1417,8 +1432,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84768ae404123SXwoH8xso2D6",
+-          "message_id": "msg_e84768ae403e5vm5eQ6Srt6woS",
++          "id": "prt_e84768ae4042bNQ9loaziasarg",
++          "message_id": "msg_e84768ae403fbRTU8ly09qui93",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338821860,
+           "time_updated": 1780338821860,
+@@ -1440,13 +1455,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84768bac0420gD72crOhYCcA3",
++      "id": "msg_e84768bac043QLdbQ6x2mxJAME",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338822060,
+       "time_updated": 1780338822060,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84768ae403e5vm5eQ6Srt6woS",
++        "parentID": "msg_e84768ae403fbRTU8ly09qui93",
+         "time": {
+           "created": 1780338822060,
+           "completed": 1780338822060
+@@ -1472,8 +1487,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84768bac043GQPErJwX7javyf",
+-          "message_id": "msg_e84768bac0420gD72crOhYCcA3",
++          "id": "prt_e84768bac044uESxfuSfsYn2I1",
++          "message_id": "msg_e84768bac043QLdbQ6x2mxJAME",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338822060,
+           "time_updated": 1780338822060,
+@@ -1482,8 +1497,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84768bac044uESxfuSfsYn2I1",
+-          "message_id": "msg_e84768bac0420gD72crOhYCcA3",
++          "id": "prt_e84768bac045E2Od1upX76CLS3",
++          "message_id": "msg_e84768bac043QLdbQ6x2mxJAME",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338822060,
+           "time_updated": 1780338822060,
+@@ -1512,8 +1527,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84768bac045E2Od1upX76CLS3",
+-          "message_id": "msg_e84768bac0420gD72crOhYCcA3",
++          "id": "prt_e84768bac046CfBAlysVwqxIj7",
++          "message_id": "msg_e84768bac043QLdbQ6x2mxJAME",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338822060,
+           "time_updated": 1780338822060,
+@@ -1535,13 +1550,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e84768da90464nMGLXKjTX1onv",
++      "id": "msg_e84768da9047iqWkdS388UcfGZ",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338822569,
+       "time_updated": 1780338822569,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84768bac0420gD72crOhYCcA3",
++        "parentID": "msg_e84768bac043QLdbQ6x2mxJAME",
+         "time": {
+           "created": 1780338822569,
+           "completed": 1780338822569
+@@ -1567,8 +1582,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e84768da904763DkCs74XLx9o6",
+-          "message_id": "msg_e84768da90464nMGLXKjTX1onv",
++          "id": "prt_e84768da90481xS1kMBtuparBF",
++          "message_id": "msg_e84768da9047iqWkdS388UcfGZ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338822569,
+           "time_updated": 1780338822569,
+@@ -1577,8 +1592,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84768da90481xS1kMBtuparBF",
+-          "message_id": "msg_e84768da90464nMGLXKjTX1onv",
++          "id": "prt_e84768da9049Pv8Zp2cnSVg2vN",
++          "message_id": "msg_e84768da9047iqWkdS388UcfGZ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338822569,
+           "time_updated": 1780338822569,
+@@ -1633,8 +1648,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e84768da9049Pv8Zp2cnSVg2vN",
+-          "message_id": "msg_e84768da90464nMGLXKjTX1onv",
++          "id": "prt_e84768da904a5Tij3BECwNXHUa",
++          "message_id": "msg_e84768da9047iqWkdS388UcfGZ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338822569,
+           "time_updated": 1780338822569,
+@@ -1656,13 +1671,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e847693bb04anz6g3bWtqRXjLS",
++      "id": "msg_e847693bb04bnwxf2T99Llm2WQ",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338824123,
+       "time_updated": 1780338824123,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e84768da90464nMGLXKjTX1onv",
++        "parentID": "msg_e84768da9047iqWkdS388UcfGZ",
+         "time": {
+           "created": 1780338824123,
+           "completed": 1780338824123
+@@ -1688,8 +1703,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e847693bb04bI6ZfYZCIE7X7l6",
+-          "message_id": "msg_e847693bb04anz6g3bWtqRXjLS",
++          "id": "prt_e847693bb04cB0E8KkNhBtiRBs",
++          "message_id": "msg_e847693bb04bnwxf2T99Llm2WQ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338824123,
+           "time_updated": 1780338824123,
+@@ -1698,8 +1713,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847693bb04cB0E8KkNhBtiRBs",
+-          "message_id": "msg_e847693bb04anz6g3bWtqRXjLS",
++          "id": "prt_e847693bb04dxwaIjs0h3q3oKL",
++          "message_id": "msg_e847693bb04bnwxf2T99Llm2WQ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338824123,
+           "time_updated": 1780338824123,
+@@ -1713,8 +1728,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847693bb04dxwaIjs0h3q3oKL",
+-          "message_id": "msg_e847693bb04anz6g3bWtqRXjLS",
++          "id": "prt_e847693bb04eqcU5UCGhXxu9B5",
++          "message_id": "msg_e847693bb04bnwxf2T99Llm2WQ",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338824123,
+           "time_updated": 1780338824123,
+@@ -1736,13 +1751,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e847693ec04e9p4kqG69VEY5cU",
++      "id": "msg_e847693ec04fkLHPw0Lp5BYxVU",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338824172,
+       "time_updated": 1780338824172,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e847693bb04anz6g3bWtqRXjLS",
++        "parentID": "msg_e847693bb04bnwxf2T99Llm2WQ",
+         "time": {
+           "created": 1780338824172,
+           "completed": 1780338824172
+@@ -1768,8 +1783,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e847693ec04fJAaDOrzZizZX6c",
+-          "message_id": "msg_e847693ec04e9p4kqG69VEY5cU",
++          "id": "prt_e847693ec050L8GdeE4D2fUKDW",
++          "message_id": "msg_e847693ec04fkLHPw0Lp5BYxVU",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338824172,
+           "time_updated": 1780338824172,
+@@ -1778,8 +1793,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847693ec050L8GdeE4D2fUKDW",
+-          "message_id": "msg_e847693ec04e9p4kqG69VEY5cU",
++          "id": "prt_e847693ec051Yi0oFHZC6LrsF3",
++          "message_id": "msg_e847693ec04fkLHPw0Lp5BYxVU",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338824172,
+           "time_updated": 1780338824172,
+@@ -1807,8 +1822,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e847693ec051Yi0oFHZC6LrsF3",
+-          "message_id": "msg_e847693ec04e9p4kqG69VEY5cU",
++          "id": "prt_e847693ec052aHPwHF3FiOJ3AJ",
++          "message_id": "msg_e847693ec04fkLHPw0Lp5BYxVU",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338824172,
+           "time_updated": 1780338824172,
+@@ -1830,13 +1845,13 @@ input_file: test-fixtures/cursor/convo.json
+       ]
+     },
+     {
+-      "id": "msg_e8476c80a052YQBC17xoPS4Q3u",
++      "id": "msg_e8476c80a053mYJWm2pfNv3g1j",
+       "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+       "time_created": 1780338837514,
+       "time_updated": 1780338837514,
+       "data": {
+         "role": "assistant",
+-        "parentID": "msg_e847693ec04e9p4kqG69VEY5cU",
++        "parentID": "msg_e847693ec04fkLHPw0Lp5BYxVU",
+         "time": {
+           "created": 1780338837514,
+           "completed": 1780338837514
+@@ -1862,8 +1877,8 @@ input_file: test-fixtures/cursor/convo.json
+       },
+       "parts": [
+         {
+-          "id": "prt_e8476c80a053m1QcxedB78RrSo",
+-          "message_id": "msg_e8476c80a052YQBC17xoPS4Q3u",
++          "id": "prt_e8476c80a054p52nu27fCOafDH",
++          "message_id": "msg_e8476c80a053mYJWm2pfNv3g1j",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338837514,
+           "time_updated": 1780338837514,
+@@ -1872,8 +1887,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476c80a054p52nu27fCOafDH",
+-          "message_id": "msg_e8476c80a052YQBC17xoPS4Q3u",
++          "id": "prt_e8476c80a0556fdRFTjODmbDQQ",
++          "message_id": "msg_e8476c80a053mYJWm2pfNv3g1j",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338837514,
+           "time_updated": 1780338837514,
+@@ -1887,8 +1902,8 @@ input_file: test-fixtures/cursor/convo.json
+           }
+         },
+         {
+-          "id": "prt_e8476c80a0556fdRFTjODmbDQQ",
+-          "message_id": "msg_e8476c80a052YQBC17xoPS4Q3u",
++          "id": "prt_e8476c80a056e9lhmnNKb2tuAr",
++          "message_id": "msg_e8476c80a053mYJWm2pfNv3g1j",
+           "session_id": "ses_17b89b88fffejU6Ck7bkSvlv85",
+           "time_created": 1780338837514,
+           "time_updated": 1780338837514,
+diff --git a/crates/toolpath-goldens/snapshots/projection@cursor@pi.snap b/crates/toolpath-goldens/snapshots/projection@cursor@pi.snap
+index 407d464c..8e52e3c7 100644
+--- a/crates/toolpath-goldens/snapshots/projection@cursor@pi.snap
++++ b/crates/toolpath-goldens/snapshots/projection@cursor@pi.snap
+@@ -9,7 +9,7 @@ input_file: test-fixtures/cursor/convo.json
+ ---
+ {"type":"session","version":3,"id":"ad9f62d0-57b4-42f4-9310-b6fd3213af85","timestamp":"2026-06-01T18:33:24.592Z","cwd":"/Users/ben/projects/temp/cursortest2"}
+ {"type":"message","id":"afc40009-9378-4bef-9730-29d98c4056dc","parentId":null,"timestamp":"2026-06-01T18:33:24.592Z","message":{"role":"user","content":"You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.\n","timestamp":1780338804592}}
+-{"type":"message","id":"c91881d0-c0e1-4632-b522-4b2c65b9342f","parentId":"afc40009-9378-4bef-9730-29d98c4056dc","timestamp":"2026-06-01T18:33:26.400Z","message":{"role":"assistant","content":[],"api":"anthropic","provider":"anthropic","model":"default","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"stop","timestamp":1780338806400}}
++{"type":"message","id":"c91881d0-c0e1-4632-b522-4b2c65b9342f","parentId":"afc40009-9378-4bef-9730-29d98c4056dc","timestamp":"2026-06-01T18:33:26.400Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"The user wants me to complete a series of tasks that test different tool categories.\n\nI will first list the files in the current directory using either the Glob tool with a \"*\" pattern or the Shell tool with the ls command, as these are the most appropriate options among my available tools.\n\nThe user prefers a dedicated directory listing tool, so I will use the Shell tool with the ls command to list directory contents. I'll use ls -la for detailed output.\n\nStep 1: List directory contents using Shell ls command.\nStep 2: Create notes.md file with two lines of text, maintaining proper indentation as specified.\nStep 3: Read the contents of notes.md file.\n\nStep 4: Replace \"scratch\" with \"fixture\" in the file contents.  \nStep 5: Use Glob tool to find files matching the pattern \"note*\".  \nStep 6: Search for the term \"fixture\" using the Grep tool.  \nStep 7: Attempt to read a non-existent file, which should result in an error.  \nStep 8: Create and execute a shell script named count.sh.  \nStep 9: Delegate the word count task to a sub-agent.  \nStep 10: Provide a final summary of all completed steps.  \n\nThe content of notes.md is:\n```\n       scratch  feature elicitation\n       this file will be edited and searched.\n```"}],"api":"anthropic","provider":"anthropic","model":"default","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"stop","timestamp":1780338806400}}
+ {"type":"message","id":"32bb4bdc-e840-4e06-bf11-ef70a25efbb3","parentId":"c91881d0-c0e1-4632-b522-4b2c65b9342f","timestamp":"2026-06-01T18:33:31.139Z","message":{"role":"assistant","content":[{"type":"text","text":"Starting step 1: I'll list the current directory contents first, then work through the remaining steps in order.\n"}],"api":"anthropic","provider":"anthropic","model":"default","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"stop","timestamp":1780338811139}}
+ {"type":"message","id":"724d68c5-84f0-462c-9b45-68750241911c","parentId":"32bb4bdc-e840-4e06-bf11-ef70a25efbb3","timestamp":"2026-06-01T18:33:31.520Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"tool_6debf531-4ee7-4c8c-afe6-22236682a78","name":"bash","arguments":{"command":"ls -la /Users/ben/projects/temp/cursortest2","commandDescription":"List files in current workspace directory","cwd":"","options":{"timeout":30000},"parsingResult":{"executableCommands":[{"args":[{"type":"word","value":"-la"},{"type":"word","value":"/Users/ben/projects/temp/cursortest2"}],"fullText":"ls -la /Users/ben/projects/temp/cursortest2","name":"ls"}]},"requestedSandboxPolicy":{"additionalReadwritePaths":["/Users/ben/projects/temp/cursortest2"],"enableSharedBuildCache":true,"networkAccess":false,"type":"TYPE_WORKSPACE_READWRITE"}}}],"api":"anthropic","provider":"anthropic","model":"default","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0.0,"output":0.0,"cacheRead":0.0,"cacheWrite":0.0,"total":0.0}},"stopReason":"toolUse","timestamp":1780338811520}}
+ {"type":"message","id":"724d68c5-84f0-462c-9b45-68750241911c-tr-1","parentId":"724d68c5-84f0-462c-9b45-68750241911c","timestamp":"2026-06-01T18:33:31.520Z","message":{"role":"toolResult","toolCallId":"tool_6debf531-4ee7-4c8c-afe6-22236682a78","toolName":"bash","content":[{"type":"text","text":"total 0\ndrwxr-xr-x 2 ben staff  64 Jun  1 14:33 .\ndrwxr-xr-x 5 ben staff 160 Jun  1 14:33 ..\n"}],"isError":false,"timestamp":1780338811520}}
+diff --git a/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap b/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
+index 0c12ba88..97f673d2 100644
+--- a/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@gemini@cursor.snap
+@@ -214,6 +214,10 @@ input_file: test-fixtures/gemini/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "I will begin by listing the files in the current directory to establish the starting state.",
++      "thinking": {
++        "signature": "",
++        "text": "**Processing Next Steps**\nI am now focusing on executing the planned actions: first, listing the directory contents, and then proceeding to create the `notes.md` file."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 8702,
+diff --git a/crates/toolpath-goldens/snapshots/projection@opencode-forced@cursor.snap b/crates/toolpath-goldens/snapshots/projection@opencode-forced@cursor.snap
+index 9942176e..b4725f88 100644
+--- a/crates/toolpath-goldens/snapshots/projection@opencode-forced@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@opencode-forced@cursor.snap
+@@ -214,6 +214,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Let me work through each step in order, thinking out loud before each tool call.\n\n1. List the files in the current directory - I'll use the `read` tool with the directory path.\n2. Write `notes.md` with two specific lines.\n3. Read `notes.md` back.\n4. Edit `notes.md` to change \"scratch\" to \"fixture\".\n5. Find files starting with \"note\" in the current directory.\n6. Search contents for \"fixture\".\n7. Try to read a non-existent file.\n8. Write and run `count.sh`.\n9. Dispatch a sub-agent.\n10. Summarize."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 8596,
+@@ -302,6 +306,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "One file so far. Now writing `notes.md`.",
++      "thinking": {
++        "signature": "",
++        "text": "Directory contains only `.stderr.log`. Good, now step 2: write `notes.md` with the two specified lines."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 188,
+@@ -391,6 +399,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Step 3 — read it back.",
++      "thinking": {
++        "signature": "",
++        "text": "Step 2 done. Now step 3: read it back."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 102,
+@@ -479,6 +491,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Both lines confirmed. Step 4 — replace \"scratch\" with \"fixture\".",
++      "thinking": {
++        "signature": "",
++        "text": "Both lines confirmed. Now step 4: edit \"scratch\" to \"fixture\" using the edit tool."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 184,
+@@ -568,6 +584,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Step 5 — glob for files starting with \"note\".",
++      "thinking": {
++        "signature": "",
++        "text": "Step 4 done. Step 5: find files starting with \"note\" using the glob tool."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 108,
+@@ -656,6 +676,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "One match: `notes.md`. Step 6 — grep for \"fixture\".",
++      "thinking": {
++        "signature": "",
++        "text": "Step 5 done — only `notes.md` matches. Step 6: search contents for \"fixture\" using grep tool."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 169,
+@@ -744,6 +768,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Found. Step 7 — try reading a non-existent file.",
++      "thinking": {
++        "signature": "",
++        "text": "\"fixture\" found in `notes.md` line 1. Step 7: read a non-existent file. I'll use the read tool."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 132,
+@@ -831,6 +859,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Expected error — the file does not exist, as confirmed by the tool. Step 8 — write and run `count.sh`.",
++      "thinking": {
++        "signature": "",
++        "text": "Step 7 complete — the tool correctly returned a \"File not found\" error. Step 8: write `count.sh` and run it."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 74,
+@@ -919,6 +951,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Now run it with bash."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 140,
+@@ -1007,6 +1043,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "Five lines, confirmed. Step 9 — dispatching a sub-agent to count words in `notes.md`.",
++      "thinking": {
++        "signature": "",
++        "text": "Five lines, as expected. Step 9: dispatch a sub-agent to count words in `notes.md`. I have the `task` tool available."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 34,
+@@ -1145,6 +1185,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "The sub-agent reports 11 words in `notes.md`.\n\nHere's the summary: I listed the current directory (one file, `.stderr.log`), created `notes.md` with two lines, read it back to confirm, edited \"scratch\" to \"fixture\" via the dedicated edit tool, glob-searched for `note*` files (found `notes.md`), grepped for \"fixture\" (found on line 1), gracefully handled a read of a non-existent file, wrote and ran `count.sh` producing five lines of output, and dispatched a sub-agent to count words in `notes.md` (it returned 11).",
++      "thinking": {
++        "signature": "",
++        "text": "The sub-agent reports 11 words. Let me verify: \"fixture — feature elicitation\" has 3 words, \"this file will be edited and searched.\" has 6 words. Total is 9 words. But the em dash \"—\" might be counted as a word by some naive word-splitters, or the agent might count differently. Let me just quote it as is. Actually, I'll count: \"fixture\" (1), \"—\" (could be counted as 1), \"feature\" (2), \"elicitation\" (3), \"this\" (4), \"file\" (5), \"will\" (6), \"be\" (7), \"edited\" (8), \"and\" (9), \"searched.\" (10). That's 10 if you count \"—\" as a word, or 9 if you don't. The agent says 11. Close enough — I'll quote the result.\n\nStep 10: summarize."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 160,
+@@ -1388,6 +1432,10 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "## Goal\n- Executed a structured set of tool-use tasks covering file listing, creation, reading, editing, globbing, grep, error handling, script execution, and sub-agent dispatch.\n\n## Constraints & Preferences\n- All work confined to the current working directory (`/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/opencode`).\n- Use dedicated tools when available; fall back to shell equivalents otherwise.\n- Steps must be taken in order without skipping.\n\n## Progress\n### Done\n- Listed current directory contents — one file (`.stderr.log`).\n- Wrote `notes.md` with two lines: `scratch — feature elicitation` and `this file will be edited and searched.`\n- Read `notes.md` back and verified both lines are present.\n- Edited `notes.md` replacing \"scratch\" with \"fixture\" using the edit tool.\n- Globbed for files starting with `note*` — found only `notes.md`.\n- Grepped for \"fixture\" in the current directory — found on line 1 of `notes.md`.\n- Attempted to read `does-not-exist.txt` — tool returned `File not found` error; acknowledged.\n- Wrote `count.sh` (five `echo` commands), ran with `bash count.sh` — confirmed five-line output (1–5).\n- Dispatched a sub-agent (via `task` tool) to count words in `notes.md` — result: 11.\n\n### In Progress\n- (none)\n\n### Blocked\n- (none)\n\n## Key Decisions\n- Used dedicated `edit` tool for string replacement rather than `sed -i`.\n- Used dedicated `glob` and `grep` tools when steps explicitly allowed them.\n- Used `task` sub-agent for word counting since it was available.\n\n## Next Steps\n- (none — all tasks complete)\n\n## Critical Context\n- The file `does-not-exist.txt` does not exist in the working directory; reading it correctly produces an unresolvable error.\n- `count.sh` is a shell script that prints integers 1–5 on separate lines.\n\n## Relevant Files\n- `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/opencode/notes.md`: contains `fixture — feature elicitation` and `this file will be edited and searched.` (2 lines).\n- `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/opencode/count.sh`: shell script echoing 1 through 5.\n- `/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/opencode/.stderr.log`: the only pre-existing file in the directory (unrelated to the tasks).",
++      "thinking": {
++        "signature": "",
++        "text": "I need to create a summary from the conversation history I just participated in. The conversation was a set of tool-use tasks that I executed. Let me extract the key facts and structure them according to the template.\n\nLet me recall what happened:\n\n1. Listed files in current directory → `.stderr.log` only.\n2. Created `notes.md` with two lines.\n3. Read it back and confirmed.\n4. Edited \"scratch\" → \"fixture\" in `notes.md`.\n5. Globbing for `note*` → found `notes.md`.\n6. Grepping for \"fixture\" → found in `notes.md` line 1.\n7. Tried to read `does-not-exist.txt` → got proper error.\n8. Wrote `count.sh` with 5 echo lines, ran it → 5 lines output.\n9. Dispatched a sub-agent to count words in `notes.md` → 11 words.\n10. Summarized.\n\nNow I need to produce the summary in the exact template format."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 3461,
+diff --git a/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap b/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap
+index 5af08dd6..3515ead9 100644
+--- a/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@opencode@cursor.snap
+@@ -213,6 +213,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "The user wants me to walk through a set of tasks. Let me go through them in order.\n\n1. List files in current directory\n2. Write notes.md\n3. Read notes.md\n4. Edit notes.md\n5. Find files starting with \"note\"\n6. Search for \"fixture\" in files\n7. Read non-existent file\n8. Write and run count.sh\n9. Dispatch sub-agent\n10. Summarize\n\nLet me start with step 1."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 11294,
+@@ -300,6 +304,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Step 1 done — the directory has a single file `.stderr.log`. Now step 2: write `notes.md`."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 165,
+@@ -388,6 +396,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Step 2 done. Step 3: read it back."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 68,
+@@ -475,6 +487,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Both lines confirmed. Step 4: edit \"scratch\" → \"fixture\"."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 142,
+@@ -563,6 +579,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Step 4 done. Step 5: glob for files starting with \"note\"."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 43,
+@@ -650,6 +670,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Step 5 done — one match. Step 6: grep for \"fixture\"."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 89,
+@@ -737,6 +761,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Step 6 done. Step 7: try to read a non-existent file."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 155,
+@@ -823,6 +851,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "As instructed: read failed (file not found). Now step 8: write and run count.sh."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 71,
+@@ -911,6 +943,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Now run it."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 102,
+@@ -998,6 +1034,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Step 8 done — five lines as expected. Step 9: I have the Task tool (sub-agent). Let me dispatch it to count words in notes.md."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 122,
+@@ -1136,6 +1176,10 @@ input_file: test-fixtures/opencode/convo.json
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "The sub-agent reported that `notes.md` contains 10 words.\n\n**Summary:** I listed the directory, wrote `notes.md`, read it back, edited \"scratch\" → \"fixture\" with the edit tool, globbed for `note*` files, grepped for \"fixture\", confirmed the read tool errors on a missing file, wrote and ran `count.sh` (printed 1–5), and dispatched a sub-agent that counted 10 words in `notes.md`. All steps completed without incident.",
++      "thinking": {
++        "signature": "",
++        "text": "The sub-agent reports the word count is 10. Step 10: summarize."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 89,
+diff --git a/crates/toolpath-goldens/snapshots/projection@pi-forced@cursor.snap b/crates/toolpath-goldens/snapshots/projection@pi-forced@cursor.snap
+index 462414b7..9e7ce467 100644
+--- a/crates/toolpath-goldens/snapshots/projection@pi-forced@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@pi-forced@cursor.snap
+@@ -248,6 +248,10 @@ input_file: test-fixtures/pi/convo-compacted.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "### Task 1: List the files in the current directory\nI will use the `bash` tool to execute `ls` to list the files in the current directory, as requested.\n\n<tool_call>bash{command:<|\"|>ls<|\"|>}</tool_call>\n",
++      "thinking": {
++        "signature": "",
++        "text": "The user wants me to execute a sequence of 10 tasks designed to test various coding assistant tools. I must follow the steps in order, think aloud before each tool call, use dedicated tools when available, and stay within the current directory.\n\n**Plan:**\n1.  **Task 1 (List files):** Use the dedicated `bash` tool to run `ls` (as specified, it's fine, and `bash` is the tool).\n2.  **Task 2 (Write file):** Use the dedicated `write` tool to create `notes.md`.\n3.  **Task 3 (Read file):** Use the dedicated `read` tool to read `notes.md`.\n4.  **Task 4 (Edit file):** Use the dedicated `edit` tool to replace \"scratch\" with \"fixture\" in `notes.md`.\n5.  **Task 5 (Find files):** Use the dedicated `bash` tool to run `find . -maxdepth 1 -name 'note*'` (as suggested fallback).\n6.  **Task 6 (Search content):** Use the dedicated `bash` tool to run `grep -r fixture .` (as suggested fallback).\n7.  **Task 7 (Read non-existent file):** Use the dedicated `read` tool pointing to `does-not-exist.txt`, expecting failure.\n8.  **Task 8 (Write and run script):** Use `write` to create `count.sh`, then use `bash` to execute `./count.sh`.\n9.  **Task 9 (Sub-agent):** Check for a dedicated sub-agent/task-dispatch tool. Since none were listed in the available tools, I must skip and state explicitly.\n10. **Task 10 (Summary):** Write the final summary.\n\nLet's start with Task 1."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 2107,
+@@ -492,6 +496,10 @@ input_file: test-fixtures/pi/convo-compacted.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "### Task 2: Write `notes.md`\nI will use the `write` tool to create `notes.md` with the specified content.\n\n<tool_call>write{content:<|\"|>scratch — feature elicitation\nthis file will be edited and searched.<|\"|>,path:<|\"|>notes.md<|\"|>}</tool_call>",
++      "thinking": {
++        "signature": "",
++        "text": "The user has provided a response in the middle of a multi-step task execution (Task 1 was listing files). The previous turn initiated a bash call for `ls`. Since I haven't received the output of that call yet, I cannot proceed to the next step based on the full plan. However, the user has provided a direct instruction: \"Now print the single word: done.\"\n\nI must interpret this as a request to proceed with the conversation flow, which implies responding to the *result* of the previous tool call, even if the tool result is not shown to me yet, or perhaps it is an interruption.\n\nGiven the instructions are to \"Stay inside the current working directory — do not touch anything outside it. Take the steps in order,\" and the previous step was to list files, I should assume the tool call output will follow shortly. If I simply print \"done\", I am ignoring the multi-step plan and the pending tool result.\n\nSince the model's state is based on the tool call output, and the next *programmed* step is Task 2, I should wait for the `ls` output.\n\nHowever, if the user's input \"Now print the single word: done.\" is meant to *simulate* the continuation or acknowledgment, I should adhere to the multi-step plan as if the tools are working sequentially.\n\nGiven the strict instruction to follow the steps in order:\n1. List files (Done/In progress - waiting for output).\n2. Write `notes.md`.\n\nI will assume the user's input \"Now print the single word: done.\" is either confirmation or a misstep, and I must proceed to Task 2 regardless, once the directory listing from Task 1 is complete (which is implied to happen before I proceed). Since the output of the tool call is not present, I will state the plan for Task 2 and execute it, acknowledging the preceding tool call.\n\n*Self-correction*: I will ignore the immediate input \"Now print the single word: done\" as it contradicts the systematic nature of the task and seems like a conversational filler. I will focus on executing the next planned step (Task 2) assuming the initial directory listing was preparatory and can be handled once its output is available.\n\n**Next Step (Task 2):** Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n`scratch — feature elicitation`\n`this file will be edited and searched.`\n\nI will use the `write` tool."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 2287,
+diff --git a/crates/toolpath-goldens/snapshots/projection@pi@cursor.snap b/crates/toolpath-goldens/snapshots/projection@pi@cursor.snap
+index 955a2a51..c5ced7ee 100644
+--- a/crates/toolpath-goldens/snapshots/projection@pi@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/projection@pi@cursor.snap
+@@ -214,6 +214,10 @@ input_file: test-fixtures/pi/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "**Step 1: List the files in the current directory**\n\nI will use the `bash` tool with the `ls` command to list the files in the current directory, as this is a standard and reliable way to fulfill this request.\n\n",
++      "thinking": {
++        "signature": "",
++        "text": "The user wants me to execute a sequence of 10 steps designed to exercise all available tool categories. I must stay within the current directory and use dedicated tools when they are preferred or available, falling back to shell commands otherwise.\n\nStep 1: List files. Use `read` or `bash ls`. `bash ls` is fine.\nStep 2: Create `notes.md`. Use a dedicated write tool (`write`).\nStep 3: Read `notes.md`. Use `read`.\nStep 4: Edit `notes.md`. Use a dedicated edit tool (`edit`).\nStep 5: Find files starting with \"note\". Use `bash find`.\nStep 6: Search contents for \"fixture\". Use `bash grep -r`.\nStep 7: Read a non-existent file. Use `read`. Expect failure report.\nStep 8: Create and run a script `count.sh`. Use `write` and `bash`.\nStep 9: Sub-agent dispatch. Check for dedicated sub-agent tool. If none, skip and report.\nStep 10: Summarize. Final response.\n\nLet's start with Step 1."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 2108,
+@@ -301,6 +305,10 @@ input_file: test-fixtures/pi/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "Current directory listing was empty, which means no files were present before I started.\n\nNow for Step 2: Write `notes.md`.\nI must use the dedicated `write` tool.\nContent:\n```markdown\nscratch — feature elicitation\nthis file will be edited and searched.\n```"
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 2440,
+@@ -473,6 +481,10 @@ input_file: test-fixtures/pi/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "The `read` tool call succeeded and confirmed the content of `notes.md`.\n\nNow for Step 4: Edit `notes.md`.\nI must change \"scratch\" to \"fixture\" using the dedicated `edit` tool.\nThe old text I am targeting is \"scratch\".\nThe new text is \"fixture\"."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 2658,
+@@ -645,6 +657,10 @@ input_file: test-fixtures/pi/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "The `edit` tool successfully changed \"scratch\" to \"fixture\" in `notes.md`.\nThe read tool call confirmed this change:\n```\nfixture — feature elicitation\nthis file will be edited and searched.\n```\n\nNow for Step 5: Find files starting with \"note\".\nI must use `bash find . -maxdepth 1 -name 'note*'`."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 2930,
+@@ -816,6 +832,10 @@ input_file: test-fixtures/pi/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "The `grep -r fixture .` command successfully located \"fixture\" inside `notes.md`.\n\nNow for Step 7: Read a non-existent file.\nI must use the `read` tool on `does-not-exist.txt` and expect failure, which I must report and acknowledge."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 3220,
+@@ -987,6 +1007,10 @@ input_file: test-fixtures/pi/convo.jsonl
+       "summarizedComposers": [],
+       "supportedTools": [],
+       "text": "",
++      "thinking": {
++        "signature": "",
++        "text": "The `write` tool successfully created `count.sh` containing a loop for printing 1 to 5.\n\nNow I must execute it using `bash count.sh` and confirm the output is exactly five lines."
++      },
+       "todos": [],
+       "tokenCount": {
+         "inputTokens": 3578,
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+index a1637a40..80a0d329 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 73
++    "key_paths": 74
+   },
+   "after": {
+-    "steps": 22,
++    "steps": 23,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 61
++    "key_paths": 62
+   },
+   "lost": [
+     "paths[].meta.producer.name",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+index c79d86cf..2eab0a12 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 73
++    "key_paths": 74
+   },
+   "after": {
+-    "steps": 55,
++    "steps": 57,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 98
++    "key_paths": 99
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+index 8e9220fb..f4a86091 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 73
++    "key_paths": 74
+   },
+   "after": {
+-    "steps": 21,
++    "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 67
++    "key_paths": 68
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+index aa147725..9233e867 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 73
++    "key_paths": 74
+   },
+   "after": {
+-    "steps": 21,
++    "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 63
++    "key_paths": 64
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+index a69901ef..0195f090 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 73
++    "key_paths": 74
+   },
+   "after": {
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 71
+   },
+   "lost": [
+     "paths[].meta.producer.version",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+index 6d694916..9db426f9 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 73
++    "key_paths": 74
+   },
+   "after": {
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 69
++    "key_paths": 70
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+index d0ecfff2..8b3f95e2 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 73
++    "key_paths": 74
+   },
+   "after": {
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 70
++    "key_paths": 71
+   },
+   "lost": [
+     "paths[].meta.producer.name",
+diff --git a/crates/toolpath-goldens/snapshots/shed@copilot.snap b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+index 5e85cbfc..b3fa748a 100644
+--- a/crates/toolpath-goldens/snapshots/shed@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+@@ -63,9 +63,9 @@ input_file: test-fixtures/copilot/convo.jsonl
+       }
+     },
+     "cursor": {
+-      "lines": 1497,
+-      "bytes": 110194,
+-      "string_chars": 66375,
++      "lines": 1541,
++      "bytes": 117925,
++      "string_chars": 73183,
+       "by_type": {
+         "?": 1
+       }
+diff --git a/crates/toolpath-goldens/snapshots/shed@cursor.snap b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+index 2b832fa3..3f6bd60f 100644
+--- a/crates/toolpath-goldens/snapshots/shed@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+@@ -17,42 +17,43 @@ input_file: test-fixtures/cursor/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 19316,
+-    "string_chars": 12070,
++    "bytes": 20588,
++    "string_chars": 13296,
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10
+   },
+   "projections": {
+     "claude": {
+-      "lines": 31,
+-      "bytes": 21211,
+-      "string_chars": 14410,
++      "lines": 32,
++      "bytes": 22838,
++      "string_chars": 15837,
+       "by_type": {
+-        "assistant": 20,
++        "assistant": 21,
+         "permission-mode": 1,
+         "user": 10
+       }
+     },
+     "codex": {
+-      "lines": 74,
+-      "bytes": 25936,
+-      "string_chars": 18570,
++      "lines": 77,
++      "bytes": 27718,
++      "string_chars": 20046,
+       "by_type": {
+         "event_msg/agent_message": 10,
+         "event_msg/exec_command_end": 2,
+         "event_msg/user_message": 1,
+         "response_item/function_call": 10,
+         "response_item/function_call_output": 9,
+-        "response_item/message": 21,
++        "response_item/message": 22,
++        "response_item/reasoning": 1,
+         "session_meta": 1,
+-        "turn_context": 20
++        "turn_context": 21
+       }
+     },
+     "copilot": {
+       "lines": 86,
+-      "bytes": 34285,
+-      "string_chars": 22392,
++      "bytes": 35562,
++      "string_chars": 23618,
+       "by_type": {
+         "assistant.message": 21,
+         "assistant.turn_end": 21,
+@@ -66,33 +67,33 @@ input_file: test-fixtures/cursor/convo.json
+       }
+     },
+     "cursor-agent": {
+-      "lines": 142,
+-      "bytes": 27949,
+-      "string_chars": 22458,
++      "lines": 148,
++      "bytes": 32169,
++      "string_chars": 26423,
+       "by_type": {
+         "?": 1
+       }
+     },
+     "gemini": {
+-      "lines": 493,
+-      "bytes": 20406,
+-      "string_chars": 9960,
++      "lines": 525,
++      "bytes": 22302,
++      "string_chars": 11176,
+       "by_type": {
+         "?": 1
+       }
+     },
+     "opencode": {
+-      "lines": 1904,
+-      "bytes": 61864,
+-      "string_chars": 18149,
++      "lines": 1919,
++      "bytes": 63589,
++      "string_chars": 19474,
+       "by_type": {
+         "?": 1
+       }
+     },
+     "pi": {
+       "lines": 32,
+-      "bytes": 21559,
+-      "string_chars": 11306,
++      "bytes": 22850,
++      "string_chars": 12540,
+       "by_type": {
+         "message": 31,
+         "session": 1
+@@ -100,14 +101,14 @@ input_file: test-fixtures/cursor/convo.json
+     }
+   },
+   "same_format": {
+-    "lines": 2578,
+-    "bytes": 106362,
++    "lines": 2590,
++    "bytes": 110639,
+     "event_types_shed": {},
+     "key_paths": {
+       "source": 174,
+-      "after": 101,
+-      "lost": 103,
+-      "gained": 30
++      "after": 106,
++      "lost": 100,
++      "gained": 32
+     },
+     "renamed": [],
+     "dropped": [
+@@ -119,14 +120,6 @@ input_file: test-fixtures/cursor/convo.json
+         "path": "bubbles[].isPlanExecution",
+         "example": "false"
+       },
+-      {
+-        "path": "bubbles[].thinking.signature",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "bubbles[].thinking.text",
+-        "example": "The user wants me to complete a series o…"
+-      },
+       {
+         "path": "bubbles[].thinkingDurationMs",
+         "example": "4705"
+@@ -267,10 +260,6 @@ input_file: test-fixtures/cursor/convo.json
+         "path": "data.fullConversationHeadersOnly[].contentHeightHint",
+         "example": "754"
+       },
+-      {
+-        "path": "data.fullConversationHeadersOnly[].grouping.hasThinking",
+-        "example": "true"
+-      },
+       {
+         "path": "data.fullConversationHeadersOnly[].grouping.isKeptFinalAiVisibleOutsideWorkedForGroup",
+         "example": "true"
+diff --git a/crates/toolpath-goldens/snapshots/shed@gemini.snap b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+index 9b022277..77ef925b 100644
+--- a/crates/toolpath-goldens/snapshots/shed@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+@@ -70,9 +70,9 @@ input_file: test-fixtures/gemini/convo.jsonl
+       }
+     },
+     "cursor": {
+-      "lines": 1362,
+-      "bytes": 65045,
+-      "string_chars": 25573,
++      "lines": 1366,
++      "bytes": 65286,
++      "string_chars": 25740,
+       "by_type": {
+         "?": 1
+       }
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+index bc6e3cc1..f1494fa6 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+@@ -68,9 +68,9 @@ input_file: test-fixtures/opencode/convo-compacted.json
+       }
+     },
+     "cursor": {
+-      "lines": 1674,
+-      "bytes": 86125,
+-      "string_chars": 38041,
++      "lines": 1722,
++      "bytes": 89765,
++      "string_chars": 40693,
+       "by_type": {
+         "?": 1
+       }
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index 4d436ca0..c845d749 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -68,9 +68,9 @@ input_file: test-fixtures/opencode/convo.json
+       }
+     },
+     "cursor": {
+-      "lines": 1389,
+-      "bytes": 61639,
+-      "string_chars": 22814,
++      "lines": 1433,
++      "bytes": 63451,
++      "string_chars": 23790,
+       "by_type": {
+         "?": 1
+       }
+diff --git a/crates/toolpath-goldens/snapshots/shed@pi-forced.snap b/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
+index b392e164..70f0b259 100644
+--- a/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
+@@ -66,9 +66,9 @@ input_file: test-fixtures/pi/convo-compacted.jsonl
+       }
+     },
+     "cursor": {
+-      "lines": 673,
+-      "bytes": 39840,
+-      "string_chars": 20808,
++      "lines": 681,
++      "bytes": 43767,
++      "string_chars": 24533,
+       "by_type": {
+         "?": 1
+       }
+diff --git a/crates/toolpath-goldens/snapshots/shed@pi.snap b/crates/toolpath-goldens/snapshots/shed@pi.snap
+index 7800e7f6..5b6b5c6b 100644
+--- a/crates/toolpath-goldens/snapshots/shed@pi.snap
++++ b/crates/toolpath-goldens/snapshots/shed@pi.snap
+@@ -69,9 +69,9 @@ input_file: test-fixtures/pi/convo.jsonl
+       }
+     },
+     "cursor": {
+-      "lines": 1377,
+-      "bytes": 69379,
+-      "string_chars": 29999,
++      "lines": 1401,
++      "bytes": 71967,
++      "string_chars": 32086,
+       "by_type": {
+         "?": 1
+       }
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 22624f58..8eaa4f5c 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++    "toolpath_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "720746209ceb28ccc95769f61a5ea5f58c22f5eabea02e97d6272f322781d6a4",
++        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "01e76f2bdc05f7a93e9870abbae1de954f6b8119"
++        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }

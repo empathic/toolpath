@@ -1,0 +1,377 @@
+From ac4cdd1a0b0ea0ef03ce89f938a6f9d0e9d354ab Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 13:27:41 -0400
+Subject: [PATCH] test(webmock): every agent's cassette replays green through
+ its real CLI (just replay-agents) (pr/107)
+
+---
+ crates/toolpath-webmock/src/.qual  |   1 +
+ crates/toolpath-webmock/src/lib.rs | 120 ++++++++++++++++++++++++-----
+ crates/toolpath-webmock/src/run.rs |   4 +
+ justfile                           |   9 +++
+ pr/103-replay-in-cargo-test.md     |   2 +-
+ pr/107-replay-agents-green.md      |  53 +++++++++++++
+ scripts/replay-cells.sh            |  73 ++++++++++++++++++
+ 7 files changed, 240 insertions(+), 22 deletions(-)
+ create mode 100644 pr/107-replay-agents-green.md
+ create mode 100755 scripts/replay-cells.sh
+
+diff --git a/crates/toolpath-webmock/src/.qual b/crates/toolpath-webmock/src/.qual
+index 1a3fae84..200e3819 100644
+--- a/crates/toolpath-webmock/src/.qual
++++ b/crates/toolpath-webmock/src/.qual
+@@ -1,2 +1,3 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-webmock/src/lib.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T19:07:12.478214Z","id":"f0809694e34fb506410ab0460b6b8c9e321ac3842712b45108fe9c8bc53c296a","body":{"detail":"Same copilot cell, pre-scrub cassettes, Rust server. Before: rc 1 in 152 s, tools/list id 2 answered with id 1 so copilot timed out 3x at 60 s, cancelled/retry calls got the initialize answer via the shared loose key, model request carried 19 tools, 6 MISS on /v1/messages. After: rc 0 in 1 s, every request EXACT, 25 tools, the recorded reply.","kind":"pass","span":{"start":{"line":316},"end":{"line":316},"content_hash":"cef0e96b1884665f71261f37d6c16ae92537bacf41e61d8858af97f7a1f6b37e"},"summary":"copilot replays exact: a replayed JSON-RPC answer carries the live id; a JSON-RPC method is part of the loose key","tags":["webmock","copilot","replay","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-webmock/src/lib.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:22:42.596481Z","id":"fc57917bdc885c7a32f9e5cc03e27c1a6e659a193d1b4a9213c5884e5d346010","body":{"detail":"Same copilot cell, pre-scrub cassettes, Rust server. Before: rc 1 in 152 s, tools/list id 2 answered with id 1 so copilot timed out 3x at 60 s, cancelled/retry calls got the initialize answer via the shared loose key, model request carried 19 tools, 6 MISS on /v1/messages. After: rc 0 in 1 s, every request EXACT, 25 tools, the recorded reply.","kind":"pass","span":{"start":{"line":346},"end":{"line":346},"content_hash":"cef0e96b1884665f71261f37d6c16ae92537bacf41e61d8858af97f7a1f6b37e"},"summary":"copilot replays exact: a replayed JSON-RPC answer carries the live id; a JSON-RPC method is part of the loose key","supersedes":"f0809694e34fb506410ab0460b6b8c9e321ac3842712b45108fe9c8bc53c296a","tags":["session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-webmock/src/lib.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-22T17:23:26.127374Z","id":"397a2bf2d35a5e9cfea601818e0af8cc952095cecc395f965c437734f1cb091a","body":{"detail":"Same copilot cell, pre-scrub cassettes, Rust server. Before: rc 1 in 152 s, tools/list id 2 answered with id 1 so copilot timed out 3x at 60 s, cancelled/retry calls got the initialize answer via the shared loose key, model request carried 19 tools, 6 MISS on /v1/messages. After: rc 0 in 1 s, every request EXACT, 25 tools, the recorded reply. re-anchored 2026-10-22 (pr/107): the function moved from line 346 to 370 when the loose key gained tool-output and dated-prompt rules; behaviour unchanged, and copilot still replays EXACT on its MCP calls (just replay-agents).","kind":"pass","span":{"start":{"line":370},"end":{"line":370},"content_hash":"cef0e96b1884665f71261f37d6c16ae92537bacf41e61d8858af97f7a1f6b37e"},"summary":"copilot replays exact: a replayed JSON-RPC answer carries the live id; a JSON-RPC method is part of the loose key","supersedes":"fc57917bdc885c7a32f9e5cc03e27c1a6e659a193d1b4a9213c5884e5d346010","tags":["session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:3678b54b-fb6e-4347-aaf3-124b17aae153"]}}
+diff --git a/crates/toolpath-webmock/src/lib.rs b/crates/toolpath-webmock/src/lib.rs
+index 2eda6a9f..a1420354 100644
+--- a/crates/toolpath-webmock/src/lib.rs
++++ b/crates/toolpath-webmock/src/lib.rs
+@@ -285,7 +285,19 @@ pub fn last_user_text(body: &Value) -> String {
+     without_reminders(&last_user_raw(body))
+ }
+ 
+-/// The last user message's text as sent, reminders included.
++/// A content block that carries a tool's output rather than text the user wrote: a Messages
++/// `tool_result`, a Responses `function_call_output`, a Gemini `functionResponse` part.
++fn is_tool_output(v: &Value) -> bool {
++    matches!(
++        v.get("type").and_then(Value::as_str),
++        Some("tool_result" | "function_call_output")
++    ) || v.get("functionResponse").is_some()
++}
++
++/// The last user message's text as sent, reminders included. Tool output in that message is
++/// skipped: a harness may fold the previous turn's tool results into the same user message as the
++/// new prompt (Claude Code does, depending on how the resumed session was written), and that
++/// grouping is the projection's, not the prompt's.
+ fn last_user_raw(body: &Value) -> String {
+     let list = body
+         .get("messages")
+@@ -297,12 +309,17 @@ fn last_user_raw(body: &Value) -> String {
+     };
+     for m in list.iter().rev() {
+         if m.get("role").and_then(Value::as_str) == Some("user") {
+-            return text_of(
+-                m.get("content")
+-                    .or_else(|| m.get("parts"))
+-                    .or_else(|| m.get("text"))
+-                    .unwrap_or(&Value::Null),
+-            );
++            let content = m
++                .get("content")
++                .or_else(|| m.get("parts"))
++                .or_else(|| m.get("text"))
++                .unwrap_or(&Value::Null);
++            return match content {
++                Value::Array(a) => text_of(&Value::Array(
++                    a.iter().filter(|b| !is_tool_output(b)).cloned().collect(),
++                )),
++                other => text_of(other),
++            };
+         }
+     }
+     String::new()
+@@ -312,23 +329,30 @@ fn last_user_raw(body: &Value) -> String {
+ /// trimmed. Harnesses add reminders to the last user message that depend on the run, not the
+ /// conversation (Claude Code adds "The date has changed" when a session resumes on a later day),
+ /// so the loose key ignores them.
++/// Copilot's own form is `<system_reminder>` (underscore); its content is local state such as
++/// which session tables exist yet, so it is dropped too.
+ pub fn without_reminders(text: &str) -> String {
+-    const OPEN: &str = "<system-reminder>";
+-    const CLOSE: &str = "</system-reminder>";
+-    let mut out = String::with_capacity(text.len());
+-    let mut rest = text;
+-    while let Some(i) = rest.find(OPEN) {
+-        out.push_str(&rest[..i]);
+-        match rest[i..].find(CLOSE) {
+-            Some(j) => rest = &rest[i + j + CLOSE.len()..],
+-            None => {
+-                rest = "";
+-                break;
++    let mut s = text.to_string();
++    for (open, close) in [
++        ("<system-reminder>", "</system-reminder>"),
++        ("<system_reminder>", "</system_reminder>"),
++    ] {
++        let mut out = String::with_capacity(s.len());
++        let mut rest = s.as_str();
++        while let Some(i) = rest.find(open) {
++            out.push_str(&rest[..i]);
++            match rest[i..].find(close) {
++                Some(j) => rest = &rest[i + j + close.len()..],
++                None => {
++                    rest = "";
++                    break;
++                }
+             }
+         }
++        out.push_str(rest);
++        s = out;
+     }
+-    out.push_str(rest);
+-    out.split_whitespace().collect::<Vec<_>>().join(" ")
++    s.split_whitespace().collect::<Vec<_>>().join(" ")
+ }
+ 
+ /// The `method` of a JSON-RPC 2.0 request or notification body, if it is one.
+@@ -440,7 +464,15 @@ pub fn keys(method: &str, path_and_query: &str, body_text: &str) -> Keys {
+         &serde_json::json!({"method": method, "path": path_and_query, "body": normalized})
+             .to_string(),
+     );
+-    let mut loose_doc = serde_json::json!({"method": method, "path": path, "model": model, "last_user": parsed.as_ref().map(last_user_text).unwrap_or_default()});
++    // The last user text is read from the normalized body, so a date the harness stamps into the
++    // prompt (copilot's `<current_datetime>`) does not change the loose key between runs.
++    let last_user = if parsed.is_some() {
++        last_user_text(&normalized)
++    } else {
++        String::new()
++    };
++    let mut loose_doc =
++        serde_json::json!({"method": method, "path": path, "model": model, "last_user": last_user});
+     // A JSON-RPC call (an MCP server) has no model and no user text, so without its method every
+     // call to one endpoint shares a loose key and the first stored answer wins for all of them.
+     if let Some(rpc) = parsed.as_ref().and_then(jsonrpc_method) {
+@@ -1152,6 +1184,52 @@ mod tests {
+         assert_eq!(a.loose, b.loose);
+     }
+ 
++    #[test]
++    fn loose_key_ignores_tool_output_folded_into_the_last_user_turn() {
++        // Claude Code may send the previous turn's tool_result in the same user message as the new
++        // prompt, or as its own message, depending on how the resumed session was written.
++        let folded = keys(
++            "POST",
++            "/v1/messages",
++            r#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"11 notes.md"},{"type":"text","text":"probe"}]}]}"#,
++        );
++        let separate = keys(
++            "POST",
++            "/v1/messages",
++            r#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"11 notes.md"}]},{"role":"assistant","content":"ok"},{"role":"user","content":[{"type":"text","text":"probe"}]}]}"#,
++        );
++        assert_eq!(folded.loose, separate.loose);
++        let other = keys(
++            "POST",
++            "/v1/messages",
++            r#"{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"another probe"}]}]}"#,
++        );
++        assert_ne!(folded.loose, other.loose);
++    }
++
++    #[test]
++    fn loose_key_ignores_a_date_stamped_into_the_prompt() {
++        let day = |d: &str| {
++            keys(
++                "POST",
++                "/v1/messages",
++                &format!(
++                    r#"{{"model":"m","messages":[{{"role":"user","content":[{{"type":"text","text":"<current_datetime>{d}</current_datetime> probe"}}]}}]}}"#
++                ),
++            )
++        };
++        assert_eq!(
++            day("2026-10-15T19:38:47Z").loose,
++            day("2026-10-22T17:20:01Z").loose
++        );
++    }
++
++    #[test]
++    fn without_reminders_drops_both_reminder_spellings() {
++        let t = "a <system-reminder>x</system-reminder> b <system_reminder>\n<sql_tables>t</sql_tables>\n</system_reminder> c";
++        assert_eq!(without_reminders(t), "a b c");
++    }
++
+     // copilot's MCP handshake as recorded in cassettes/copilot (bodies verbatim, ids as replayed).
+     const INIT: &str = r#"{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"github-copilot-developer","version":"1.0.61"}},"jsonrpc":"2.0","id":0}"#;
+     const INITIALIZED: &str = r#"{"method":"notifications/initialized","jsonrpc":"2.0"}"#;
+diff --git a/crates/toolpath-webmock/src/run.rs b/crates/toolpath-webmock/src/run.rs
+index 5de0f721..7758081f 100644
+--- a/crates/toolpath-webmock/src/run.rs
++++ b/crates/toolpath-webmock/src/run.rs
+@@ -212,6 +212,10 @@ pub fn prepare(
+                 } else {
+                     json!({})
+                 };
++                // A fresh cell has no auth.json; pi only reads an `oauth`-typed entry as a login.
++                if auth["openai-codex"].get("type").is_none() {
++                    auth["openai-codex"]["type"] = Value::String("oauth".into());
++                }
+                 auth["openai-codex"]["access"] = Value::String(fake_pi_jwt());
+                 auth["openai-codex"]["refresh"] = Value::String("webmock-replay".into());
+                 auth["openai-codex"]["expires"] = json!(9999999999000u64);
+diff --git a/justfile b/justfile
+index a6f6c4ab..8c1127f3 100644
+--- a/justfile
++++ b/justfile
+@@ -28,6 +28,15 @@ baseline *ARGS:
+ webmock AGENT MODE="replay" *ARGS:
+     @cargo build -q -p toolpath-webmock --bin webmock && cargo run -q -p path-cli --features develop -- d webmock run "$@"
+ 
++# Replay every agent's committed cassette through its real CLI, offline (tests/replay_agents.rs).
++# Needs the pinned agent CLIs on PATH (claude copilot pi opencode gemini). Builds the cells from the
++# codex golden into CELLS, then runs the tests with every agent required: a skip fails.
++replay-agents CELLS="target/replay-cells":
++    cargo build -q -p path-cli
++    scripts/replay-cells.sh "${CARGO_TARGET_DIR:-target}/debug/path" {{CELLS}}
++    WEBMOCK_CELLS="$(cd {{CELLS}} && pwd)" WEBMOCK_REQUIRE=claude,copilot,pi,opencode,gemini \
++      cargo test -q -p toolpath-webmock --features zstd-bodies --test replay_agents -- --test-threads=1
++
+ # Regenerate the goldens object model (docs/model/model.json) via `path d model`
+ [positional-arguments]
+ model *ARGS:
+diff --git a/pr/103-replay-in-cargo-test.md b/pr/103-replay-in-cargo-test.md
+index 1f507837..cdc2aad0 100644
+--- a/pr/103-replay-in-cargo-test.md
++++ b/pr/103-replay-in-cargo-test.md
+@@ -1,6 +1,6 @@
+ # test(webmock): replay checked by cargo test, one test per agent (design + UNRUN tests)
+ 
+-Status: draft · renumbered on landing (author label pr/101) · Base: pr/102 · Source: Bobby 2026-10-21 "make the replay row green"; NEXT items 10, 11 · **THE TESTS IN THIS PIECE HAVE NOT BEEN RUN**
++Status: draft · renumbered on landing (author label pr/101) · Base: pr/102 · Source: Bobby 2026-10-21 "make the replay row green"; NEXT items 10, 11 · tests not run in this piece; first run, and green after fixes, in pr/107 (`just replay-agents`)
+ 
+ ## Why this is UNRUN
+ Every replay starts a loopback server. This seat's sandbox forbids `bind` (the same EPERM as the 31 port-bind test failures), so no replay test can be run here, red or green.
+diff --git a/pr/107-replay-agents-green.md b/pr/107-replay-agents-green.md
+new file mode 100644
+index 00000000..ebf385f5
+--- /dev/null
++++ b/pr/107-replay-agents-green.md
+@@ -0,0 +1,53 @@
++# test(webmock): every agent's cassette replays green through its real CLI (`just replay-agents`)
++
++Status: draft · Base: pr/103 · Source: Bobby 2026-10-22 "ok lets do it" (make the replay row green)
++
++## Why
++pr/103 added one replay test per agent (copilot, claude, pi, opencode, gemini) but could not run them: no cells, no CLIs, no bound port where it was written. Run for the first time (2026-10-22, pinned CLIs from nixpkgs, network blocked except loopback), every agent missed or failed:
++- claude and copilot: the request carries the current projection, so the exact key no longer matches the 10-15 recording, and the loose key missed too.
++  - Claude Code now sends the previous turn's `tool_result` in the same user message as the probe, so the "last user text" included tool output.
++  - copilot stamps `<current_datetime>` into the prompt and adds a `<system_reminder>` (underscore) with local table state.
++- pi 0.84.3 zstd-compresses its request body (keyed on raw bytes without the `zstd-bodies` feature), and a fresh cell has no pi `auth.json`, so the fake login lacked `"type":"oauth"` ("No API key found for openai-codex").
++- opencode: `path resume` needs an existing database; a schema-only database made opencode re-run its migrations ("table `project` already exists").
++
++## What changes
++- `toolpath-webmock` loose key (`keys`, `last_user_raw`, `without_reminders`):
++  - the last user text skips tool output blocks (`tool_result`, `function_call_output`, Gemini `functionResponse`);
++  - it is read from the normalized body (dates replaced);
++  - both reminder spellings, `<system-reminder>` and `<system_reminder>`, are dropped.
++  Three unit tests pin each rule. The exact key is unchanged.
++- `run::prepare` (pi, replay): adds `"type":"oauth"` to the `openai-codex` entry when the cell has none.
++- `scripts/replay-cells.sh <path-binary> <out> [agent…]`: builds `<out>/<agent>/{home,project,sid}` the way the cassettes were recorded:
++  - the codex golden → `path p derive codex --all` → `path resume --harness <agent>`, with the harness replaced by an argv-recording shim, so no agent runs and no model is called;
++  - the session id is read back from that argv;
++  - for opencode, the pinned opencode creates its own database first (`session list`, offline).
++- `just replay-agents [CELLS]`: builds `path` and the cells, then runs `tests/replay_agents.rs` with `--features zstd-bodies` and `WEBMOCK_REQUIRE` naming all five agents, so a skip fails.
++
++## Verification
++- Run 2026-10-22 on phobos, wip 334cd39d plus this change, pinned CLIs on PATH:
++  - claude-code 2.1.296;
++  - github-copilot-cli 1.0.61 (unwrapped);
++  - pi-coding-agent 0.84.3;
++  - opencode 1.18.18;
++  - gemini-cli 0.47.0.
++- The test binary ran under `sandbox-exec` with outbound network denied except loopback: `test result: ok. 6 passed; 0 failed`, `replay_zz_coverage` ok.
++
++| agent | how its requests were served |
++|---|---|
++| claude | LOOSE ×1 |
++| copilot | EXACT ×9 (MCP, models, user) plus LOOSE ×1 (`/v1/messages`) |
++| gemini | LOOSE ×8 (the recorded 429 → retry loop, then the 200 stream) |
++| opencode | LOOSE ×1 |
++| pi | LOOSE ×1 (zstd body decoded) |
++
++No agent reached a non-loopback host.
++
++- `just replay-agents` was also run end to end: 6 passed.
++
++## What CI needs (not done here)
++- The five pinned CLIs on PATH, from the agents.lock fetch (pr/92), in the Actions job or under `act`.
++- `just replay-agents`. The cells are built in the job; nothing is committed.
++- codex (needs a TLS listener or an http base_url, NEXT 10) and cursor (no cassette yet, NEXT 11) are still outside this test.
++
++## For the next PR
++Re-record the cassettes from the current projection, so claude, opencode, pi and gemini replay EXACT, not only LOOSE. Loose proves the agent resumes and is answered; exact also pins the request body the projection produces.
+diff --git a/scripts/replay-cells.sh b/scripts/replay-cells.sh
+new file mode 100755
+index 00000000..1e81152d
+--- /dev/null
++++ b/scripts/replay-cells.sh
+@@ -0,0 +1,73 @@
++#!/usr/bin/env bash
++# Build the replay cells crates/toolpath-webmock/tests/replay_agents.rs reads (pr/103):
++#   <out>/<agent>/{home,project,sid}
++# the same way the cassettes were recorded (cassettes/<agent>/provenance.json): the codex golden
++# (goldens/codex/input.jsonl) -> `path p derive codex --all` -> `path resume --harness <agent>` into
++# a hermetic HOME. The harness binary is a shim that records its argv and exits, so no agent runs
++# and no model is called; the session id is read back from that argv.
++#
++# usage: scripts/replay-cells.sh <path-binary> <out-dir> [agent ...]
++#   default agents: claude copilot pi opencode gemini
++set -euo pipefail
++
++PATHBIN=${1:?usage: replay-cells.sh <path-binary> <out-dir> [agent ...]}
++OUT=${2:?usage: replay-cells.sh <path-binary> <out-dir> [agent ...]}
++shift 2
++AGENTS=("$@")
++[ ${#AGENTS[@]} -gt 0 ] || AGENTS=(claude copilot pi opencode gemini)
++
++ROOT=$(cd "$(dirname "$0")/.." && pwd)
++GOLDEN=$ROOT/goldens/codex/input.jsonl
++SID_SRC=019e03b2-11a2-7320-9098-5d831813e66c   # the session id inside the golden
++
++mkdir -p "$OUT"
++OUT=$(cd "$OUT" && pwd -P)
++
++henv() { # HENV: the hermetic variables run::hermetic_env sets, for a home dir
++  local h=$1
++  HENV=("HOME=$h" "TMPDIR=$h" "XDG_CONFIG_HOME=$h/.config" "XDG_DATA_HOME=$h/.local/share"
++    "XDG_STATE_HOME=$h/.local/state" "XDG_CACHE_HOME=$h/.cache" "CLAUDE_CONFIG_DIR=$h/.claude"
++    "CODEX_HOME=$h/.codex" "COPILOT_HOME=$h/.copilot" "TOOLPATH_CONFIG_DIR=$h/.toolpath"
++    "GEMINI_CLI_HOME=$h")
++}
++mkhome() { mkdir -p "$1"/{.config,.local/share,.local/state,.cache,.claude,.codex,.copilot,.toolpath}; }
++
++# 1. The golden as a codex rollout in a source home, derived into a Toolpath document.
++SRC=$OUT/.src-codex
++rm -rf "$SRC"; mkhome "$SRC"
++mkdir -p "$SRC/.codex/sessions/2026/05/07"
++cp "$GOLDEN" "$SRC/.codex/sessions/2026/05/07/rollout-2026-05-07T18-27-42-$SID_SRC.jsonl"
++DOC=$OUT/codex-doc.json
++henv "$SRC"
++( cd "$SRC" && env -i PATH=/usr/bin:/bin "${HENV[@]}" "$PATHBIN" p derive codex --all ) >"$DOC"
++[ -s "$DOC" ] || { echo "derive produced nothing" >&2; exit 1; }
++
++# 2. One cell per agent: resume into the cell with the harness replaced by an argv-recording shim.
++for agent in "${AGENTS[@]}"; do
++  c=$OUT/$agent
++  rm -rf "$c"; mkhome "$c/home"; mkdir -p "$c/project" "$OUT/.shim-$agent"
++  shim=$OUT/.shim-$agent
++  if [ "$agent" = opencode ]; then
++    # `path resume` writes into an existing opencode database. Let the pinned opencode create it
++    # (all its migrations, offline: `session list` makes no request), so the replay run does not
++    # try to migrate a partial schema.
++    oc=$(command -v opencode) || { echo "opencode: the pinned opencode must be on PATH to build its cell" >&2; exit 1; }
++    henv "$c/home"
++    ( cd "$c/project" && env -i PATH=/usr/bin:/bin "${HENV[@]}" OPENCODE_DISABLE_AUTOUPDATE=1 \
++        "$oc" session list </dev/null ) >"$OUT/.init-opencode.log" 2>&1 || true
++    [ -s "$c/home/.local/share/opencode/opencode-stable.db" ] \
++      || { echo "opencode: no database after init (see $OUT/.init-opencode.log)" >&2; exit 1; }
++  fi
++  # shellcheck disable=SC2016 # the shim's own "$@" and "$a" are meant literally
++  printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a"; done > "%s/argv.txt"\nexit 0\n' "$shim" >"$shim/$agent"
++  chmod +x "$shim/$agent"
++  henv "$c/home"
++  ( cd "$c/project" && env -i PATH="$shim:/usr/bin:/bin" "${HENV[@]}" \
++      "$PATHBIN" resume --harness "$agent" -C "$c/project" "$DOC" ) >"$OUT/.resume-$agent.log" 2>&1 \
++    || { echo "resume --harness $agent failed (see $OUT/.resume-$agent.log)" >&2; exit 1; }
++  # The session id: the value of --resume/-r/--session (or --resume=<id>).
++  sid=$(awk 'f{print; exit} /^--resume=|^--session=/{sub(/^--[a-z]+=/,""); print; exit} /^(--resume|-r|--session)$/{f=1}' "$shim/argv.txt")
++  [ -n "$sid" ] || { echo "$agent: no session id in the harness argv: $(tr '\n' ' ' <"$shim/argv.txt")" >&2; exit 1; }
++  printf '%s\n' "$sid" >"$c/sid"
++  echo "$agent: cell $c (sid $sid)"
++done
+-- 
+2.55.0
+

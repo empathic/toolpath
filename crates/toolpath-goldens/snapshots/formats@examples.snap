@@ -1,0 +1,34 @@
+---
+source: crates/toolpath-goldens/tests/formats.rs
+expression: rows
+---
+[
+  {
+    "differs_only_in": [],
+    "example": "path-01-pr.path.jsonl",
+    "json_graph_id": "path-pr-42",
+    "sealed_graph_id": "path-pr-42"
+  },
+  {
+    "differs_only_in": [],
+    "example": "path-02-local-session.path.jsonl",
+    "json_graph_id": "path-claude-code-89f4d66a",
+    "sealed_graph_id": "path-claude-code-89f4d66a"
+  },
+  {
+    "differs_only_in": [
+      "graph.id"
+    ],
+    "example": "path-03-signed-pr.path.jsonl",
+    "json_graph_id": "graph-path-pr-42",
+    "sealed_graph_id": "path-pr-42"
+  },
+  {
+    "differs_only_in": [
+      "graph.id"
+    ],
+    "example": "path-04-exploration.path.jsonl",
+    "json_graph_id": "graph-path-explore-cli-args",
+    "sealed_graph_id": "path-explore-cli-args"
+  }
+]

@@ -1,0 +1,258 @@
+From 405bf5f47b512aa5add5a64e01508e97b3b71b21 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 11:52:42 -0400
+Subject: [PATCH] fix(toolpath): documents serialize their maps in key order;
+ the upload body is stable (pr/90)
+
+---
+ crates/toolpath-goldens/tests/share_body.rs | 59 +++++++++++++++++++++
+ crates/toolpath/src/types.rs                | 55 +++++++++++++++----
+ pr/90-document-serializes-in-key-order.md   | 23 ++++++++
+ 3 files changed, 128 insertions(+), 9 deletions(-)
+ create mode 100644 crates/toolpath-goldens/tests/share_body.rs
+ create mode 100644 pr/90-document-serializes-in-key-order.md
+
+diff --git a/crates/toolpath-goldens/tests/share_body.rs b/crates/toolpath-goldens/tests/share_body.rs
+new file mode 100644
+index 00000000..cad0d7ab
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/share_body.rs
+@@ -0,0 +1,59 @@
++//! What `path share` uploads is the derived document itself (pr/89): `run_pathbase_inner`
++//! (crates/path-cli/src/cmd_export.rs) validates `body` with `Graph::from_json` and sends the
++//! same `body`. So the share cells that lose a value lose it in Pathbase's reader, not on the way
++//! up. This pins the toolpath side: for every committed document, the body `Graph::to_json`
++//! writes is the same bytes however many times it is read and written again, and it is the
++//! document (same value) the snapshot holds. The cache fast path and a fresh derive upload
++//! "byte for byte" the same text only if this holds.
++
++use std::path::PathBuf;
++
++use serde_json::Value;
++use toolpath::v1::Graph;
++
++fn snapshots() -> PathBuf {
++    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("snapshots")
++}
++
++#[test]
++fn the_upload_body_is_the_derived_document_byte_for_byte() {
++    let mut checked = 0;
++    for entry in std::fs::read_dir(snapshots()).expect("snapshots") {
++        let path = entry.expect("entry").path();
++        let name = path.file_name().unwrap().to_string_lossy().into_owned();
++        let Some(set) = name
++            .strip_prefix("document@")
++            .and_then(|r| r.strip_suffix(".snap"))
++        else {
++            continue;
++        };
++        let text = std::fs::read_to_string(&path).unwrap();
++        let body_json = text.splitn(3, "---\n").nth(2).expect("snapshot body");
++        let graph = Graph::from_json(body_json).unwrap_or_else(|e| panic!("{set}: {e}"));
++
++        // the body `path share` builds from a freshly derived document
++        let body = graph.to_json().unwrap_or_else(|e| panic!("{set}: {e}"));
++        // validation reads it back; sending is of `body` itself, so it must survive the read
++        let again = Graph::from_json(&body)
++            .unwrap_or_else(|e| panic!("{set}: body is not a document: {e}"))
++            .to_json()
++            .unwrap();
++        assert_eq!(
++            body, again,
++            "{set}: the body changes when it is read and written again"
++        );
++
++        // and nothing was added or removed on the way: same value as the committed document
++        let sent: Value = serde_json::from_str(&body).unwrap();
++        let derived: Value = serde_json::from_str(body_json).unwrap();
++        assert_eq!(
++            sent, derived,
++            "{set}: the upload body differs from the derived document"
++        );
++        checked += 1;
++    }
++    assert!(
++        checked >= 13,
++        "expected a document per recording, found {checked}"
++    );
++}
+diff --git a/crates/toolpath/src/types.rs b/crates/toolpath/src/types.rs
+index fc3b15db..37b4cd63 100644
+--- a/crates/toolpath/src/types.rs
++++ b/crates/toolpath/src/types.rs
+@@ -1,5 +1,29 @@
+ use serde::{Deserialize, Serialize};
+-use std::collections::HashMap;
++use std::collections::{BTreeMap, HashMap};
++
++/// Serialize a map with its keys in order. A `HashMap` writes them in a different order on every
++/// run, so the same document would otherwise serialize to different bytes each time (the upload
++/// body, the cache file, a diff); the ordered form is the same text every time.
++fn sorted_map<S, V>(map: &HashMap<String, V>, s: S) -> Result<S::Ok, S::Error>
++where
++    S: serde::Serializer,
++    V: serde::Serialize,
++{
++    use serde::Serialize;
++    map.iter().collect::<BTreeMap<_, _>>().serialize(s)
++}
++
++/// [`sorted_map`] for an optional map.
++fn sorted_opt_map<S, V>(map: &Option<HashMap<String, V>>, s: S) -> Result<S::Ok, S::Error>
++where
++    S: serde::Serializer,
++    V: serde::Serialize,
++{
++    match map {
++        Some(m) => sorted_map(m, s),
++        None => s.serialize_none(),
++    }
++}
+ 
+ // ============================================================================
+ // Graph — the root of every Toolpath document
+@@ -50,12 +74,16 @@ pub struct GraphMeta {
+     pub description: Option<String>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub refs: Vec<Ref>,
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[serde(
++        default,
++        skip_serializing_if = "Option::is_none",
++        serialize_with = "sorted_opt_map"
++    )]
+     pub actors: Option<HashMap<String, ActorDefinition>>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub signatures: Vec<Signature>,
+     /// Additional properties (schema: `additionalProperties: true`)
+-    #[serde(flatten)]
++    #[serde(flatten, serialize_with = "sorted_map")]
+     pub extra: HashMap<String, serde_json::Value>,
+ }
+ 
+@@ -179,12 +207,16 @@ pub struct PathMeta {
+     pub description: Option<String>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub refs: Vec<Ref>,
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[serde(
++        default,
++        skip_serializing_if = "Option::is_none",
++        serialize_with = "sorted_opt_map"
++    )]
+     pub actors: Option<HashMap<String, ActorDefinition>>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub signatures: Vec<Signature>,
+     /// Additional properties (schema: `additionalProperties: true`)
+-    #[serde(flatten)]
++    #[serde(flatten, serialize_with = "sorted_map")]
+     pub extra: HashMap<String, serde_json::Value>,
+ }
+ 
+@@ -231,6 +263,7 @@ pub struct PathMeta {
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct Step {
+     pub step: StepIdentity,
++    #[serde(serialize_with = "sorted_map")]
+     pub change: HashMap<String, ArtifactChange>,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub meta: Option<StepMeta>,
+@@ -279,7 +312,7 @@ pub struct ArtifactChange {
+ pub struct StructuralChange {
+     #[serde(rename = "type")]
+     pub change_type: String,
+-    #[serde(flatten)]
++    #[serde(flatten, serialize_with = "sorted_map")]
+     pub extra: HashMap<String, serde_json::Value>,
+ }
+ 
+@@ -294,12 +327,16 @@ pub struct StepMeta {
+     pub source: Option<VcsSource>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub refs: Vec<Ref>,
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[serde(
++        default,
++        skip_serializing_if = "Option::is_none",
++        serialize_with = "sorted_opt_map"
++    )]
+     pub actors: Option<HashMap<String, ActorDefinition>>,
+     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+     pub signatures: Vec<Signature>,
+     /// Additional properties (schema: `additionalProperties: true`)
+-    #[serde(flatten)]
++    #[serde(flatten, serialize_with = "sorted_map")]
+     pub extra: HashMap<String, serde_json::Value>,
+ }
+ 
+@@ -312,7 +349,7 @@ pub struct VcsSource {
+     #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub change_id: Option<String>,
+     /// Additional properties (schema: `additionalProperties: true`)
+-    #[serde(flatten)]
++    #[serde(flatten, serialize_with = "sorted_map")]
+     pub extra: HashMap<String, serde_json::Value>,
+ }
+ 
+diff --git a/pr/90-document-serializes-in-key-order.md b/pr/90-document-serializes-in-key-order.md
+new file mode 100644
+index 00000000..451063f7
+--- /dev/null
++++ b/pr/90-document-serializes-in-key-order.md
+@@ -0,0 +1,23 @@
++# fix(toolpath): a document serializes its maps in key order, so the upload body is the same bytes every time
++
++Status: draft · Base: pr/89 · Found by the toolpath-side share test (controller-core's decision: body == derived document byte for byte)
++
++## Why (plain words)
++`path share` uploads `Graph::to_json()` (cmd_export.rs:911-924), and says in a comment that the cached copy "would reproduce it byte-for-byte anyway". It would not. The core
++types hold their maps as `HashMap` (`change`, `actors`, and the flattened `extra` of the structural change, step meta, path meta, graph meta), and `HashMap` writes its keys in
++a different order every run. The new test (tests/share_body.rs) read each committed document, wrote it, read that back and wrote it again: `claude-compacted` came out
++with `role`/`text` in the other order. So the same session produced different upload bodies on different runs, and a cache file did not match a fresh derive. Nothing was lost
++(same value either way), but every byte comparison, cache check and diff of an upload was noise. This is the same HashMap-order cause as the Copilot `id`/`parentId` flip fixed in pr/87.
++
++## What
++`toolpath::v1` types serialize those maps through `sorted_map` / `sorted_opt_map` (keys in order). Types and the API are unchanged; only the written order is fixed.
++
++## Test (written first, failing first)
++tests/share_body.rs: for every committed `document@*` snapshot the body `to_json` writes is byte-identical after being read and written again, and equals the snapshot's value. It failed on
++claude-compacted before the change; five repeat runs pass after (a HashMap order that is right by luck would not).
++
++## Where this leaves the share cells (pr/89)
++Toolpath's side of the upload is now provably the document, verbatim and stable. The four lossy cells are in Pathbase's reader (routed to work-pathbase-author by controller-core).
++
++## Not run
++Pinned 1.94, gitleaks, nix-develop recapture. The byte layout of `path p derive`/share output is now key-sorted (it was random per run); no committed file depended on the old order (workspace tests unchanged).
+-- 
+2.55.0
+
+From 3cea437d161835b0284872ca82cb55a754198704 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 11:53:18 -0400
+Subject: [PATCH] docs(toolpath): who reads the document bytes, pr/90
+
+---
+ pr/90-document-serializes-in-key-order.md | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/pr/90-document-serializes-in-key-order.md b/pr/90-document-serializes-in-key-order.md
+index 451063f7..39ad2807 100644
+--- a/pr/90-document-serializes-in-key-order.md
++++ b/pr/90-document-serializes-in-key-order.md
+@@ -21,3 +21,12 @@ Toolpath's side of the upload is now provably the document, verbatim and stable.
+ 
+ ## Not run
+ Pinned 1.94, gitleaks, nix-develop recapture. The byte layout of `path p derive`/share output is now key-sorted (it was random per run); no committed file depended on the old order (workspace tests unchanged).
++
++## Who reads or compares these bytes (what I checked, and what I did not)
++Checked in this tree (workspace tests unchanged after the change): the goldens snapshots (insta writes JSON with sorted maps, so they never depended on the order), `examples/` and
++`path-cli`'s `query@site-example` (compared as values), signatures (they canonicalize with JCS, which sorts keys itself, tests/jcs.rs and signatures.rs pass), and `Graph::from_json`
++(order-insensitive). NOT checked, outside this repo: Pathbase's stored documents and `pathbase-doc-format` snapshots (JSON readers are order-insensitive by construction, but I did not run
++them); existing cache files and earlier shares keep their old byte order (equal as values, different as bytes) until re-derived; any external tool that diffs or hashes raw output
++(only the byte order moves, and it was random before, so no stable hash of it could have existed). The committed `document@*` snapshots for the Pathbase-side run are in this tree
++(`crates/toolpath-goldens/snapshots/`); I could NOT make copies under `~/.lobby/ops/decisions/` (my write scope refused the copy and a tar of it), so they exist only in the
++worktree until someone copies them.
+-- 
+2.55.0
+

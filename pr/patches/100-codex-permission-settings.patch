@@ -1,0 +1,623 @@
+From cddb16ac043e846423d30d3607cd324057974459 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 14:46:21 -0400
+Subject: [PATCH] fix(codex): a codex -> codex round trip keeps
+ permission_profile and file_system_sandbox_policy (pr/95)
+
+---
+ crates/toolpath-codex/src/project.rs          | 40 +++++++-
+ .../snapshots/shed@codex-forced.snap          | 54 +---------
+ .../snapshots/shed@codex.snap                 | 62 +-----------
+ goldens/manifest.json                         | 98 +++++++++----------
+ pr/95-codex-permission-settings.md            | 19 ++++
+ 5 files changed, 113 insertions(+), 160 deletions(-)
+ create mode 100644 pr/95-codex-permission-settings.md
+
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index 9196185f..6b4fd004 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -291,6 +291,9 @@ fn make_session_meta_line(
+ struct TurnSettings {
+     approval_policy: Option<String>,
+     sandbox_policy: Option<SandboxPolicy>,
++    /// The permission settings Codex states besides `sandbox_policy`, kept as the JSON it wrote.
++    permission_profile: Option<Value>,
++    file_system_sandbox_policy: Option<Value>,
+     personality: Option<String>,
+     collaboration_mode: Option<Value>,
+ }
+@@ -312,6 +315,8 @@ impl TurnSettings {
+         Self {
+             approval_policy: field(&event.data, "approval_policy"),
+             sandbox_policy: field(&event.data, "sandbox_policy"),
++            permission_profile: event.data.get("permission_profile").cloned(),
++            file_system_sandbox_policy: event.data.get("file_system_sandbox_policy").cloned(),
+             personality: field(&event.data, "personality"),
+             collaboration_mode: field(&event.data, "collaboration_mode"),
+         }
+@@ -325,6 +330,13 @@ fn make_turn_context_line(
+     model: &str,
+     settings: &TurnSettings,
+ ) -> RolloutLine {
++    let mut extra = HashMap::new();
++    if let Some(v) = &settings.permission_profile {
++        extra.insert("permission_profile".to_string(), v.clone());
++    }
++    if let Some(v) = &settings.file_system_sandbox_policy {
++        extra.insert("file_system_sandbox_policy".to_string(), v.clone());
++    }
+     let tc = TurnContext {
+         turn_id: turn_id.to_string(),
+         cwd: PathBuf::from(cwd),
+@@ -335,7 +347,7 @@ fn make_turn_context_line(
+         model: Some(model.to_string()),
+         personality: settings.personality.clone(),
+         collaboration_mode: settings.collaboration_mode.clone(),
+-        extra: HashMap::new(),
++        extra,
+     };
+     RolloutLine {
+         timestamp: timestamp.to_string(),
+@@ -898,6 +910,18 @@ mod tests {
+             "cwd": "/tmp/proj",
+             "approval_policy": "on-request",
+             "sandbox_policy": {"type": "workspace-write", "network_access": false},
++            "permission_profile": {
++                "type": "managed",
++                "network": "restricted",
++                "file_system": {
++                    "type": "restricted",
++                    "entries": [{"access": "read", "path": {"type": "special", "value": {"kind": "root"}}}]
++                }
++            },
++            "file_system_sandbox_policy": {
++                "kind": "restricted",
++                "entries": [{"access": "write", "path": {"type": "path", "path": "/tmp/proj"}}]
++            },
+             "personality": "pragmatic",
+             "collaboration_mode": {"mode": "default", "settings": {"model": "gpt-5.4"}},
+         });
+@@ -939,6 +963,18 @@ mod tests {
+             assert_eq!(tc["sandbox_policy"]["network_access"], false);
+             assert_eq!(tc["personality"], "pragmatic");
+             assert_eq!(tc["collaboration_mode"]["mode"], "default");
++            // the permission settings Codex states besides `sandbox_policy`
++            assert_eq!(tc["permission_profile"]["type"], "managed");
++            assert_eq!(tc["permission_profile"]["network"], "restricted");
++            assert_eq!(
++                tc["permission_profile"]["file_system"]["entries"][0]["path"]["value"]["kind"],
++                "root"
++            );
++            assert_eq!(tc["file_system_sandbox_policy"]["kind"], "restricted");
++            assert_eq!(
++                tc["file_system_sandbox_policy"]["entries"][0]["path"]["path"],
++                "/tmp/proj"
++            );
+         }
+     }
+ 
+@@ -951,6 +987,8 @@ mod tests {
+             for key in [
+                 "approval_policy",
+                 "sandbox_policy",
++                "permission_profile",
++                "file_system_sandbox_policy",
+                 "personality",
+                 "collaboration_mode",
+             ] {
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index fd11784f..3276af5c 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -112,7 +112,7 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+   },
+   "same_format": {
+     "lines": 90,
+-    "bytes": 47058,
++    "bytes": 50390,
+     "event_types_shed": {
+       "compacted": {
+         "source": 1,
+@@ -149,8 +149,8 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     },
+     "key_paths": {
+       "source": 152,
+-      "after": 49,
+-      "lost": 111,
++      "after": 61,
++      "lost": 99,
+       "gained": 8
+     },
+     "renamed": [],
+@@ -215,26 +215,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.execution",
+         "example": "client"
+       },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].access",
+-        "example": "read"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].path.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].path.type",
+-        "example": "special"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].path.value.kind",
+-        "example": "root"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.kind",
+-        "example": "restricted"
+-      },
+       {
+         "path": "payload.info.last_token_usage.cached_input_tokens",
+         "example": "<withheld>"
+@@ -283,34 +263,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.namespace",
+         "example": "multi_agent_v1"
+       },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].access",
+-        "example": "read"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].path.path",
+-        "example": "<withheld>"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].path.type",
+-        "example": "special"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].path.value.kind",
+-        "example": "root"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.type",
+-        "example": "restricted"
+-      },
+-      {
+-        "path": "payload.permission_profile.network",
+-        "example": "restricted"
+-      },
+-      {
+-        "path": "payload.permission_profile.type",
+-        "example": "managed"
+-      },
+       {
+         "path": "payload.rate_limits.credits",
+         "example": "null"
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index 043d0460..51570f4e 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -103,7 +103,7 @@ input_file: test-fixtures/codex/convo.jsonl
+   },
+   "same_format": {
+     "lines": 19,
+-    "bytes": 20716,
++    "bytes": 22202,
+     "event_types_shed": {
+       "event_msg/agent_message": {
+         "source": 13,
+@@ -132,8 +132,8 @@ input_file: test-fixtures/codex/convo.jsonl
+     },
+     "key_paths": {
+       "source": 94,
+-      "after": 48,
+-      "lost": 58,
++      "after": 62,
++      "lost": 44,
+       "gained": 12
+     },
+     "renamed": [],
+@@ -174,30 +174,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.encrypted_content",
+         "example": "<withheld>"
+       },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].access",
+-        "example": "read"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].path.path",
+-        "example": "/Users/ben/.codex/memories"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].path.type",
+-        "example": "special"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].path.value.kind",
+-        "example": "root"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.entries[].path.value.subpath",
+-        "example": ".git"
+-      },
+-      {
+-        "path": "payload.file_system_sandbox_policy.kind",
+-        "example": "restricted"
+-      },
+       {
+         "path": "payload.forked_from_id",
+         "example": "<withheld>"
+@@ -246,38 +222,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.model_context_window",
+         "example": "258400"
+       },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].access",
+-        "example": "read"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].path.path",
+-        "example": "/Users/ben/.codex/memories"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].path.type",
+-        "example": "special"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].path.value.kind",
+-        "example": "root"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.entries[].path.value.subpath",
+-        "example": ".git"
+-      },
+-      {
+-        "path": "payload.permission_profile.file_system.type",
+-        "example": "restricted"
+-      },
+-      {
+-        "path": "payload.permission_profile.network",
+-        "example": "restricted"
+-      },
+-      {
+-        "path": "payload.permission_profile.type",
+-        "example": "managed"
+-      },
+       {
+         "path": "payload.rate_limits.credits",
+         "example": "null"
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 9332b142..3e01d594 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++          "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++          "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++          "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++          "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++          "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++          "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++          "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++          "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++          "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++          "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++          "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++          "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++    "toolpath_rev": "29fa651295e937012b61a19a912b3885106829de"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "8bbe90a94e312980ee3c0bb83b04006fcf336f8d9a7024399bf79a37bc6b1a96"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "12a1042a37c183dcdd5e631d0ad6653b3f25d7fdc9ccc1d925ca99a4e3ca1281"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "4154cd2bb1e2955b647bba4cf96b82df3cab1f6ce919152e9cea738964531457",
++        "binary_sha256": "a90341c180ab4ee51438171fdbdefe8b170863f7aa05a90dd24ff1cd903137c4",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "e2d379ec2a3b8fbc9820fc76f36d340f1b658d7d"
++        "repo_rev": "29fa651295e937012b61a19a912b3885106829de"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+diff --git a/pr/95-codex-permission-settings.md b/pr/95-codex-permission-settings.md
+new file mode 100644
+index 00000000..6ae38505
+--- /dev/null
++++ b/pr/95-codex-permission-settings.md
+@@ -0,0 +1,19 @@
++# fix(codex): a codex -> codex round trip keeps permission_profile and file_system_sandbox_policy
++
++Status: draft · Base: pr/94 · Source: deck v52 item 1
++
++## Why
++The writer restored `approval_policy`, `sandbox_policy`, `personality` and `collaboration_mode` on each `turn_context` it wrote, but not the two other permission settings Codex states there:
++`permission_profile` (8 paths) and `file_system_sandbox_policy` (6 paths): 14 paths lost in codex -> codex that the format can hold. A value the format can hold is a writer bug.
++
++## What changes
++`TurnSettings` (toolpath-codex/src/project.rs) also reads the two settings from the view's first `turn_context` event and writes them back on every `turn_context`, as the JSON Codex wrote
++(no new typed struct: their inner shape is Codex's and changes between Codex versions). Still only for a view Codex recorded; other harnesses' views get none (tested).
++
++## Verification
++- Test first: `codex_session_keeps_its_turn_settings` now asserts both settings (the fixture event carries them); it failed (`Null` vs "managed"), passes now. `other_harness_settings_are_not_copied` also checks the two keys.
++- shed@codex and shed@codex-forced no longer list the 14 paths; no other snapshot changed (cross-agent projections never carried them).
++- Sandbox, cargo 1.97.1: fmt, clippy -D warnings, `baseline check`, qualifier, toolpath-goldens tests, workspace tests (only the 31 sandbox port failures): see the report.
++
++## For the next PR
++The other codex fields that shed@codex still lists for codex -> codex (effort, current_date, base_instructions, rate_limits, token info, ...) are the next candidates; each needs the same look (held by the format, or a declared loss).
+-- 
+2.55.0
+

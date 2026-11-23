@@ -1,0 +1,367 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path p list
+List available sources (branches, projects, sessions)
+
+Usage: path p list [OPTIONS] <COMMAND>
+
+Commands:
+  git       List git branches in a repository
+  github    List GitHub pull requests
+  claude    List Claude projects or sessions
+  gemini    List Gemini CLI projects or sessions
+  codex     List Codex CLI sessions (global, newest first)
+  copilot   List GitHub Copilot CLI sessions (global, newest first; preview)
+  opencode  List opencode sessions (global, newest first)
+  cursor    List Cursor (IDE) composers (global, newest first). Reads `<user-data>/User/globalStorage/state.vscdb`
+  pi        List Pi (pi.dev) projects or sessions
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list claude
+List Claude projects or sessions
+
+Usage: path p list claude [OPTIONS]
+
+Options:
+  -p, --project <PROJECT>
+          Project path — if omitted, lists all projects (pretty) or all sessions across all projects (tsv/json)
+
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list codex
+List Codex CLI sessions (global, newest first)
+
+Usage: path p list codex [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list copilot
+List GitHub Copilot CLI sessions (global, newest first; preview)
+
+Usage: path p list copilot [OPTIONS]
+
+Options:
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list cursor
+List Cursor (IDE) composers (global, newest first). Reads `<user-data>/User/globalStorage/state.vscdb`
+
+Usage: path p list cursor [OPTIONS]
+
+Options:
+  -p, --project <PROJECT>
+          Filter by workspace folder path (absolute). Matches by canonical equality against each composer's `workspaceIdentifier.uri.fsPath`
+
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list gemini
+List Gemini CLI projects or sessions
+
+Usage: path p list gemini [OPTIONS]
+
+Options:
+  -p, --project <PROJECT>
+          Project path — if omitted, lists all projects (pretty) or all sessions across all projects (tsv/json)
+
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list git
+List git branches in a repository
+
+Usage: path p list git [OPTIONS]
+
+Options:
+  -r, --repo <REPO>
+          Path to the git repository
+          
+          [default: .]
+
+      --remote <REMOTE>
+          Remote name for URI generation
+          
+          [default: origin]
+
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list github
+List GitHub pull requests
+
+Usage: path p list github [OPTIONS] --repo <REPO>
+
+Options:
+  -r, --repo <REPO>
+          Repository in owner/repo format
+
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list opencode
+List opencode sessions (global, newest first)
+
+Usage: path p list opencode [OPTIONS]
+
+Options:
+  -p, --project <PROJECT>
+          Filter by project id (SHA of repo's first root commit)
+
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path p list pi
+List Pi (pi.dev) projects or sessions
+
+Usage: path p list pi [OPTIONS]
+
+Options:
+  -p, --project <PROJECT>
+          Project path — if omitted, lists all projects (pretty) or all sessions across all projects (tsv/json)
+
+      --base <BASE>
+          Override the Pi sessions base directory (default: ~/.pi/agent/sessions)
+
+      --format <FORMAT>
+          Output format (default: pretty when stdout is a TTY, tsv when piped)
+
+          Possible values:
+          - pretty: Human-readable, with section headers and aligned columns
+          - json:   One JSON object per call
+          - tsv:    One session per line, tab-delimited. See README for column layout
+
+      --json
+          Output as JSON (deprecated alias for --format json)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

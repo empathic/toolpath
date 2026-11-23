@@ -1,0 +1,465 @@
+From 4b2d71c33730e511a6b9be8fa7e084bb069bacc1 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 14:30:33 -0400
+Subject: [PATCH] fix(opencode): resolve the channel-named database for resume
+ and derive
+
+`path resume --harness opencode` projected into `opencode.db`, but a
+current opencode (1.18.18, channel `stable`) opens
+`opencode-stable.db` and answered `Error: Session not found`. Decoded
+from its bundle, opencode resolves `$OPENCODE_DB` first, then
+`opencode.db` only on the latest/beta/prod channels or with
+`$OPENCODE_DISABLE_CHANNEL_DB`, else `opencode-<channel>.db`; it never
+migrates or reads the legacy file.
+
+`PathResolver` now mirrors that: `$OPENCODE_DB` (or `with_db_file`)
+pins the file; otherwise `db_candidates()` is `opencode-stable.db` then
+`opencode.db`, and `db_path()` is the first that exists, or
+`opencode-stable.db` when neither does. Resume therefore writes the
+file the installed opencode reads and derive reads the one it shows;
+the two files are deliberately not kept in sync. The rule and its two
+version witnesses are documented in paths.rs and
+docs/agents/formats/opencode.md.
+
+Verified end to end in a hermetic HOME: project the codex golden with
+the fixed binary, `opencode --session <id>` under understudy renders
+the full history.
+---
+ crates/path-cli/src/cmd_export.rs     |   9 +-
+ crates/path-cli/src/providers.rs      |   4 +-
+ crates/path-cli/tests/support/mod.rs  |   2 +-
+ crates/toolpath-opencode/README.md    |   8 +-
+ crates/toolpath-opencode/src/paths.rs | 193 +++++++++++++++++++++++++-
+ docs/agents/formats/opencode.md       |  45 +++++-
+ 6 files changed, 242 insertions(+), 19 deletions(-)
+
+diff --git a/crates/path-cli/src/cmd_export.rs b/crates/path-cli/src/cmd_export.rs
+index 06aaab6..a3bb724 100644
+--- a/crates/path-cli/src/cmd_export.rs
++++ b/crates/path-cli/src/cmd_export.rs
+@@ -12,7 +12,9 @@
+ //!   JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`,
+ //!   loadable via `codex resume <session-uuid>`.
+ //! - `export opencode` projects a Path document into rows in opencode's
+-//!   `~/.local/share/opencode/opencode.db` so the session is visible to
++//!   database under `~/.local/share/opencode/` (`opencode-stable.db` for
++//!   current releases, `opencode.db` for older ones — see
++//!   `toolpath_opencode::PathResolver`) so the session is visible to
+ //!   the `opencode` CLI; or to a JSON file / stdout.
+ //! - `export pathbase` uploads the document to a Pathbase server.
+ 
+@@ -151,8 +153,9 @@ pub enum ExportTarget {
+         input: String,
+ 
+         /// Target project directory. With this flag, inserts session,
+-        /// message, and part rows into `~/.local/share/opencode/opencode.db`
+-        /// so the `opencode` CLI sees the session in its picker.
++        /// message, and part rows into the opencode database under
++        /// `~/.local/share/opencode/` (`opencode-stable.db`, or `opencode.db`
++        /// for older releases) so the `opencode` CLI sees the session.
+         /// Defaults to cwd when neither --project nor --output is given.
+         #[arg(short, long)]
+         project: Option<PathBuf>,
+diff --git a/crates/path-cli/src/providers.rs b/crates/path-cli/src/providers.rs
+index 9af0336..caac24a 100644
+--- a/crates/path-cli/src/providers.rs
++++ b/crates/path-cli/src/providers.rs
+@@ -202,9 +202,11 @@ mod tests {
+             ..Config::default()
+         };
+         let manager = opencode_convo(&config);
++        // Nothing exists under /xdg/data, so the resolver names the file a
++        // current (stable-channel) opencode would create.
+         assert_eq!(
+             manager.resolver().db_path().unwrap(),
+-            PathBuf::from("/xdg/data/opencode/opencode.db")
++            PathBuf::from("/xdg/data/opencode/opencode-stable.db")
+         );
+     }
+ 
+diff --git a/crates/path-cli/tests/support/mod.rs b/crates/path-cli/tests/support/mod.rs
+index d508ab8..258064a 100644
+--- a/crates/path-cli/tests/support/mod.rs
++++ b/crates/path-cli/tests/support/mod.rs
+@@ -31,7 +31,7 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+ /// `$XDG_DATA_HOME` to a tempdir, and clears `$CLAUDE_CONFIG_DIR`.
+ ///
+ /// `$XDG_DATA_HOME` matters because the opencode `PathResolver` prefers it
+-/// over `$HOME` when locating `opencode.db`. Without pinning it, a machine
++/// over `$HOME` when locating the opencode database. Without pinning it, a machine
+ /// that sets `$XDG_DATA_HOME` (common on Linux; also set on this dev box)
+ /// would send the opencode projector to the *real* user database — the
+ /// test would fail with "table … already exists" and, worse, mutate the
+diff --git a/crates/toolpath-opencode/README.md b/crates/toolpath-opencode/README.md
+index d8357d7..58adc9f 100644
+--- a/crates/toolpath-opencode/README.md
++++ b/crates/toolpath-opencode/README.md
+@@ -5,15 +5,17 @@ Derive Toolpath provenance documents from
+ 
+ opencode stores every conversation — sessions, messages, typed
+ parts, tool calls, filesystem snapshots — in a single SQLite
+-database at `~/.local/share/opencode/opencode.db`. This crate reads
+-that database directly (read-only) and maps it to Toolpath
++database under `~/.local/share/opencode/` — `opencode-stable.db` for
++current releases, `opencode.db` for older ones (the rule is in
++`src/paths.rs`). This crate reads that database directly (read-only)
++and maps it to Toolpath
+ documents, so every opencode-assisted change has a traceable origin
+ with real unified diffs reconstructed from the sibling snapshot
+ git repositories.
+ 
+ ## Overview
+ 
+-- **Reading**: open `opencode.db` with `rusqlite`, enumerate
++- **Reading**: open the database with `rusqlite`, enumerate
+   projects and sessions, materialize typed `Message` / `Part` rows
+   from the JSON-in-TEXT `data` columns.
+ - **Provider**: implements
+diff --git a/crates/toolpath-opencode/src/paths.rs b/crates/toolpath-opencode/src/paths.rs
+index 6abfdd5..9b939f2 100644
+--- a/crates/toolpath-opencode/src/paths.rs
++++ b/crates/toolpath-opencode/src/paths.rs
+@@ -2,10 +2,53 @@
+ //!
+ //! opencode stores everything under `$XDG_DATA_HOME/opencode/`
+ //! (`~/.local/share/opencode/` on macOS/Linux). The primary
+-//! conversation store is the `opencode.db` SQLite database; per-step
++//! conversation store is a SQLite database in that directory; per-step
+ //! filesystem snapshots live in sibling bare git repositories under
+ //! `snapshot/<project-id>/<sha1(worktree)>/`.
+ //!
++//! # Which database file
++//!
++//! The database's file name depends on the opencode release:
++//!
++//! - Older releases (observed: 1.3.10, and the `opencode.db` dated
++//!   2026-09-01 on the machine this was written on) read and write
++//!   `opencode.db`.
++//! - Current releases name the file after their release *channel*.
++//!   Decoded from the bundle inside opencode 1.18.18 (channel
++//!   `"stable"`), the resolution is, in order:
++//!   1. `$OPENCODE_DB` if set — used as is when absolute, otherwise
++//!      joined to the data dir;
++//!   2. `opencode.db` when the channel is `latest`, `beta` or `prod`,
++//!      or `$OPENCODE_DISABLE_CHANNEL_DB` is `1`/`true`;
++//!   3. otherwise `opencode-<channel>.db`, i.e. `opencode-stable.db`
++//!      for a stable build.
++//!
++//!   A current opencode does **not** migrate or read a pre-existing
++//!   `opencode.db`; both files simply coexist. The release that
++//!   introduced the channel name is not pinned here — only the two
++//!   witnesses above are.
++//!
++//! toolpath mirrors that rule so that `path resume --harness opencode`
++//! writes the file the installed `opencode` will open, and derive reads
++//! the same file opencode shows:
++//!
++//! - `$OPENCODE_DB` (or [`PathResolver::with_db_file`]) pins the file
++//!   exactly as it does for opencode.
++//! - Otherwise the candidates are `opencode-stable.db` then
++//!   `opencode.db` (only `opencode.db` when
++//!   `$OPENCODE_DISABLE_CHANNEL_DB` is on, see
++//!   [`PathResolver::with_channel_db`]); [`PathResolver::db_path`]
++//!   returns the first that exists, or `opencode-stable.db` when
++//!   neither does, since that is what a current opencode creates.
++//!
++//! Keeping both files in sync is deliberately *not* attempted:
++//! opencode itself reads exactly one of them, and the stable file's
++//! `session` table has columns and foreign keys the legacy file lacks.
++//! The one case this rule cannot see is a machine whose only file is a
++//! legacy `opencode.db` but whose installed opencode is a current,
++//! never-run build; run `opencode` once (it creates
++//! `opencode-stable.db`) or set `OPENCODE_DB`.
++//!
+ //! `project.id` is itself the SHA of the repo's first root commit
+ //! (`git rev-list --max-parents=0 HEAD`), so a project survives
+ //! being moved on disk. The inner snapshot dirname is the SHA-1 of
+@@ -18,14 +61,31 @@ use sha1::{Digest, Sha1};
+ use std::path::{Path, PathBuf};
+ 
+ const SNAPSHOT_SUBDIR: &str = "snapshot";
+-const DB_FILE: &str = "opencode.db";
+ const LOG_SUBDIR: &str = "log";
+ 
++/// The database a current, stable-channel opencode reads and writes
++/// (`opencode-<channel>.db` with channel `stable`).
++pub const DB_FILE_STABLE: &str = "opencode-stable.db";
++/// The database older opencode releases read and write, and that current
++/// releases fall back to on the `latest`/`beta`/`prod` channels or with
++/// [`DISABLE_CHANNEL_DB_ENV`] set.
++pub const DB_FILE_LEGACY: &str = "opencode.db";
++/// opencode's own override of the database location; honoured here with
++/// the same semantics (absolute as is, relative under the data dir).
++pub const DB_ENV: &str = "OPENCODE_DB";
++/// When `1` or `true`, opencode ignores its channel and uses
++/// [`DB_FILE_LEGACY`]; honoured here the same way.
++pub const DISABLE_CHANNEL_DB_ENV: &str = "OPENCODE_DISABLE_CHANNEL_DB";
++
+ /// Builder-style resolver over the opencode data directory.
+ #[derive(Debug, Clone)]
+ pub struct PathResolver {
+     home_dir: Option<PathBuf>,
+     data_dir: Option<PathBuf>,
++    /// `$OPENCODE_DB` or [`PathResolver::with_db_file`].
++    db_file: Option<PathBuf>,
++    /// `false` when `$OPENCODE_DISABLE_CHANNEL_DB` is on.
++    channel_db: bool,
+ }
+ 
+ impl Default for PathResolver {
+@@ -35,10 +95,16 @@ impl Default for PathResolver {
+ }
+ 
+ impl PathResolver {
++    /// A resolver seeded from the environment: `$HOME`, and opencode's
++    /// own `$OPENCODE_DB` / `$OPENCODE_DISABLE_CHANNEL_DB` overrides.
+     pub fn new() -> Self {
+         Self {
+             home_dir: home_dir(),
+             data_dir: None,
++            db_file: std::env::var_os(DB_ENV)
++                .filter(|v| !v.is_empty())
++                .map(PathBuf::from),
++            channel_db: !env_is_on(DISABLE_CHANNEL_DB_ENV),
+         }
+     }
+ 
+@@ -54,6 +120,23 @@ impl PathResolver {
+         self
+     }
+ 
++    /// Pin the database file, exactly as opencode's `$OPENCODE_DB` does:
++    /// an absolute path is used as is, a relative one is joined to the
++    /// data dir. `None` clears an override picked up from the
++    /// environment, restoring the channel rule.
++    pub fn with_db_file<P: Into<PathBuf>>(mut self, db_file: Option<P>) -> Self {
++        self.db_file = db_file.map(Into::into);
++        self
++    }
++
++    /// Whether the channel-named database (`opencode-stable.db`) is
++    /// considered at all. `false` mirrors opencode running with
++    /// `$OPENCODE_DISABLE_CHANNEL_DB=1`: only `opencode.db` is used.
++    pub fn with_channel_db(mut self, channel_db: bool) -> Self {
++        self.channel_db = channel_db;
++        self
++    }
++
+     pub fn home_dir(&self) -> Result<&Path> {
+         self.home_dir.as_deref().ok_or(ConvoError::NoHomeDirectory)
+     }
+@@ -72,8 +155,34 @@ impl PathResolver {
+         Ok(self.home_dir()?.join(".local/share/opencode"))
+     }
+ 
++    /// The database files opencode could be using, most current first.
++    /// See the module docs for the rule.
++    pub fn db_candidates(&self) -> Result<Vec<PathBuf>> {
++        if let Some(pinned) = &self.db_file {
++            let p = if pinned.is_absolute() {
++                pinned.clone()
++            } else {
++                self.data_dir()?.join(pinned)
++            };
++            return Ok(vec![p]);
++        }
++        let data = self.data_dir()?;
++        if !self.channel_db {
++            return Ok(vec![data.join(DB_FILE_LEGACY)]);
++        }
++        Ok(vec![data.join(DB_FILE_STABLE), data.join(DB_FILE_LEGACY)])
++    }
++
++    /// The database to read from and project into: the first of
++    /// [`Self::db_candidates`] that exists, or the first candidate (what
++    /// a current opencode would create) when none does.
+     pub fn db_path(&self) -> Result<PathBuf> {
+-        Ok(self.data_dir()?.join(DB_FILE))
++        let candidates = self.db_candidates()?;
++        Ok(candidates
++            .iter()
++            .find(|p| p.exists())
++            .cloned()
++            .unwrap_or_else(|| candidates[0].clone()))
+     }
+ 
+     pub fn snapshot_root(&self) -> Result<PathBuf> {
+@@ -126,6 +235,12 @@ fn home_dir() -> Option<PathBuf> {
+         .map(PathBuf::from)
+ }
+ 
++/// opencode's truthiness for `$OPENCODE_DISABLE_CHANNEL_DB`: exactly
++/// `1` or `true`.
++fn env_is_on(name: &str) -> bool {
++    matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"))
++}
++
+ pub(crate) fn sha1_hex(bytes: &[u8]) -> String {
+     let mut h = Sha1::new();
+     h.update(bytes);
+@@ -144,13 +259,17 @@ mod tests {
+     use std::fs;
+     use tempfile::TempDir;
+ 
++    /// A resolver over a temp data dir with no environment overrides, so
++    /// the tests are deterministic regardless of the host's `OPENCODE_*`.
+     fn setup() -> (TempDir, PathResolver) {
+         let temp = TempDir::new().unwrap();
+         let data = temp.path().join(".local/share/opencode");
+         fs::create_dir_all(&data).unwrap();
+         let resolver = PathResolver::new()
+             .with_home(temp.path())
+-            .with_data_dir(&data);
++            .with_data_dir(&data)
++            .with_db_file(None::<PathBuf>)
++            .with_channel_db(true);
+         (temp, resolver)
+     }
+ 
+@@ -165,9 +284,71 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn db_path_under_data_dir() {
++    fn db_candidates_are_stable_then_legacy() {
+         let (_t, r) = setup();
+-        assert!(r.db_path().unwrap().ends_with("opencode/opencode.db"));
++        let data = r.data_dir().unwrap();
++        assert_eq!(
++            r.db_candidates().unwrap(),
++            vec![data.join("opencode-stable.db"), data.join("opencode.db")]
++        );
++    }
++
++    #[test]
++    fn db_path_is_stable_when_neither_exists() {
++        let (_t, r) = setup();
++        assert!(
++            r.db_path()
++                .unwrap()
++                .ends_with("opencode/opencode-stable.db")
++        );
++        assert!(!r.db_exists());
++    }
++
++    #[test]
++    fn db_path_is_legacy_when_only_legacy_exists() {
++        let (_t, r) = setup();
++        let data = r.data_dir().unwrap();
++        fs::write(data.join("opencode.db"), b"").unwrap();
++        assert_eq!(r.db_path().unwrap(), data.join("opencode.db"));
++        assert!(r.db_exists());
++    }
++
++    #[test]
++    fn db_path_prefers_stable_when_both_exist() {
++        let (_t, r) = setup();
++        let data = r.data_dir().unwrap();
++        fs::write(data.join("opencode.db"), b"").unwrap();
++        fs::write(data.join("opencode-stable.db"), b"").unwrap();
++        assert_eq!(r.db_path().unwrap(), data.join("opencode-stable.db"));
++    }
++
++    #[test]
++    fn channel_db_off_uses_only_legacy() {
++        let (_t, r) = setup();
++        let r = r.with_channel_db(false);
++        let data = r.data_dir().unwrap();
++        fs::write(data.join("opencode-stable.db"), b"").unwrap();
++        assert_eq!(r.db_candidates().unwrap(), vec![data.join("opencode.db")]);
++        assert_eq!(r.db_path().unwrap(), data.join("opencode.db"));
++    }
++
++    #[test]
++    fn pinned_db_file_relative_joins_data_dir() {
++        let (_t, r) = setup();
++        let r = r.with_db_file(Some("custom.db"));
++        let data = r.data_dir().unwrap();
++        fs::write(data.join("opencode-stable.db"), b"").unwrap();
++        assert_eq!(r.db_candidates().unwrap(), vec![data.join("custom.db")]);
++        // Pinned wins even though it does not exist and the stable one does.
++        assert_eq!(r.db_path().unwrap(), data.join("custom.db"));
++    }
++
++    #[test]
++    fn pinned_db_file_absolute_is_used_as_is() {
++        let (t, r) = setup();
++        let elsewhere = t.path().join("elsewhere.db");
++        let r = r.with_db_file(Some(elsewhere.clone()));
++        assert_eq!(r.db_path().unwrap(), elsewhere);
+     }
+ 
+     #[test]
+diff --git a/docs/agents/formats/opencode.md b/docs/agents/formats/opencode.md
+index f4c7f84..1ad75b9 100644
+--- a/docs/agents/formats/opencode.md
++++ b/docs/agents/formats/opencode.md
+@@ -14,8 +14,10 @@ from:
+ 3. The snapshot subsystem in `packages/opencode/src/snapshot/index.ts`.
+ 
+ Unlike Codex or Gemini, opencode **does not use JSONL**. Conversations
+-live in a SQLite database (`opencode.db`). Every session, message,
+-and part is a row; message/part payloads are JSON text columns.
++live in a SQLite database (`opencode-stable.db` for current releases,
++`opencode.db` for older ones — see [Database file name](#database-file-name)).
++Every session, message, and part is a row; message/part payloads are
++JSON text columns.
+ Per-step filesystem snapshots live in a sibling bare git repository
+ addressed by content hash.
+ 
+@@ -31,9 +33,10 @@ opencode follows XDG base-dir conventions. On macOS and Linux:
+ ```
+ $XDG_DATA_HOME/opencode/           (defaults to ~/.local/share/opencode/)
+   auth.json                         OAuth + API-key credentials per provider (sensitive)
+-  opencode.db                       Primary SQLite DB — sessions, messages, parts, projects
+-  opencode.db-shm                   SQLite WAL shared-memory sidecar
+-  opencode.db-wal                   SQLite WAL journal
++  opencode-stable.db                Primary SQLite DB (current releases) — sessions, messages, parts, projects
++  opencode-stable.db-shm            SQLite WAL shared-memory sidecar
++  opencode-stable.db-wal            SQLite WAL journal
++  opencode.db                       The same DB as written by older releases (not migrated; may coexist)
+   log/
+     YYYY-MM-DDThhmmss.log           Per-run process logs (rotating)
+     dev.log                         Long-running dev-mode log
+@@ -79,6 +82,38 @@ OAuth tokens and API keys, keyed by provider id:
+ A reader should **never** ingest this file into a derived Toolpath
+ document — the tokens are live credentials.
+ 
++## Database file name
++
++The file name depends on the release. Two witnesses:
++
++- opencode `1.3.10` (the session inspected for this document) and the
++  `opencode.db` dated 2026-09-01 on this machine: **`opencode.db`**.
++- opencode `1.18.18` (2026-10-15): **`opencode-stable.db`**. Decoded
++  from the bundled source, it resolves the path as:
++  1. `$OPENCODE_DB` if set — as is when absolute, else under the data dir;
++  2. `opencode.db` when the release channel is `latest`, `beta` or
++     `prod`, or `$OPENCODE_DISABLE_CHANNEL_DB` is `1`/`true`;
++  3. otherwise `opencode-<channel>.db`; a release build's channel is
++     `stable`.
++
++  It does not migrate or read a pre-existing `opencode.db`, so on an
++  upgraded machine both files coexist and only the stable one is live.
++  The `1.18.18` file also carries more tables (`workspace`,
++  `session_message`, `account`, …), extra nullable `session` columns
++  (`path`, `metadata`, `cost`, `tokens_*`, `agent`, `model`) and
++  foreign keys; the `project` / `session` / `message` / `part` columns
++  toolpath writes exist in both.
++
++The release that introduced the channel name is not pinned here.
++
++`toolpath-opencode` (`crates/toolpath-opencode/src/paths.rs`) mirrors
++the rule: `$OPENCODE_DB` pins the file; otherwise it takes the first of
++`opencode-stable.db`, `opencode.db` that exists, and names
++`opencode-stable.db` when neither does. `path resume --harness opencode`
++therefore writes the file the installed `opencode` opens, and
++`path p derive opencode` reads the one opencode shows. The two files are
++never kept in sync.
++
+ ## `opencode.db` — SQLite layout
+ 
+ WAL-mode SQLite managed by [drizzle-orm](https://orm.drizzle.team/).
+-- 
+2.55.0
+

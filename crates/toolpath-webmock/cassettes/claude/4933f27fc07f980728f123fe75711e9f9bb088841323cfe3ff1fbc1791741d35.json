@@ -1,0 +1,36 @@
+{
+ "agent": "claude",
+ "recorded_at": "2026-10-15T19:16:23.122Z",
+ "key": "4933f27fc07f980728f123fe75711e9f9bb088841323cfe3ff1fbc1791741d35",
+ "loose_key": "0a83410d08f040f3fe7d7c134037175ab4b3e1fb6f708e214cd3134dd0817034",
+ "model": "",
+ "request": {
+  "method": "HEAD",
+  "url": "/api/hello",
+  "upstream": "https://api.anthropic.com",
+  "headers": {
+   "accept": "*/*",
+   "user-agent": "Bun/1.4.3"
+  },
+  "body": "",
+  "normalized": ""
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "cf-cache-status": "DYNAMIC",
+   "cf-ray": "a4b1286ce889aa39-EWR",
+   "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+   "content-type": "application/json",
+   "date": "Thu, 15 Oct 2026 19:16:23 GMT",
+   "server": "cloudflare",
+   "server-timing": "x-originResponse;dur=",
+   "x-robots-tag": "none"
+  },
+  "chunks": [],
+  "bytes": 0,
+  "duration_ms": 60,
+  "sse": false,
+  "text_preview": ""
+ }
+}

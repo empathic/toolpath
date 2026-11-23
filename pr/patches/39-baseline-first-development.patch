@@ -1,0 +1,358 @@
+From 82068460e395579bfec6b1aedcf8740a2e8e2059 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:36:50 -0400
+Subject: [PATCH] docs: development starts from the baseline; the unreleased
+ changelog entry
+
+DEVELOPMENT.md is rewritten around a baseline-first loop (state the
+change as a baseline difference, read the named diff, fix or accept on
+purpose with a declared loss and a qualifier record, cite the snapshots
+in the piece record, just ci), credits the foundation it builds on
+(#81, 7a51195, #86, #87, #85), and lists what the baseline does not
+reach. CHANGELOG.md gets one unreleased section for what wip carries.
+---
+ CHANGELOG.md                        |  71 ++++++++++++
+ DEVELOPMENT.md                      | 170 ++++++++++++++++++++++++----
+ pr/38-baseline-first-development.md |  46 ++++++++
+ 3 files changed, 263 insertions(+), 24 deletions(-)
+ create mode 100644 pr/38-baseline-first-development.md
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index fbb55818..3f024b4a 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2,6 +2,77 @@
+ 
+ All notable changes to the Toolpath workspace are documented here.
+ 
++## The baseline: every recording through every stage — unreleased
++
++Development now starts from what the harnesses actually wrote. Every
++committed recording (the real sessions in `test-fixtures/` that #81
++and 7a51195 introduced, plus live captures) runs through every stage,
++each stage's output is a saved snapshot, the accepted losses are data,
++and what a harness or the schema would reject is a contract checked on
++every output. See DEVELOPMENT.md for the loop.
++
++- **`toolpath-goldens`** (new, unpublished): the baseline as insta
++  snapshots, one per stage per recording: `ir`, `document`,
++  `projection@<target>`, `round_trip@<target>`, `validate`,
++  `validate_transforms` (the kind schema on every document a transform
++  produces), `shed`, `known_defects`, `writer@<harness>` (each writer on
++  its own, over one generated document), `formats` and `opencode_db`.
++  Covers all seven harnesses, pins schema validation and asserts the
++  token-accounting contract. `contracts.rs` checks every projection and
++  document for what the harness rejects (a JSONL file without a final
++  newline, a null thinking signature, an empty errored tool result, a
++  broken parent chain, an opencode session id of the wrong shape,
++  duplicate step ids); `tests/regressions.rs` re-introduces nine bugs
++  this changelog records and requires each to fail by field and stage.
++- **`path-cli`**: `path goldens capture|check|diff|list|shed|capture-live`
++  behind a `goldens` cargo feature, off by default. Breaking for anyone
++  building with the feature: the group is moving to `path d baseline`
++  (`goldens` stays an alias).
++- **Fixes the baseline found**: Gemini CLI 0.47 `session-*.jsonl`
++  record streams are read (the old copies counted every assistant turn
++  twice); Cursor 3.24's `composerHeaders` table is read and written;
++  the Gemini and opencode session totals add the turns' reasoning
++  breakdowns and Copilot's `session.shutdown` totals land on the last
++  assistant turn; the Claude writer writes only Claude Code entry types
++  and `message.stop_reason` (not `stopReason`); `path.head` keeps the
++  conversation in its ancestry, so a Claude Code session's turns are no
++  longer a dead end; pi parent chains, Copilot's empty errored tool
++  results and Claude's empty errors are fixed so projected sessions
++  resume with their history; opencode resumes from the database it
++  reads, with session ids in its own shape; who served the model rides
++  the RFC's `meta.actors` `provider` slot, so a pi session run on
++  `ollama` keeps its provider across a round trip; the Cursor writer
++  writes the model history Cursor 3.24 reads, so a resumed chat carries
++  its transcript.
++- **`toolpath-webmock`** (new, unpublished): record once, replay with
++  no network and fake credentials, for every harness's model API and
++  for `path` ↔ Pathbase; JSON-RPC answers carry the live request id, so
++  Copilot's MCP calls replay. A `no_secrets` test runs the repo's
++  gitleaks rules over every committed fixture.
++- **`toolpath-harness-mock`** (new, unpublished): what Claude Code
++  would send the model when it resumes a projected session, without the
++  binary, checked against a recorded request.
++- **`toolpath`**: the RFC's signature algorithm as code behind a
++  `verify` feature: JCS canonical inputs for step author, path author
++  and reviewer signatures, SHA-256 digests, and ssh (Ed25519)
++  verification, proven against RFC 8785's test vectors and the RFC's own
++  example.
++- **Tests of what the docs promise**: `path query` across every
++  harness's sessions with the site's example filter; the core types,
++  dead ends, forks and merges, and `.path.json` ≡ `.path.jsonl`; the
++  RFC's version-control table through `path p import git`; the CLI
++  page against the binary (every command's help pinned); the
++  toolpath.net quick start step by step, offline.
++- **CI**: the pinned qualifier binary is installed and its review fails
++  closed when missing. Every public statement on the site, the format
++  and kind pages and the RFC carries a qualifier record at its text.
++- **`toolpath-model`** (new, unpublished): the work as one generated
++  JSON object model (harnesses, stages, snapshots, findings, claims,
++  pieces, qualifier records, review threads) with a test that fails
++  when the model and the repository disagree.
++- Kind: producers write `agent-coding-session` v1.1.0 only; v1.0.0 is
++  read-only legacy.
++
+ ## path-cli 0.30.0 — 2026-09-30
+ 
+ - **`path-cli`** (0.30.0): one Pathbase login per server.
+diff --git a/DEVELOPMENT.md b/DEVELOPMENT.md
+index 831a926b..4b8ca5e1 100644
+--- a/DEVELOPMENT.md
++++ b/DEVELOPMENT.md
+@@ -5,36 +5,152 @@ Requires Rust 1.85+ (edition 2024); the exact toolchain is pinned via
+ [`just`](https://github.com/casey/just); run `just help` to list the
+ recipes.
+ 
+-## The dev loop
++Toolpath reads sessions that other programs write, in formats nobody
++documents, and writes them back for programs that will reject anything
++they don't expect. So development here starts from what the harnesses
++actually wrote, not from what we think they write: a change is first
++stated as a difference in the baseline, then made, then reviewed as
++that difference.
+ 
+-```bash
+-just check            # auto-format, then run the full CI verification
+-just ci               # the same quality gates CI runs, without auto-format
+-```
++## Words
+ 
+-Both take gate names to narrow or exclude: the gates are `format`,
+-`shellcheck`, `clippy`, `test`, `doc`, `examples`, `plugin`, and
+-`site`, and a `-` prefix excludes one.
++- **recording**: one real session a harness wrote, committed as test
++  input (`test-fixtures/<harness>/convo.*`, `goldens/<name>/input.*`).
++  Each records the harness and version that produced it.
++- **snapshot**: the saved output of one stage for one recording
++  (`crates/toolpath-goldens/snapshots/<stage>@<recording>[@<target>].snap`).
++- **baseline**: every recording through every stage, every snapshot,
++  the declared losses and the contracts. `goldens` is its older name and
++  stays as an alias in the commands below.
++- **stage**: parse (`ir`), derive (`document`), project
++  (`projection@…@<harness>`), the round trip back (`round_trip@…`),
++  `validate` and `validate_transforms` (the schema on every document a
++  transform produces), `shed` (what each stage drops), `known_defects`,
++  `writer@<harness>` (each writer on its own), `formats` (the file
++  formats), `opencode_db` (the opencode database read).
++- **contract**: a property the harness or the schema enforces, checked
++  on every output and never pinned
++  (`crates/toolpath-goldens/src/contracts.rs`), so accepting a snapshot
++  cannot accept an output the harness would reject.
+ 
+-```bash
+-just ci test          # just the workspace tests
+-just check -site      # everything except the site build
+-```
++## Where this comes from
+ 
+-Individual pieces are also available directly:
++The baseline builds on the test foundation Ben Barber laid in the spring,
++and replaces none of it:
+ 
+-```bash
+-just fmt              # format all code (Rust + site)
+-just clippy           # clippy across the workspace, warnings denied
+-cargo test --workspace
+-```
++- the elicited real-session recordings in `test-fixtures/` and their
++  capture script, `scripts/capture-elicit-fixtures.sh` (7a51195);
++- the cross-harness translation matrix and the per-harness real-fixture
++  round trips, with the Codex idempotence fixes (#81):
++  `crates/path-cli/tests/cross_harness_matrix.rs` and each provider
++  crate's `tests/real_fixture_roundtrip.rs`;
++- `ConversationView` as the one derive/project interface (#86), which is
++  what makes "every recording through every writer" one loop;
++- derived actors conforming to the base schema (#87) and `meta.kind`
++  (#85), which the baseline's `validate` stage checks per kind.
++
++Those tests check named properties: same turns, same tool-call topology,
++same text, a fixed point the second time around. The baseline adds the
++rest of the output: every stage of every recording is saved, so any
++field that changes shows up by name, and the losses we accept are
++written down as data rather than left implicit.
++
++## The loop
++
++1. **State the change as a baseline difference first.** Pick one:
++   - a new recording (a harness version, a session shape we don't have);
++   - an expected loss or gain going away (a field a writer should now
++     keep), or a new one we accept on purpose;
++   - a regression case: re-introduce the bug as a fault in a stage's
++     output in `crates/toolpath-goldens/tests/regressions.rs` and watch
++     it fail with the field and stage named.
++2. **Run the baseline and read the named diff.**
++   ```bash
++   cargo test -p toolpath-goldens   # every recording, every stage, the contracts
++   scripts/goldens.sh check         # the same through the CLI, plus the qualifier review
++   ```
++   A failure names the snapshot (stage and recording) and the line; a
++   contract failure names the rule, the target, the line and the field.
++3. **Fix the code, or accept the difference on purpose.** Accepting
++   means three things in the same change: the snapshot (`cargo insta
++   review`, or `INSTA_UPDATE=always cargo test -p toolpath-goldens`), the
++   loss declared where it is measured (`shed`, `known_defects`), and a
++   qualifier record on the owning code that says why. A contract is never
++   accepted this way: fix the output.
++4. **Write the piece's `pr/NN-*.md` record**: why, what changes, the
++   snapshots it changes and what each difference means, the verification.
++   `git diff crates/toolpath-goldens/snapshots/` is the review.
++5. **Run CI's gates locally**: `just ci` (or `just check` to format
++   first). The goldens run with `--features path-cli/goldens`.
++
++`path d baseline` and `just baseline` are landing as the short forms of
++step 2 (the `develop` group of the CLI, off in release builds). Until
++then, use the commands above.
+ 
+-The `examples` gate validates every document under `examples/` with
+-`path p validate`.
++## Common changes
++
++**Adding a harness.** In this order, each one landing with its baseline:
++a recording from a real session of a named version (with its provenance
++in `goldens/manifest.json`); the reader (the provider crate's `to_view`);
++the writer (its projector); a `<harness>.md` format note under
++`docs/agents/formats/` grounded in that recording; a loader model in
++`crates/toolpath-harness-mock` (what the harness would send the model
++when it resumes); a recorded model exchange under
++`crates/toolpath-webmock/cassettes/<harness>/` so resume can be replayed
++without a model; a contract for anything the harness is known to reject.
++
++**Changing a reader or writer.** Run the baseline before and after. The
++diff is the change's description: which stages, which recordings, which
++fields. If a format note says something the change makes false, update
++it in the same change (see Format notes below).
++
++**Changing the kind.** Producers write `agent-coding-session` v1.1.0
++only. A new kind version is a new immutable URI: add its schema under
++`crates/path-cli/kinds/agent-coding-session/v<x.y.z>/`, publish it under
++`site/kinds/`, move the producers to it, and the baseline's `validate`
++stage (and `validate_transforms`) checks every document and every
++transform against it. The old version stays readable; nothing writes it.
++
++**Examples.** `examples/` is validated by the `examples` gate (`path p
++validate` over each document) and by the site's visualizer, which loads
++them. Generating them from real producer runs is in progress; until
++then they are hand-written and the gate is what keeps them valid.
++
++**The object model.** `docs/model/model.json` is generated from both
++repositories, the `pr/` records, the qualifier records and the deck's
++review threads (`cargo run -p toolpath-model`, see
++`docs/model/README.md`). Its test fails when a piece cites a commit
++that isn't on the branch, a claim that reads as pinned has no snapshot
++evidence, or a known defect has no owner. Regenerate it after the code
++it describes is committed.
++
++**Qualifier.** Findings live on the code they are about, as qualifier
++records (`.qual` beside the file). The baseline's check runs `qualifier
++review`, and in CI the pinned qualifier binary is installed and a
++missing one fails the gate. When your change moves lines a record is
++anchored on, re-record it with `--supersedes` (same content, new
++anchor); when it fixes what a record describes, `qualifier resolve
++--reason fixed`.
++
++## What the baseline does not reach
++
++Some fixed bugs live outside a single recording's pipeline; each is
++covered by its own test and recorded as a qualifier concern on
++`crates/toolpath-goldens/tests/regressions.rs` until the baseline reaches
++it:
++
++- rotated Claude Code session files (`.orphaned-*`): the baseline reads
++  one file per recording; `toolpath-claude` `chain.rs` tests the chain;
++- the export refusing to overwrite a richer local session: CLI
++  behaviour, tested in `path-cli` `cmd_export.rs`;
++- Cursor's `state.vscdb`: the cursor recording is a JSON dump;
++  `toolpath-cursor`'s reader tests the 3.24 table.
+ 
+ ## Other recipes
+ 
+ ```bash
++just fmt                  # format all code (Rust + site)
++just clippy               # clippy across the workspace, warnings denied
+ just site                 # site dev server (eleventy + wasm watcher)
+ just refresh-openapi      # re-fetch the Pathbase OpenAPI spec into pathbase-client
+ just test-pathbase-live   # live smoke test against a Pathbase deployment
+@@ -42,7 +158,12 @@ just release-check        # dry-run publish of all workspace crates (safe)
+ just release-publish      # publish to crates.io for real
+ ```
+ 
+-## Agent session format notes
++`just ci` and `just check` take gate names to narrow or exclude: the
++gates are `format`, `shellcheck`, `clippy`, `test`, `doc`, `examples`,
++`plugin`, `quickstart`, `site` and `secrets`, and a `-` prefix excludes one
++(`just ci test`, `just check -site`).
++
++## Format notes
+ 
+ [docs/agents/formats/](docs/agents/formats/README.md) records our
+ understanding of each agent's on-disk session format, written down
+@@ -59,6 +180,7 @@ time. Corrections are welcome. If you're building your own session
+ tooling, they're a useful starting point even if you never run our
+ code.
+ 
+-The notes are meant to stay in sync with the derive crates. If you
+-change what a crate reads or writes, update the matching document under
+-`docs/agents/formats/`.
++The notes are meant to stay in sync with the derive crates and the
++recordings. If you change what a crate reads or writes, or add a
++recording of a new version, update the matching document under
++`docs/agents/formats/` in the same change.
+diff --git a/pr/38-baseline-first-development.md b/pr/38-baseline-first-development.md
+new file mode 100644
+index 00000000..c2052652
+--- /dev/null
++++ b/pr/38-baseline-first-development.md
+@@ -0,0 +1,46 @@
++# docs: development starts from the baseline; the unreleased changelog entry
++
++Status: planned (asked 2026-10-19: "I want the goldens to drive development") · Base: the goldens stack once merged ·
++Docs only; independent of pr/19–37 (it describes what they landed)
++
++## Why
++DEVELOPMENT.md described the gates and the format notes but not how a change is made: nothing said to state a change
++as a baseline difference first, how to accept a loss on purpose, or what a piece record cites. CHANGELOG.md had no
++entry for any of the goldens work. The baseline also builds on Ben Barber's spring work (the elicited recordings,
++7a51195; the translation matrix and real-fixture round trips, #81; `ConversationView`, #86; schema-conformant actors,
++#87; `meta.kind`, #85), which the docs never credited.
++
++## What changes
++- `DEVELOPMENT.md`: rewritten around a baseline-first loop (state the change as a difference: a new recording, an
++  expected loss or gain going away, or a regression case; run the baseline and read the named diff; fix, or accept on
++  purpose with the snapshot, the declared loss and a qualifier record in one change; the piece record cites the
++  snapshots; `just ci`). Words: recording, snapshot, baseline (`goldens` as the older name), stage, contract. "Where
++  this comes from" credits the foundation above and says what the baseline adds. Recipes for adding a harness,
++  changing a reader or writer, changing the kind (v1.1.0 only; a new version is a new URI), examples, the object
++  model, qualifier records; the three things the baseline does not reach; the gate list now includes `quickstart`
++  and `secrets`. Commands are today's (`cargo test -p toolpath-goldens`, `scripts/goldens.sh check`); `path d
++  baseline` / `just baseline` are named as landing, not used.
++- `CHANGELOG.md`: one unreleased section, "The baseline: every recording through every stage", in the file's style,
++  listing what is on wip/bdelanghe as of this piece (pr/01–37, the pi provider and the Cursor history pieces): the baseline crate and its stages, the `goldens`
++  feature and the coming `path d baseline` rename, the fixes the baseline found, webmock and `no_secrets`, the mock
++  harness, the signature algorithm behind `verify`, the tests of the docs' promises, the qualifier gate in CI and the
++  claims records, the object model, kind v1.1.0 only.
++
++## Not done here, and why
++- `scripts/goldens.sh` stays: it is the only short form until the `develop` group (`path d`) and its `just` recipes
++  land; that piece removes it or points it at the recipe.
++- The `examples` gate stays: `examples/` is still hand-written (generating it from producer runs is in progress); the
++  gate is what keeps them valid until then.
++
++## Verification
++- Docs only. Every command and file named exists at this tip (`scripts/quality_gates.sh` `_all_gates`, the
++  snapshot kinds under `crates/toolpath-goldens/snapshots/`, `crates/path-cli/kinds/agent-coding-session/`,
++  `toolpath/Cargo.toml` `verify`); the PR numbers and commits cited resolve (`gh pr view 81 85 86 87`, `git log
++  7a51195`).
++
++## Paths
++```
++DEVELOPMENT.md
++CHANGELOG.md
++pr/38-baseline-first-development.md
++```
+-- 
+2.55.0
+

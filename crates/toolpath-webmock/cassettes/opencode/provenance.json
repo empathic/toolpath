@@ -1,0 +1,31 @@
+{
+ "cassettes": "opencode",
+ "recorded_at": "2026-10-15T19:43:53.545Z",
+ "recorded_with": "the Bun prototype of this crate (webmock.ts, the spec it was ported from) driven by the scratch run-cell.sh: `run opencode record`; secret headers never stored, the recording machine's scratch root replaced by <scratch>",
+ "golden": {
+  "set": "codex",
+  "input": "goldens/codex/input.jsonl",
+  "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "same_bytes_as": "test-fixtures/codex/convo.jsonl"
+ },
+ "projection": {
+  "toolpath_rev": "d93750a",
+  "path_version": "0.30.0",
+  "basis": "spike/opencode-free-tier on top of 0655ae9 (the id-shape fix, on wip as 5ff0d26); review/opencode-free-tier.md section 4",
+  "derive": "path p derive codex --all",
+  "resume": "path resume --harness opencode",
+  "cell": "resume-matrix/gate-cell-codex-to-opencode",
+  "session_id": "ses_1fc4dee4effeulILZjObmSFUYV",
+  "session_id_origin": "minted by the projection"
+ },
+ "probe": {
+  "command": "opencode run --pure --format json --model opencode/big-pickle --session ses_1fc4dee4effeulILZjObmSFUYV <prompt>",
+  "prompt": "Reply with exactly the first five words of the very first user message in this conversation (not this one), then the word END. No other text.",
+  "turns": "the golden conversation plus this one headless turn; nothing else was sent"
+ },
+ "files": [
+  "b7d037911bbe200ded2a32b0882b2a471ee64e9f66aad43cbc1e266dc10fb3ad.json",
+  "index.jsonl"
+ ]
+}

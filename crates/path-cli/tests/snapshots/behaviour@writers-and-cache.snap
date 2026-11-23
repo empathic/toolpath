@@ -1,0 +1,54 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: out
+---
+$ path p export claude --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p export gemini --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p export pi --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p export codex --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p export opencode --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p export copilot --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p export cursor --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p project claude --input <doc> --output <file>
+exit: 0
+wrote a non-empty file: true
+
+$ path p incept claude --input <doc> --project <dir>
+exit: 0
+--- stdout
+
+--- stderr
+Exported session 89f4d66a-510b-48b3-94b8-d6a8f981b143 (80 entries) → <home>/.claude/projects/<home-slug>-incept-proj/89f4d66a-510b-48b3-94b8-d6a8f981b143.jsonl
+
+Resume with:
+  cd <home>/incept-proj && claude -r 89f4d66a-510b-48b3-94b8-d6a8f981b143
+
+$ path p import claude --project <project> --all
+exit: 0
+$ path p cache ls
+exit: 0
+entries naming claude: 1
+$ path p cache rm <id>
+exit: 0
+gone after rm: true

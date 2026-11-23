@@ -1,0 +1,39 @@
+{
+ "cassettes": "copilot",
+ "recorded_at": "2026-10-15T19:38:47.009Z",
+ "recorded_with": "the Bun prototype of this crate (webmock.ts, the spec it was ported from) driven by the scratch run-cell.sh: `run copilot record`; secret headers never stored, the recording machine's scratch root replaced by <scratch>",
+ "golden": {
+  "set": "codex",
+  "input": "goldens/codex/input.jsonl",
+  "input_sha256": "472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c",
+  "session_id": "019e03b2-11a2-7320-9098-5d831813e66c",
+  "same_bytes_as": "test-fixtures/codex/convo.jsonl"
+ },
+ "projection": {
+  "toolpath_rev": "6aeff36",
+  "path_version": "0.30.0",
+  "basis": "same tree and binary as v2 (not rebuilt); review/resume-matrix-v3.md",
+  "derive": "path p derive codex --all",
+  "resume": "path resume --harness copilot",
+  "cell": "resume-matrix/v3-cell-codex-to-copilot",
+  "session_id": "9c607aaa-e74b-4182-b2c4-8d65674fab2e",
+  "session_id_origin": "minted by the projection"
+ },
+ "probe": {
+  "command": "copilot -p <prompt> --resume=9c607aaa-e74b-4182-b2c4-8d65674fab2e -s --no-color --no-custom-instructions --available-tools=",
+  "prompt": "Reply with exactly the first five words of the very first user message in this conversation (not this one), then the word END. No other text.",
+  "turns": "the golden conversation plus this one headless turn; nothing else was sent"
+ },
+ "files": [
+  "2a0cd17c0f4891d5393ccda3e2f015edd0b42849fa236a565d17723a8a9c996f.json",
+  "32c0fe12903ef73c7d6a8674307afa6da903b48b1824fde1ddb6af2a5cc57ff7.json",
+  "40b852ca5115752fac2a1bfc4a5e5230a4efa5e40c1ba973d875d5f4f336e641.json",
+  "4b5f8d8bc42fd09b402a1520900e8e1062cc5266dbd9bb413a42067f0fccd736.json",
+  "77dea3e4fd128860fdaa6e401b9edb6e8a82493e7cfe3fae08658c29da856c2d.json",
+  "9418809bf59535ef8e29bf7e143fabad956abb3b73b2a40cc5aa1374f3bc97ac.json",
+  "e3c37696d373db301de30e45070a6cd00a13aea554c77c8caa3eaf0b36a1d322.json",
+  "eeae4e31e200a6c8152090e738f76396ad0d9e60193db01a713ffa900c810777.json",
+  "index.jsonl"
+ ],
+ "github_user": "9418809b…: GET /copilot_internal/user from api.github.com (copilot's COPILOT_DEBUG_GITHUB_API_URL listener), recorded in the same run; the signed-in identity (id, login, analytics id, assigned date, org lists) replaced with webmock-replay values and identifying response headers dropped, 2026-10-19"
+}

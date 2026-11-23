@@ -1,0 +1,105 @@
+---
+source: crates/path-cli/tests/core_types.rs
+expression: "pretty(&json!({ \"rows\": rows, \"validator_does_not_enforce\": gaps }))"
+---
+{
+  "rows": [
+    {
+      "accepted": true,
+      "agrees_with_rfc": true,
+      "rfc_says": "valid",
+      "rule": "graph is the root (step-01-minimal)"
+    },
+    {
+      "accepted": false,
+      "agrees_with_rfc": true,
+      "rfc_says": "invalid",
+      "rule": "a step alone is not a document root"
+    },
+    {
+      "accepted": false,
+      "agrees_with_rfc": true,
+      "rfc_says": "invalid",
+      "rule": "a path alone is not a document root"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": true,
+      "rfc_says": "valid",
+      "rule": "fork, merge and dead end (path-04-exploration)"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": false,
+      "rfc_says": "invalid",
+      "rule": "step ids are unique within a path"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": false,
+      "rfc_says": "invalid",
+      "rule": "path ids are unique within a graph"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": false,
+      "rfc_says": "invalid",
+      "rule": "a parent reference names a step in the path"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": false,
+      "rfc_says": "invalid",
+      "rule": "path.head names a step in the path"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": true,
+      "rfc_says": "valid",
+      "rule": "actors human:, agent:, tool:, ci:"
+    },
+    {
+      "accepted": false,
+      "agrees_with_rfc": true,
+      "rfc_says": "invalid",
+      "rule": "an actor prefix is one of human, agent, tool, ci"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": true,
+      "rfc_says": "valid",
+      "rule": "perspectives: raw and structural on one artifact"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": true,
+      "rfc_says": "valid",
+      "rule": "meta.intent and meta.refs"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": true,
+      "rfc_says": "valid",
+      "rule": "base: toolpath:<path-id>/<step-id>"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": true,
+      "rfc_says": "valid",
+      "rule": "a $ref path to a sealed .path.json"
+    },
+    {
+      "accepted": true,
+      "agrees_with_rfc": false,
+      "rfc_says": "invalid",
+      "rule": "a $ref MUST NOT point to a .path.jsonl stream"
+    }
+  ],
+  "validator_does_not_enforce": [
+    "step ids are unique within a path",
+    "path ids are unique within a graph",
+    "a parent reference names a step in the path",
+    "path.head names a step in the path",
+    "a $ref MUST NOT point to a .path.jsonl stream"
+  ]
+}

@@ -1,0 +1,39 @@
+---
+source: crates/toolpath-goldens/tests/writers.rs
+expression: trip
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 4,
+    "text_chars": 198,
+    "tool_uses": 3,
+    "key_paths": 65
+  },
+  "after": {
+    "steps": 4,
+    "text_chars": 198,
+    "tool_uses": 3,
+    "key_paths": 53
+  },
+  "lost": [
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.provider",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.value",
+    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+    "paths[].steps[].change.notes.md.structural.before"
+  ],
+  "gained": [
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text",
+    "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
+  ]
+}

@@ -1,0 +1,312 @@
+From ad00e4641449e7f24868cae0240ff1ca50a7b3b7 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 16:43:26 -0400
+Subject: [PATCH] docs(baseline): resume-results summary of the live evidence
+ files, with what could not be found
+
+---
+ docs/baseline/resume-results.md | 49 +++++++++++++++++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+ create mode 100644 docs/baseline/resume-results.md
+
+diff --git a/docs/baseline/resume-results.md b/docs/baseline/resume-results.md
+new file mode 100644
+index 00000000..734ee20f
+--- /dev/null
++++ b/docs/baseline/resume-results.md
+@@ -0,0 +1,49 @@
++# Resume results: what real agents did with a projected session
++
++Summary written 2026-10-20 by toolpath-author from the evidence files below. It states only what those files show. The evidence lives
++outside this repository (the fleet ops directory `~/.lobby/ops/goldens-session-2026-10-19/`); the files are named so a reader can check
++each line. Cells ran on toolpath `origin/wip/bdelanghe` at `f308ab5` or `c1e8cd9` as each file says, with nix-store agent binaries and a
++temp home, one model call per probe.
++
++## Method (same in every file)
++The probe asks, in one line, for facts only the recording's own history contains (the first file written, the replaced word, a
++sub-agent's count, or the facts the recording does have). Controls: a fresh session asked the same question answers `NONE`; a
++nonexistent session id is refused by the agent before any model call.
++
++## Own session: the agent's recording goes through toolpath and back into the same agent
++
++| agent (version) | probe reply | verdict | file |
++|---|---|---|---|
++| gemini-cli 0.47.0 | `notes.md \| scratch -> fixture \| 11` | loaded | there-and-back-gemini-opencode.md |
++| opencode 1.18.18 | `notes.md \| scratch -> fixture \| 10` | loaded | there-and-back-gemini-opencode.md |
++| codex-cli 0.162.1 | `notes.md \| wc -w notes.md \| 11` | loaded | there-and-back-codex-pi.md |
++| pi 0.84.3 | `notes.md \| scratch -> fixture \| 68` | loaded | there-and-back-codex-pi.md |
++| cursor-agent (from a Cursor IDE recording) | answered the history-only question correctly | loaded | there-and-back-cursor.md |
++
++Controls named in those files: fresh session `NONE`; bad id refused (gemini rc 42, opencode rc 1, codex rc 1 and pi rc 1 with no key in
++the environment). The codex and pi files report 4 model calls (gpt-5.4-mini) with their cost. The claude and copilot own-session cells are NOT in
++these files; the addendum's "7/7 own-session" count is not backed by a file I could read for those two.
++
++## Cross-agent: one agent's recording resumed by a different agent (cross-into-cursor-and-pi-opencode.md)
++
++| cell | verdict |
++|---|---|
++| claude-session -> cursor-agent | loaded (`notes.txt,other.txt \| first line of the notes`) |
++| codex -> cursor-agent | loaded (`notes.md \| wc -w notes.md \| 11`) |
++| pi -> cursor-agent | loaded (`notes.md \| scratch -> fixture \| 68`) |
++| copilot -> cursor-agent | loaded (`notes.md \| scratch -> fixture \| 16`) |
++| pi -> opencode | loaded (`notes.md \| scratch -> fixture \| 68`) |
++
++5 cells, 5 model calls, no error, no rate limit. The fresh-session controls were not repeated there; that file points to the two
++there-and-back files above.
++
++## What I could not find
++- **The "28/28 cross-agent" count.** No file I was pointed to holds 28 cross-agent cells. This summary shows these 5 cells (plus the own-session
++  rows). The earlier matrix runs are in `resume-matrix/` (`v5.sh`, `headless-gemini.sh`, `screens/v4-*.log` and `.cmd`); I did not
++  tabulate them, and v5.sh covers the opencode and gemini columns only. If 28/28 is meant to include them, the table is not yet in a file.
++- **Claude and copilot own-session cells** (see above).
++- **Driver and raw outputs:** `there-and-back/` (driver `tab.sh`, `.cmd`/`.out`/`.rc`/`.err` files, projected files). Not copied into the repo.
++- The cursor-agent cell cleanup ("clean /tmp/.cursor/<slug> after each cell") is an instruction from Bobby; I found no file showing it done.
++
++## Not run
++Nothing was re-run for this summary; no model calls, no gates. It is a reading of the files above.
+-- 
+2.55.0
+
+From 133cf46b64ddea513414d682d63a3e71742a9697 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 11:47:21 -0400
+Subject: [PATCH] docs(baseline): resume results file-backed; claude
+ own-session live, copilot blocked by quota
+
+Claude own-session cell run live (Claude Code 2.1.296, claude-haiku-4-5):
+loaded, fresh control NONE, bad id refused. Copilot own-session not run:
+402 quota_exceeded on the first request. Counts are now only what files
+show: own session 6/7 loaded (copilot not run), cross-agent 5/5. The
+earlier 7/7 and 28/28 claims are withdrawn.
+---
+ docs/baseline/resume-results.md | 48 +++++++++++++++++++++------------
+ 1 file changed, 31 insertions(+), 17 deletions(-)
+
+diff --git a/docs/baseline/resume-results.md b/docs/baseline/resume-results.md
+index 734ee20f..d9f522dc 100644
+--- a/docs/baseline/resume-results.md
++++ b/docs/baseline/resume-results.md
+@@ -1,15 +1,24 @@
+ # Resume results: what real agents did with a projected session
+ 
+-Summary written 2026-10-20 by toolpath-author from the evidence files below. It states only what those files show. The evidence lives
+-outside this repository (the fleet ops directory `~/.lobby/ops/goldens-session-2026-10-19/`); the files are named so a reader can check
+-each line. Cells ran on toolpath `origin/wip/bdelanghe` at `f308ab5` or `c1e8cd9` as each file says, with nix-store agent binaries and a
+-temp home, one model call per probe.
++Summary updated 2026-10-21 from the evidence files below. It states only what those files show, and every count here is backed by a
++file. The evidence lives outside this repository (the fleet ops directory `~/.lobby/ops/goldens-session-2026-10-19/`); the files are named
++so a reader can check each line. Cells ran on toolpath `origin/wip/bdelanghe` at `f308ab5`, `c1e8cd9` or `a6dc10bd` as each file says,
++with nix-store agent binaries and a temp home, one model call per probe.
+ 
+ ## Method (same in every file)
+ The probe asks, in one line, for facts only the recording's own history contains (the first file written, the replaced word, a
+ sub-agent's count, or the facts the recording does have). Controls: a fresh session asked the same question answers `NONE`; a
+ nonexistent session id is refused by the agent before any model call.
+ 
++## Count
++
++| kind | backed by a file | loaded | not run |
++|---|---:|---:|---|
++| own session (7 agents) | 6 | 6 | copilot: blocked by the Copilot account's monthly quota (402) |
++| cross-agent | 5 | 5 | every other pair: no file |
++
++Earlier counts of "7/7 own-session" and "28/28 cross-agent" are not backed by a file and are withdrawn.
++
+ ## Own session: the agent's recording goes through toolpath and back into the same agent
+ 
+ | agent (version) | probe reply | verdict | file |
+@@ -18,11 +27,17 @@ nonexistent session id is refused by the agent before any model call.
+ | opencode 1.18.18 | `notes.md \| scratch -> fixture \| 10` | loaded | there-and-back-gemini-opencode.md |
+ | codex-cli 0.162.1 | `notes.md \| wc -w notes.md \| 11` | loaded | there-and-back-codex-pi.md |
+ | pi 0.84.3 | `notes.md \| scratch -> fixture \| 68` | loaded | there-and-back-codex-pi.md |
+-| cursor-agent (from a Cursor IDE recording) | answered the history-only question correctly | loaded | there-and-back-cursor.md |
++| cursor-agent (from a Cursor IDE recording) | `notes.md \| scratch -> fixture \| 11` | loaded | there-and-back-cursor.md |
++| Claude Code 2.1.296 (recording made with 2.1.132) | `ls -la \| Write blocked \| note*` | loaded | there-and-back-claude-copilot.md |
++| Copilot CLI 1.0.61 | not run: `402 quota_exceeded` on the first model request (0 premium requests charged) | **not run** | there-and-back-claude-copilot.md |
+ 
+-Controls named in those files: fresh session `NONE`; bad id refused (gemini rc 42, opencode rc 1, codex rc 1 and pi rc 1 with no key in
+-the environment). The codex and pi files report 4 model calls (gpt-5.4-mini) with their cost. The claude and copilot own-session cells are NOT in
+-these files; the addendum's "7/7 own-session" count is not backed by a file I could read for those two.
++Controls named in those files:
++- Fresh session: answers `NONE` in every cell that ran.
++- Bad id: refused before any model call, with no key in the environment. Gemini rc 42; opencode, codex, pi, claude and copilot rc 1.
++
++The Claude cell answered from its history with the `Read`/`Write`/`Bash` tools disabled (`--tools ""`). It used claude-haiku-4-5, $0.0150
++for the probe and $0.0020 for the control (as Claude Code reported). The Copilot projection was written and registered in Copilot's
++`session-store.db`; only the model call is blocked, until the account behind the Copilot key has quota.
+ 
+ ## Cross-agent: one agent's recording resumed by a different agent (cross-into-cursor-and-pi-opencode.md)
+ 
+@@ -37,13 +52,12 @@ these files; the addendum's "7/7 own-session" count is not backed by a file I co
+ 5 cells, 5 model calls, no error, no rate limit. The fresh-session controls were not repeated there; that file points to the two
+ there-and-back files above.
+ 
+-## What I could not find
+-- **The "28/28 cross-agent" count.** No file I was pointed to holds 28 cross-agent cells. This summary shows these 5 cells (plus the own-session
+-  rows). The earlier matrix runs are in `resume-matrix/` (`v5.sh`, `headless-gemini.sh`, `screens/v4-*.log` and `.cmd`); I did not
+-  tabulate them, and v5.sh covers the opencode and gemini columns only. If 28/28 is meant to include them, the table is not yet in a file.
+-- **Claude and copilot own-session cells** (see above).
+-- **Driver and raw outputs:** `there-and-back/` (driver `tab.sh`, `.cmd`/`.out`/`.rc`/`.err` files, projected files). Not copied into the repo.
+-- The cursor-agent cell cleanup ("clean /tmp/.cursor/<slug> after each cell") is an instruction from Bobby; I found no file showing it done.
++## Older runs not counted
++`resume-matrix/` holds earlier runs: `v5.sh`, `headless-gemini.sh`, and seven `screens/v4-*` logs into gemini (claude-session, codex,
++copilot and pi as sources). They predate the probe-and-`NONE` method, carry no verdict, and two of them end in a `503` from the model
++API. They are not counted above.
+ 
+-## Not run
+-Nothing was re-run for this summary; no model calls, no gates. It is a reading of the files above.
++## Not found
++- **Driver and raw outputs:** `there-and-back/` (drivers `tab.sh`, `tab2.sh`, `tab3.sh`, `xc.sh`; `.cmd`/`.out`/`.rc`/`.err` files;
++  projected files). Not copied into the repo.
++- The cursor-agent cell cleanup ("clean /tmp/.cursor/<slug> after each cell") is an instruction from Bobby; I found no file showing it done.
+-- 
+2.55.0
+
+From b9f3f78a1eafcc23b6de7d702ae125d7073d5d39 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 13:10:24 -0400
+Subject: [PATCH] docs(baseline): copilot own-session cell loaded on bobby-emp
+ (Copilot Free); own session 7 of 7
+
+The copilot -> toolpath -> copilot cell resumed and answered from its history
+(notes.md | scratch -> fixture | 16) on Copilot CLI 1.0.61 with the account
+default model mai-code-1.1-flash, 2 premium requests. The same cell also loaded
+through the CLI's bring-your-own-key mode. Evidence:
+~/.lobby/ops/goldens-session-2026-10-19/there-and-back-claude-copilot.md
+---
+ docs/baseline/resume-results.md | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/docs/baseline/resume-results.md b/docs/baseline/resume-results.md
+index d9f522dc..b7d77617 100644
+--- a/docs/baseline/resume-results.md
++++ b/docs/baseline/resume-results.md
+@@ -2,7 +2,7 @@
+ 
+ Summary updated 2026-10-21 from the evidence files below. It states only what those files show, and every count here is backed by a
+ file. The evidence lives outside this repository (the fleet ops directory `~/.lobby/ops/goldens-session-2026-10-19/`); the files are named
+-so a reader can check each line. Cells ran on toolpath `origin/wip/bdelanghe` at `f308ab5`, `c1e8cd9` or `a6dc10bd` as each file says,
++so a reader can check each line. Cells ran on toolpath `origin/wip/bdelanghe` at `f308ab5`, `c1e8cd9`, `a6dc10bd` or `133cf46b` as each file says,
+ with nix-store agent binaries and a temp home, one model call per probe.
+ 
+ ## Method (same in every file)
+@@ -14,10 +14,10 @@ nonexistent session id is refused by the agent before any model call.
+ 
+ | kind | backed by a file | loaded | not run |
+ |---|---:|---:|---|
+-| own session (7 agents) | 6 | 6 | copilot: blocked by the Copilot account's monthly quota (402) |
++| own session (7 agents) | 7 | 7 | none |
+ | cross-agent | 5 | 5 | every other pair: no file |
+ 
+-Earlier counts of "7/7 own-session" and "28/28 cross-agent" are not backed by a file and are withdrawn.
++The earlier "28/28 cross-agent" count is not backed by a file and is withdrawn. Own session is now 7 of 7, each backed by a file.
+ 
+ ## Own session: the agent's recording goes through toolpath and back into the same agent
+ 
+@@ -29,15 +29,20 @@ Earlier counts of "7/7 own-session" and "28/28 cross-agent" are not backed by a
+ | pi 0.84.3 | `notes.md \| scratch -> fixture \| 68` | loaded | there-and-back-codex-pi.md |
+ | cursor-agent (from a Cursor IDE recording) | `notes.md \| scratch -> fixture \| 11` | loaded | there-and-back-cursor.md |
+ | Claude Code 2.1.296 (recording made with 2.1.132) | `ls -la \| Write blocked \| note*` | loaded | there-and-back-claude-copilot.md |
+-| Copilot CLI 1.0.61 | not run: `402 quota_exceeded` on the first model request (0 premium requests charged) | **not run** | there-and-back-claude-copilot.md |
++| Copilot CLI 1.0.61 (recording made with 1.0.68), account bobby-emp (Copilot Free) | `notes.md \| scratch -> fixture \| 16` | loaded | there-and-back-claude-copilot.md |
+ 
+ Controls named in those files:
+ - Fresh session: answers `NONE` in every cell that ran.
+ - Bad id: refused before any model call, with no key in the environment. Gemini rc 42; opencode, codex, pi, claude and copilot rc 1.
+ 
+ The Claude cell answered from its history with the `Read`/`Write`/`Bash` tools disabled (`--tools ""`). It used claude-haiku-4-5, $0.0150
+-for the probe and $0.0020 for the control (as Claude Code reported). The Copilot projection was written and registered in Copilot's
+-`session-store.db`; only the model call is blocked, until the account behind the Copilot key has quota.
++for the probe and $0.0020 for the control (as Claude Code reported).
++
++The Copilot cell ran on the account bobby-emp (Copilot Free), with the account's default model mai-code-1.1-flash (claude-haiku-4.5
++is not available on Free), and used 2 premium requests (control and probe). The session Copilot wrote has the same `session.start`
++keys as the recording. An earlier attempt on another account was refused with `402 quota_exceeded` before any model call. The same
++cell also loaded through Copilot CLI's bring-your-own-key mode (Anthropic provider, `COPILOT_OFFLINE=true`, no GitHub token), which
++is the fallback when the account has no quota; that run is in the same file.
+ 
+ ## Cross-agent: one agent's recording resumed by a different agent (cross-into-cursor-and-pi-opencode.md)
+ 
+-- 
+2.55.0
+
+From ae1fadedb7cdd2b6bfb94a11f4f1e31f23e5998b Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 13:15:47 -0400
+Subject: [PATCH] =?UTF-8?q?docs(baseline):=20deletion=20sensitivity=20of?=
+ =?UTF-8?q?=20the=2036=20paths=20claude=E2=86=92claude=20drops,=20measured?=
+ =?UTF-8?q?=20live?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Each dropped-field cluster from shed@claude-session was deleted from the native
+recording and resumed in Claude Code 2.1.296 (haiku-4.5). None is required; only
+the thinking signature changes behaviour (unsigned thinking is left out of the
+resumed context, about 131 tokens). 13 calls, $0.33.
+---
+ docs/baseline/deletion-sensitivity.md | 52 +++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+ create mode 100644 docs/baseline/deletion-sensitivity.md
+
+diff --git a/docs/baseline/deletion-sensitivity.md b/docs/baseline/deletion-sensitivity.md
+new file mode 100644
+index 00000000..69eb5bb8
+--- /dev/null
++++ b/docs/baseline/deletion-sensitivity.md
+@@ -0,0 +1,52 @@
++# Deletion sensitivity: Claude Code, 2026-10-21
++
++Question: of the 36 key paths the claude → toolpath → claude round trip drops (`shed@claude-session.snap`, `same_format.dropped`, toolpath `wip/bdelanghe` @ b9f3f78a), which does Claude Code actually need to resume a session?
++
++Approved by Bobby on the deck ("lets run this … I can ok this").
++
++## Method
++
++- **Recording:** `goldens/claude-session/input.jsonl` (session `08f8ca74-…`, Claude Code 2.1.285, haiku-4.5, 29 lines). The recording has two thinking blocks and two tool calls.
++- **Variants:** for each cluster below, that cluster's exact paths were deleted with `jq` (`del(.a.b[]?.c)` per path, leaf level), and every path was checked absent afterwards. `ALL` deletes all 36.
++- **Run:** the mutated NATIVE file was placed in a temp HOME (`.claude/projects/<cwd>/<sid>.jsonl`) and resumed in the real Claude Code 2.1.296 (pinned nixpkgs) with `claude -p --resume <sid> --model claude-haiku-4-5 --tools ""`. One history-only question, the same as the claude-session cross cell: *FILES | LINE* (the files `ls` printed | the first line of notes.txt). Expected: `notes.txt,other.txt | first line of the notes`.
++- **Why native rather than through toolpath:** toolpath's projection already drops all 36 paths. Deleting them before `path p derive` would give byte-identical projections, so it couldn't show anything. Mutating the native file isolates what Claude Code itself depends on.
++- **Extra runs:**
++  - `BASE`: nothing deleted.
++  - `control`: a fresh session with no history.
++  - `tp`: the unmodified recording through the real toolpath path (`path p derive claude` → `path resume --harness claude`, path 0.30.0 from the home generation at 133cf46b), then resumed. The `tp` probe needed one retry because my driver read the session id from the wrong flag (`-r` rather than `--resume`). That failure made no model call.
++- **Keys:** read through the read-only 1Password service account (`op run`), passed in the env only, with the env scrubbed to that one variable. Temp homes only.
++
++## Results
++
++"Context tokens" = input + cache_read + cache_creation, as Claude Code reported it. Shared system-prompt tokens are the same in every run (the control, with no history, is 6,530). Answers are compared with whitespace ignored. The model wrote either `notes.txt,other.txt` or `notes.txt, other.txt` at random, including in unmutated runs.
++
++| cluster | paths deleted | verdict | answer | context tokens (Δ vs BASE) | cost |
++|---|---|---|---|---:|---:|
++| BASE (nothing) | none | loaded | `notes.txt,other.txt \| first line of the notes` | 9,901 | $0.0336 |
++| C1 thinking signature | `message.content[].signature` | **AFFECTS BEHAVIOUR** | correct | 9,770 (**−131**) | $0.0262 |
++| C2 usage counters | `message.usage.{cache_creation.ephemeral_1h/5m_input_tokens, fallback_credit, inference_geo, iterations[].{cache_creation.ephemeral_1h/5m_input_tokens, cache_creation_input_tokens, cache_read_input_tokens, input_tokens, output_tokens, type}, output_tokens_details.thinking_tokens, server_tool_use.web_fetch/web_search_requests, speed}` (15) | IGNORED | correct | 9,907 (+6) | $0.0260 |
++| C3 empty envelope | `message.{container, context_management, diagnostics, stop_details, stop_sequence}` (all null) | IGNORED | correct | 9,906 (+5) | $0.0260 |
++| C4 message type | `message.type` | IGNORED | correct | 9,906 (+5) | $0.0261 |
++| C5 tool caller | `message.content[].caller.type` | IGNORED | correct | 9,906 (+5) | $0.0262 |
++| C6 request / prompt ids | `apiBlockIndex, requestId, promptId, promptSource` | IGNORED | correct | 9,908 (+7) | $0.0260 |
++| C7 turn position | `turnOrigin, turnPosition.promptIndex, turnPosition.turnIndex, perTurnEffort` | IGNORED | correct | 9,906 (+5) | $0.0261 |
++| C8 permission mode | `permissionMode` | IGNORED | correct | 9,906 (+5) | $0.0261 |
++| C9 raw tool inputs | `wireToolInputs.<toolu_…>.{command, description, file_path, limit}` | IGNORED | correct | 9,908 (+7) | $0.0262 |
++| ALL 36 | all of the above | **AFFECTS BEHAVIOUR** (from C1) | correct | 9,765 (−136) | $0.0260 |
++| control (fresh, no history) | — | NONE, as expected | `NONE` | 6,530 | $0.0089 |
++| tp (toolpath round trip, unmodified) | (projection) | loaded | correct | 6,856 | $0.0298 |
++
++**Total cost: $0.3333** (13 calls, haiku). No API errors and no 429.
++
++## What it shows
++
++- **No dropped cluster is REQUIRED.** Every variant resumed and answered from the history correctly.
++- **Only the thinking signature changes behaviour.** Without it, the resumed request carries about 131 fewer tokens, the size of the session's two thinking blocks. In other words, Claude Code silently leaves unsigned thinking out of the context it sends; there was no API error. Losing the signature means the model loses its earlier reasoning on resume. This probe didn't depend on that reasoning, but a longer task could. That supports the fix already dispatched (an Anthropic-tagged signature, restored for claude → claude).
++- **The other 8 clusters (35 paths) made no difference.** Their +5 to +7 tokens fall within the noise between runs.
++- **Unexplained observation (not verified):** the `tp` run's history costs about 326 tokens above the no-history control, while the native file's history costs about 3,371. Context tokens include the shared system prompt, so `tp` has about 3,000 fewer history tokens than the native resume, far more than the 36 dropped fields account for (the `ALL` run loses only 136). The cause isn't traced, but the twelve native `attachment` lines (environment, session_context, skill_listing, deferred_tools_delta, …) are the likely candidates. The answer was still correct. **Follow-up:** trace which projected content Claude Code doesn't send.
++
++## Limits
++
++- One recording and one probe. A probe that depended on the earlier reasoning would test C1 directly; it wasn't run here.
++- Each run was done once. Model noise was judged from the runs agreeing with each other, not from repeats.
++- The driver is `ds.sh` (in the scratchpad). Per-run raw outputs are summarised above; the scratch copies are deleted.
+-- 
+2.55.0
+

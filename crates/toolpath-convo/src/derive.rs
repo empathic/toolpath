@@ -140,6 +140,18 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
     // The last turn step emitted and its group id, for message-level token
     // accounting (below).
     let mut last_turn_step: Option<(usize, Option<String>)> = None;
+    // The step of the conversation's last turn: `path.head` must keep it in
+    // its ancestry, or the conversation itself reads as a dead end.
+    let mut last_turn_id: Option<String> = None;
+    // Where the session ran: file-change keys are written relative to it.
+    let session_wd: Option<String> = view
+        .base
+        .as_ref()
+        .and_then(|b| b.working_dir.clone())
+        .or_else(|| {
+            view.turns()
+                .find_map(|t| t.environment.as_ref()?.working_dir.clone())
+        });
 
     for item in &view.items {
         match item {
@@ -147,6 +159,11 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                 let idx = turn_idx;
                 turn_idx += 1;
                 let steps_before = steps.len();
+                let turn_wd: Option<&str> = turn
+                    .environment
+                    .as_ref()
+                    .and_then(|e| e.working_dir.as_deref())
+                    .or(session_wd.as_deref());
 
                 // Step id: use the turn's native id when set so it round-trips
                 // through `extract_conversation`; otherwise synthesize sequentially.
@@ -194,6 +211,18 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         "thinking".to_string(),
                         serde_json::Value::String(thinking.clone()),
                     );
+                    // The provider's signature over that thinking, agent-tagged, so a same-provider
+                    // writer can return it and any other writer knows to drop it.
+                    if let Some(sig) = &turn.thinking_signature {
+                        extra.insert(
+                            "thinking_signature".to_string(),
+                            serde_json::json!({
+                                "provider": sig.provider,
+                                "value": sig.value,
+                                "text_sha256": sig.text_sha256,
+                            }),
+                        );
+                    }
                 }
 
                 if config.include_tool_uses && !turn.tool_uses.is_empty() {
@@ -326,7 +355,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         );
                     }
                     step.change.insert(
-                        fm.path.clone(),
+                        normalize_artifact_path(&fm.path, turn_wd),
                         ArtifactChange {
                             raw: fm.raw_diff.clone(),
                             structural: Some(StructuralChange {
@@ -355,7 +384,7 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                         serde_json::Value::String(tool.id.clone()),
                     );
                     step.change.insert(
-                        path,
+                        normalize_artifact_path(&path, turn_wd),
                         ArtifactChange {
                             raw,
                             structural: Some(StructuralChange {
@@ -377,7 +406,8 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
                     if final_id != turn.id {
                         turn_to_step.insert(final_id.clone(), final_id.clone());
                     }
-                    turn_to_step.insert(turn.id.clone(), final_id);
+                    turn_to_step.insert(turn.id.clone(), final_id.clone());
+                    last_turn_id = Some(final_id);
                     if let Some((prev, Some(prev_group))) = &last_turn_step
                         && turn.group_id.as_ref() == Some(prev_group)
                         && let Some(sc) = steps[*prev]
@@ -486,9 +516,10 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         }
     }
 
-    // The last surviving step is the head; a dropped trailing replay
-    // collapses into its original, which is not necessarily last.
-    let head = steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
+    // The head is the latest step that keeps the last turn in its ancestry
+    // (see `pick_head`); a dropped trailing replay collapses into its
+    // original, which is not necessarily last.
+    let head = pick_head(&steps, last_turn_id.as_deref());
 
     // Meta
     let title = config
@@ -540,6 +571,43 @@ pub fn derive_path(view: &ConversationView, config: &DeriveConfig) -> Path {
         steps,
         meta: Some(meta),
     }
+}
+
+/// The path's head: the latest step whose ancestry holds the last turn, so
+/// events that chain after the conversation (parentless ones fall through to
+/// the step before them) extend it, while an event side chain that hangs off
+/// an earlier turn never takes the head and turns the conversation into a dead
+/// end. Without turns, the last step.
+fn pick_head(steps: &[Step], last_turn: Option<&str>) -> String {
+    let Some(last_turn) = last_turn else {
+        return steps.last().map(|s| s.step.id.clone()).unwrap_or_default();
+    };
+    let parents: HashMap<&str, &[String]> = steps
+        .iter()
+        .map(|s| (s.step.id.as_str(), s.step.parents.as_slice()))
+        .collect();
+    let descends = |from: &str| {
+        let mut stack = vec![from];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(id) = stack.pop() {
+            if id == last_turn {
+                return true;
+            }
+            if seen.insert(id)
+                && let Some(ps) = parents.get(id)
+            {
+                stack.extend(ps.iter().map(String::as_str));
+            }
+        }
+        false
+    };
+    steps
+        .iter()
+        .rev()
+        .map(|s| s.step.id.as_str())
+        .find(|id| descends(id))
+        .unwrap_or(last_turn)
+        .to_string()
 }
 
 /// Push `step` into `steps`, resolving an id collision with an
@@ -649,13 +717,19 @@ fn record_actor(
     provider: &str,
     _view: &ConversationView,
 ) {
-    if actors.contains_key(actor) {
+    if let Some(existing) = actors.get_mut(actor) {
+        // A later turn may be the first to name the serving provider.
+        if existing.provider.is_none() && actor.starts_with("agent:") {
+            existing.provider = turn.provider.clone();
+        }
         return;
     }
     let def = if let Some(rest) = actor.strip_prefix("agent:") {
+        // The RFC's slot for who served the model (`anthropic`, `ollama`, …).
+        // The harness is `meta.source`, so it is not repeated here.
         ActorDefinition {
             name: Some(rest.to_string()),
-            provider: Some(provider.to_string()),
+            provider: turn.provider.clone(),
             model: turn.model.clone(),
             identities: vec![],
             keys: vec![],
@@ -674,6 +748,50 @@ fn record_actor(
         }
     };
     actors.insert(actor.to_string(), def);
+}
+
+/// The key a file change is filed under: `path` relative to the session's working directory when
+/// it lies inside it, with any leading `./` dropped, else `path` as given. One file is then one
+/// key whether the tool wrote it as `/work/dir/a.rs`, `./a.rs` or `a.rs`. The working directory
+/// itself is `.`. A path outside the working directory stays absolute.
+///
+/// macOS spells the same directory `/private/var/...` and `/var/...` (likewise `/tmp`, `/etc`);
+/// the two are compared as one.
+pub fn normalize_artifact_path(path: &str, working_dir: Option<&str>) -> String {
+    let mut p = path;
+    while let Some(rest) = p.strip_prefix("./") {
+        p = rest;
+    }
+    if let Some(wd) = working_dir {
+        let wd = strip_private_alias(wd.trim_end_matches('/'));
+        let abs = strip_private_alias(p);
+        if !wd.is_empty() && abs.starts_with('/') {
+            if abs == wd {
+                return ".".to_string();
+            }
+            if let Some(rest) = abs.strip_prefix(wd)
+                && let Some(rel) = rest.strip_prefix('/')
+                && !rel.is_empty()
+            {
+                return rel.to_string();
+            }
+        }
+    }
+    // Outside the working directory (or none known, as in a session written with the caller's
+    // cwd `/`): still one spelling per file, so the alias is dropped from absolute paths.
+    strip_private_alias(p).to_string()
+}
+
+/// `/private/var/x` -> `/var/x` (also `/private/tmp`, `/private/etc`): macOS's symlinked roots.
+fn strip_private_alias(p: &str) -> &str {
+    for root in ["/var", "/tmp", "/etc"] {
+        if let Some(rest) = p.strip_prefix("/private")
+            && (rest == root || rest.starts_with(&format!("{root}/")))
+        {
+            return rest;
+        }
+    }
+    p
 }
 
 fn extract_file_path(tool: &ToolInvocation) -> Option<String> {
@@ -832,10 +950,11 @@ pub fn unified_diff(path: &str, before: &str, after: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult};
+    use crate::{ConversationEvent, DelegatedWork, EnvironmentSnapshot, TokenUsage, ToolResult};
 
     fn base_turn(id: &str, role: Role) -> Turn {
         Turn {
+            provider: None,
             id: id.to_string(),
             parent_id: None,
             group_id: None,
@@ -843,6 +962,7 @@ mod tests {
             timestamp: "2026-01-01T00:00:00Z".to_string(),
             text: String::new(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -1461,6 +1581,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn one_file_is_one_key_however_the_tool_spelled_it() {
+        let wd = Some("/private/var/folders/x/proj");
+        for spelling in [
+            "/private/var/folders/x/proj/notes.md",
+            "/var/folders/x/proj/notes.md",
+            "./notes.md",
+            "notes.md",
+        ] {
+            assert_eq!(
+                normalize_artifact_path(spelling, wd),
+                "notes.md",
+                "{spelling}"
+            );
+        }
+        assert_eq!(
+            normalize_artifact_path("/private/var/folders/x/proj/src/a.rs", wd),
+            "src/a.rs"
+        );
+        assert_eq!(
+            normalize_artifact_path("/private/var/folders/x/proj", wd),
+            "."
+        );
+        // outside the working directory, or a sibling that merely shares the prefix: untouched
+        assert_eq!(
+            normalize_artifact_path("/private/var/folders/x/proj2/a.rs", wd),
+            "/var/folders/x/proj2/a.rs"
+        );
+        assert_eq!(normalize_artifact_path("/etc/hosts", wd), "/etc/hosts");
+        // a session written with cwd `/` (or none) still files both spellings under one key
+        for cwd in [Some("/"), None] {
+            assert_eq!(
+                normalize_artifact_path("/private/var/folders/x/proj/notes.md", cwd),
+                "/var/folders/x/proj/notes.md"
+            );
+            assert_eq!(
+                normalize_artifact_path("/var/folders/x/proj/notes.md", cwd),
+                "/var/folders/x/proj/notes.md"
+            );
+        }
+        // no working directory: only the leading ./ goes
+        assert_eq!(normalize_artifact_path("./a.rs", None), "a.rs");
+        assert_eq!(normalize_artifact_path("/abs/a.rs", None), "/abs/a.rs");
+    }
+
     fn fw_tool(name: &str, id: &str, input: serde_json::Value) -> ToolInvocation {
         ToolInvocation {
             id: id.to_string(),
@@ -1833,16 +1998,28 @@ mod tests {
         let u = base_turn("t1", Role::User);
         let mut a = base_turn("t2", Role::Assistant);
         a.model = Some("claude-opus-4-7".into());
+        a.provider = Some("anthropic".into());
         let view = view_with(vec![u, a]);
         let path = derive_path(&view, &DeriveConfig::default());
         let actors = path.meta.unwrap().actors.unwrap();
         assert!(actors.contains_key("human:user"));
         assert!(actors.contains_key("agent:claude-opus-4-7"));
         let agent = &actors["agent:claude-opus-4-7"];
-        assert_eq!(agent.provider.as_deref(), Some("pi"));
+        // Who served the model (the turn's provider), not the harness
+        // (`pi` here), which is `meta.source`.
+        assert_eq!(agent.provider.as_deref(), Some("anthropic"));
         assert_eq!(agent.model.as_deref(), Some("claude-opus-4-7"));
         let human = &actors["human:user"];
         assert_eq!(human.name.as_deref(), Some("user"));
+    }
+
+    #[test]
+    fn test_agent_actor_without_provider_names_none() {
+        let mut a = base_turn("t2", Role::Assistant);
+        a.model = Some("gemma4".into());
+        let path = derive_path(&view_with(vec![a]), &DeriveConfig::default());
+        let actors = path.meta.unwrap().actors.unwrap();
+        assert_eq!(actors["agent:gemma4"].provider, None);
     }
 
     #[test]
@@ -1855,6 +2032,24 @@ mod tests {
         let view = view_with(turns);
         let path = derive_path(&view, &DeriveConfig::default());
         assert_eq!(path.path.head, "t3");
+    }
+
+    #[test]
+    fn test_head_stays_on_the_conversation_when_events_branch_off_an_earlier_turn() {
+        // An event parented to the first turn (an attachment) must not take the
+        // head: the conversation would read as a dead end (all_steps − ancestors(head)).
+        let mut t2 = base_turn("t2", Role::Assistant);
+        t2.parent_id = Some("t1".into());
+        let mut view = view_with(vec![base_turn("t1", Role::User), t2]);
+        view.items.push(Item::Event(ConversationEvent {
+            id: "e1".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            parent_id: Some("t1".into()),
+            event_type: "attachment".into(),
+            data: HashMap::new(),
+        }));
+        let path = derive_path(&view, &DeriveConfig::default());
+        assert_eq!(path.path.head, "t2");
     }
 
     #[test]

@@ -1,0 +1,79 @@
+From f9af8d68ae763e2cb8fbda9a0a839fd82cc4d7e7 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 15:09:48 -0400
+Subject: [PATCH] docs(baseline): a compacted session resumed live; claude
+ loses all history through toolpath, opencode keeps full history (pr/97)
+
+---
+ docs/baseline/compacted-resume.md | 59 +++++++++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+ create mode 100644 docs/baseline/compacted-resume.md
+
+diff --git a/docs/baseline/compacted-resume.md b/docs/baseline/compacted-resume.md
+new file mode 100644
+index 00000000..dee1788e
+--- /dev/null
++++ b/docs/baseline/compacted-resume.md
+@@ -0,0 +1,59 @@
++# Resuming a compacted session, live (2026-10-21)
++
++Bobby, deck thread 01M5FXKK0E8AWZ6B0457HKY392: "we can run compact manually on a really small conversation - we can run test on a conversation after it is compacted". #108's forced recordings are exactly that: Ben's capture runs the 10-step session, then forces `/compact`. Four are in our baseline (pr/88). Until now nothing resumed one in the real agent.
++
++## Method
++- **Recordings:** toolpath `wip/bdelanghe` 6bd1b0ec.
++  - `test-fixtures/claude/convo-compacted.jsonl`: Claude Code 2.1.170, `/compact` (manual), one `compact_boundary`, a summary user line (`isCompactSummary`), and 2 preserved messages (the last two assistant turns).
++  - `test-fixtures/opencode/convo-compacted.json`: opencode, one `compaction` part and a `summary: true` assistant message. The compaction is wholesale; nothing is kept besides the summary.
++- **path:** 0.30.0 at toolpath 6bd1b0ec (the home generation from pin #553), `/nix/store/99zqnsk1…-toolpath-path-0.30.0`.
++- **Agents:**
++  - Claude Code 2.1.296 (nixpkgs), `claude-haiku-4-5`, key `toolpath-ci/claude` via the read-only service account, env only.
++  - opencode 1.18.18 (nixpkgs), `opencode/big-pickle` (Zen, free).
++  - Every run in a temp HOME.
++- **Runs:**
++  - **native:** the recording itself resumed.
++  - **tp:** the recording through `path p derive` → `path resume --harness <same agent>` → resumed.
++  - **control:** a fresh session with no history.
++- **Probes** (history-only, no tools):
++  - **claude:** `SHEBANG | LAST`.
++    - SHEBANG is the first line of `count.sh`. It's only in the compaction summary, since the Write call itself is before the boundary.
++    - LAST is the final sentence of the Step 10 summary. It's only in a PRESERVED turn after the boundary; the summary itself says Step 10 is still pending.
++    - Expected: `#!/usr/bin/env bash | All work stayed within the current working directory.`
++  - **opencode:** `TOOL | FILE`.
++    - TOOL is the sub-agent tool. FILE is the only pre-existing file.
++    - Both are only in the summary.
++    - Expected: `task | .stderr.log`.
++- **Drivers:** adapted from the live-check drivers (ds.sh, tab.sh) on Bobby's machine.
++
++## Results
++
++| agent | run | answer | correct | context tokens | cost |
++|---|---|---|---|---|---|
++| claude | control (fresh) | `NONE` | n/a | 6,537 | $0.0088 |
++| claude | native compacted | `#!/usr/bin/env bash \| All work stayed within the current working directory.` | **both facts** | 9,858 | $0.0141 |
++| claude | **through toolpath** | `NONE` | **neither: history lost** | 7,392 | $0.0125 |
++| opencode | control (fresh) | `NONE` | n/a | 6,427 (+1,536 cache) | free |
++| opencode | native compacted | `task \| .stderr.log` | both | 7,342 (+70 cache) | free |
++| opencode | through toolpath | `task \| .stderr.log` | both | **10,251** (+70 cache) | free |
++
++Total cost $0.035 (3 haiku calls); opencode is on the free Zen tier. No errors, no 429.
++
++## Findings
++1. **Claude: a compacted session loses ALL its history through toolpath.** Claude Code resumes the converted session as if it were empty, and answers NONE.
++   - The cause is in the projected file. Native vs projected:
++     - **Native:** the `compact_boundary` (line 60) comes BEFORE the summary. It has `parentUuid: null` and `logicalParentUuid` set to the last pre-compaction turn. The summary line has `isCompactSummary: true` and `isVisibleInTranscriptOnly: true`, and is parented to the boundary.
++     - **Projected:** the boundary is written AFTER the summary and the `/compact` command lines (line 67 of 76), it's parented to an attachment (not null), and the summary loses both flags and is parented straight to the last pre-compaction turn.
++   - Claude Code loads only what follows the last `compact_boundary` in file order. In the projected file that's just four attachment lines, so the model sees no conversation: about 855 tokens over the fresh control, against 3,321 natively.
++   - This is #108's territory: its typed `Compaction` item and the Claude writer's boundary placement. Our baseline doesn't have that item yet. The reader keeps the boundary as an ordinary event, and the writer emits it in event order.
++2. **opencode: compaction is dropped, and the full history comes back.** The answer is still correct.
++   - The projected database has no `compaction` part, and the summary message loses `summary: true`.
++   - So opencode treats every pre-compaction turn as live. It sends the summary AND the whole history: about 2,900 more tokens than native.
++   - On a real long session that defeats compaction, and could overflow the context window.
++3. **What fixes both:** #108 (Ben) adds compaction to the IR and to both writers. Under the "everyone else's work first" plan it lands before our stack.
++   - Our pr/88 snapshots record today's loss.
++   - These two live cells become the acceptance test: claude must answer both facts, and opencode must match native's context (± noise).
++   - Both cells are cheap to re-run (pre-approved) once #108 is in the base.
++
++## Not run
++codex and pi: their keys are uncapped OpenAI keys, so they need Bobby's OK. Copilot doesn't persist compactions (#108). Cursor isn't in #108's forced set.
+-- 
+2.55.0
+

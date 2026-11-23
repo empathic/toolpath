@@ -1,0 +1,48 @@
+{
+ "cassettes": "codex",
+ "recorded_at": "2026-10-15T19:21:09.074Z",
+ "recorded_with": "the Bun prototype of this crate (webmock.ts, the spec it was ported from) driven by the scratch run-cell.sh: `run codex record`; secret headers never stored, the recording machine's scratch root replaced by <scratch>",
+ "golden": {
+  "set": "claude-session",
+  "input": "goldens/claude-session/input.jsonl",
+  "input_sha256": "a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c",
+  "session_id": "08f8ca74-56bc-441d-8922-cb3637991ef5"
+ },
+ "projection": {
+  "toolpath_rev": "6aeff36",
+  "path_version": "0.30.0",
+  "basis": "tp worktree at 6aeff36 (wip/bdelanghe), path 0.30.0 built 10:39 EDT 2026-10-15; review/resume-matrix-v2.md",
+  "derive": "path p derive claude --project <cwd> --all",
+  "resume": "path resume --harness codex",
+  "cell": "resume-matrix/v2-cell-claude-session-to-codex",
+  "session_id": "08f8ca74-56bc-441d-8922-cb3637991ef5",
+  "session_id_origin": "kept from the golden"
+ },
+ "probe": {
+  "command": "codex exec --skip-git-repo-check -s read-only -C <cell>/project --json -c chatgpt_base_url=<proxy>/backend-api/ resume 08f8ca74-56bc-441d-8922-cb3637991ef5 <prompt>",
+  "prompt": "Reply with exactly the first five words of the very first user message in this conversation (not this one), then the word END. No other text.",
+  "turns": "the golden conversation plus this one headless turn; nothing else was sent"
+ },
+ "files": [
+  "149c69f4e6e3d4776145981d3b58dc403a93bf71adb84a0f527b7739bce0b1d8.json",
+  "163260813ca3d356bdf5fc73c41a4194ec36fe54c8331fca9500c84562900394.json",
+  "1cd471243539b90bf4107074cedabcb0bebc0ff992378c63b3b6e206999231b0.json",
+  "22e6f93044f1b6b373a78ab786c06394a95f15e0eb01116e6aa0d72671882bbf.json",
+  "34a88ef7e6b02a0f1fc74e632c996e783dbf54359077b3f55f30974987946a4d.json",
+  "728491b0e237474b40c8603219400c96f822c6d89a471ab34dde6c41f5efeba5.json",
+  "78dd4d41ae7cc3a729e5a14518488c2eea8359a0324d9844a5b93aa27c53219f.json",
+  "927295b0ebad4309f3b35afa6ac1b571d90f65c8a53c9a87185a2c7e27a82014.json",
+  "a7f5fd73982b8922f12a90628ec094f4cb09147084a0662736c5d3044251a926.json",
+  "ad1bff4949c1f11c379badb5bb99f4f29f272a073155c39681f5e1dc0c784542.json",
+  "b3b7b7bd0923bec8935d0fd5d3ff4ee047f8f90094f63fb2950a41cb079a6d5c.json",
+  "d2c9ea2b737a1d57aaec1a2c50c45cd16e0339bb74cd026a3577bc2b7d83d1ce.json",
+  "d5b4a63c26122ec20c50ea0080218267ea33c24ef18c540d683760c32a0f1c1c.json",
+  "d9419d1ecdeaa0f61bd7549b920f4c4ad631ce9d004903627cd0ee4bc3ff47aa.json",
+  "d9dc4d2f38879d100066c6360bc8d2367c1ba248c7c796a2ccb9841a0a92485f.json",
+  "e2d178672016145b71d1b0423d570cd26298a64ab164bcbea65efeed2aa9dc96.json",
+  "eb87b34b820f98189469bc2896b17f7d996a240d42ebe6de7321de938cc6841b.json",
+  "f9e273df67d32e54f9bdbf02ac6e4e809c51bdbaab6dff3b55bc32590810eedc.json",
+  "fbe0ab0b59958095edee303a5540fd55c0fb1bfff7588a919e534f1b4246ad02.json",
+  "index.jsonl"
+ ]
+}

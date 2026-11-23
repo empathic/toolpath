@@ -1,0 +1,71 @@
+From f308ab58af6a438e036a4384f6de835253693591 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 11:44:00 -0400
+Subject: [PATCH] docs(rfc): keep pr/60's rule 1 on one line so RFC.md's
+ annotations stay anchored; resolve the :719 blocker (pr/62)
+
+pr/60 turned one line into three, which moved every qualifier span below
+it by two: 31 annotations drifted, failing path-cli's goldens test and
+toolpath-model's claims test. Same wording on one line; the blocker pr/60
+fixed is resolved (reason: fixed).
+---
+ .qual                                 |  1 +
+ RFC.md                                |  4 +---
+ pr/62-rfc-jcs-annotations-anchored.md | 21 +++++++++++++++++++++
+ 3 files changed, 23 insertions(+), 3 deletions(-)
+ create mode 100644 pr/62-rfc-jcs-annotations-anchored.md
+
+diff --git a/.qual b/.qual
+index a4a8c1b1..db7d15aa 100644
+--- a/.qual
++++ b/.qual
+@@ -111,3 +111,4 @@
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T00:19:46.095754Z","id":"2e5abc064fdc9f77c80ed64d59e19fba1e3dc88351e397544769fb345176a378","body":{"detail":"scripts/test-plugin.sh and scripts/test-quickstart.sh, a quality gate (0464020).","kind":"pass","span":{"start":{"line":85},"end":{"line":86},"content_hash":"30bcf0e27cdb32dd3de75f746b77fa775cb48a4caa30e7ff5b571eb26611d14c"},"summary":"README: the plugin installs the CLI on first use and adds two slash commands — backed offline","supersedes":"34962083b54ff39d8faeba80aa9dee226a685e4f7640662c0712417a7ed8ece8","tags":["claim:readme-plugin","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T00:19:46.122603Z","id":"56a52af7118207858a2e2155b2ed5a3fb5529dca521debaf284b26b975c6cdc2","body":{"detail":"justfile `ci` runs scripts/quality_gates.sh; .github/workflows/deploy-site.yml (on: pull_request, and push to main) runs scripts/quality_gates.sh --verbose, whose test gate is cargo test --workspace (toolpath-goldens and path-cli's cross_harness_matrix included), with qualifier installed (pr/25).","kind":"pass","span":{"start":{"line":53},"end":{"line":54},"content_hash":"88b7b053ed5d548f6de7595932f536db2a7b4ef626a865a3e7696baa1bc86376"},"summary":"README: the baseline and the matrix run in just ci, which GitHub Actions runs on every pull request — backed","supersedes":"be262c3c6b5746e3afba285e0b6d3f4bdd4b0eb1678c2d6f70c4f60378507b86","tags":["claim:readme-matrix-ci","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T00:22:44.979815Z","id":"c20ada90256cbd56f115ec0c0011ab081eefcb0d3634c01c3bd87b8e07691498","body":{"detail":"crates/toolpath-goldens/snapshots: ir and document for 9 sets (claude, claude-compacted, claude-session, codex, copilot, cursor, gemini, opencode, pi), projection@ and round_trip@ for 54 set/target pairs (each set into the six other harnesses), writer@ for each of the seven. Checked by cargo test -p toolpath-goldens (tests/goldens.rs).","kind":"pass","span":{"start":{"line":49},"end":{"line":51},"content_hash":"86ddf4ba1cf1ba3e40a497cfa9742a1d758837781330a082cfe4bbd1d3a68479"},"summary":"README: the baseline pins read, write and round trip for all seven harnesses (nine sets) against the other six — backed","supersedes":"2847154b7f92942dbde38409ac5fd50dede345449fb6344a2ac5157df75e7a20","tags":["claim:readme-goldens-four","claims","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T15:42:17.617943Z","id":"f48a6a0136c0b3295500b848c402366b13df71e20ff805cf02ef89d30adf4f5f","body":{"kind":"resolve","summary":"Fixed by pr/60: RFC.md rule 1 now states UTF-16 code unit order (RFC 8785 §3.2.3) and where it differs from UTF-8 byte order","supersedes":"a25ba26430c759fbb5a70689bdad82f6db78d3d91589c21fc3b44cda0cf0ddec","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/RFC.md b/RFC.md
+index 4dc64573..5939170f 100644
+--- a/RFC.md
++++ b/RFC.md
+@@ -716,9 +716,7 @@ Signatures require a canonical byte representation. Toolpath uses **JCS (RFC
+ 
+ To produce a signable byte sequence:
+ 
+-1. **Key Ordering**: Object keys sorted by UTF-16 code units (RFC 8785 §3.2.3).
+-   This differs from UTF-8 byte order only for keys with characters outside the
+-   Basic Multilingual Plane, whose surrogate pairs sort before U+E000–U+FFFF
++1. **Key Ordering**: Object keys sorted by UTF-16 code units (RFC 8785 §3.2.3). This differs from UTF-8 byte order only for keys with characters outside the Basic Multilingual Plane, whose surrogate pairs sort before U+E000–U+FFFF
+ 2. **No Whitespace**: No spaces, newlines, or indentation
+ 3. **Unicode**: Literal characters when valid; escape only `"`, `\`, and control
+    characters (U+0000-U+001F); lowercase hex in escapes (`\u001f` not `\u001F`)
+diff --git a/pr/62-rfc-jcs-annotations-anchored.md b/pr/62-rfc-jcs-annotations-anchored.md
+new file mode 100644
+index 00000000..6a57e910
+--- /dev/null
++++ b/pr/62-rfc-jcs-annotations-anchored.md
+@@ -0,0 +1,21 @@
++# docs(rfc): keep pr/60's rule 1 on one line so RFC.md's annotations stay anchored; resolve the :719 blocker
++
++Status: draft · Base: pr/60-rfc-jcs-key-order · RFC.md layout and one qualifier record
++
++## Why
++pr/60 rewrote RFC.md rule 1 (JCS key ordering) as three lines where there had been one. Every span-bound qualifier
++annotation below it moved by two lines, so `qualifier review` reported 31 drifted (all in RFC.md), and two tests failed:
++- `path-cli --test goldens`: its `qualifier review` step fails on any drift.
++- `toolpath-model --test claims`: nine `claim:rfc-*` records no longer covered their RFC.md lines.
++pr/60's "cargo test was not needed for a text-only change" did not hold: these tests read RFC.md.
++
++## What changes
++- RFC.md rule 1 is one line again, with pr/60's wording unchanged (Markdown renders it the same). Lines 720 onward are back
++  where the annotations expect them.
++- The RFC.md:719 blocker ("False as written: … UTF-16 code units, not UTF-8 bytes") is resolved with `qualifier resolve
++  --reason fixed`, pointing at pr/60. pr/60 left that for after it landed; with its line rewritten the blocker could only
++  drift, and the goldens test fails on drift.
++
++## Checked
++- `qualifier review`: 240 annotations checked, 240 fresh, 0 drifted, 0 missing.
++- `cargo test -p path-cli --test goldens` and `cargo test -p toolpath-model --test claims` pass.
+-- 
+2.55.0
+

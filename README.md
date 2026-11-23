@@ -30,21 +30,33 @@ one format and writes them back. With everything in one format you can:
 
 ## Supported harnesses
 
-| Harness | Read | Write | Resume | Notes |
+| Harness | Read | Write | Resume | Verified (2026-10-15) |
 |---|:-:|:-:|:-:|---|
-| Claude Code | ✓ | ✓ | ✓ `claude -r` | Rotated session files merged into one chain; projected sessions load in Claude Code |
-| Gemini CLI | ✓ | ✓ | ✓ `gemini --resume` | Sub-agent sessions folded in; reasoning tokens round-trip losslessly |
-| Codex CLI | ✓ | ✓ | ✓ `codex resume` | Real unified diffs on every file change; per-step token attribution |
-| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` | Preview; projected sessions verified to resume in copilot 1.0.67 |
-| opencode | ✓ | ✓ | ✓ `opencode --session` | File diffs recovered from opencode's git snapshots |
-| Cursor (IDE) | ✓ | ✓ | ✓ opens workspace | Projected composers render in Cursor.app's chat sidebar |
-| Pi | ✓ | ✓ | ✓ `pi --session` | Branching session trees preserved as DAGs |
+| Claude Code | ✓ | ✓ | ✓ `claude -r` | Goldens for read and write. Resume: claude 2.1.285 answered from a projected session's history. Rotated session files are merged into one chain (unit-tested; no captured multi-file chain yet). |
+| Codex CLI | ✓ | ✓ | ✓ `codex resume` | Goldens for read and write, including per-step token attribution. Resume: codex-cli 0.162.1 answered from the projected history. `patch_apply_end` diffs are kept verbatim (crate fixture; the codex golden has no file change). |
+| Pi | ✓ | ✓ | ✓ `pi --session` | Goldens for read and write. Resume: pi 0.84.3 answered from the projected history. In-file `id`/`parentId` trees are read as DAGs (unit-tested; the captured sessions are linear). |
+| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` | Preview. Goldens for read and write. Resume: copilot CLI 1.0.61 answered from the projected history. |
+| Gemini CLI | ✓ | ✓ | `gemini --resume` | Baseline: a gemini-cli 0.47 recording, with snapshots for read, write and the round trip from and into each other harness. Reads the `.json` chat files of gemini-cli ≤ 0.46 and the `chats/session-*.jsonl` record stream 0.47 writes (crate test on the recording). Resume: gemini-cli 0.47.0 rendered the projected history; no model turn was run. Sub-agent chat files are folded in (unit-tested); reasoning-token counts survive a round trip (crate test). |
+| opencode | ✓ | ✓ | `opencode --session` | Baseline: an `opencode export` recording, with snapshots for read, write and the round trip from and into each other harness, plus the same session read from an `opencode-stable.db` built with 1.18.18's schema. Reads `opencode-stable.db` (1.18) and the older `opencode.db`. Resume: opencode 1.18.18 opened the projected session in its TUI; headless on OpenCode Zen's free tier, it answered from a projected Codex session. Snapshot-repo file diffs are implemented but not exercised by any test. |
+| Cursor (IDE) | ✓ | ✓ | opens workspace | Baseline: a recording of one composer's rows, with snapshots for read, write and the round trip from and into each other harness. Reads both header layouts: the ≤ 3.6 ItemTable key and Cursor 3.24's `composerHeaders` table. A projected composer is adopted and listed by title in Cursor.app 3.24.12, but before this fix it opened empty and its agent did not see the history (seen 2026-10-19). The projection now writes the model history Cursor 3.24 reads (`conversationState` and `agentKv:blob:` rows); a live check of that is pending. |
+| Cursor CLI (`cursor-agent`) | | ✓ | ✓ `cursor-agent --resume` | Resume target only (no reader for `share` yet). Writes the CLI's `store.db` under `$CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor`, else `~/.cursor` (`chats/<md5(cwd)>/<agentId>/`). Baseline: projection and round-trip snapshots from every recording, plus `writer@cursor-agent`. `cursor-agent ls` (cursor-cli 2026-08-11) lists a written chat, checked with no login in a temp HOME (2026-10-19). Whether the resumed chat's model sees the history is pending a live check. |
 
 Read means `path p import`, `path p list`, and `path show`. Write means
 `path p export`. Resume means `path resume`, which projects the session
 into the harness's on-disk layout and execs its resume command. Any
-readable session can be projected into any writable harness; a
-cross-harness conformance matrix in CI exercises the pairs.
+readable session can be projected into any writable harness.
+
+How the column is verified: the baseline in `crates/toolpath-goldens`
+pins read, write and round trip for recordings of all seven harnesses
+(nine sets) against each of the other six as a target; `cargo test -p
+path-cli --test cross_harness_matrix` round-trips every pair of the
+seven in-process on captured fixtures (it launches no agent); both run
+in `just ci`, which GitHub Actions runs on every pull request; the
+resume verdicts come from projecting the recordings and asking each
+installed agent to quote the first message back. Round trips are not
+lossless: the goldens' `shed` and `round_trip` snapshots list what each
+harness drops (reasoning bullets, tool-call argument bodies, session
+metadata).
 
 ## Beyond sessions
 
@@ -53,8 +65,9 @@ how artifacts change across the development lifecycle, so the session
 that wrote a change, the pull request that reviewed it, and the release
 that shipped it can share one graph. `path p import git` derives paths
 from commit history and `path p import github` from GitHub pull
-requests, review threads, CI runs and comments included; `path p merge`
-combines documents into a single `Graph`.
+requests, review threads, CI runs and comments included (both are
+unit-tested; neither has a golden yet); `path p merge` combines
+documents into a single `Graph`.
 
 ## Install
 
@@ -149,7 +162,10 @@ step-1 -- step-2 --+
 A path can declare a **kind**, a versioned, immutable URI naming what
 its steps mean. Agent sessions use
 `https://toolpath.net/kinds/agent-coding-session/v1.1.0`; `path kind
-agent-coding-session` prints the field reference. [RFC.md](RFC.md) is
+agent-coding-session` prints the field reference. The earlier
+`…/v1.0.0` is read-only legacy: no producer writes it, `path p
+validate` warns when a document carries it, and its page records the
+token-accounting erratum. [RFC.md](RFC.md) is
 the full specification and
 [schema/toolpath.schema.json](schema/toolpath.schema.json) is the JSON
 Schema.
@@ -169,7 +185,7 @@ normalizes all of it into three fields with strict semantics:
   never guessed from streaming snapshots.
 - `breakdowns` holds informational decompositions, such as reasoning
   tokens within output (Gemini, Codex, opencode). These are never added
-  into any total.
+  into the token counters.
 
 Each provider's quirks (cumulative counters, repeated message totals,
 zero-filled placeholders) are handled at derivation time, so
@@ -422,7 +438,7 @@ See each crate's README for library-level documentation.
 
 ## Requirements
 
-Rust 1.85+ (edition 2024).
+Rust 1.94+ (edition 2024).
 
 ## License
 

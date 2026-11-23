@@ -1,0 +1,2428 @@
+From 7031c5257be2538054b27d097f5cafe68d02b914 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:54:23 -0400
+Subject: [PATCH] docs(formats): the format notes' facts generated from the
+ recordings, and checked
+
+observed.rs computes, per harness and record kind, every field the
+baseline's recordings carry (shape, required or optional) and the
+versions they name; docs/agents/formats/observed/<harness>.md holds it,
+generated. tests/observed.rs fails when a table is stale, a note does
+not link its table, or a recording carries a record kind or version the
+notes never name. The notes name the recordings' versions (Claude Code
+2.1.132 and 2.1.285, Codex 0.128.0, Copilot 1.0.68, opencode 1.14.41),
+entry-types.md describes cost-state, and the index corrects the Copilot
+line.
+---
+ crates/toolpath-goldens/src/lib.rs            |   1 +
+ crates/toolpath-goldens/src/observed.rs       | 260 ++++++++++
+ crates/toolpath-goldens/tests/observed.rs     | 173 +++++++
+ docs/agents/formats/.qual                     |   1 +
+ docs/agents/formats/README.md                 |  15 +-
+ docs/agents/formats/claude-code/README.md     |   7 +-
+ .../agents/formats/claude-code/entry-types.md |  12 +
+ .../formats/claude-code/format-changelog.md   |   4 +-
+ docs/agents/formats/codex.md                  |   5 +-
+ docs/agents/formats/copilot-cli/README.md     |   6 +-
+ docs/agents/formats/cursor.md                 |   4 +-
+ docs/agents/formats/gemini.md                 |   5 +-
+ docs/agents/formats/observed/claude.md        | 457 ++++++++++++++++++
+ docs/agents/formats/observed/codex.md         | 201 ++++++++
+ docs/agents/formats/observed/copilot.md       | 284 +++++++++++
+ docs/agents/formats/observed/cursor.md        | 336 +++++++++++++
+ docs/agents/formats/observed/gemini.md        | 125 +++++
+ docs/agents/formats/observed/opencode.md      | 110 +++++
+ docs/agents/formats/observed/pi.md            |  88 ++++
+ docs/agents/formats/opencode.md               |   4 +
+ docs/agents/formats/pi.md                     |   5 +-
+ pr/43-observed-format-facts.md                |  63 +++
+ 22 files changed, 2156 insertions(+), 10 deletions(-)
+ create mode 100644 crates/toolpath-goldens/src/observed.rs
+ create mode 100644 crates/toolpath-goldens/tests/observed.rs
+ create mode 100644 docs/agents/formats/.qual
+ create mode 100644 docs/agents/formats/observed/claude.md
+ create mode 100644 docs/agents/formats/observed/codex.md
+ create mode 100644 docs/agents/formats/observed/copilot.md
+ create mode 100644 docs/agents/formats/observed/cursor.md
+ create mode 100644 docs/agents/formats/observed/gemini.md
+ create mode 100644 docs/agents/formats/observed/opencode.md
+ create mode 100644 docs/agents/formats/observed/pi.md
+ create mode 100644 pr/43-observed-format-facts.md
+
+diff --git a/crates/toolpath-goldens/src/lib.rs b/crates/toolpath-goldens/src/lib.rs
+index 570f4499..ae794c31 100644
+--- a/crates/toolpath-goldens/src/lib.rs
++++ b/crates/toolpath-goldens/src/lib.rs
+@@ -39,6 +39,7 @@ pub mod keypaths;
+ pub mod leaks;
+ pub mod losses;
+ pub mod model;
++pub mod observed;
+ pub mod pipeline;
+ pub mod schemas;
+ pub mod shed;
+diff --git a/crates/toolpath-goldens/src/observed.rs b/crates/toolpath-goldens/src/observed.rs
+new file mode 100644
+index 00000000..2264b120
+--- /dev/null
++++ b/crates/toolpath-goldens/src/observed.rs
+@@ -0,0 +1,260 @@
++//! What each harness's recordings actually contain: per record kind, every
++//! field (key path, arrays collapsed), the JSON shapes seen, and whether it
++//! was ever missing. The facts `docs/agents/formats/` states by hand
++//! ("optional = seen without it, required = never seen missing", "what we've
++//! seen in sample data"), computed from the recordings instead, so a new
++//! recording that changes them changes the generated table.
++
++use std::collections::{BTreeMap, BTreeSet};
++use std::fmt::Write as _;
++
++use serde_json::Value;
++
++use crate::keypaths::json_values;
++use crate::model::Agent;
++
++/// One recording of a harness: its name in the baseline and its bytes.
++pub struct Recording<'a> {
++    pub name: &'a str,
++    pub text: &'a str,
++}
++
++/// The keys whose values name the harness version that wrote a recording.
++const VERSION_KEYS: [&str; 3] = ["version", "cli_version", "copilotVersion"];
++
++#[derive(Default)]
++struct Field {
++    shapes: BTreeSet<&'static str>,
++    present: usize,
++}
++
++#[derive(Default)]
++struct Kind {
++    records: usize,
++    fields: BTreeMap<String, Field>,
++}
++
++/// The record kind a value belongs to: its `type` (with Codex's
++/// `payload.type`), or `document` for a recording that is one JSON
++/// document, or `(no type)`.
++fn kind_of(v: &Value, single_document: bool) -> String {
++    if single_document {
++        return "document".to_owned();
++    }
++    match (v["type"].as_str(), v["payload"]["type"].as_str()) {
++        (Some(t), Some(p)) => format!("{t}/{p}"),
++        (Some(t), None) => t.to_owned(),
++        (None, _) => v
++            .as_object()
++            .and_then(|o| o.keys().find(|k| k.starts_with('$')).cloned())
++            .unwrap_or_else(|| "(no type)".to_owned()),
++    }
++}
++
++fn shape(v: &Value) -> &'static str {
++    match v {
++        Value::Null => "null",
++        Value::Bool(_) => "bool",
++        Value::Number(_) => "number",
++        Value::String(_) => "string",
++        Value::Array(_) => "array",
++        Value::Object(_) => "object",
++    }
++}
++
++/// Every leaf key path of `v` (arrays collapsed to `[]`), with its shape.
++/// Empty arrays and objects are leaves too, so a field that is always empty
++/// still shows.
++fn leaves(prefix: &str, v: &Value, out: &mut BTreeMap<String, BTreeSet<&'static str>>) {
++    match v {
++        Value::Object(m) if !m.is_empty() => {
++            for (k, x) in m {
++                let k = if data_key(k) { "<key>" } else { k };
++                leaves(&format!("{prefix}.{k}"), x, out);
++            }
++        }
++        Value::Array(a) if !a.is_empty() => {
++            for x in a {
++                leaves(&format!("{prefix}[]"), x, out);
++            }
++        }
++        leaf => {
++            out.entry(prefix.trim_start_matches('.').to_owned())
++                .or_default()
++                .insert(shape(leaf));
++        }
++    }
++}
++
++/// A key that names a record's own data rather than the format's structure
++/// (a file path, an id, a dated model id) would make the table grow with every session; such
++/// a key is shown as `<key>`.
++fn data_key(k: &str) -> bool {
++    let digit_run = k
++        .split(|c: char| !c.is_ascii_digit())
++        .map(str::len)
++        .max()
++        .unwrap_or(0);
++    k.contains('/')
++        || k.len() > 40
++        || (k.len() >= 16 && k.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
++        // a dated model id used as a key: `claude-haiku-4-5-20251001`
++        || digit_run >= 8
++}
++
++/// The harness versions the recordings name: `(key path, value, recording)`.
++pub fn versions(recordings: &[Recording]) -> BTreeSet<(String, String, String)> {
++    let mut out = BTreeSet::new();
++    for r in recordings {
++        for v in json_values(r.text) {
++            let mut leafs = BTreeMap::new();
++            leaves("", &v, &mut leafs);
++            for path in leafs.keys() {
++                let last = path.rsplit('.').next().unwrap_or(path);
++                if !VERSION_KEYS.contains(&last)
++                    || path.matches('.').count() > 2
++                    || path.contains("<key>")
++                {
++                    continue;
++                }
++                let ptr = format!("/{}", path.replace('.', "/"));
++                if let Some(val) = v.pointer(&ptr).filter(|x| x.is_string() || x.is_number()) {
++                    let val = val.as_str().map_or_else(|| val.to_string(), str::to_owned);
++                    out.insert((path.clone(), val, r.name.to_owned()));
++                }
++            }
++        }
++    }
++    out
++}
++
++/// The record kinds the recordings contain (see [`render`]).
++pub fn kinds(recordings: &[Recording]) -> BTreeSet<String> {
++    let mut out = BTreeSet::new();
++    for r in recordings {
++        let single = serde_json::from_str::<Value>(r.text).is_ok();
++        for v in json_values(r.text) {
++            out.insert(kind_of(&v, single));
++        }
++    }
++    out
++}
++
++/// The generated Markdown table for one harness.
++pub fn render(agent: Agent, recordings: &[Recording]) -> String {
++    let mut kinds: BTreeMap<String, Kind> = BTreeMap::new();
++    for r in recordings {
++        let single = serde_json::from_str::<Value>(r.text).is_ok();
++        for v in json_values(r.text) {
++            let kind = kinds.entry(kind_of(&v, single)).or_default();
++            kind.records += 1;
++            let mut leafs = BTreeMap::new();
++            leaves("", &v, &mut leafs);
++            for (p, s) in leafs {
++                let f = kind.fields.entry(p).or_default();
++                f.present += 1;
++                f.shapes.extend(s);
++            }
++        }
++    }
++
++    let mut out = String::new();
++    let _ = writeln!(
++        out,
++        "<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.\n     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->\n"
++    );
++    let _ = writeln!(out, "# {agent}: fields observed in the recordings\n");
++    let _ = writeln!(
++        out,
++        "Computed from every recording of this harness the baseline runs. **required** = present in every record of \
++         its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. \
++         Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the \
++         recordings contain, not a specification: a field absent here may exist in versions we have no recording of.\n"
++    );
++    let _ = writeln!(out, "## Recordings\n");
++    for r in recordings {
++        let _ = writeln!(out, "- `{}`", r.name);
++    }
++    let vs = versions(recordings);
++    let _ = writeln!(out, "\n## Versions the recordings name\n");
++    if vs.is_empty() {
++        let _ = writeln!(
++            out,
++            "None: these recordings do not record the harness version."
++        );
++    } else {
++        for (path, val, rec) in &vs {
++            let _ = writeln!(out, "- `{path}` = `{val}` (`{rec}`)");
++        }
++    }
++    for (name, kind) in &kinds {
++        let plural = if kind.records == 1 {
++            "record"
++        } else {
++            "records"
++        };
++        let _ = writeln!(out, "\n## `{name}` ({} {plural})\n", kind.records);
++        let _ = writeln!(out, "| field | shape | presence |");
++        let _ = writeln!(out, "|---|---|---|");
++        for (path, f) in &kind.fields {
++            let shapes: Vec<&str> = f.shapes.iter().copied().collect();
++            let presence = if f.present == kind.records {
++                "required".to_owned()
++            } else {
++                format!("optional ({}/{})", f.present, kind.records)
++            };
++            let _ = writeln!(
++                out,
++                "| `{}` | {} | {} |",
++                path.replace('|', "\\|"),
++                shapes.join(", "),
++                presence
++            );
++        }
++    }
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn presence_is_counted_per_kind() {
++        let text = "{\"type\":\"a\",\"x\":1,\"y\":\"s\"}\n{\"type\":\"a\",\"x\":2}\n{\"type\":\"b\",\"z\":null}\n";
++        let md = render(Agent::Claude, &[Recording { name: "t", text }]);
++        assert!(md.contains("## `a` (2 records)"), "{md}");
++        assert!(md.contains("## `b` (1 record)"), "{md}");
++        assert!(md.contains("| `x` | number | required |"), "{md}");
++        assert!(md.contains("| `y` | string | optional (1/2) |"), "{md}");
++        assert!(md.contains("| `z` | null | required |"), "{md}");
++    }
++
++    #[test]
++    fn data_keys_are_generalised() {
++        let text = "{\"type\":\"a\",\"change\":{\"/tmp/x.rs\":{\"raw\":\"d\"}}}\n";
++        let md = render(Agent::Claude, &[Recording { name: "t", text }]);
++        assert!(
++            md.contains("| `change.<key>.raw` | string | required |"),
++            "{md}"
++        );
++        assert!(data_key("0123456789abcdef0123"));
++        assert!(data_key("claude-haiku-4-5-20251001"));
++        assert!(!data_key("content"));
++        assert!(!data_key("cache_creation_input_tokens"));
++    }
++
++    #[test]
++    fn versions_are_found_near_the_top() {
++        let text = "{\"type\":\"session_meta\",\"payload\":{\"cli_version\":\"0.128.0\"}}\n";
++        let v = versions(&[Recording {
++            name: "codex",
++            text,
++        }]);
++        assert!(v.contains(&(
++            "payload.cli_version".to_owned(),
++            "0.128.0".to_owned(),
++            "codex".to_owned()
++        )));
++    }
++}
+diff --git a/crates/toolpath-goldens/tests/observed.rs b/crates/toolpath-goldens/tests/observed.rs
+new file mode 100644
+index 00000000..d247172b
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/observed.rs
+@@ -0,0 +1,173 @@
++//! The format notes' facts, checked against the recordings.
++//!
++//! `docs/agents/formats/` is practitioner prose, kept by hand. Two kinds of
++//! fact in it come from the recordings, and this test keeps them from going
++//! stale:
++//!
++//! * the fields each harness writes, their shapes, and whether they are ever
++//!   missing: generated per harness into
++//!   `docs/agents/formats/observed/<harness>.md`
++//!   (`toolpath_goldens::observed`). A recording that changes them fails
++//!   here until the table is regenerated:
++//!   `OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed`;
++//! * the harness versions the recordings name: the harness's note must name
++//!   every one (dotted versions; a bare schema number like pi's `3` is listed
++//!   in the table only), so a recording of a new version fails here until the
++//!   note says what was seen in it;
++//! * the record kinds (entry types) the recordings contain: the harness's
++//!   notes must name every one, so a new entry type fails here until it is
++//!   described.
++//!
++//! Every note also links its generated table.
++
++use std::path::{Path, PathBuf};
++
++use toolpath_goldens::model::{Agent, Set};
++use toolpath_goldens::observed::{Recording, kinds, render, versions};
++
++const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
++
++/// The hand-written note for each harness, under `docs/agents/formats/`.
++fn note(agent: Agent) -> &'static str {
++    match agent {
++        Agent::Claude => "claude-code/README.md",
++        Agent::Codex => "codex.md",
++        Agent::Pi => "pi.md",
++        Agent::Copilot => "copilot-cli/README.md",
++        Agent::Gemini => "gemini.md",
++        Agent::Opencode => "opencode.md",
++        Agent::Cursor => "cursor.md",
++    }
++}
++
++/// Every recording the baseline runs, by harness: `test-fixtures/<agent>/convo.*`
++/// and `goldens/<name>/input.*` (the old tool's per-agent copies skipped, as
++/// the goldens test does).
++fn recordings() -> Vec<(Agent, String, String)> {
++    let root = Path::new(ROOT);
++    let mut files: Vec<PathBuf> = Vec::new();
++    for (dir, stem) in [("test-fixtures", "convo"), ("goldens", "input")] {
++        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
++            continue;
++        };
++        for e in entries.filter_map(Result::ok) {
++            let name = e.file_name().to_string_lossy().into_owned();
++            if dir == "goldens" && Agent::ALL.iter().any(|a| a.name() == name) {
++                continue;
++            }
++            let Ok(inner) = std::fs::read_dir(e.path()) else {
++                continue;
++            };
++            files.extend(
++                inner
++                    .filter_map(Result::ok)
++                    .map(|f| f.path())
++                    .filter(|p| p.file_stem().and_then(|s| s.to_str()) == Some(stem)),
++            );
++        }
++    }
++    files.sort();
++    files
++        .iter()
++        .map(|p| {
++            let set = Set::from_input_file(p).expect("a recording the goldens read");
++            let rel = p.strip_prefix(root).unwrap_or(p).display().to_string();
++            (set.agent, rel, set.text())
++        })
++        .collect()
++}
++
++#[test]
++fn every_note_matches_its_recordings() {
++    let root = Path::new(ROOT);
++    let formats = root.join("docs/agents/formats");
++    let update = std::env::var_os("OBSERVED_UPDATE").is_some();
++    let all = recordings();
++    let mut problems = Vec::new();
++
++    for agent in Agent::ALL {
++        let mine: Vec<Recording> = all
++            .iter()
++            .filter(|(a, _, _)| *a == agent)
++            .map(|(_, name, text)| Recording { name, text })
++            .collect();
++        if mine.is_empty() {
++            problems.push(format!("{agent}: no recording in the baseline"));
++            continue;
++        }
++
++        let generated = render(agent, &mine);
++        let table = formats
++            .join("observed")
++            .join(format!("{}.md", agent.name()));
++        if update {
++            std::fs::create_dir_all(table.parent().unwrap()).unwrap();
++            std::fs::write(&table, &generated).unwrap();
++        } else {
++            match std::fs::read_to_string(&table) {
++                Ok(committed) if committed == generated => {}
++                Ok(_) => problems.push(format!(
++                    "{agent}: {} is stale: the recordings changed what this harness writes. \
++                     Regenerate with OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed, \
++                     then read the diff and update {} where it disagrees",
++                    table.strip_prefix(root).unwrap().display(),
++                    note(agent)
++                )),
++                Err(_) => problems.push(format!(
++                    "{agent}: {} is missing (OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed)",
++                    table.strip_prefix(root).unwrap().display()
++                )),
++            }
++        }
++
++        let note_path = formats.join(note(agent));
++        let text = std::fs::read_to_string(&note_path)
++            .unwrap_or_else(|e| panic!("{}: {e}", note_path.display()));
++        // A harness documented as a folder (claude-code/, copilot-cli/): every
++        // page of it counts for what the notes name.
++        let mut all_notes = text.clone();
++        if let Some(dir) = note_path.parent().filter(|d| *d != formats)
++            && let Ok(entries) = std::fs::read_dir(dir)
++        {
++            for e in entries.filter_map(Result::ok) {
++                if e.path() != note_path && e.path().extension().is_some_and(|x| x == "md") {
++                    all_notes += &std::fs::read_to_string(e.path()).unwrap_or_default();
++                }
++            }
++        }
++        let link = format!("observed/{}.md", agent.name());
++        if !text.contains(&link) {
++            problems.push(format!(
++                "{agent}: {} does not link its generated table (`{link}`)",
++                note(agent)
++            ));
++        }
++        for kind in kinds(&mine) {
++            if kind == "document" || kind == "(no type)" {
++                continue;
++            }
++            let name = kind.rsplit('/').next().unwrap_or(&kind);
++            if !all_notes.contains(&format!("`{name}`"))
++                && !all_notes.contains(&format!("\"{name}\""))
++            {
++                problems.push(format!(
++                    "{agent}: the recordings contain record kind `{kind}`, which {} never names",
++                    note(agent)
++                ));
++            }
++        }
++        for (path, version, rec) in versions(&mine) {
++            if !version.contains('.') {
++                continue;
++            }
++            if !text.contains(&version) {
++                problems.push(format!(
++                    "{agent}: {} does not name version {version} (`{path}` in {rec}): \
++                     say what was seen in it, or that nothing changed",
++                    note(agent)
++                ));
++            }
++        }
++    }
++    assert!(problems.is_empty(), "\n{}", problems.join("\n"));
++}
+diff --git a/docs/agents/formats/.qual b/docs/agents/formats/.qual
+new file mode 100644
+index 00000000..3943fbbe
+--- /dev/null
++++ b/docs/agents/formats/.qual
+@@ -0,0 +1 @@
++{"metabox":"1","type":"annotation","subject":"docs/agents/formats/README.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:53:46.646421Z","id":"5676a59310cc6d6a73f4c269b9355894290edbe78ce6119f75350ee5be0606c9","body":{"detail":"crates/toolpath-goldens/tests/observed.rs fails when a recording adds a field, an entry type or a version the notes don't name. A change to a reader or writer that alters what toolpath reads or writes, without a new recording, is not caught: the ir/document/projection snapshots change, but nothing ties that diff to the note. Whole-file qualifier spans on each provider.rs/project.rs would enforce it (any edit drifts until re-anchored after checking the note) but would fail every concurrent piece that touches those files; not done. A cheaper link: have the observed test also diff the ir@<set> key paths against a per-harness 'fields toolpath reads' table in observed/.","kind":"concern","span":{"start":{"line":102},"end":{"line":106},"content_hash":"380177978b1023ebafe4ade58c0bd12db6abc3cae65c2a57e375e848e2734c83"},"summary":"The Maintenance rule is enforced from the recordings, not from the code","tags":["format-notes","gap","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/docs/agents/formats/README.md b/docs/agents/formats/README.md
+index c860d52c..542ad6ba 100644
+--- a/docs/agents/formats/README.md
++++ b/docs/agents/formats/README.md
+@@ -14,6 +14,14 @@ culting.
+ 
+ ## Contents
+ 
++Each harness's note is prose. The facts it states about fields
++("optional = seen without it, required = never seen missing") are also
++generated from the baseline's recordings into [`observed/`](observed/),
++one table per harness, and checked: a recording that adds a field, an
++entry type or a version fails `cargo test -p toolpath-goldens --test
++observed` until the table is regenerated and the note names the new
++entry type or version.
++
+ - **[`claude-code/`](claude-code/README.md)** — Claude Code
+   (`~/.claude/projects/…` JSONL). Split into focused docs covering
+   directory layout, the JSONL line envelope, entry types, the `message`
+@@ -30,9 +38,10 @@ culting.
+   GitHub Copilot CLI (`@github/copilot`), whose sessions live under
+   `~/.copilot/session-state/<id>/` (`events.jsonl` + `workspace.yaml` +
+   `checkpoints/`) alongside a cross-session `session-store.db` SQLite
+-  index. Split into a folder because the format has several moving parts;
+-  **unusually, it is not yet sample-grounded** — built from official docs
+-  plus reverse-engineering, with every claim confidence-tagged. Start at
++  index. Split into a folder because the format has several moving parts.
++  Grounded in captured sessions (1.0.67, and the baseline's 1.0.68
++  recording); claims are confidence-tagged, and the rows still tagged
++  `[reverse-eng]` are the event types no recording contains yet. Start at
+   its README's sourcing-posture note.
+ - **[`cursor.md`](cursor.md)** — Cursor's split storage: the JSONL
+   agent transcript at `~/.cursor/projects/<slug>/agent-transcripts/`
+diff --git a/docs/agents/formats/claude-code/README.md b/docs/agents/formats/claude-code/README.md
+index 2a600acc..748c9bb8 100644
+--- a/docs/agents/formats/claude-code/README.md
++++ b/docs/agents/formats/claude-code/README.md
+@@ -1,8 +1,13 @@
+ # Claude Code on-disk format
+ 
+-> **Reference revision:** 2026-04-23
++> **Reference revision:** 2026-10-19
+ > **Tracks:** Claude Code 2.1.x
+ > **First-hand samples:** 2.1.37, 2.1.90, 2.1.110, 2.1.112
++> **Recordings in the baseline:** 2.1.132 (`test-fixtures/claude/convo.jsonl`)
++> and 2.1.285 (`goldens/claude-session/input.jsonl`, a live capture). Every
++> field those recordings carry, per entry type, with its shape and whether it
++> was ever missing, is generated in [observed/claude.md](../observed/claude.md);
++> the 2.1.285 capture adds `cost-state` (below, in [entry-types.md](entry-types.md)).
+ >
+ > When you change anything in this directory, bump the revision date
+ > here and in [format-changelog.md](format-changelog.md) so downstream
+diff --git a/docs/agents/formats/claude-code/entry-types.md b/docs/agents/formats/claude-code/entry-types.md
+index f469b751..d498a589 100644
+--- a/docs/agents/formats/claude-code/entry-types.md
++++ b/docs/agents/formats/claude-code/entry-types.md
+@@ -22,6 +22,7 @@ a large fraction of the file.
+ | `agent-name`            | no             | no          | Agent name for the session. |
+ | `mode`                  | no             | no          | Active mode. Only `"normal"` observed. |
+ | `atis-latch`            | no             | no          | Opaque latch value. Purpose unknown. |
++| `cost-state`            | no             | no          | The session's running cost and usage per model. Seen in 2.1.285. |
+ | `pr-link`               | no             | no          | Pull request linked to the session. |
+ | `frame-link`            | no             | no          | Frame URL linked to a local file. |
+ | `relocated`             | no             | no          | New working directory for the session. |
+@@ -356,6 +357,17 @@ string, or a ~190-character string. Its purpose is unknown.
+ {"type": "atis-latch", "atis": "", "sessionId": "..."}
+ ```
+ 
++### `cost-state`
++
++The session's running totals, written once near the end of the 2.1.285
++capture: `totalCostUSD`, `totalAPIDuration`, `totalAPIDurationWithoutRetries`,
++`totalDuration`, `totalToolDuration`, `totalLinesAdded`, `totalLinesRemoved`,
++`hasUnknownModelCost`, `startTime`, and `modelUsage` keyed by model id
++(`inputTokens`, `outputTokens`, `cacheReadInputTokens`,
++`cacheCreationInputTokens`, `thinkingTokens`, `webSearchRequests`, `costUSD`).
++Not a conversation entry; toolpath carries it as a session event.
++Field list from [observed/claude.md](../observed/claude.md).
++
+ ### `pr-link`
+ 
+ Pull request linked to the session. Carries a `timestamp`.
+diff --git a/docs/agents/formats/claude-code/format-changelog.md b/docs/agents/formats/claude-code/format-changelog.md
+index a6e9fc7d..c3b88689 100644
+--- a/docs/agents/formats/claude-code/format-changelog.md
++++ b/docs/agents/formats/claude-code/format-changelog.md
+@@ -25,7 +25,9 @@ later than") unless the note says otherwise.
+ 
+ This reference tracks Claude Code **2.1.x**. First-hand samples span
+ client versions 2.1.37, 2.1.90, 2.1.110, and 2.1.112, plus a local
+-store spanning 2.1.215 – 2.1.245. Reference revision: **2026-08-25**.
++store spanning 2.1.215 – 2.1.245, and the baseline's recordings at 2.1.132
++and 2.1.285 (fields generated in [observed/claude.md](../observed/claude.md)).
++Reference revision: **2026-10-19**.
+ 
+ ---
+ 
+diff --git a/docs/agents/formats/codex.md b/docs/agents/formats/codex.md
+index 9734c359..669a7224 100644
+--- a/docs/agents/formats/codex.md
++++ b/docs/agents/formats/codex.md
+@@ -6,7 +6,10 @@ Reference for the on-disk format produced by OpenAI's
+ Compiled from:
+ 
+ 1. Direct inspection of real session files on this machine
+-   (Codex CLI 0.118.0, session recorded 2026-04-20).
++   (Codex CLI 0.118.0, session recorded 2026-04-20). The baseline's
++   recording (`test-fixtures/codex/convo.jsonl`) is Codex CLI 0.128.0;
++   every field it carries, per record kind, is generated in
++   [observed/codex.md](observed/codex.md).
+ 2. The Rust definitions in `openai/codex` at
+    `codex-rs/protocol/src/protocol.rs` and
+    `codex-rs/protocol/src/models.rs`.
+diff --git a/docs/agents/formats/copilot-cli/README.md b/docs/agents/formats/copilot-cli/README.md
+index 33c9071e..5605664e 100644
+--- a/docs/agents/formats/copilot-cli/README.md
++++ b/docs/agents/formats/copilot-cli/README.md
+@@ -1,6 +1,6 @@
+ # GitHub Copilot CLI on-disk format
+ 
+-> **Reference revision:** 2026-07-02
++> **Reference revision:** 2026-10-19
+ > **Tracks:** `@github/copilot` (the standalone agentic CLI, command `copilot`)
+ > **Version anchors:** public preview 2025-09-25, GA 2026-02-25, npm `1.0.66`.
+ > **First-hand grounding:** sessions captured at `copilotVersion` **1.0.67**
+@@ -10,6 +10,10 @@
+ > CLI at **1.0.67–1.0.68** via pty capture (see
+ > [known-gaps-and-sourcing.md](known-gaps-and-sourcing.md#verification-methodology)).
+ >
++> **Recording in the baseline:** `test-fixtures/copilot/convo.jsonl`,
++> `copilotVersion` 1.0.68; every field per event type, with shapes and
++> presence, is generated in [observed/copilot.md](../observed/copilot.md).
++>
+ > When you change anything in this directory, bump the revision date here.
+ 
+ This folder documents the on-disk session format of the **standalone agentic
+diff --git a/docs/agents/formats/cursor.md b/docs/agents/formats/cursor.md
+index 16b58521..1cc41186 100644
+--- a/docs/agents/formats/cursor.md
++++ b/docs/agents/formats/cursor.md
+@@ -8,7 +8,9 @@ source, so there is no upstream type definition to cross-check against
+ and every claim here is empirical.
+ 
+ Date: **2026-06-01**. Revisit when the Cursor minor version bumps or a
+-`_v` field on any object increments.
++`_v` field on any object increments. The baseline's recording
++(`test-fixtures/cursor/convo.json`, a `CursorSession` dump) carries the
++fields generated in [observed/cursor.md](observed/cursor.md).
+ 
+ > **Observed 2026-10-15 on Cursor.app 3.24.12 (not yet folded into the
+ > sections below).** `composerData._v` is now 18 (16 here). Composer
+diff --git a/docs/agents/formats/gemini.md b/docs/agents/formats/gemini.md
+index a7f48292..da2a4338 100644
+--- a/docs/agents/formats/gemini.md
++++ b/docs/agents/formats/gemini.md
+@@ -7,7 +7,10 @@ on disk plus cross-checking with Gemini's own internal documentation
+ (`cli/session-management.md`, `cli/checkpointing.md`,
+ `cli/settings.md`, and the tool reference). The Gemini team does not
+ publish a stable schema, so treat this as observed behaviour as of
+-**2026-04-24** — forward-compat guards matter.
++**2026-04-24** — forward-compat guards matter. The baseline's recording
++(`test-fixtures/gemini/convo.jsonl`, a 0.47 record stream) does not
++record the version; every field per record kind is generated in
++[observed/gemini.md](observed/gemini.md).
+ 
+ > **Observed 2026-10-15 on gemini-cli 0.47.0 (not yet folded into the
+ > sections below).** Chat files are now JSONL: a header record
+diff --git a/docs/agents/formats/observed/claude.md b/docs/agents/formats/observed/claude.md
+new file mode 100644
+index 00000000..aeaaeb0b
+--- /dev/null
++++ b/docs/agents/formats/observed/claude.md
+@@ -0,0 +1,457 @@
++<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.
++     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->
++
++# claude: fields observed in the recordings
++
++Computed from every recording of this harness the baseline runs. **required** = present in every record of its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the recordings contain, not a specification: a field absent here may exist in versions we have no recording of.
++
++## Recordings
++
++- `goldens/claude-compacted/input.jsonl`
++- `goldens/claude-session/input.jsonl`
++- `test-fixtures/claude/convo.jsonl`
++
++## Versions the recordings name
++
++- `version` = `2.1.132` (`test-fixtures/claude/convo.jsonl`)
++- `version` = `2.1.285` (`goldens/claude-session/input.jsonl`)
++
++## `ai-title` (4 records)
++
++| field | shape | presence |
++|---|---|---|
++| `aiTitle` | string | required |
++| `sessionId` | string | required |
++| `type` | string | required |
++
++## `assistant` (54 records)
++
++| field | shape | presence |
++|---|---|---|
++| `apiBlockIndex` | number | optional (5/54) |
++| `cwd` | string | optional (51/54) |
++| `entrypoint` | string | optional (51/54) |
++| `gitBranch` | string | optional (51/54) |
++| `isSidechain` | bool | optional (51/54) |
++| `message.container` | null | optional (5/54) |
++| `message.content` | string | optional (1/54) |
++| `message.content[].caller.type` | string | optional (21/54) |
++| `message.content[].id` | string | optional (23/54) |
++| `message.content[].input.command` | string | optional (9/54) |
++| `message.content[].input.content` | string | optional (5/54) |
++| `message.content[].input.description` | string | optional (10/54) |
++| `message.content[].input.file_path` | string | optional (10/54) |
++| `message.content[].input.limit` | number | optional (1/54) |
++| `message.content[].input.new_string` | string | optional (1/54) |
++| `message.content[].input.old_string` | string | optional (1/54) |
++| `message.content[].input.output_mode` | string | optional (1/54) |
++| `message.content[].input.pattern` | string | optional (2/54) |
++| `message.content[].input.prompt` | string | optional (1/54) |
++| `message.content[].input.questions[].header` | string | optional (1/54) |
++| `message.content[].input.questions[].multiSelect` | bool | optional (1/54) |
++| `message.content[].input.questions[].options[].description` | string | optional (1/54) |
++| `message.content[].input.questions[].options[].label` | string | optional (1/54) |
++| `message.content[].input.questions[].question` | string | optional (1/54) |
++| `message.content[].input.subagent_type` | string | optional (1/54) |
++| `message.content[].name` | string | optional (23/54) |
++| `message.content[].signature` | string | optional (15/54) |
++| `message.content[].text` | string | optional (17/54) |
++| `message.content[].thinking` | string | optional (15/54) |
++| `message.content[].type` | string | optional (53/54) |
++| `message.context_management` | null | optional (5/54) |
++| `message.diagnostics` | null | optional (5/54) |
++| `message.id` | string | optional (51/54) |
++| `message.input_transformations` | array | optional (5/54) |
++| `message.model` | string | required |
++| `message.role` | string | required |
++| `message.stop_details` | null | optional (51/54) |
++| `message.stop_reason` | string | required |
++| `message.stop_sequence` | null | optional (51/54) |
++| `message.type` | string | optional (51/54) |
++| `message.usage.cache_creation.ephemeral_1h_input_tokens` | number | optional (51/54) |
++| `message.usage.cache_creation.ephemeral_5m_input_tokens` | number | optional (51/54) |
++| `message.usage.cache_creation_input_tokens` | number | optional (51/54) |
++| `message.usage.cache_read_input_tokens` | number | optional (51/54) |
++| `message.usage.fallback_credit` | null | optional (5/54) |
++| `message.usage.inference_geo` | string | optional (51/54) |
++| `message.usage.input_tokens` | number | required |
++| `message.usage.iterations[].cache_creation.ephemeral_1h_input_tokens` | number | optional (51/54) |
++| `message.usage.iterations[].cache_creation.ephemeral_5m_input_tokens` | number | optional (51/54) |
++| `message.usage.iterations[].cache_creation_input_tokens` | number | optional (51/54) |
++| `message.usage.iterations[].cache_read_input_tokens` | number | optional (51/54) |
++| `message.usage.iterations[].input_tokens` | number | optional (51/54) |
++| `message.usage.iterations[].output_tokens` | number | optional (51/54) |
++| `message.usage.iterations[].type` | string | optional (51/54) |
++| `message.usage.output_tokens` | number | required |
++| `message.usage.output_tokens_details.thinking_tokens` | number | optional (5/54) |
++| `message.usage.server_tool_use.web_fetch_requests` | number | optional (51/54) |
++| `message.usage.server_tool_use.web_search_requests` | number | optional (51/54) |
++| `message.usage.service_tier` | string | optional (51/54) |
++| `message.usage.speed` | string | optional (51/54) |
++| `parentUuid` | string | required |
++| `perTurnEffort` | null | optional (5/54) |
++| `requestId` | string | optional (51/54) |
++| `sessionId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++| `userType` | string | optional (51/54) |
++| `uuid` | string | required |
++| `version` | string | optional (51/54) |
++| `wireToolInputs.toolu_016Jcqs5U6qdvMJZjjrcRFvq.command` | string | optional (1/54) |
++| `wireToolInputs.toolu_016Jcqs5U6qdvMJZjjrcRFvq.description` | string | optional (1/54) |
++| `wireToolInputs.toolu_01GjqjxW9tnUh9qzsRWnoEWW.file_path` | string | optional (1/54) |
++| `wireToolInputs.toolu_01GjqjxW9tnUh9qzsRWnoEWW.limit` | number | optional (1/54) |
++
++## `atis-latch` (3 records)
++
++| field | shape | presence |
++|---|---|---|
++| `atis` | string | required |
++| `sessionId` | string | required |
++| `type` | string | required |
++
++## `attachment` (17 records)
++
++| field | shape | presence |
++|---|---|---|
++| `attachment.addedLines[]` | string | optional (3/17) |
++| `attachment.addedNames[]` | string | optional (2/17) |
++| `attachment.addedTypes[]` | string | optional (1/17) |
++| `attachment.builtInTypes[]` | string | optional (1/17) |
++| `attachment.cliPrefix` | string | optional (1/17) |
++| `attachment.commit` | string | optional (1/17) |
++| `attachment.content` | array, string | optional (5/17) |
++| `attachment.context` | object | optional (1/17) |
++| `attachment.contextRendering` | string | optional (2/17) |
++| `attachment.date` | string | optional (1/17) |
++| `attachment.echoWireToolInputs` | bool | optional (2/17) |
++| `attachment.failedMcpServers` | array | optional (1/17) |
++| `attachment.identity.knowledgeCutoff` | string | optional (1/17) |
++| `attachment.identity.marketingName` | string | optional (1/17) |
++| `attachment.identity.modelId` | string | optional (1/17) |
++| `attachment.isInitial` | bool | optional (3/17) |
++| `attachment.itemCount` | number | optional (3/17) |
++| `attachment.managedCommit` | bool | optional (1/17) |
++| `attachment.managedPr` | bool | optional (1/17) |
++| `attachment.names[]` | string | optional (1/17) |
++| `attachment.needsAuthMcpServers` | array | optional (1/17) |
++| `attachment.pendingMcpServers` | array | optional (1/17) |
++| `attachment.pr` | string | optional (1/17) |
++| `attachment.readdedNames` | array | optional (2/17) |
++| `attachment.reminderFold` | bool | optional (2/17) |
++| `attachment.removedNames` | array | optional (2/17) |
++| `attachment.removedTypes` | array | optional (1/17) |
++| `attachment.sendUserFileHint` | bool | optional (1/17) |
++| `attachment.showConcurrencyNote` | bool | optional (1/17) |
++| `attachment.skillCount` | number | optional (2/17) |
++| `attachment.snapshot.additionalWorkingDirectories` | array | optional (1/17) |
++| `attachment.snapshot.isGitRepo` | bool | optional (1/17) |
++| `attachment.snapshot.isWorktree` | bool | optional (1/17) |
++| `attachment.snapshot.osVersion` | string | optional (1/17) |
++| `attachment.snapshot.platform` | string | optional (1/17) |
++| `attachment.snapshot.shell` | string | optional (1/17) |
++| `attachment.snapshot.workingDirectory` | string | optional (1/17) |
++| `attachment.systemPrompt[]` | string | optional (2/17) |
++| `attachment.text` | string | optional (3/17) |
++| `attachment.tools[].description` | string | optional (1/17) |
++| `attachment.tools[].name` | string | optional (1/17) |
++| `attachment.tools[].schema.description` | string | optional (1/17) |
++| `attachment.tools[].schema.eager_input_streaming` | bool | optional (1/17) |
++| `attachment.tools[].schema.input_schema.$schema` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.additionalProperties` | bool | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-A.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-A.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-B.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-B.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-C.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-C.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-i.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-i.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-n.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-n.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-o.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.-o.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.args.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.args.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.channel.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.channel.maxLength` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.channel.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.command.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.command.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.content.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.content.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.context.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.context.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.dangerouslyDisableSandbox.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.dangerouslyDisableSandbox.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.delaySeconds.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.delaySeconds.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.description.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.description.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.file_path.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.file_path.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.additionalProperties` | bool | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.category.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.category.maxLength` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.category.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.failure_scenario.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.failure_scenario.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.file.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.file.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.line.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.line.maximum` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.line.minimum` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.line.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.outcome.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.outcome.enum[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.outcome.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.short_summary.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.short_summary.maxLength` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.short_summary.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.summary.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.summary.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.verdict.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.verdict.enum[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.properties.verdict.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.required[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.items.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.maxItems` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.findings.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.glob.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.glob.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.head_limit.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.head_limit.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.isolation.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.isolation.enum[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.isolation.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.level.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.level.enum[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.level.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.limit.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.limit.exclusiveMinimum` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.limit.maximum` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.limit.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.max_results.default` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.max_results.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.max_results.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.model.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.model.enum[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.model.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.multiline.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.multiline.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.name.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.name.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.new_string.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.new_string.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.noop.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.noop.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.offset.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.offset.maximum` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.offset.minimum` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.offset.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.old_string.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.old_string.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.output_mode.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.output_mode.enum[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.output_mode.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.pages.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.pages.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.path.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.path.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.pattern.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.pattern.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.prompt.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.prompt.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.q.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.q.maxLength` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.q.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.query.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.query.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.reason.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.reason.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.replace_all.default` | bool | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.replace_all.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.replace_all.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.resumeFromRunId.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.resumeFromRunId.pattern` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.resumeFromRunId.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.run_in_background.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.run_in_background.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.script.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.script.maxLength` | number | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.script.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.scriptPath.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.scriptPath.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.skill.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.skill.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.stop.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.stop.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.subagent_type.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.subagent_type.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.timeout.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.timeout.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.title.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.title.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.type.description` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.properties.type.type` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.required[]` | string | optional (1/17) |
++| `attachment.tools[].schema.input_schema.type` | string | optional (1/17) |
++| `attachment.tools[].schema.name` | string | optional (1/17) |
++| `attachment.type` | string | required |
++| `attachment.url` | null | optional (1/17) |
++| `attachment.wireHiddenNames` | array | optional (1/17) |
++| `cwd` | string | required |
++| `entrypoint` | string | required |
++| `gitBranch` | string | required |
++| `isSidechain` | bool | required |
++| `parentUuid` | string | required |
++| `renderedRole` | string | optional (9/17) |
++| `rendered[].content` | string | optional (9/17) |
++| `sessionId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++| `userType` | string | required |
++| `uuid` | string | required |
++| `version` | string | required |
++
++## `compact_boundary` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `compactMetadata.preTokens` | number | required |
++| `compactMetadata.trigger` | string | required |
++| `logicalParentUuid` | string | required |
++| `parentUuid` | null | required |
++| `sessionId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++| `uuid` | string | required |
++
++## `cost-state` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `hasUnknownModelCost` | bool | required |
++| `modelUsage.<key>.cacheCreationInputTokens` | number | required |
++| `modelUsage.<key>.cacheReadInputTokens` | number | required |
++| `modelUsage.<key>.costUSD` | number | required |
++| `modelUsage.<key>.inputTokens` | number | required |
++| `modelUsage.<key>.outputTokens` | number | required |
++| `modelUsage.<key>.thinkingTokens` | number | required |
++| `modelUsage.<key>.webSearchRequests` | number | required |
++| `sessionId` | string | required |
++| `startTime` | number | required |
++| `totalAPIDuration` | number | required |
++| `totalAPIDurationWithoutRetries` | number | required |
++| `totalCostUSD` | number | required |
++| `totalDuration` | number | required |
++| `totalLinesAdded` | number | required |
++| `totalLinesRemoved` | number | required |
++| `totalToolDuration` | number | required |
++| `type` | string | required |
++
++## `last-prompt` (6 records)
++
++| field | shape | presence |
++|---|---|---|
++| `lastPrompt` | string | required |
++| `leafUuid` | string | required |
++| `sessionId` | string | required |
++| `type` | string | required |
++
++## `queue-operation` (4 records)
++
++| field | shape | presence |
++|---|---|---|
++| `content` | string | optional (2/4) |
++| `operation` | string | required |
++| `sessionId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `user` (28 records)
++
++| field | shape | presence |
++|---|---|---|
++| `cwd` | string | optional (24/28) |
++| `entrypoint` | string | optional (23/28) |
++| `gitBranch` | string | optional (24/28) |
++| `isCompactSummary` | bool | optional (1/28) |
++| `isSidechain` | bool | optional (23/28) |
++| `isVisibleInTranscriptOnly` | bool | optional (1/28) |
++| `message.content` | string | optional (5/28) |
++| `message.content[].content` | string | optional (22/28) |
++| `message.content[].content[].text` | string | optional (1/28) |
++| `message.content[].content[].type` | string | optional (1/28) |
++| `message.content[].is_error` | bool | optional (19/28) |
++| `message.content[].tool_use_id` | string | optional (23/28) |
++| `message.content[].type` | string | optional (23/28) |
++| `message.role` | string | required |
++| `parentUuid` | null, string | optional (27/28) |
++| `permissionMode` | string | optional (2/28) |
++| `promptId` | string | optional (23/28) |
++| `promptSource` | string | optional (1/28) |
++| `sessionId` | string | required |
++| `sourceToolAssistantUUID` | string | optional (21/28) |
++| `timestamp` | string | required |
++| `toolUseResult` | string | optional (13/28) |
++| `toolUseResult.agentId` | string | optional (1/28) |
++| `toolUseResult.agentType` | string | optional (1/28) |
++| `toolUseResult.content` | string | optional (1/28) |
++| `toolUseResult.content[].text` | string | optional (1/28) |
++| `toolUseResult.content[].type` | string | optional (1/28) |
++| `toolUseResult.durationMs` | number | optional (1/28) |
++| `toolUseResult.file.content` | string | optional (1/28) |
++| `toolUseResult.file.filePath` | string | optional (1/28) |
++| `toolUseResult.file.numLines` | number | optional (1/28) |
++| `toolUseResult.file.startLine` | number | optional (1/28) |
++| `toolUseResult.file.totalLines` | number | optional (1/28) |
++| `toolUseResult.filenames` | array | optional (2/28) |
++| `toolUseResult.interrupted` | bool | optional (4/28) |
++| `toolUseResult.isImage` | bool | optional (4/28) |
++| `toolUseResult.mode` | string | optional (1/28) |
++| `toolUseResult.noOutputExpected` | bool | optional (4/28) |
++| `toolUseResult.numFiles` | number | optional (2/28) |
++| `toolUseResult.numLines` | number | optional (1/28) |
++| `toolUseResult.prompt` | string | optional (1/28) |
++| `toolUseResult.status` | string | optional (1/28) |
++| `toolUseResult.stderr` | string | optional (4/28) |
++| `toolUseResult.stdout` | string | optional (4/28) |
++| `toolUseResult.toolStats.bashCount` | number | optional (1/28) |
++| `toolUseResult.toolStats.editFileCount` | number | optional (1/28) |
++| `toolUseResult.toolStats.linesAdded` | number | optional (1/28) |
++| `toolUseResult.toolStats.linesRemoved` | number | optional (1/28) |
++| `toolUseResult.toolStats.otherToolCount` | number | optional (1/28) |
++| `toolUseResult.toolStats.readCount` | number | optional (1/28) |
++| `toolUseResult.toolStats.searchCount` | number | optional (1/28) |
++| `toolUseResult.totalDurationMs` | number | optional (1/28) |
++| `toolUseResult.totalTokens` | number | optional (1/28) |
++| `toolUseResult.totalToolUseCount` | number | optional (1/28) |
++| `toolUseResult.truncated` | bool | optional (1/28) |
++| `toolUseResult.type` | string | optional (1/28) |
++| `toolUseResult.usage.cache_creation.ephemeral_1h_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.cache_creation.ephemeral_5m_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.cache_creation_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.cache_read_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.inference_geo` | string | optional (1/28) |
++| `toolUseResult.usage.input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.iterations[].cache_creation.ephemeral_1h_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.iterations[].cache_creation.ephemeral_5m_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.iterations[].cache_creation_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.iterations[].cache_read_input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.iterations[].input_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.iterations[].output_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.iterations[].type` | string | optional (1/28) |
++| `toolUseResult.usage.output_tokens` | number | optional (1/28) |
++| `toolUseResult.usage.server_tool_use.web_fetch_requests` | number | optional (1/28) |
++| `toolUseResult.usage.server_tool_use.web_search_requests` | number | optional (1/28) |
++| `toolUseResult.usage.service_tier` | string | optional (1/28) |
++| `toolUseResult.usage.speed` | string | optional (1/28) |
++| `turnOrigin` | string | optional (1/28) |
++| `turnPosition.promptIndex` | number | optional (1/28) |
++| `turnPosition.turnIndex` | number | optional (1/28) |
++| `type` | string | required |
++| `userType` | string | optional (23/28) |
++| `uuid` | string | required |
++| `version` | string | optional (23/28) |
+diff --git a/docs/agents/formats/observed/codex.md b/docs/agents/formats/observed/codex.md
+new file mode 100644
+index 00000000..12b8db4b
+--- /dev/null
++++ b/docs/agents/formats/observed/codex.md
+@@ -0,0 +1,201 @@
++<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.
++     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->
++
++# codex: fields observed in the recordings
++
++Computed from every recording of this harness the baseline runs. **required** = present in every record of its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the recordings contain, not a specification: a field absent here may exist in versions we have no recording of.
++
++## Recordings
++
++- `test-fixtures/codex/convo.jsonl`
++
++## Versions the recordings name
++
++- `payload.cli_version` = `0.128.0` (`test-fixtures/codex/convo.jsonl`)
++
++## `event_msg/agent_message` (13 records)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.memory_citation` | null | required |
++| `payload.message` | string | required |
++| `payload.phase` | string | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `event_msg/task_complete` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.completed_at` | number | required |
++| `payload.duration_ms` | number | required |
++| `payload.last_agent_message` | string | required |
++| `payload.time_to_first_token_ms` | number | required |
++| `payload.turn_id` | string | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `event_msg/task_started` (2 records)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.collaboration_mode_kind` | string | required |
++| `payload.model_context_window` | number | required |
++| `payload.started_at` | number | required |
++| `payload.turn_id` | string | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `event_msg/token_count` (13 records)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.info` | null | optional (1/13) |
++| `payload.info.last_token_usage.cached_input_tokens` | number | optional (12/13) |
++| `payload.info.last_token_usage.input_tokens` | number | optional (12/13) |
++| `payload.info.last_token_usage.output_tokens` | number | optional (12/13) |
++| `payload.info.last_token_usage.reasoning_output_tokens` | number | optional (12/13) |
++| `payload.info.last_token_usage.total_tokens` | number | optional (12/13) |
++| `payload.info.model_context_window` | number | optional (12/13) |
++| `payload.info.total_token_usage.cached_input_tokens` | number | optional (12/13) |
++| `payload.info.total_token_usage.input_tokens` | number | optional (12/13) |
++| `payload.info.total_token_usage.output_tokens` | number | optional (12/13) |
++| `payload.info.total_token_usage.reasoning_output_tokens` | number | optional (12/13) |
++| `payload.info.total_token_usage.total_tokens` | number | optional (12/13) |
++| `payload.rate_limits.credits` | null | required |
++| `payload.rate_limits.limit_id` | string | required |
++| `payload.rate_limits.limit_name` | null | required |
++| `payload.rate_limits.plan_type` | string | required |
++| `payload.rate_limits.primary.resets_at` | number | required |
++| `payload.rate_limits.primary.used_percent` | number | required |
++| `payload.rate_limits.primary.window_minutes` | number | required |
++| `payload.rate_limits.rate_limit_reached_type` | null | required |
++| `payload.rate_limits.secondary.resets_at` | number | required |
++| `payload.rate_limits.secondary.used_percent` | number | required |
++| `payload.rate_limits.secondary.window_minutes` | number | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `event_msg/user_message` (2 records)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.images` | array | required |
++| `payload.local_images` | array | required |
++| `payload.message` | string | required |
++| `payload.text_elements` | array | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `response_item/function_call` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.arguments` | string | required |
++| `payload.call_id` | string | required |
++| `payload.name` | string | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `response_item/function_call_output` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.call_id` | string | required |
++| `payload.output` | string | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `response_item/message` (8 records)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.content[].text` | string | required |
++| `payload.content[].type` | string | required |
++| `payload.phase` | string | optional (2/8) |
++| `payload.role` | string | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `response_item/reasoning` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.content` | null | required |
++| `payload.encrypted_content` | string | required |
++| `payload.summary` | array | required |
++| `payload.type` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `session_meta` (2 records)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.agent_nickname` | string | optional (1/2) |
++| `payload.base_instructions.text` | string | required |
++| `payload.cli_version` | string | required |
++| `payload.cwd` | string | required |
++| `payload.forked_from_id` | string | optional (1/2) |
++| `payload.id` | string | required |
++| `payload.model_provider` | string | required |
++| `payload.originator` | string | required |
++| `payload.source` | string | optional (1/2) |
++| `payload.source.subagent.thread_spawn.agent_nickname` | string | optional (1/2) |
++| `payload.source.subagent.thread_spawn.agent_path` | null | optional (1/2) |
++| `payload.source.subagent.thread_spawn.agent_role` | null | optional (1/2) |
++| `payload.source.subagent.thread_spawn.depth` | number | optional (1/2) |
++| `payload.source.subagent.thread_spawn.parent_thread_id` | string | optional (1/2) |
++| `payload.timestamp` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `turn_context` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `payload.approval_policy` | string | required |
++| `payload.collaboration_mode.mode` | string | required |
++| `payload.collaboration_mode.settings.developer_instructions` | null | required |
++| `payload.collaboration_mode.settings.model` | string | required |
++| `payload.collaboration_mode.settings.reasoning_effort` | string | required |
++| `payload.current_date` | string | required |
++| `payload.cwd` | string | required |
++| `payload.effort` | string | required |
++| `payload.file_system_sandbox_policy.entries[].access` | string | required |
++| `payload.file_system_sandbox_policy.entries[].path.path` | string | required |
++| `payload.file_system_sandbox_policy.entries[].path.type` | string | required |
++| `payload.file_system_sandbox_policy.entries[].path.value.kind` | string | required |
++| `payload.file_system_sandbox_policy.entries[].path.value.subpath` | string | required |
++| `payload.file_system_sandbox_policy.kind` | string | required |
++| `payload.model` | string | required |
++| `payload.permission_profile.file_system.entries[].access` | string | required |
++| `payload.permission_profile.file_system.entries[].path.path` | string | required |
++| `payload.permission_profile.file_system.entries[].path.type` | string | required |
++| `payload.permission_profile.file_system.entries[].path.value.kind` | string | required |
++| `payload.permission_profile.file_system.entries[].path.value.subpath` | string | required |
++| `payload.permission_profile.file_system.type` | string | required |
++| `payload.permission_profile.network` | string | required |
++| `payload.permission_profile.type` | string | required |
++| `payload.personality` | string | required |
++| `payload.realtime_active` | bool | required |
++| `payload.sandbox_policy.exclude_slash_tmp` | bool | required |
++| `payload.sandbox_policy.exclude_tmpdir_env_var` | bool | required |
++| `payload.sandbox_policy.network_access` | bool | required |
++| `payload.sandbox_policy.type` | string | required |
++| `payload.sandbox_policy.writable_roots[]` | string | required |
++| `payload.summary` | string | required |
++| `payload.timezone` | string | required |
++| `payload.truncation_policy.limit` | number | required |
++| `payload.truncation_policy.mode` | string | required |
++| `payload.turn_id` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
+diff --git a/docs/agents/formats/observed/copilot.md b/docs/agents/formats/observed/copilot.md
+new file mode 100644
+index 00000000..0ba94022
+--- /dev/null
++++ b/docs/agents/formats/observed/copilot.md
+@@ -0,0 +1,284 @@
++<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.
++     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->
++
++# copilot: fields observed in the recordings
++
++Computed from every recording of this harness the baseline runs. **required** = present in every record of its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the recordings contain, not a specification: a field absent here may exist in versions we have no recording of.
++
++## Recordings
++
++- `test-fixtures/copilot/convo.jsonl`
++
++## Versions the recordings name
++
++- `data.copilotVersion` = `1.0.68` (`test-fixtures/copilot/convo.jsonl`)
++- `data.version` = `1` (`test-fixtures/copilot/convo.jsonl`)
++
++## `assistant.message` (13 records)
++
++| field | shape | presence |
++|---|---|---|
++| `agentId` | string | optional (2/13) |
++| `data.apiCallId` | string | required |
++| `data.content` | string | required |
++| `data.interactionId` | string | required |
++| `data.messageId` | string | required |
++| `data.model` | string | required |
++| `data.outputTokens` | number | required |
++| `data.parentToolCallId` | string | optional (2/13) |
++| `data.reasoningOpaque` | string | required |
++| `data.reasoningText` | string | required |
++| `data.requestId` | string | required |
++| `data.serviceRequestId` | string | required |
++| `data.toolRequests` | array | optional (2/13) |
++| `data.toolRequests[].arguments.agent_type` | string | optional (1/13) |
++| `data.toolRequests[].arguments.command` | string | optional (1/13) |
++| `data.toolRequests[].arguments.description` | string | optional (2/13) |
++| `data.toolRequests[].arguments.file_text` | string | optional (2/13) |
++| `data.toolRequests[].arguments.mode` | string | optional (1/13) |
++| `data.toolRequests[].arguments.name` | string | optional (1/13) |
++| `data.toolRequests[].arguments.new_str` | string | optional (1/13) |
++| `data.toolRequests[].arguments.old_str` | string | optional (1/13) |
++| `data.toolRequests[].arguments.path` | string | optional (7/13) |
++| `data.toolRequests[].arguments.pattern` | string | optional (2/13) |
++| `data.toolRequests[].arguments.prompt` | string | optional (1/13) |
++| `data.toolRequests[].intentionSummary` | string | optional (11/13) |
++| `data.toolRequests[].name` | string | optional (11/13) |
++| `data.toolRequests[].toolCallId` | string | optional (11/13) |
++| `data.toolRequests[].type` | string | optional (11/13) |
++| `data.turnId` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `assistant.turn_end` (11 records)
++
++| field | shape | presence |
++|---|---|---|
++| `data.turnId` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `assistant.turn_start` (11 records)
++
++| field | shape | presence |
++|---|---|---|
++| `data.interactionId` | string | required |
++| `data.turnId` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `session.model_change` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `data.contextTier` | null | required |
++| `data.newModel` | string | required |
++| `data.reasoningEffort` | null | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `session.shutdown` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `data.codeChanges.filesModified[]` | string | required |
++| `data.codeChanges.linesAdded` | number | required |
++| `data.codeChanges.linesRemoved` | number | required |
++| `data.conversationTokens` | number | required |
++| `data.currentModel` | string | required |
++| `data.currentTokens` | number | required |
++| `data.eventsFileSizeBytes` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.requests.cost` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.requests.count` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.tokenDetails.cache_read.tokenCount` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.tokenDetails.cache_write.tokenCount` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.tokenDetails.input.tokenCount` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.tokenDetails.output.tokenCount` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.totalNanoAiu` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.usage.cacheReadTokens` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.usage.cacheWriteTokens` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.usage.inputTokens` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.usage.outputTokens` | number | required |
++| `data.modelMetrics.claude-haiku-4.5.usage.reasoningTokens` | number | required |
++| `data.sessionStartTime` | number | required |
++| `data.shutdownType` | string | required |
++| `data.systemTokens` | number | required |
++| `data.tokenDetails.cache_read.tokenCount` | number | required |
++| `data.tokenDetails.cache_write.tokenCount` | number | required |
++| `data.tokenDetails.input.tokenCount` | number | required |
++| `data.tokenDetails.output.tokenCount` | number | required |
++| `data.toolDefinitionsTokens` | number | required |
++| `data.totalApiDurationMs` | number | required |
++| `data.totalNanoAiu` | number | required |
++| `data.totalPremiumRequests` | number | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `session.start` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `data.alreadyInUse` | bool | required |
++| `data.context.cwd` | string | required |
++| `data.contextTier` | null | required |
++| `data.copilotVersion` | string | required |
++| `data.producer` | string | required |
++| `data.remoteSteerable` | bool | required |
++| `data.sessionId` | string | required |
++| `data.startTime` | string | required |
++| `data.version` | number | required |
++| `id` | string | required |
++| `parentId` | null | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `subagent.completed` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `agentId` | string | required |
++| `data.agentDisplayName` | string | required |
++| `data.agentName` | string | required |
++| `data.model` | string | required |
++| `data.toolCallId` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `subagent.started` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `agentId` | string | required |
++| `data.agentDescription` | string | required |
++| `data.agentDisplayName` | string | required |
++| `data.agentName` | string | required |
++| `data.model` | string | required |
++| `data.toolCallId` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `system.message` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `data.content` | string | required |
++| `data.role` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `tool.execution_complete` (11 records)
++
++| field | shape | presence |
++|---|---|---|
++| `agentId` | string | optional (1/11) |
++| `data.error.code` | string | optional (1/11) |
++| `data.error.message` | string | optional (1/11) |
++| `data.interactionId` | string | required |
++| `data.model` | string | required |
++| `data.parentToolCallId` | string | optional (1/11) |
++| `data.result.content` | string | optional (10/11) |
++| `data.result.detailedContent` | string | optional (10/11) |
++| `data.success` | bool | required |
++| `data.toolCallId` | string | required |
++| `data.toolTelemetry.metrics.commandTimeout` | number | optional (1/11) |
++| `data.toolTelemetry.metrics.file_count` | number | optional (1/11) |
++| `data.toolTelemetry.metrics.linesAdded` | number | optional (3/11) |
++| `data.toolTelemetry.metrics.linesRemoved` | number | optional (3/11) |
++| `data.toolTelemetry.metrics.numberOfToolCallsMadeByAgent` | number | optional (1/11) |
++| `data.toolTelemetry.metrics.responseTokenLimit` | number | optional (7/11) |
++| `data.toolTelemetry.metrics.response_length` | number | optional (1/11) |
++| `data.toolTelemetry.metrics.resultForLlmLength` | number | optional (7/11) |
++| `data.toolTelemetry.metrics.resultLength` | number | optional (7/11) |
++| `data.toolTelemetry.metrics.result_length` | number | optional (2/11) |
++| `data.toolTelemetry.properties.agent_name` | string | optional (1/11) |
++| `data.toolTelemetry.properties.agent_type` | string | optional (1/11) |
++| `data.toolTelemetry.properties.asyncOnlyShell` | string | optional (1/11) |
++| `data.toolTelemetry.properties.codeBlocks` | string | optional (3/11) |
++| `data.toolTelemetry.properties.command` | string | optional (7/11) |
++| `data.toolTelemetry.properties.customTimeout` | string | optional (1/11) |
++| `data.toolTelemetry.properties.detached` | string | optional (1/11) |
++| `data.toolTelemetry.properties.executionMode` | string | optional (1/11) |
++| `data.toolTelemetry.properties.execution_mode` | string | optional (1/11) |
++| `data.toolTelemetry.properties.fileExtension` | string | optional (7/11) |
++| `data.toolTelemetry.properties.files_found` | string | optional (1/11) |
++| `data.toolTelemetry.properties.inputs` | string | optional (7/11) |
++| `data.toolTelemetry.properties.languageId` | string | optional (3/11) |
++| `data.toolTelemetry.properties.matches_found` | string | optional (1/11) |
++| `data.toolTelemetry.properties.options` | string | optional (7/11) |
++| `data.toolTelemetry.properties.output_mode` | string | optional (1/11) |
++| `data.toolTelemetry.properties.prompt_length` | string | optional (1/11) |
++| `data.toolTelemetry.properties.resolvedPathAgainstCwd` | string | optional (7/11) |
++| `data.toolTelemetry.properties.response_length` | string | optional (1/11) |
++| `data.toolTelemetry.properties.sandboxApplied` | string | optional (3/11) |
++| `data.toolTelemetry.properties.sandboxOptOutRequested` | string | optional (1/11) |
++| `data.toolTelemetry.properties.viewType` | string | optional (4/11) |
++| `data.toolTelemetry.restrictedProperties` | object | optional (5/11) |
++| `data.toolTelemetry.restrictedProperties.agent_name` | string | optional (1/11) |
++| `data.toolTelemetry.restrictedProperties.filePaths` | string | optional (3/11) |
++| `data.toolTelemetry.restrictedProperties.path` | string | optional (1/11) |
++| `data.toolTelemetry.restrictedProperties.pattern` | string | optional (1/11) |
++| `data.turnId` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `tool.execution_start` (11 records)
++
++| field | shape | presence |
++|---|---|---|
++| `agentId` | string | optional (1/11) |
++| `data.arguments.agent_type` | string | optional (1/11) |
++| `data.arguments.command` | string | optional (1/11) |
++| `data.arguments.description` | string | optional (2/11) |
++| `data.arguments.file_text` | string | optional (2/11) |
++| `data.arguments.mode` | string | optional (1/11) |
++| `data.arguments.name` | string | optional (1/11) |
++| `data.arguments.new_str` | string | optional (1/11) |
++| `data.arguments.old_str` | string | optional (1/11) |
++| `data.arguments.path` | string | optional (7/11) |
++| `data.arguments.pattern` | string | optional (2/11) |
++| `data.arguments.prompt` | string | optional (1/11) |
++| `data.model` | string | required |
++| `data.parentToolCallId` | string | optional (1/11) |
++| `data.shellToolInfo.hasWriteFileRedirection` | bool | optional (1/11) |
++| `data.shellToolInfo.possiblePaths[]` | string | optional (1/11) |
++| `data.toolCallId` | string | required |
++| `data.toolName` | string | required |
++| `data.turnId` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `user.message` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `data.attachments` | array | required |
++| `data.content` | string | required |
++| `data.delivery` | string | required |
++| `data.interactionId` | string | required |
++| `data.parentAgentTaskId` | string | required |
++| `data.supportedNativeDocumentMimeTypes` | array | required |
++| `data.transformedContent` | string | required |
++| `id` | string | required |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
+diff --git a/docs/agents/formats/observed/cursor.md b/docs/agents/formats/observed/cursor.md
+new file mode 100644
+index 00000000..57254e49
+--- /dev/null
++++ b/docs/agents/formats/observed/cursor.md
+@@ -0,0 +1,336 @@
++<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.
++     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->
++
++# cursor: fields observed in the recordings
++
++Computed from every recording of this harness the baseline runs. **required** = present in every record of its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the recordings contain, not a specification: a field absent here may exist in versions we have no recording of.
++
++## Recordings
++
++- `test-fixtures/cursor/convo.json`
++
++## Versions the recordings name
++
++None: these recordings do not record the harness version.
++
++## `document` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `bubbles[]._v` | number | required |
++| `bubbles[].aiWebSearchResults` | array | required |
++| `bubbles[].approximateLintErrors` | array | required |
++| `bubbles[].assistantSuggestedDiffs` | array | required |
++| `bubbles[].attachedCodeChunks` | array | required |
++| `bubbles[].attachedFileCodeChunksMetadataOnly` | array | required |
++| `bubbles[].attachedFolders` | array | required |
++| `bubbles[].attachedFoldersListDirResults` | array | required |
++| `bubbles[].attachedFoldersNew` | array | required |
++| `bubbles[].attachedHumanChanges` | bool | required |
++| `bubbles[].bubbleId` | string | required |
++| `bubbles[].capabilities` | array | required |
++| `bubbles[].capabilityContexts` | array | required |
++| `bubbles[].capabilityType` | number | required |
++| `bubbles[].checkpointId` | string | required |
++| `bubbles[].codeBlocks` | array | required |
++| `bubbles[].codebaseContextChunks` | array | required |
++| `bubbles[].commits` | array | required |
++| `bubbles[].consoleLogs` | array | required |
++| `bubbles[].context.browserSelections` | array | required |
++| `bubbles[].context.composers` | array | required |
++| `bubbles[].context.cursorCommands` | array | required |
++| `bubbles[].context.cursorRules` | array | required |
++| `bubbles[].context.externalLinks` | array | required |
++| `bubbles[].context.extraContext` | array | required |
++| `bubbles[].context.fileSelections` | array | required |
++| `bubbles[].context.folderSelections` | array | required |
++| `bubbles[].context.gitPRDiffSelections` | array | required |
++| `bubbles[].context.mentions.browserSelections` | object | required |
++| `bubbles[].context.mentions.composers` | object | required |
++| `bubbles[].context.mentions.consoleLogs` | array | required |
++| `bubbles[].context.mentions.cursorCommands` | object | required |
++| `bubbles[].context.mentions.cursorRules` | object | required |
++| `bubbles[].context.mentions.diffHistory` | array | required |
++| `bubbles[].context.mentions.externalLinks` | object | required |
++| `bubbles[].context.mentions.fileSelections` | object | required |
++| `bubbles[].context.mentions.folderSelections` | object | required |
++| `bubbles[].context.mentions.gitDiff` | array | required |
++| `bubbles[].context.mentions.gitDiffFromBranchToMain` | array | required |
++| `bubbles[].context.mentions.gitPRDiffSelections` | object | required |
++| `bubbles[].context.mentions.ideEditorsState` | array | required |
++| `bubbles[].context.mentions.selectedCommits` | object | required |
++| `bubbles[].context.mentions.selectedDocs` | object | required |
++| `bubbles[].context.mentions.selectedDocuments` | object | required |
++| `bubbles[].context.mentions.selectedImages` | object | required |
++| `bubbles[].context.mentions.selectedPullRequests` | object | required |
++| `bubbles[].context.mentions.selectedVideos` | object | required |
++| `bubbles[].context.mentions.selections` | object | required |
++| `bubbles[].context.mentions.subagentSelections` | object | required |
++| `bubbles[].context.mentions.terminalFiles` | object | required |
++| `bubbles[].context.mentions.terminalSelections` | object | required |
++| `bubbles[].context.mentions.uiElementSelections` | array | required |
++| `bubbles[].context.selectedCommits` | array | required |
++| `bubbles[].context.selectedDocs` | array | required |
++| `bubbles[].context.selectedDocuments` | array | required |
++| `bubbles[].context.selectedImages` | array | required |
++| `bubbles[].context.selectedPullRequests` | array | required |
++| `bubbles[].context.selectedVideos` | array | required |
++| `bubbles[].context.selections` | array | required |
++| `bubbles[].context.subagentSelections` | array | required |
++| `bubbles[].context.terminalFiles` | array | required |
++| `bubbles[].context.terminalSelections` | array | required |
++| `bubbles[].contextPieces` | array | required |
++| `bubbles[].conversationState` | string | required |
++| `bubbles[].createdAt` | string | required |
++| `bubbles[].cursorCommands` | array | required |
++| `bubbles[].cursorCommandsExplicitlySet` | bool | required |
++| `bubbles[].cursorRules` | array | required |
++| `bubbles[].deletedFiles` | array | required |
++| `bubbles[].diffHistories` | array | required |
++| `bubbles[].diffsForCompressingFiles` | array | required |
++| `bubbles[].diffsSinceLastApply` | array | required |
++| `bubbles[].docsReferences` | array | required |
++| `bubbles[].documentationSelections` | array | required |
++| `bubbles[].editTrailContexts` | array | required |
++| `bubbles[].existedPreviousTerminalCommand` | bool | required |
++| `bubbles[].existedSubsequentTerminalCommand` | bool | required |
++| `bubbles[].externalLinks` | array | required |
++| `bubbles[].fileDiffTrajectories` | array | required |
++| `bubbles[].gitDiffs` | array | required |
++| `bubbles[].humanChanges` | array | required |
++| `bubbles[].images` | array | required |
++| `bubbles[].interpreterResults` | array | required |
++| `bubbles[].isAgentic` | bool | required |
++| `bubbles[].isPlanExecution` | bool | required |
++| `bubbles[].isRefunded` | bool | required |
++| `bubbles[].knowledgeItems` | array | required |
++| `bubbles[].lints` | array | required |
++| `bubbles[].mcpDescriptors` | array | required |
++| `bubbles[].modelInfo.modelName` | string | required |
++| `bubbles[].multiFileLinterErrors` | array | required |
++| `bubbles[].notepads` | array | required |
++| `bubbles[].pastChats` | array | required |
++| `bubbles[].pastChatsExplicitlySet` | bool | required |
++| `bubbles[].projectLayouts` | array | required |
++| `bubbles[].pullRequests` | array | required |
++| `bubbles[].recentLocationsHistory` | array | required |
++| `bubbles[].recentlyViewedFiles` | array | required |
++| `bubbles[].relevantFiles` | array | required |
++| `bubbles[].requestId` | string | required |
++| `bubbles[].richText` | string | required |
++| `bubbles[].suggestedCodeBlocks` | array | required |
++| `bubbles[].summarizedComposers` | array | required |
++| `bubbles[].supportedTools` | array | required |
++| `bubbles[].text` | string | required |
++| `bubbles[].thinking.signature` | string | required |
++| `bubbles[].thinking.text` | string | required |
++| `bubbles[].thinkingDurationMs` | number | required |
++| `bubbles[].thinkingStyle` | number | required |
++| `bubbles[].todos` | array | required |
++| `bubbles[].tokenCount.inputTokens` | number | required |
++| `bubbles[].tokenCount.outputTokens` | number | required |
++| `bubbles[].toolFormerData.additionalData` | object | required |
++| `bubbles[].toolFormerData.additionalData.isPruned` | bool | required |
++| `bubbles[].toolFormerData.additionalData.outputMode` | string | required |
++| `bubbles[].toolFormerData.additionalData.path` | string | required |
++| `bubbles[].toolFormerData.additionalData.pattern` | string | required |
++| `bubbles[].toolFormerData.additionalData.precomputedDiff.hasChanges` | bool | required |
++| `bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].content` | string | required |
++| `bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].modifiedLineNumber` | number | required |
++| `bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].originalLineNumber` | number | required |
++| `bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].type` | string | required |
++| `bubbles[].toolFormerData.additionalData.startedAtMs` | number | required |
++| `bubbles[].toolFormerData.additionalData.status` | string | required |
++| `bubbles[].toolFormerData.additionalData.subagentComposerId` | string | required |
++| `bubbles[].toolFormerData.additionalData.terminationReason` | string | required |
++| `bubbles[].toolFormerData.additionalData.topFiles[].matchCount` | number | required |
++| `bubbles[].toolFormerData.additionalData.topFiles[].uri` | string | required |
++| `bubbles[].toolFormerData.additionalData.totalFiles` | number | required |
++| `bubbles[].toolFormerData.additionalData.totalMatches` | number | required |
++| `bubbles[].toolFormerData.modelCallId` | string | required |
++| `bubbles[].toolFormerData.name` | string | required |
++| `bubbles[].toolFormerData.params` | string | required |
++| `bubbles[].toolFormerData.result` | string | required |
++| `bubbles[].toolFormerData.status` | string | required |
++| `bubbles[].toolFormerData.tool` | number | required |
++| `bubbles[].toolFormerData.toolCallId` | string | required |
++| `bubbles[].toolFormerData.toolIndex` | number | required |
++| `bubbles[].turnDurationMs` | number | required |
++| `bubbles[].type` | number | required |
++| `bubbles[].uiElementPicked` | array | required |
++| `bubbles[].unifiedMode` | number | required |
++| `bubbles[].userResponsesToSuggestedCodeBlocks` | array | required |
++| `bubbles[].webReferences` | array | required |
++| `bubbles[].workspaceUris` | array | required |
++| `content_blobs.<key>` | string | required |
++| `data._v` | number | required |
++| `data.activeTabsShouldBeReactive` | bool | required |
++| `data.addedFiles` | number | required |
++| `data.agentBackend` | string | required |
++| `data.allAttachedFileCodeChunksUris` | array | required |
++| `data.applied` | bool | required |
++| `data.applyAgentBackendTypeRestrictions` | bool | required |
++| `data.blobEncryptionKey` | string | required |
++| `data.browserChipManuallyDisabled` | bool | required |
++| `data.browserChipManuallyEnabled` | bool | required |
++| `data.capabilities[].data` | object | required |
++| `data.capabilities[].data.bubbleDataMap` | string | required |
++| `data.capabilities[].type` | number | required |
++| `data.capabilityContexts` | array | required |
++| `data.codeBlockData` | object | required |
++| `data.composerId` | string | required |
++| `data.context.browserSelections` | array | required |
++| `data.context.composers` | array | required |
++| `data.context.cursorCommands` | array | required |
++| `data.context.cursorRules` | array | required |
++| `data.context.externalLinks` | array | required |
++| `data.context.extraContext` | array | required |
++| `data.context.fileSelections` | array | required |
++| `data.context.folderSelections` | array | required |
++| `data.context.gitPRDiffSelections` | array | required |
++| `data.context.mentions.browserSelections` | object | required |
++| `data.context.mentions.composers` | object | required |
++| `data.context.mentions.consoleLogs` | array | required |
++| `data.context.mentions.cursorCommands` | object | required |
++| `data.context.mentions.cursorRules` | object | required |
++| `data.context.mentions.diffHistory` | array | required |
++| `data.context.mentions.externalLinks` | object | required |
++| `data.context.mentions.fileSelections` | object | required |
++| `data.context.mentions.folderSelections` | object | required |
++| `data.context.mentions.gitDiff` | array | required |
++| `data.context.mentions.gitDiffFromBranchToMain` | array | required |
++| `data.context.mentions.gitPRDiffSelections` | object | required |
++| `data.context.mentions.ideEditorsState` | array | required |
++| `data.context.mentions.selectedCommits` | object | required |
++| `data.context.mentions.selectedDocs` | object | required |
++| `data.context.mentions.selectedDocuments` | object | required |
++| `data.context.mentions.selectedImages` | object | required |
++| `data.context.mentions.selectedPullRequests` | object | required |
++| `data.context.mentions.selectedVideos` | object | required |
++| `data.context.mentions.selections` | object | required |
++| `data.context.mentions.subagentSelections` | object | required |
++| `data.context.mentions.terminalFiles` | object | required |
++| `data.context.mentions.terminalSelections` | object | required |
++| `data.context.mentions.uiElementSelections` | array | required |
++| `data.context.selectedCommits` | array | required |
++| `data.context.selectedDocs` | array | required |
++| `data.context.selectedDocuments` | array | required |
++| `data.context.selectedImages` | array | required |
++| `data.context.selectedPullRequests` | array | required |
++| `data.context.selectedVideos` | array | required |
++| `data.context.selections` | array | required |
++| `data.context.subagentSelections` | array | required |
++| `data.context.terminalSelections` | array | required |
++| `data.contextUsagePercent` | number | required |
++| `data.conversationCheckpointLastUpdatedAt` | number | required |
++| `data.conversationMap` | object | required |
++| `data.conversationState` | string | required |
++| `data.createdAt` | number | required |
++| `data.debugModeSuggestionUsed` | bool | required |
++| `data.filesChangedCount` | number | required |
++| `data.forceMode` | string | required |
++| `data.fullConversationHeadersOnly[].bubbleId` | string | required |
++| `data.fullConversationHeadersOnly[].contentHeightHint` | number | required |
++| `data.fullConversationHeadersOnly[].grouping.<key>` | bool | required |
++| `data.fullConversationHeadersOnly[].grouping.capabilityType` | number | required |
++| `data.fullConversationHeadersOnly[].grouping.hasText` | bool | required |
++| `data.fullConversationHeadersOnly[].grouping.hasThinking` | bool | required |
++| `data.fullConversationHeadersOnly[].grouping.isRenderable` | bool | required |
++| `data.fullConversationHeadersOnly[].grouping.isShortPlainText` | bool | required |
++| `data.fullConversationHeadersOnly[].grouping.isToolGroupable` | bool | required |
++| `data.fullConversationHeadersOnly[].grouping.thinkingDurationMs` | number | required |
++| `data.fullConversationHeadersOnly[].grouping.toolCallId` | string | required |
++| `data.fullConversationHeadersOnly[].grouping.toolFormerTool` | number | required |
++| `data.fullConversationHeadersOnly[].grouping.turnDurationMs` | number | required |
++| `data.fullConversationHeadersOnly[].type` | number | required |
++| `data.generatingBubbleIds` | array | required |
++| `data.gitHubPromptDismissed` | bool | required |
++| `data.hasChangedContext` | bool | required |
++| `data.hasLoaded` | bool | required |
++| `data.hasUnreadMessages` | bool | required |
++| `data.isAgentic` | bool | required |
++| `data.isApplyingWorktree` | bool | required |
++| `data.isBestOfNParent` | bool | required |
++| `data.isBestOfNSubcomposer` | bool | required |
++| `data.isContinuationInProgress` | bool | required |
++| `data.isCreatingWorktree` | bool | required |
++| `data.isDraft` | bool | required |
++| `data.isFileListExpanded` | bool | required |
++| `data.isNAL` | bool | required |
++| `data.isProject` | bool | required |
++| `data.isQueueExpanded` | bool | required |
++| `data.isReadingLongFile` | bool | required |
++| `data.isSpec` | bool | required |
++| `data.isSpecSubagentDone` | bool | required |
++| `data.isUndoingWorktree` | bool | required |
++| `data.lastUpdatedAt` | number | required |
++| `data.latestChatGenerationUUID` | string | required |
++| `data.modelConfig.maxMode` | bool | required |
++| `data.modelConfig.modelName` | string | required |
++| `data.modelConfig.selectedModels[].modelId` | string | required |
++| `data.name` | string | required |
++| `data.newlyCreatedFiles[].uri.$mid` | number | required |
++| `data.newlyCreatedFiles[].uri.external` | string | required |
++| `data.newlyCreatedFiles[].uri.path` | string | required |
++| `data.newlyCreatedFiles[].uri.scheme` | string | required |
++| `data.newlyCreatedFolders` | array | required |
++| `data.originalFileStates.<key>.contentKey` | string | required |
++| `data.originalFileStates.<key>.firstEditBubbleId` | string | required |
++| `data.originalFileStates.<key>.isNewlyCreated` | bool | required |
++| `data.originalFileStates.<key>.newlyCreatedFolders` | array | required |
++| `data.pendingCreateWorktree` | bool | required |
++| `data.planModeSuggestionUsed` | bool | required |
++| `data.promptTokenBreakdown.categories[].estimatedTokens` | number | required |
++| `data.promptTokenBreakdown.categories[].id` | string | required |
++| `data.promptTokenBreakdown.categories[].label` | string | required |
++| `data.promptTokenBreakdown.maxTokens` | number | required |
++| `data.promptTokenBreakdown.totalUsedTokens` | number | required |
++| `data.queueItems` | array | required |
++| `data.removedFiles` | number | required |
++| `data.restrictAgentModeSwitching` | bool | required |
++| `data.richText` | string | required |
++| `data.speculativeSummarizationEncryptionKey` | string | required |
++| `data.status` | string | required |
++| `data.stopHookLoopCount` | number | required |
++| `data.subagentComposerIds[]` | string | required |
++| `data.subtitle` | string | required |
++| `data.text` | string | required |
++| `data.todos` | array | required |
++| `data.totalLinesAdded` | number | required |
++| `data.totalLinesRemoved` | number | required |
++| `data.trackedGitRepos` | array | required |
++| `data.unifiedMode` | string | required |
++| `data.usageData` | object | required |
++| `data.worktreeStartedReadOnly` | bool | required |
++| `head.composerId` | string | required |
++| `head.contextUsagePercent` | number | required |
++| `head.conversationCheckpointLastUpdatedAt` | number | required |
++| `head.createdAt` | number | required |
++| `head.filesChangedCount` | number | required |
++| `head.forceMode` | string | required |
++| `head.hasBlockingPendingActions` | bool | required |
++| `head.hasPendingPlan` | bool | required |
++| `head.hasUnreadMessages` | bool | required |
++| `head.isArchived` | bool | required |
++| `head.isBestOfNSubcomposer` | bool | required |
++| `head.isDraft` | bool | required |
++| `head.isProject` | bool | required |
++| `head.isSpec` | bool | required |
++| `head.isWorktree` | bool | required |
++| `head.lastUpdatedAt` | number | required |
++| `head.name` | string | required |
++| `head.numSubComposers` | number | required |
++| `head.referencedPlans` | array | required |
++| `head.subtitle` | string | required |
++| `head.totalLinesAdded` | number | required |
++| `head.totalLinesRemoved` | number | required |
++| `head.trackedGitRepos` | array | required |
++| `head.type` | string | required |
++| `head.unifiedMode` | string | required |
++| `head.workspaceIdentifier.id` | string | required |
++| `head.workspaceIdentifier.uri.$mid` | number | required |
++| `head.workspaceIdentifier.uri.external` | string | required |
++| `head.workspaceIdentifier.uri.fsPath` | string | required |
++| `head.workspaceIdentifier.uri.path` | string | required |
++| `head.workspaceIdentifier.uri.scheme` | string | required |
++| `head.worktreeStartedReadOnly` | bool | required |
+diff --git a/docs/agents/formats/observed/gemini.md b/docs/agents/formats/observed/gemini.md
+new file mode 100644
+index 00000000..013b6eae
+--- /dev/null
++++ b/docs/agents/formats/observed/gemini.md
+@@ -0,0 +1,125 @@
++<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.
++     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->
++
++# gemini: fields observed in the recordings
++
++Computed from every recording of this harness the baseline runs. **required** = present in every record of its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the recordings contain, not a specification: a field absent here may exist in versions we have no recording of.
++
++## Recordings
++
++- `test-fixtures/gemini/convo.jsonl`
++
++## Versions the recordings name
++
++None: these recordings do not record the harness version.
++
++## `$set` (12 records)
++
++| field | shape | presence |
++|---|---|---|
++| `$set.lastUpdated` | string | required |
++
++## `(no type)` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `kind` | string | required |
++| `lastUpdated` | string | required |
++| `projectHash` | string | required |
++| `sessionId` | string | required |
++| `startTime` | string | required |
++
++## `gemini` (21 records)
++
++| field | shape | presence |
++|---|---|---|
++| `content` | string | required |
++| `id` | string | required |
++| `model` | string | required |
++| `thoughts` | array | optional (19/21) |
++| `thoughts[].description` | string | optional (2/21) |
++| `thoughts[].subject` | string | optional (2/21) |
++| `thoughts[].timestamp` | string | optional (2/21) |
++| `timestamp` | string | required |
++| `tokens.cached` | number | required |
++| `tokens.input` | number | required |
++| `tokens.output` | number | required |
++| `tokens.thoughts` | number | required |
++| `tokens.tool` | number | required |
++| `tokens.total` | number | required |
++| `toolCalls[].agentId` | string | optional (1/21) |
++| `toolCalls[].args.agent_name` | string | optional (1/21) |
++| `toolCalls[].args.command` | string | optional (1/21) |
++| `toolCalls[].args.content` | string | optional (2/21) |
++| `toolCalls[].args.context` | number | optional (1/21) |
++| `toolCalls[].args.description` | string | optional (1/21) |
++| `toolCalls[].args.dir_path` | string | optional (1/21) |
++| `toolCalls[].args.file_path` | string | optional (5/21) |
++| `toolCalls[].args.instruction` | string | optional (1/21) |
++| `toolCalls[].args.new_string` | string | optional (1/21) |
++| `toolCalls[].args.old_string` | string | optional (1/21) |
++| `toolCalls[].args.pattern` | string | optional (2/21) |
++| `toolCalls[].args.prompt` | string | optional (1/21) |
++| `toolCalls[].description` | string | optional (10/21) |
++| `toolCalls[].displayName` | string | optional (10/21) |
++| `toolCalls[].id` | string | optional (10/21) |
++| `toolCalls[].name` | string | optional (10/21) |
++| `toolCalls[].renderOutputAsMarkdown` | bool | optional (10/21) |
++| `toolCalls[].resultDisplay` | string | optional (3/21) |
++| `toolCalls[].resultDisplay.agentName` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.diffStat.model_added_chars` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.diffStat.model_added_lines` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.diffStat.model_removed_chars` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.diffStat.model_removed_lines` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.diffStat.user_added_chars` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.diffStat.user_added_lines` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.diffStat.user_removed_chars` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.diffStat.user_removed_lines` | number | optional (3/21) |
++| `toolCalls[].resultDisplay.fileDiff` | string | optional (3/21) |
++| `toolCalls[].resultDisplay.fileName` | string | optional (3/21) |
++| `toolCalls[].resultDisplay.filePath` | string | optional (3/21) |
++| `toolCalls[].resultDisplay.files[]` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.isNewFile` | bool | optional (3/21) |
++| `toolCalls[].resultDisplay.isSubagentProgress` | bool | optional (1/21) |
++| `toolCalls[].resultDisplay.matches[].absolutePath` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.matches[].filePath` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.matches[].line` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.matches[].lineNumber` | number | optional (1/21) |
++| `toolCalls[].resultDisplay.newContent` | string | optional (3/21) |
++| `toolCalls[].resultDisplay.originalContent` | string | optional (3/21) |
++| `toolCalls[].resultDisplay.recentActivity[].args` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.recentActivity[].content` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.recentActivity[].description` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.recentActivity[].displayName` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.recentActivity[].id` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.recentActivity[].status` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.recentActivity[].type` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.result` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.state` | string | optional (1/21) |
++| `toolCalls[].resultDisplay.summary` | string | optional (2/21) |
++| `toolCalls[].resultDisplay.terminateReason` | string | optional (1/21) |
++| `toolCalls[].resultDisplay[][].bg` | string | optional (1/21) |
++| `toolCalls[].resultDisplay[][].bold` | bool | optional (1/21) |
++| `toolCalls[].resultDisplay[][].dim` | bool | optional (1/21) |
++| `toolCalls[].resultDisplay[][].fg` | string | optional (1/21) |
++| `toolCalls[].resultDisplay[][].inverse` | bool | optional (1/21) |
++| `toolCalls[].resultDisplay[][].isUninitialized` | bool | optional (1/21) |
++| `toolCalls[].resultDisplay[][].italic` | bool | optional (1/21) |
++| `toolCalls[].resultDisplay[][].text` | string | optional (1/21) |
++| `toolCalls[].resultDisplay[][].underline` | bool | optional (1/21) |
++| `toolCalls[].result[].functionResponse.id` | string | optional (10/21) |
++| `toolCalls[].result[].functionResponse.name` | string | optional (10/21) |
++| `toolCalls[].result[].functionResponse.response.error` | string | optional (1/21) |
++| `toolCalls[].result[].functionResponse.response.output` | string | optional (9/21) |
++| `toolCalls[].status` | string | optional (10/21) |
++| `toolCalls[].timestamp` | string | optional (10/21) |
++| `type` | string | required |
++
++## `user` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `content[].text` | string | required |
++| `id` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
+diff --git a/docs/agents/formats/observed/opencode.md b/docs/agents/formats/observed/opencode.md
+new file mode 100644
+index 00000000..438693fc
+--- /dev/null
++++ b/docs/agents/formats/observed/opencode.md
+@@ -0,0 +1,110 @@
++<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.
++     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->
++
++# opencode: fields observed in the recordings
++
++Computed from every recording of this harness the baseline runs. **required** = present in every record of its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the recordings contain, not a specification: a field absent here may exist in versions we have no recording of.
++
++## Recordings
++
++- `test-fixtures/opencode/convo.json`
++
++## Versions the recordings name
++
++- `info.version` = `1.14.41` (`test-fixtures/opencode/convo.json`)
++
++## `document` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `info.directory` | string | required |
++| `info.id` | string | required |
++| `info.path` | string | required |
++| `info.permission[].action` | string | required |
++| `info.permission[].pattern` | string | required |
++| `info.permission[].permission` | string | required |
++| `info.projectID` | string | required |
++| `info.slug` | string | required |
++| `info.summary.additions` | number | required |
++| `info.summary.deletions` | number | required |
++| `info.summary.files` | number | required |
++| `info.time.created` | number | required |
++| `info.time.updated` | number | required |
++| `info.title` | string | required |
++| `info.version` | string | required |
++| `messages[].info.agent` | string | required |
++| `messages[].info.cost` | number | required |
++| `messages[].info.finish` | string | required |
++| `messages[].info.id` | string | required |
++| `messages[].info.mode` | string | required |
++| `messages[].info.model.modelID` | string | required |
++| `messages[].info.model.providerID` | string | required |
++| `messages[].info.modelID` | string | required |
++| `messages[].info.parentID` | string | required |
++| `messages[].info.path.cwd` | string | required |
++| `messages[].info.path.root` | string | required |
++| `messages[].info.providerID` | string | required |
++| `messages[].info.role` | string | required |
++| `messages[].info.sessionID` | string | required |
++| `messages[].info.summary.diffs` | array | required |
++| `messages[].info.time.completed` | number | required |
++| `messages[].info.time.created` | number | required |
++| `messages[].info.tokens.cache.read` | number | required |
++| `messages[].info.tokens.cache.write` | number | required |
++| `messages[].info.tokens.input` | number | required |
++| `messages[].info.tokens.output` | number | required |
++| `messages[].info.tokens.reasoning` | number | required |
++| `messages[].info.tokens.total` | number | required |
++| `messages[].parts[].callID` | string | required |
++| `messages[].parts[].cost` | number | required |
++| `messages[].parts[].id` | string | required |
++| `messages[].parts[].messageID` | string | required |
++| `messages[].parts[].reason` | string | required |
++| `messages[].parts[].sessionID` | string | required |
++| `messages[].parts[].state.error` | string | required |
++| `messages[].parts[].state.input.command` | string | required |
++| `messages[].parts[].state.input.content` | string | required |
++| `messages[].parts[].state.input.description` | string | required |
++| `messages[].parts[].state.input.filePath` | string | required |
++| `messages[].parts[].state.input.newString` | string | required |
++| `messages[].parts[].state.input.oldString` | string | required |
++| `messages[].parts[].state.input.path` | string | required |
++| `messages[].parts[].state.input.pattern` | string | required |
++| `messages[].parts[].state.input.prompt` | string | required |
++| `messages[].parts[].state.input.subagent_type` | string | required |
++| `messages[].parts[].state.input.workdir` | string | required |
++| `messages[].parts[].state.metadata.count` | number | required |
++| `messages[].parts[].state.metadata.description` | string | required |
++| `messages[].parts[].state.metadata.diagnostics` | object | required |
++| `messages[].parts[].state.metadata.diff` | string | required |
++| `messages[].parts[].state.metadata.exists` | bool | required |
++| `messages[].parts[].state.metadata.exit` | number | required |
++| `messages[].parts[].state.metadata.filediff.additions` | number | required |
++| `messages[].parts[].state.metadata.filediff.deletions` | number | required |
++| `messages[].parts[].state.metadata.filediff.file` | string | required |
++| `messages[].parts[].state.metadata.filediff.patch` | string | required |
++| `messages[].parts[].state.metadata.filepath` | string | required |
++| `messages[].parts[].state.metadata.loaded` | array | required |
++| `messages[].parts[].state.metadata.matches` | number | required |
++| `messages[].parts[].state.metadata.model.modelID` | string | required |
++| `messages[].parts[].state.metadata.model.providerID` | string | required |
++| `messages[].parts[].state.metadata.output` | string | required |
++| `messages[].parts[].state.metadata.preview` | string | required |
++| `messages[].parts[].state.metadata.sessionId` | string | required |
++| `messages[].parts[].state.metadata.truncated` | bool | required |
++| `messages[].parts[].state.output` | string | required |
++| `messages[].parts[].state.status` | string | required |
++| `messages[].parts[].state.time.end` | number | required |
++| `messages[].parts[].state.time.start` | number | required |
++| `messages[].parts[].state.title` | string | required |
++| `messages[].parts[].text` | string | required |
++| `messages[].parts[].time.end` | number | required |
++| `messages[].parts[].time.start` | number | required |
++| `messages[].parts[].tokens.cache.read` | number | required |
++| `messages[].parts[].tokens.cache.write` | number | required |
++| `messages[].parts[].tokens.input` | number | required |
++| `messages[].parts[].tokens.output` | number | required |
++| `messages[].parts[].tokens.reasoning` | number | required |
++| `messages[].parts[].tokens.total` | number | required |
++| `messages[].parts[].tool` | string | required |
++| `messages[].parts[].type` | string | required |
+diff --git a/docs/agents/formats/observed/pi.md b/docs/agents/formats/observed/pi.md
+new file mode 100644
+index 00000000..701c02d3
+--- /dev/null
++++ b/docs/agents/formats/observed/pi.md
+@@ -0,0 +1,88 @@
++<!-- Generated from the baseline's recordings by `crates/toolpath-goldens/tests/observed.rs`; do not edit.
++     Regenerate: OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed -->
++
++# pi: fields observed in the recordings
++
++Computed from every recording of this harness the baseline runs. **required** = present in every record of its kind in these recordings; **optional** = seen missing at least once. Shapes are the JSON types seen. Arrays are collapsed to `[]`; a key that is data (a path, an id) is shown as `<key>`. This is what the recordings contain, not a specification: a field absent here may exist in versions we have no recording of.
++
++## Recordings
++
++- `test-fixtures/pi/convo.jsonl`
++
++## Versions the recordings name
++
++- `version` = `3` (`test-fixtures/pi/convo.jsonl`)
++
++## `message` (22 records)
++
++| field | shape | presence |
++|---|---|---|
++| `id` | string | required |
++| `message.api` | string | optional (11/22) |
++| `message.content[].arguments.command` | string | optional (4/22) |
++| `message.content[].arguments.content` | string | optional (2/22) |
++| `message.content[].arguments.edits[].newText` | string | optional (1/22) |
++| `message.content[].arguments.edits[].oldText` | string | optional (1/22) |
++| `message.content[].arguments.path` | string | optional (6/22) |
++| `message.content[].id` | string | optional (10/22) |
++| `message.content[].name` | string | optional (10/22) |
++| `message.content[].text` | string | optional (17/22) |
++| `message.content[].thinking` | string | optional (6/22) |
++| `message.content[].thinkingSignature` | string | optional (6/22) |
++| `message.content[].type` | string | required |
++| `message.details` | object | optional (1/22) |
++| `message.details.diff` | string | optional (1/22) |
++| `message.details.firstChangedLine` | number | optional (1/22) |
++| `message.isError` | bool | optional (10/22) |
++| `message.model` | string | optional (11/22) |
++| `message.provider` | string | optional (11/22) |
++| `message.responseId` | string | optional (11/22) |
++| `message.role` | string | required |
++| `message.stopReason` | string | optional (11/22) |
++| `message.timestamp` | number | required |
++| `message.toolCallId` | string | optional (10/22) |
++| `message.toolName` | string | optional (10/22) |
++| `message.usage.cacheRead` | number | optional (11/22) |
++| `message.usage.cacheWrite` | number | optional (11/22) |
++| `message.usage.cost.cacheRead` | number | optional (11/22) |
++| `message.usage.cost.cacheWrite` | number | optional (11/22) |
++| `message.usage.cost.input` | number | optional (11/22) |
++| `message.usage.cost.output` | number | optional (11/22) |
++| `message.usage.cost.total` | number | optional (11/22) |
++| `message.usage.input` | number | optional (11/22) |
++| `message.usage.output` | number | optional (11/22) |
++| `message.usage.totalTokens` | number | optional (11/22) |
++| `parentId` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `model_change` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `id` | string | required |
++| `modelId` | string | required |
++| `parentId` | null | required |
++| `provider` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++
++## `session` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `cwd` | string | required |
++| `id` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
++| `version` | number | required |
++
++## `thinking_level_change` (1 record)
++
++| field | shape | presence |
++|---|---|---|
++| `id` | string | required |
++| `parentId` | string | required |
++| `thinkingLevel` | string | required |
++| `timestamp` | string | required |
++| `type` | string | required |
+diff --git a/docs/agents/formats/opencode.md b/docs/agents/formats/opencode.md
+index d9a3ab66..aed1a34b 100644
+--- a/docs/agents/formats/opencode.md
++++ b/docs/agents/formats/opencode.md
+@@ -13,6 +13,10 @@ from:
+    (the drizzle table definitions and the Zod Part/Message schemas).
+ 3. The snapshot subsystem in `packages/opencode/src/snapshot/index.ts`.
+ 
++The baseline's recording (`test-fixtures/opencode/convo.json`, an
++`opencode export` of opencode 1.14.41) carries the fields generated in
++[observed/opencode.md](observed/opencode.md).
++
+ Unlike Codex or Gemini, opencode **does not use JSONL**. Conversations
+ live in a SQLite database (`opencode-stable.db` for current releases,
+ `opencode.db` for older ones — see [Database file name](#database-file-name)).
+diff --git a/docs/agents/formats/pi.md b/docs/agents/formats/pi.md
+index ca1d77e7..d5bb9aa0 100644
+--- a/docs/agents/formats/pi.md
++++ b/docs/agents/formats/pi.md
+@@ -5,7 +5,10 @@ consumed by `toolpath-pi`. Pi calls itself a terminal coding agent and
+ writes sessions as JSONL files. This doc captures the format observed
+ in real Pi sessions plus the schema as defined in
+ `crates/toolpath-pi/src/types.rs`. Treat it as observed behaviour as
+-of **2026-04-27** (format version 3).
++of **2026-04-27** (format version 3). The baseline's recording
++(`test-fixtures/pi/convo.jsonl`, format version 3) does not record the
++pi version that wrote it; every field it carries is generated in
++[observed/pi.md](observed/pi.md).
+ 
+ ## Storage root
+ 
+diff --git a/pr/43-observed-format-facts.md b/pr/43-observed-format-facts.md
+new file mode 100644
+index 00000000..cb1a3cee
+--- /dev/null
++++ b/pr/43-observed-format-facts.md
+@@ -0,0 +1,63 @@
++# docs(formats): the format notes' facts generated from the recordings, and checked
++
++Status: planned (asked 2026-10-19: make the format notes' facts generated or checked, not hand-maintained) · Base:
++the goldens stack once merged · Independent of pr/19–42
++
++## Why
++`docs/agents/formats/` states facts that come from samples ("optional = seen without it, required = never seen
++missing", "what we've seen in sample data") and versions, all kept by hand, and stale against the recordings the
++baseline now runs: the Claude Code note's samples stop at 2.1.112 (the recordings are 2.1.132 and 2.1.285), the Codex
++note's at 0.118.0 (recording: 0.128.0), the opencode note names 1.3.10 and 1.18.18 (recording: 1.14.41), and the index
++still called the Copilot notes "not yet sample-grounded" although they cite 1.0.67 captures and the baseline records
++1.0.68. Nothing failed when a recording and a note disagreed.
++
++## What changes
++- `crates/toolpath-goldens/src/observed.rs` (new): over a harness's recordings, per record kind (`type`, Codex's
++  `type/payload.type`, or `document`), every field (key path, arrays collapsed; a key that is data — a path, an id, a
++  dated model id — shown as `<key>`), the JSON shapes seen, and `required` (never missing) or `optional (n/m)`; plus the
++  versions the recordings name. Unit tests.
++- `docs/agents/formats/observed/<harness>.md` (new, generated, seven files): that table per harness, with the
++  recordings it was computed from.
++- `crates/toolpath-goldens/tests/observed.rs` (new): fails when a table is stale (regenerate:
++  `OBSERVED_UPDATE=1 cargo test -p toolpath-goldens --test observed`), when a note doesn't link its table, when a
++  recording contains a record kind the harness's notes never name, or a dotted version the note doesn't name.
++- Notes: each links its table and names the recordings' versions (Claude Code 2.1.132 and 2.1.285, Codex 0.128.0,
++  Copilot 1.0.68, opencode 1.14.41; pi, Gemini and Cursor recordings carry no version, said so). Claude Code's
++  `entry-types.md` describes `cost-state` (seen in 2.1.285, the one entry type no note named). The index explains
++  `observed/` and corrects the Copilot line: grounded in captures; the `[reverse-eng]` rows are exactly the event
++  types no recording contains (checked: none of them occurs in the 1.0.68 recording).
++- Qualifier: a concern on the index's Maintenance rule. The rule is now enforced from the recordings; a reader or
++  writer change with no new recording still is not, and the record says why whole-file spans were not used and what
++  would close it.
++
++## Verification
++- `cargo test -p toolpath-goldens` (lib `observed` tests, `--test observed`): ok.
++- At this base the workspace test is red independently of this piece: 7a93457 (Cursor 3.24 model history) changed
++  the Cursor projection without recapturing `projection@*@cursor`, `round_trip@*@cursor`, `shed@*` and
++  `writer@cursor`; nothing here touches them.
++- Gates as `scripts/quality_gates.sh` with `--features path-cli/goldens,toolpath/verify`.
++
++## Paths
++```
++crates/toolpath-goldens/src/lib.rs
++crates/toolpath-goldens/src/observed.rs
++crates/toolpath-goldens/tests/observed.rs
++docs/agents/formats/.qual
++docs/agents/formats/README.md
++docs/agents/formats/claude-code/README.md
++docs/agents/formats/claude-code/entry-types.md
++docs/agents/formats/codex.md
++docs/agents/formats/copilot-cli/README.md
++docs/agents/formats/cursor.md
++docs/agents/formats/gemini.md
++docs/agents/formats/opencode.md
++docs/agents/formats/pi.md
++docs/agents/formats/observed/claude.md
++docs/agents/formats/observed/codex.md
++docs/agents/formats/observed/copilot.md
++docs/agents/formats/observed/cursor.md
++docs/agents/formats/observed/gemini.md
++docs/agents/formats/observed/opencode.md
++docs/agents/formats/observed/pi.md
++pr/43-observed-format-facts.md
++```
+-- 
+2.55.0
+

@@ -1,0 +1,1601 @@
+From 810a58b6d0795920890bfe104c67fcccfcb14732 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 16:40:47 -0400
+Subject: [PATCH] =?UTF-8?q?feat(toolpath):=20the=20RFC's=20signature=20alg?=
+ =?UTF-8?q?orithm,=20proven=20=E2=80=94=20JCS=20inputs,=20SHA-256=20digest?=
+ =?UTF-8?q?s,=20ssh=20verification?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A 'verify' feature on toolpath: v1::sign::{jcs, digest, step_author_input,
+path_author_input, path_reviewer_input, verify_step_signature,
+verify_path_signatures}. JCS is written in the crate (ECMAScript numbers
+via ryu-js); ssh Ed25519 SSHSIG in namespace 'toolpath'; gpg/sigstore
+refused. Tests: the six RFC 8785 reference vectors (vendored, Apache-2.0),
+escapes, numbers, the RFC example byte for byte, what gets signed, JSONL
+round trip, 2000 generated values; 14 signature tests with seeded keys.
+
+serde_json float_roundtrip workspace-wide changes how every crate parses
+floats: without it the RFC 8785 vectors canonicalize wrong and Claude
+Code's costUSD 0.020428699999999998 silently read back as 0.0204287.
+ir@/document@/shed@claude-session recaptured for that value only.
+
+Gates build with toolpath/verify. Qualifier records on RFC.md 395 and
+712-836 (RFC.md:719 is false: RFC 8785 orders keys by UTF-16, not
+UTF-8), jsonl.rs, and examples/path-02 (its jsonl twin differs).
+Record: pr/29-signatures.
+---
+ .qual                                         |  18 +
+ Cargo.lock                                    |   3 +
+ Cargo.toml                                    |   6 +-
+ .../snapshots/document@claude-session.snap    |   4 +-
+ .../snapshots/ir@claude-session.snap          |   4 +-
+ .../snapshots/shed@claude-session.snap        |   4 +-
+ crates/toolpath/Cargo.toml                    |  20 +
+ crates/toolpath/src/.qual                     |   1 +
+ crates/toolpath/src/lib.rs                    |  12 +
+ crates/toolpath/src/sign.rs                   | 300 ++++++++++++++
+ crates/toolpath/tests/jcs-vectors/LICENSE     |  13 +
+ crates/toolpath/tests/jcs-vectors/SOURCE.md   |  13 +
+ .../tests/jcs-vectors/input/arrays.json       |   8 +
+ .../tests/jcs-vectors/input/french.json       |   6 +
+ .../tests/jcs-vectors/input/structures.json   |   8 +
+ .../tests/jcs-vectors/input/unicode.json      |   3 +
+ .../tests/jcs-vectors/input/values.json       |   5 +
+ .../tests/jcs-vectors/input/weird.json        |  11 +
+ .../tests/jcs-vectors/output/arrays.json      |   1 +
+ .../tests/jcs-vectors/output/french.json      |   1 +
+ .../tests/jcs-vectors/output/structures.json  |   1 +
+ .../tests/jcs-vectors/output/unicode.json     |   1 +
+ .../tests/jcs-vectors/output/values.json      |   1 +
+ .../tests/jcs-vectors/output/weird.json       |   1 +
+ crates/toolpath/tests/jcs.rs                  | 392 ++++++++++++++++++
+ crates/toolpath/tests/signatures.rs           | 302 ++++++++++++++
+ examples/.qual                                |   1 +
+ justfile                                      |   2 +-
+ pr/29-signatures.md                           |  66 +++
+ pr/cut.sh                                     |   6 +-
+ pr/gate-piece.sh                              |   6 +-
+ scripts/quality_gates.sh                      |   6 +-
+ 32 files changed, 1209 insertions(+), 17 deletions(-)
+ create mode 100644 crates/toolpath/src/.qual
+ create mode 100644 crates/toolpath/src/sign.rs
+ create mode 100644 crates/toolpath/tests/jcs-vectors/LICENSE
+ create mode 100644 crates/toolpath/tests/jcs-vectors/SOURCE.md
+ create mode 100644 crates/toolpath/tests/jcs-vectors/input/arrays.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/input/french.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/input/structures.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/input/unicode.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/input/values.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/input/weird.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/output/arrays.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/output/french.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/output/structures.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/output/unicode.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/output/values.json
+ create mode 100644 crates/toolpath/tests/jcs-vectors/output/weird.json
+ create mode 100644 crates/toolpath/tests/jcs.rs
+ create mode 100644 crates/toolpath/tests/signatures.rs
+ create mode 100644 examples/.qual
+ create mode 100644 pr/29-signatures.md
+
+diff --git a/.qual b/.qual
+index 00b07c3e..f3efa879 100644
+--- a/.qual
++++ b/.qual
+@@ -7,3 +7,21 @@
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:28:03.242849Z","id":"4188fae59914bcfc4bd303eb0604024b9c84af31c0b77762fa0edc94b6d85451","body":{"detail":"core_types@validate (crates/path-cli/tests/core_types.rs): a duplicated step id, a duplicated path id, a parent naming no step, and a head naming no step all validate. The JSON Schema cannot express these; the validator would need a structural pass after the schema.","kind":"concern","span":{"start":{"line":127},"end":{"line":127},"content_hash":"348caab9de8420e7f36d5a15f2b61a3eb6b1f56a1b3eaaf37d48e52104d2ce62"},"summary":"path p validate does not enforce ID uniqueness, parent references or path.head","tags":["rfc-types","goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:28:03.253618Z","id":"fe818f2b8049614e6361840c310502a6f1bfcbdbb17e9674d8ef4a7fdaf453f6","body":{"detail":"core_types@validate row '$ref MUST NOT point to a .path.jsonl stream': accepted.","kind":"concern","span":{"start":{"line":122},"end":{"line":122},"content_hash":"ebd9ce2deed09df50a67c84bcb86c6b8394d21294f3f99f4c96da9a3c91c4167"},"summary":"path p validate accepts a $ref to a .path.jsonl stream, which the RFC forbids","tags":["rfc-types","goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:28:03.272645Z","id":"7b0b2a9eb1f9a0c89520027e59012af281ab3833397cb4ca3669160f07158948","body":{"detail":"formats@examples: the committed examples' .path.json twins use graph id graph-<path id>; Graph::from_jsonl names it <path id>. Everything else round-trips; all nine golden documents seal back identical (formats@<set>). examples/path-02-local-session.path.jsonl had also drifted (missing base.ref) and is fixed in this piece.","kind":"comment","span":{"start":{"line":116},"end":{"line":116},"content_hash":"da2a3bc8739fc4b4cbedee6bdc50564e311ab1bcf3c2059dd855f5991a45bf81"},"summary":"A .path.jsonl stream carries no graph identity; sealing names the graph after its path","tags":["rfc-types","goldens","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.422642Z","id":"984baee1559b72ffa375cd5555e1f9e4e81a24a62ebfc10ffd353f26ec5de76f","body":{"detail":"crates/toolpath/tests/jcs.rs::rfc8785_reference_vectors (vectors from cyberphone/json-canonicalization 32a4819, Apache-2.0, vendored in tests/jcs-vectors). Behind the toolpath 'verify' feature.","kind":"pass","span":{"start":{"line":712},"end":{"line":713},"content_hash":"a733e9c2739cd417c541a2bfc407ff5214a2f4ebd2695403f2193bd2313f43bc"},"summary":"JCS (RFC 8785) is the canonicalizer: toolpath::v1::sign::jcs reproduces all six RFC 8785 reference vectors byte for byte","tags":["rfc","signatures","jcs","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.422738Z","id":"a25ba26430c759fbb5a70689bdad82f6db78d3d91589c21fc3b44cda0cf0ddec","body":{"detail":"The implementation follows RFC 8785 (UTF-16), as the RFC 8785 vector weird.json requires (U+1F602 sorts before U+FB33). An implementer following this line literally would produce different canonical bytes and their signatures would not verify against ours. Proven by crates/toolpath/tests/jcs.rs::key_order_is_utf16_not_utf8.","kind":"blocker","span":{"start":{"line":719},"end":{"line":719},"content_hash":"86ccd1ad0524436a93b319614f8bf7400164f587a4fca7389c64583e19fdecd9"},"suggested_fix":"**Key Ordering**: Object keys sorted by their UTF-16 code units (RFC 8785 §3.2.3)","summary":"False as written: RFC 8785 sorts object keys by UTF-16 code units, not UTF-8 bytes; the two orders differ for keys above U+FFFF versus U+E000–U+FFFF","tags":["rfc","signatures","jcs","spec-error","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.423500Z","id":"9a4907f563c0b8ec6834339e8e8c49309f8feb21ff19d4685571d59ad1872fe4","body":{"detail":"crates/toolpath/tests/jcs.rs::properties_over_generated_values (no whitespace outside strings; re-parse equal; idempotent; structure equals an independent writer).","kind":"pass","span":{"start":{"line":720},"end":{"line":720},"content_hash":"e23f9ae02d6d9bb29056a1a2e92b17de537a80dfc93ea2338cebaa63b55a05a7"},"summary":"No whitespace between tokens: checked on 2000 generated values","tags":["rfc","signatures","jcs","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.423690Z","id":"29e1e4a2defdccdbd15e6a9007a793e43341d2e420c181989c37bcc0900969f4","body":{"detail":"crates/toolpath/tests/jcs.rs::escape_set_is_minimal over U+0000–U+007F. Note the rule omits that RFC 8785 writes five controls in short form (\\b \\t \\n \\f \\r), as this RFC's own example does with \\n; only the other controls use \\u00xx.","kind":"pass","span":{"start":{"line":721},"end":{"line":722},"content_hash":"d6f89f5d41f36940c394a6a99d4d300b85707aef7f270d52b0fd3f8563638997"},"summary":"Escape set is minimal: only quote, backslash and U+0000–U+001F, lowercase hex","tags":["rfc","signatures","jcs","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.423757Z","id":"3ca5d740084391d9475bbdbbd67e3d3bb2434cb3dd71910aa8f0f4bd099a9884","body":{"detail":"crates/toolpath/tests/jcs.rs::numbers_serialize_as_es6 (-0→0, 4.50→4.5, 2e-3→0.002, 1e-7, 1e21→1e+21, 333333333.33333329→333333333.3333333) and the values/weird vectors. The rule text is a paraphrase; the normative definition is ES6 (exponent form at or above 1e21 and below 1e-6).","kind":"pass","span":{"start":{"line":723},"end":{"line":724},"content_hash":"741729400fd680a989d3489dfd0b13ddd4c39463180f9899340588076327fe44"},"summary":"Numbers serialize as ECMAScript Number.toString (RFC 8785 §3.2.2.3)","tags":["rfc","signatures","jcs","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.423803Z","id":"32727f9c21d727b2027c450a9a908545c2600d3401bc55df29a0402bf5ee7559","body":{"detail":"crates/toolpath/tests/jcs.rs::escape_set_is_minimal and the unicode/french/weird vectors.","kind":"pass","span":{"start":{"line":725},"end":{"line":725},"content_hash":"3a224c580e1223389c799e7d040f86cccfe71afce5ce3b38e78669399606afda"},"summary":"Strings are UTF-8, minimally escaped: non-ASCII stays literal","tags":["rfc","signatures","jcs","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.423853Z","id":"a4c9afc1e34b618600dd1bb09f732ad350ac32a563e64a621a4a8a7f352a2e41","body":{"detail":"toolpath::v1::sign::step_author_input + digest; crates/toolpath/tests/jcs.rs::what_gets_signed, tests/signatures.rs::signed_step_and_path_verify, ::step_meta_is_not_signed, ::tampered_change_fails.","kind":"pass","span":{"start":{"line":729},"end":{"line":743},"content_hash":"1fd6c5120784def06929f54ffb8822fec10daecfaea1657939c7ee79a26f9d43"},"summary":"Step author input is JCS({change, step}) with meta excluded, SHA-256'd; signatures over it verify","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.423927Z","id":"3245db3080aa2a9654497b9dfc710d52cabc1ee5592f06faee3e95aa120e0989","body":{"detail":"toolpath::v1::sign::path_author_input; tests/signatures.rs::moved_head_fails_both_path_signatures, ::reordered_steps_fail_the_author_signature; tests/jcs.rs::what_gets_signed.","kind":"pass","span":{"start":{"line":745},"end":{"line":759},"content_hash":"33b2b5b39047676fc32c8522b7173e52f10f1e997781591549b5028c845b590e"},"summary":"Path author input is JCS({path, step_ids in steps order}); a moved head or reordered steps fail","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.423993Z","id":"1c7729f57b13e1d8723e8fa00ff3fb4eeeb321fb10d81873014f2f823ef7a681","body":{"detail":"Only the steps' own author signatures catch content changes (tests/signatures.rs::tampered_step_signature_is_caught_with_verify_steps: path author passes, verify_steps fails). Say so in the RFC, or sign step digests into the path input.","kind":"concern","span":{"start":{"line":759},"end":{"line":759},"content_hash":"b2e85074c6973f340a2b3a424f64d333537b6ad5525fed6148268325370c81ca"},"suggested_fix":"Either state that path author signatures attest order and ids only and step contents rely on step author signatures, or define step_ids as [{id, digest(step_author_input)}].","summary":"'I authored this path containing these steps' covers step ids only, not step contents: a changed diff still verifies the path author signature","tags":["rfc","signatures","security","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424116Z","id":"84980c500c0a8d83100a57ba8269a29cb543a0355524035f65f93ffd0d74a1a2","body":{"detail":"toolpath::v1::sign::path_reviewer_input; tests/signatures.rs::signed_step_and_path_verify, ::moved_head_fails_both_path_signatures, ::reviewer_needs_its_timestamp.","kind":"pass","span":{"start":{"line":761},"end":{"line":776},"content_hash":"c28d001bbe8d19d37de74e8d8d6a1a336d7a4b9dc53fdd9d75953c22631107da"},"summary":"Reviewer input is JCS({head, path_id, reviewed_at}); a moved head fails; reviewed_at is the signature timestamp, required","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424161Z","id":"db4e36a0b6898d6532f215c51f4e757a227e209df95e53c6eba67d6b2eb3e666","body":{"detail":"crates/toolpath/tests/jcs.rs::rfc_canonicalization_example.","kind":"pass","span":{"start":{"line":804},"end":{"line":804},"content_hash":"b4a465d915d9203eac014c80ce35ca77ed17df3b53a88eee7890149a2f6823a3"},"summary":"The canonicalization example is exact: the printed step canonicalizes to this string byte for byte","tags":["rfc","signatures","jcs","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424198Z","id":"99fc1ce6a6617ef9a6bfbc4a4bd907b5889a145b23140f631209c64372091f65","body":{"detail":"toolpath::v1::sign::verify_step_signature (ssh keys); tests/signatures.rs::signed_step_and_path_verify, ::tampered_change_fails, ::wrong_key_and_resolver_lies_fail.","kind":"pass","span":{"start":{"line":815},"end":{"line":818},"content_hash":"45d248975fdc72f9990e028c6a98158ce0c7d8baf55ea917522db584933e90d7"},"summary":"verify_step_signature implemented as written: canonical form, SHA-256, verify","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424389Z","id":"a0f5fa7af6bf8c0f7d714c448ead548c68c30f098b27cf454f2c46c9557d1b8c","body":{"detail":"toolpath::v1::sign::verify_path_signatures; tests/signatures.rs::missing_required_scope_fails, ::signer_not_in_actors_fails, ::wrong_scope_canonical_form_fails, ::tampered_step_signature_is_caught_with_verify_steps.","kind":"pass","span":{"start":{"line":820},"end":{"line":828},"content_hash":"eb3f993fbec8e03b75e38477b39fce7b08da62e01f3fad1e94ce9535d827ffee"},"summary":"verify_path_signatures implemented: each required scope must verify with the signer's key from meta.actors; optional step author checks; fails on any missing","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424437Z","id":"41a0169146705346e3fc9205aab1dbf1348306133461427db388e94406157ebe","body":{"detail":"The implementation takes a caller resolver (Key → public key) and checks the resolved key's SHA256 fingerprint equals Key.fingerprint (tests/signatures.rs::wrong_key_and_resolver_lies_fail). The RFC should say where key material comes from (href, a keyring) and that fingerprints are checked.","kind":"concern","span":{"start":{"line":823},"end":{"line":823},"content_hash":"e7e43ace9ef8553b70214b90495767c214bdd25fafff9f19afa272463bbc2295"},"summary":"meta.actors[signer].keys holds no public key, only a type and fingerprint (plus href), so the key cannot be 'looked up' from the document","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424478Z","id":"c50179d0938f269a2db17205cf3fa72980e4d400af2a08305cd5153febc484d3","body":{"detail":"verify_path_signatures refuses them as UnsupportedScope (tests/signatures.rs::scopes_without_a_canonical_form_are_refused). The RFC lists the scopes but defines what gets signed for two.","kind":"concern","span":{"start":{"line":395},"end":{"line":395},"content_hash":"5eadf0be002baa86da128ac4f01b51bac0c01320f14fd46fd8797dfd0272ddbc"},"summary":"Only author and reviewer have a canonical form; witness, ci and release signatures cannot be verified","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424528Z","id":"c64c385f6ca18f8d53f374786ca77fd478e4b8a21848f7fe7785a64b0ed3037c","body":{"detail":"verify_path_signatures returns UnsupportedKeyType(\"gpg\") (tests/signatures.rs::gpg_and_sigstore_are_not_verified). The committed signed example (examples/path-03-signed-pr) carries placeholder gpg signatures that no code checks.","kind":"concern","span":{"start":{"line":834},"end":{"line":834},"content_hash":"2763fd9a9ddc7926d2e6709a5bd4a124334fc876ab376296ce7c315f5a9b9181"},"summary":"gpg signatures are not verified by any toolpath code","tags":["rfc","signatures","not-implemented","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424613Z","id":"9ce9fc8981bae40a9f79e64edd157cfc9c25f14cc754ab6adacb19699c55092d","body":{"detail":"tests/signatures.rs (14 tests). Only Ed25519 is enabled. The RFC names no SSHSIG namespace; this implementation fixes it as 'toolpath' (toolpath::v1::sign::SSHSIG_NAMESPACE) — the RFC should state it, or signers and verifiers will disagree.","kind":"pass","span":{"start":{"line":835},"end":{"line":835},"content_hash":"f9670fa5ccf88e5bda3897ef476543a6a2f934050b45d26a682f0766303597a2"},"summary":"ssh (Ed25519) signatures verify, in the SSHSIG format","tags":["rfc","signatures","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"RFC.md","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424656Z","id":"e3cd7ca844071a7ef85e52ec2cc4c1666b156fb9d43f04c936c374480a855370","body":{"detail":"verify_path_signatures returns UnsupportedKeyType(\"sigstore\") (tests/signatures.rs::gpg_and_sigstore_are_not_verified).","kind":"concern","span":{"start":{"line":836},"end":{"line":836},"content_hash":"1df74d2cde505f1eaf39fe8b372cf969856d2ae2748803851b2efdeb05316d9b"},"summary":"sigstore bundles are not verified by any toolpath code","tags":["rfc","signatures","not-implemented","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/Cargo.lock b/Cargo.lock
+index 5d772218..a61f2e39 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5341,8 +5341,11 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+ name = "toolpath"
+ version = "0.7.1"
+ dependencies = [
++ "ryu-js",
+  "serde",
+  "serde_json",
++ "sha2 0.10.9",
++ "ssh-key",
+ ]
+ 
+ [[package]]
+diff --git a/Cargo.toml b/Cargo.toml
+index 895f048b..4fb23323 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -49,7 +49,11 @@ pathbase-client = { version = "0.2.0", path = "crates/pathbase-client" }
+ 
+ reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+ serde = { version = "1.0", features = ["derive"] }
+-serde_json = "1.0"
++# float_roundtrip: parse every JSON number to the nearest double, as RFC 8785
++# (and so every signature) assumes. Without it serde_json's fast path can land
++# one ULP off: Claude Code's "costUSD": 0.020428699999999998 read back as
++# 0.0204287, and RFC 8785's own vector 333333333.33333329 canonicalized wrong.
++serde_json = { version = "1.0", features = ["float_roundtrip"] }
+ clap = { version = "4.5", features = ["derive"] }
+ anyhow = "1.0"
+ thiserror = "1.0"
+diff --git a/crates/toolpath-goldens/snapshots/document@claude-session.snap b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+index 6ddcbfb1..3be22dec 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+@@ -444,7 +444,7 @@ input_file: goldens/claude-session/input.jsonl
+                     "claude-haiku-4-5-20251001": {
+                       "cacheCreationInputTokens": 7513,
+                       "cacheReadInputTokens": 37247,
+-                      "costUSD": 0.0204287,
++                      "costUSD": 0.020428699999999998,
+                       "inputTokens": 18,
+                       "outputTokens": 332,
+                       "thinkingTokens": 118,
+@@ -455,7 +455,7 @@ input_file: goldens/claude-session/input.jsonl
+                   "startTime": 1791489144176,
+                   "totalAPIDuration": 4956,
+                   "totalAPIDurationWithoutRetries": 4954,
+-                  "totalCostUSD": 0.0204287,
++                  "totalCostUSD": 0.020428699999999998,
+                   "totalDuration": 5669,
+                   "totalLinesAdded": 0,
+                   "totalLinesRemoved": 0,
+diff --git a/crates/toolpath-goldens/snapshots/ir@claude-session.snap b/crates/toolpath-goldens/snapshots/ir@claude-session.snap
+index 0e2f5482..455f21fc 100644
+--- a/crates/toolpath-goldens/snapshots/ir@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/ir@claude-session.snap
+@@ -273,7 +273,7 @@ input_file: goldens/claude-session/input.jsonl
+             "claude-haiku-4-5-20251001": {
+               "cacheCreationInputTokens": 7513,
+               "cacheReadInputTokens": 37247,
+-              "costUSD": 0.0204287,
++              "costUSD": 0.020428699999999998,
+               "inputTokens": 18,
+               "outputTokens": 332,
+               "thinkingTokens": 118,
+@@ -284,7 +284,7 @@ input_file: goldens/claude-session/input.jsonl
+           "startTime": 1791489144176,
+           "totalAPIDuration": 4956,
+           "totalAPIDurationWithoutRetries": 4954,
+-          "totalCostUSD": 0.0204287,
++          "totalCostUSD": 0.020428699999999998,
+           "totalDuration": 5669,
+           "totalLinesAdded": 0,
+           "totalLinesRemoved": 0,
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-session.snap b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+index e5cc1f18..dd4b54fb 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+@@ -23,7 +23,7 @@ input_file: goldens/claude-session/input.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 175865,
++    "bytes": 175887,
+     "string_chars": 158008,
+     "steps": 27,
+     "text_chars": 292,
+@@ -96,7 +96,7 @@ input_file: goldens/claude-session/input.jsonl
+   },
+   "same_format": {
+     "lines": 29,
+-    "bytes": 172431,
++    "bytes": 172453,
+     "event_types_shed": {},
+     "key_paths": {
+       "source": 281,
+diff --git a/crates/toolpath/Cargo.toml b/crates/toolpath/Cargo.toml
+index 7d3fe8f3..53df5570 100644
+--- a/crates/toolpath/Cargo.toml
++++ b/crates/toolpath/Cargo.toml
+@@ -11,3 +11,23 @@ categories = ["development-tools"]
+ [dependencies]
+ serde = { workspace = true }
+ serde_json = { workspace = true }
++ryu-js = { version = "1", optional = true }
++sha2 = { version = "0.10", optional = true }
++ssh-key = { version = "=0.7.0-rc.11", optional = true, default-features = false, features = ["alloc", "ed25519", "std"] }
++
++[features]
++# RFC.md "Signature Algorithm": the JCS canonical inputs, their SHA-256
++# digests, and verification of `ssh` signatures. Off by default; the quality
++# gates build with `--features toolpath/verify` so its tests always run there.
++verify = ["dep:ryu-js", "dep:sha2", "dep:ssh-key"]
++
++[dev-dependencies]
++ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["alloc", "ed25519", "std"] }
++
++[[test]]
++name = "jcs"
++required-features = ["verify"]
++
++[[test]]
++name = "signatures"
++required-features = ["verify"]
+diff --git a/crates/toolpath/src/.qual b/crates/toolpath/src/.qual
+new file mode 100644
+index 00000000..2df73cbc
+--- /dev/null
++++ b/crates/toolpath/src/.qual
+@@ -0,0 +1 @@
++{"metabox":"1","type":"annotation","subject":"crates/toolpath/src/jsonl.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424820Z","id":"3672841c4184f7941b1d511dad06e3ac548934f51eb2dae7afd68fa5e0dd96f3","body":{"detail":"crates/toolpath/tests/jcs.rs::signed_inputs_survive_jsonl_round_trip (step author and path author inputs).","kind":"pass","span":{"start":{"line":13},"end":{"line":14},"content_hash":"304bf19efe38fc00bf291892c9137dbd10952f3e5a1298e9bd4cb948444cbc9b"},"summary":"Signed inputs are identical after a .path.jsonl write-then-read round trip, for every example path","tags":["signatures","jsonl","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath/src/lib.rs b/crates/toolpath/src/lib.rs
+index 423ab3f1..f06dbb71 100644
+--- a/crates/toolpath/src/lib.rs
++++ b/crates/toolpath/src/lib.rs
+@@ -2,6 +2,8 @@
+ 
+ mod jsonl;
+ mod query;
++#[cfg(feature = "verify")]
++mod sign;
+ mod types;
+ 
+ /// The canonical JSON Schema for Toolpath documents, baked into the binary.
+@@ -138,6 +140,16 @@ pub mod v1 {
+     /// [`Graph::to_jsonl_writer`] / [`Graph::to_jsonl_string`]. The
+     /// Path-level methods of the same name remain available for callers
+     /// operating directly on an inner `Path`.
++    /// RFC.md "Signature Algorithm": JCS canonical inputs, SHA-256 digests and
++    /// `ssh` signature verification. Behind the `verify` feature.
++    #[cfg(feature = "verify")]
++    pub mod sign {
++        pub use crate::sign::{
++            SSHSIG_NAMESPACE, VerifyError, digest, jcs, key_id, path_author_input,
++            path_reviewer_input, step_author_input, verify_path_signatures, verify_step_signature,
++        };
++    }
++
+     pub mod jsonl {
+         pub use crate::jsonl::{
+             ActorDefBody, HeadBody, JsonlError, JsonlLine, PathCloseBody, PathMetaBody,
+diff --git a/crates/toolpath/src/sign.rs b/crates/toolpath/src/sign.rs
+new file mode 100644
+index 00000000..cb822c62
+--- /dev/null
++++ b/crates/toolpath/src/sign.rs
+@@ -0,0 +1,300 @@
++//! RFC.md "Signature Algorithm" and "Verification Algorithm", as pure functions.
++//!
++//! - [`jcs`]: RFC 8785 canonical form.
++//! - [`step_author_input`], [`path_author_input`], [`path_reviewer_input`]: the
++//!   three canonical inputs "What Gets Signed" defines, and [`digest`] (SHA-256).
++//! - [`verify_step_signature`] and [`verify_path_signatures`]: the RFC's
++//!   verification pseudo-code for `ssh` keys (Ed25519 signatures in the SSHSIG
++//!   format, namespace [`SSHSIG_NAMESPACE`]). `gpg` and `sigstore` keys are
++//!   refused as [`VerifyError::UnsupportedKeyType`].
++//!
++//! No key material is ever read from the document: a [`Key`] carries a type and
++//! a fingerprint, not the public key, so the caller resolves keys and this
++//! module checks that the resolved key's fingerprint is the one the document
++//! names.
++
++use std::fmt;
++
++use serde_json::{Value, json};
++use sha2::{Digest, Sha256};
++use ssh_key::{HashAlg, PublicKey, SshSig};
++
++use crate::types::{ActorDefinition, Key, Path, Signature, Step};
++
++/// The SSHSIG namespace every Toolpath `ssh` signature is made in. The RFC
++/// names the SSH signature format but no namespace; this is the one this
++/// implementation fixes.
++pub const SSHSIG_NAMESPACE: &str = "toolpath";
++
++/// RFC 8785 canonical form of a JSON value: object keys in UTF-16 code-unit
++/// order (§3.2.3), no whitespace, minimal string escaping (§3.2.2.2), numbers
++/// as ECMAScript writes them (§3.2.2.3, via `ryu-js`).
++///
++/// Written here rather than taken from `serde_json_canonicalizer`, which turns
++/// on serde_json's `float_roundtrip` for the whole build and so changes how
++/// every other crate parses floats.
++pub fn jcs(value: &Value) -> String {
++    let mut out = String::new();
++    write_value(value, &mut out);
++    out
++}
++
++fn write_value(value: &Value, out: &mut String) {
++    match value {
++        Value::Null => out.push_str("null"),
++        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
++        Value::Number(n) => {
++            // I-JSON: every number is an IEEE 754 double. serde_json never holds NaN or ±inf.
++            let f = n.as_f64().expect("a serde_json number converts to f64");
++            if f == 0.0 {
++                out.push('0'); // -0 too
++            } else {
++                out.push_str(ryu_js::Buffer::new().format_finite(f));
++            }
++        }
++        Value::String(s) => write_string(s, out),
++        Value::Array(items) => {
++            out.push('[');
++            for (i, item) in items.iter().enumerate() {
++                if i > 0 {
++                    out.push(',');
++                }
++                write_value(item, out);
++            }
++            out.push(']');
++        }
++        Value::Object(map) => {
++            let mut keys: Vec<&String> = map.keys().collect();
++            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
++            out.push('{');
++            for (i, key) in keys.into_iter().enumerate() {
++                if i > 0 {
++                    out.push(',');
++                }
++                write_string(key, out);
++                out.push(':');
++                write_value(&map[key], out);
++            }
++            out.push('}');
++        }
++    }
++}
++
++fn write_string(s: &str, out: &mut String) {
++    out.push('"');
++    for c in s.chars() {
++        match c {
++            '"' => out.push_str("\\\""),
++            '\\' => out.push_str("\\\\"),
++            '\u{8}' => out.push_str("\\b"),
++            '\t' => out.push_str("\\t"),
++            '\n' => out.push_str("\\n"),
++            '\u{c}' => out.push_str("\\f"),
++            '\r' => out.push_str("\\r"),
++            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
++            c => out.push(c),
++        }
++    }
++    out.push('"');
++}
++
++/// SHA-256 of a canonical input.
++pub fn digest(canonical_input: &str) -> [u8; 32] {
++    Sha256::digest(canonical_input.as_bytes()).into()
++}
++
++/// Step Signature (Author): `JCS({"change": …, "step": …})`; `meta` is excluded.
++pub fn step_author_input(step: &Step) -> String {
++    jcs(&json!({ "change": step.change, "step": step.step }))
++}
++
++/// Path Signature (Author): `JCS({"path": …, "step_ids": [ids in steps order]})`.
++pub fn path_author_input(path: &Path) -> String {
++    let step_ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
++    jcs(&json!({ "path": path.path, "step_ids": step_ids }))
++}
++
++/// Path Signature (Reviewer): `JCS({"head": …, "path_id": …, "reviewed_at": …})`.
++pub fn path_reviewer_input(path_id: &str, head: &str, reviewed_at: &str) -> String {
++    jcs(&json!({ "head": head, "path_id": path_id, "reviewed_at": reviewed_at }))
++}
++
++/// Why a signature did not verify.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum VerifyError {
++    /// No signature with this scope in `meta.signatures`.
++    MissingScope(String),
++    /// The scope has no canonical form in the RFC (only `author` and `reviewer` do).
++    UnsupportedScope(String),
++    /// The signer is not defined in `meta.actors`.
++    UnknownSigner(String),
++    /// The signer's definition has no key matching the signature's `key`.
++    NoMatchingKey { signer: String, key: String },
++    /// A key type this implementation does not verify (`gpg`, `sigstore`).
++    UnsupportedKeyType(String),
++    /// The resolver had no public key for this key.
++    KeyUnavailable(String),
++    /// The resolved public key's fingerprint is not the one the document names.
++    FingerprintMismatch { expected: String, actual: String },
++    /// A reviewer signature without the `timestamp` its canonical form needs.
++    MissingTimestamp,
++    /// The `sig` is not a well-formed SSH signature.
++    MalformedSignature(String),
++    /// The signature does not verify over this canonical input.
++    BadSignature(String),
++}
++
++impl fmt::Display for VerifyError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::MissingScope(s) => write!(f, "no signature with scope {s:?}"),
++            Self::UnsupportedScope(s) => {
++                write!(f, "the RFC defines no canonical form for scope {s:?}")
++            }
++            Self::UnknownSigner(s) => write!(f, "signer {s:?} is not in meta.actors"),
++            Self::NoMatchingKey { signer, key } => write!(f, "{signer:?} has no key {key:?}"),
++            Self::UnsupportedKeyType(t) => write!(f, "key type {t:?} is not verified"),
++            Self::KeyUnavailable(k) => write!(f, "no public key for {k:?}"),
++            Self::FingerprintMismatch { expected, actual } => {
++                write!(
++                    f,
++                    "key fingerprint is {actual}, the document names {expected}"
++                )
++            }
++            Self::MissingTimestamp => write!(f, "reviewer signature has no timestamp"),
++            Self::MalformedSignature(e) => write!(f, "malformed ssh signature: {e}"),
++            Self::BadSignature(e) => write!(f, "signature does not verify: {e}"),
++        }
++    }
++}
++
++impl std::error::Error for VerifyError {}
++
++/// `verify_step_signature`: canonical form → SHA-256 → SSHSIG verify with `public_key`.
++pub fn verify_step_signature(
++    step: &Step,
++    signature: &Signature,
++    public_key: &PublicKey,
++) -> Result<(), VerifyError> {
++    verify_digest(&digest(&step_author_input(step)), signature, public_key)
++}
++
++/// `verify_path_signatures`: every scope in `required_scopes` must have a
++/// signature in the path's `meta.signatures` that verifies over that scope's
++/// canonical form, with the signer's key from `meta.actors`. With
++/// `verify_steps`, every step's own `author` signatures must verify too (the
++/// signer looked up in the step's `meta.actors`, then the path's).
++///
++/// `resolve` maps a document [`Key`] to its public key; its fingerprint must
++/// equal `Key.fingerprint`.
++pub fn verify_path_signatures(
++    path: &Path,
++    required_scopes: &[&str],
++    verify_steps: bool,
++    resolve: &dyn Fn(&Key) -> Option<PublicKey>,
++) -> Result<(), VerifyError> {
++    let meta = path.meta.as_ref();
++    let signatures: &[Signature] = meta.map(|m| m.signatures.as_slice()).unwrap_or(&[]);
++    let actors = meta.and_then(|m| m.actors.as_ref());
++    for scope in required_scopes {
++        let candidates: Vec<&Signature> = signatures.iter().filter(|s| s.scope == *scope).collect();
++        if candidates.is_empty() {
++            return Err(VerifyError::MissingScope((*scope).to_string()));
++        }
++        let mut last = None;
++        let mut ok = false;
++        for sig in candidates {
++            let input = match *scope {
++                "author" => path_author_input(path),
++                "reviewer" => match &sig.timestamp {
++                    Some(at) => path_reviewer_input(&path.path.id, &path.path.head, at),
++                    None => {
++                        last = Some(VerifyError::MissingTimestamp);
++                        continue;
++                    }
++                },
++                other => return Err(VerifyError::UnsupportedScope(other.to_string())),
++            };
++            let key = match signer_key(sig, actors.and_then(|a| a.get(&sig.signer)), resolve) {
++                Ok(k) => k,
++                Err(e) => {
++                    last = Some(e);
++                    continue;
++                }
++            };
++            match verify_digest(&digest(&input), sig, &key) {
++                Ok(()) => {
++                    ok = true;
++                    break;
++                }
++                Err(e) => last = Some(e),
++            }
++        }
++        if !ok {
++            return Err(last.expect("at least one candidate was tried"));
++        }
++    }
++    if verify_steps {
++        for step in &path.steps {
++            let step_meta = step.meta.as_ref();
++            for sig in step_meta
++                .map(|m| m.signatures.as_slice())
++                .unwrap_or(&[])
++                .iter()
++                .filter(|s| s.scope == "author")
++            {
++                let def = step_meta
++                    .and_then(|m| m.actors.as_ref())
++                    .and_then(|a| a.get(&sig.signer))
++                    .or_else(|| actors.and_then(|a| a.get(&sig.signer)));
++                let key = signer_key(sig, def, resolve)?;
++                verify_step_signature(step, sig, &key)?;
++            }
++        }
++    }
++    Ok(())
++}
++
++/// The document's identifier for a key: `type:fingerprint`, spaces removed.
++pub fn key_id(key: &Key) -> String {
++    format!("{}:{}", key.key_type, key.fingerprint.replace(' ', ""))
++}
++
++fn signer_key(
++    sig: &Signature,
++    def: Option<&ActorDefinition>,
++    resolve: &dyn Fn(&Key) -> Option<PublicKey>,
++) -> Result<PublicKey, VerifyError> {
++    let def = def.ok_or_else(|| VerifyError::UnknownSigner(sig.signer.clone()))?;
++    let key = def
++        .keys
++        .iter()
++        .find(|k| key_id(k) == sig.key.replace(' ', ""))
++        .ok_or_else(|| VerifyError::NoMatchingKey {
++            signer: sig.signer.clone(),
++            key: sig.key.clone(),
++        })?;
++    if key.key_type != "ssh" {
++        return Err(VerifyError::UnsupportedKeyType(key.key_type.clone()));
++    }
++    let public = resolve(key).ok_or_else(|| VerifyError::KeyUnavailable(sig.key.clone()))?;
++    let actual = public.fingerprint(HashAlg::Sha256).to_string();
++    if actual != key.fingerprint {
++        return Err(VerifyError::FingerprintMismatch {
++            expected: key.fingerprint.clone(),
++            actual,
++        });
++    }
++    Ok(public)
++}
++
++fn verify_digest(
++    digest: &[u8; 32],
++    signature: &Signature,
++    key: &PublicKey,
++) -> Result<(), VerifyError> {
++    let sshsig = SshSig::from_pem(signature.sig.as_bytes())
++        .map_err(|e| VerifyError::MalformedSignature(e.to_string()))?;
++    key.verify(SSHSIG_NAMESPACE, digest, &sshsig)
++        .map_err(|e| VerifyError::BadSignature(e.to_string()))
++}
+diff --git a/crates/toolpath/tests/jcs-vectors/LICENSE b/crates/toolpath/tests/jcs-vectors/LICENSE
+new file mode 100644
+index 00000000..59121159
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/LICENSE
+@@ -0,0 +1,13 @@
++   Copyright 2018 Anders Rundgren
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       https://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/crates/toolpath/tests/jcs-vectors/SOURCE.md b/crates/toolpath/tests/jcs-vectors/SOURCE.md
+new file mode 100644
+index 00000000..21ad7e61
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/SOURCE.md
+@@ -0,0 +1,13 @@
++# RFC 8785 test vectors
++
++`input/*.json` and `output/*.json` are copied unchanged from the reference
++implementation's test data:
++
++- repository: https://github.com/cyberphone/json-canonicalization (Anders Rundgren, the RFC 8785 author)
++- path: `testdata/input/`, `testdata/output/`
++- commit: `32a48195b9b20fe67b1795e39e4509f14d860b45` (master, fetched 2026-10-19)
++- licence: Apache-2.0, see `LICENSE` beside this file
++
++Each `output/<name>.json` is the exact canonical byte sequence for
++`input/<name>.json` (no trailing newline). `tests/jcs.rs` requires the
++canonicalizer to reproduce every one byte for byte.
+diff --git a/crates/toolpath/tests/jcs-vectors/input/arrays.json b/crates/toolpath/tests/jcs-vectors/input/arrays.json
+new file mode 100644
+index 00000000..20e62263
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/input/arrays.json
+@@ -0,0 +1,8 @@
++[
++  56,
++  {
++    "d": true,
++    "10": null,
++    "1": [ ]
++  }
++]
+diff --git a/crates/toolpath/tests/jcs-vectors/input/french.json b/crates/toolpath/tests/jcs-vectors/input/french.json
+new file mode 100644
+index 00000000..4ff6d3de
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/input/french.json
+@@ -0,0 +1,6 @@
++{
++  "peach": "This sorting order",
++  "péché": "is wrong according to French",
++  "pêche": "but canonicalization MUST",
++  "sin":   "ignore locale"
++}
+diff --git a/crates/toolpath/tests/jcs-vectors/input/structures.json b/crates/toolpath/tests/jcs-vectors/input/structures.json
+new file mode 100644
+index 00000000..eb71efb8
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/input/structures.json
+@@ -0,0 +1,8 @@
++{
++  "1": {"f": {"f": "hi","F": 5} ,"\n": 56.0},
++  "10": { },
++  "": "empty",
++  "a": { },
++  "111": [ {"e": "yes","E": "no" } ],
++  "A": { }
++}
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs-vectors/input/unicode.json b/crates/toolpath/tests/jcs-vectors/input/unicode.json
+new file mode 100644
+index 00000000..4b5bc769
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/input/unicode.json
+@@ -0,0 +1,3 @@
++{
++  "Unnormalized Unicode":"A\u030a"
++}
+diff --git a/crates/toolpath/tests/jcs-vectors/input/values.json b/crates/toolpath/tests/jcs-vectors/input/values.json
+new file mode 100644
+index 00000000..f7712c2f
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/input/values.json
+@@ -0,0 +1,5 @@
++{
++  "numbers": [333333333.33333329, 1E30, 4.50, 2e-3, 0.000000000000000000000000001],
++  "string": "\u20ac$\u000F\u000aA'\u0042\u0022\u005c\\\"\/",
++  "literals": [null, true, false]
++}
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs-vectors/input/weird.json b/crates/toolpath/tests/jcs-vectors/input/weird.json
+new file mode 100644
+index 00000000..53fabe67
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/input/weird.json
+@@ -0,0 +1,11 @@
++{
++  "\u20ac": "Euro Sign",
++  "\r": "Carriage Return",
++  "\u000a": "Newline",
++  "1": "One",
++  "\u0080": "Control\u007f",
++  "\ud83d\ude02": "Smiley",
++  "\u00f6": "Latin Small Letter O With Diaeresis",
++  "\ufb33": "Hebrew Letter Dalet With Dagesh",
++  "</script>": "Browser Challenge"
++}
+diff --git a/crates/toolpath/tests/jcs-vectors/output/arrays.json b/crates/toolpath/tests/jcs-vectors/output/arrays.json
+new file mode 100644
+index 00000000..5efb93db
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/output/arrays.json
+@@ -0,0 +1 @@
++[56,{"1":[],"10":null,"d":true}]
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs-vectors/output/french.json b/crates/toolpath/tests/jcs-vectors/output/french.json
+new file mode 100644
+index 00000000..2e15cd1b
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/output/french.json
+@@ -0,0 +1 @@
++{"peach":"This sorting order","péché":"is wrong according to French","pêche":"but canonicalization MUST","sin":"ignore locale"}
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs-vectors/output/structures.json b/crates/toolpath/tests/jcs-vectors/output/structures.json
+new file mode 100644
+index 00000000..dc21e242
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/output/structures.json
+@@ -0,0 +1 @@
++{"":"empty","1":{"\n":56,"f":{"F":5,"f":"hi"}},"10":{},"111":[{"E":"no","e":"yes"}],"A":{},"a":{}}
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs-vectors/output/unicode.json b/crates/toolpath/tests/jcs-vectors/output/unicode.json
+new file mode 100644
+index 00000000..ee60fd12
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/output/unicode.json
+@@ -0,0 +1 @@
++{"Unnormalized Unicode":"Å"}
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs-vectors/output/values.json b/crates/toolpath/tests/jcs-vectors/output/values.json
+new file mode 100644
+index 00000000..29b720b6
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/output/values.json
+@@ -0,0 +1 @@
++{"literals":[null,true,false],"numbers":[333333333.3333333,1e+30,4.5,0.002,1e-27],"string":"€$\u000f\nA'B\"\\\\\"/"}
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs-vectors/output/weird.json b/crates/toolpath/tests/jcs-vectors/output/weird.json
+new file mode 100644
+index 00000000..62c83a33
+--- /dev/null
++++ b/crates/toolpath/tests/jcs-vectors/output/weird.json
+@@ -0,0 +1 @@
++{"\n":"Newline","\r":"Carriage Return","1":"One","</script>":"Browser Challenge","":"Control","ö":"Latin Small Letter O With Diaeresis","€":"Euro Sign","😂":"Smiley","דּ":"Hebrew Letter Dalet With Dagesh"}
+\ No newline at end of file
+diff --git a/crates/toolpath/tests/jcs.rs b/crates/toolpath/tests/jcs.rs
+new file mode 100644
+index 00000000..e9d3ca54
+--- /dev/null
++++ b/crates/toolpath/tests/jcs.rs
+@@ -0,0 +1,392 @@
++//! RFC.md "Signature Algorithm" › "Canonicalization Rules", "What Gets Signed"
++//! and "Canonicalization Example", proven against the canonicalizer the crate
++//! signs with (`toolpath::v1::sign::jcs`, RFC 8785 via serde_json_canonicalizer).
++
++use std::path::Path as FsPath;
++
++use serde_json::{Value, json};
++use toolpath::v1::Graph;
++use toolpath::v1::sign::{digest, jcs, path_author_input, path_reviewer_input, step_author_input};
++
++fn vectors_dir() -> std::path::PathBuf {
++    FsPath::new(env!("CARGO_MANIFEST_DIR")).join("tests/jcs-vectors")
++}
++
++/// RFC 8785's reference vectors (cyberphone/json-canonicalization, see
++/// tests/jcs-vectors/SOURCE.md): every input canonicalizes to its output, byte for byte.
++#[test]
++fn rfc8785_reference_vectors() {
++    let dir = vectors_dir();
++    let mut n = 0;
++    for entry in std::fs::read_dir(dir.join("input")).unwrap() {
++        let path = entry.unwrap().path();
++        let name = path.file_name().unwrap().to_owned();
++        let input: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
++        let want = std::fs::read_to_string(dir.join("output").join(&name)).unwrap();
++        assert_eq!(jcs(&input), want, "vector {name:?}");
++        n += 1;
++    }
++    assert_eq!(n, 6, "all six vectors ran");
++}
++
++/// Rule 1, "Object keys sorted lexicographically by UTF-8 bytes". RFC 8785
++/// (§3.2.3) sorts by UTF-16 code units instead. The two orders differ for a
++/// key above U+FFFF against one in U+E000–U+FFFF. The canonicalizer follows
++/// RFC 8785, as the reference vector `weird.json` requires (😂 U+1F602 sorts
++/// before דּ U+FB33). So the RFC.md rule text is wrong; the implementation and
++/// the cited standard agree.
++#[test]
++fn key_order_is_utf16_not_utf8() {
++    let v = json!({ "\u{E000}": 1, "\u{1F600}": 2 });
++    let out = jcs(&v);
++    let smile = out.find('\u{1F600}').unwrap();
++    let private = out.find('\u{E000}').unwrap();
++    assert!(
++        smile < private,
++        "UTF-16 order puts U+1F600 (D83D…) first: {out}"
++    );
++    // UTF-8 byte order would be the opposite:
++    assert!("\u{E000}".as_bytes() < "\u{1F600}".as_bytes());
++}
++
++/// Rules 3 and 5: only `"`, `\` and U+0000–U+001F are escaped; the five
++/// controls with short forms use them (`\b \t \n \f \r`), the rest `\u00xx`
++/// in lowercase hex; everything else (incl. U+007F, `/`, non-ASCII) is literal.
++#[test]
++fn escape_set_is_minimal() {
++    for c in 0u32..=0x7F {
++        let ch = char::from_u32(c).unwrap();
++        let out = jcs(&Value::String(ch.to_string()));
++        let body = &out[1..out.len() - 1];
++        let want = match ch {
++            '"' => "\\\"".to_string(),
++            '\\' => "\\\\".to_string(),
++            '\u{8}' => "\\b".into(),
++            '\t' => "\\t".into(),
++            '\n' => "\\n".into(),
++            '\u{c}' => "\\f".into(),
++            '\r' => "\\r".into(),
++            c if (c as u32) < 0x20 => format!("\\u{:04x}", c as u32),
++            c => c.to_string(),
++        };
++        assert_eq!(body, want, "U+{c:04X}");
++    }
++    assert_eq!(
++        jcs(&json!("€😂")),
++        "\"€😂\"",
++        "non-ASCII stays literal UTF-8"
++    );
++}
++
++/// Rule 4: ECMAScript number serialization (RFC 8785 §3.2.2.3).
++#[test]
++fn numbers_serialize_as_es6() {
++    let cases = [
++        ("0", "0"),
++        ("-0", "0"),
++        ("1.0", "1"),
++        ("4.50", "4.5"),
++        ("100", "100"),
++        ("2e-3", "0.002"),
++        ("0.000001", "0.000001"),
++        ("1e-7", "1e-7"),
++        ("1e21", "1e+21"),
++        ("1E30", "1e+30"),
++        ("123456789012345680000", "123456789012345680000"),
++        ("333333333.33333329", "333333333.3333333"),
++    ];
++    for (input, want) in cases {
++        let v: Value = serde_json::from_str(input).unwrap();
++        assert_eq!(jcs(&v), want, "{input}");
++    }
++}
++
++/// The RFC's "Canonicalization Example": the step it prints canonicalizes,
++/// without `meta`, to exactly the string it prints.
++#[test]
++fn rfc_canonicalization_example() {
++    let doc: Value = serde_json::from_str(
++        r#"{
++          "step": { "timestamp": "2026-01-29T10:00:00Z", "id": "step-001", "actor": "human:alex" },
++          "change": { "src/main.rs": { "raw": "@@ -1,1 +1,1 @@\n-hello\n+world" } },
++          "meta": { "intent": "Fix greeting" }
++        }"#,
++    )
++    .unwrap();
++    let step: toolpath::v1::Step = serde_json::from_value(doc).unwrap();
++    let want = r#"{"change":{"src/main.rs":{"raw":"@@ -1,1 +1,1 @@\n-hello\n+world"}},"step":{"actor":"human:alex","id":"step-001","timestamp":"2026-01-29T10:00:00Z"}}"#;
++    assert_eq!(step_author_input(&step), want);
++}
++
++/// "What Gets Signed": the step input excludes `meta`; the path input is the
++/// path identity plus the step ids in `steps` order; the reviewer input is
++/// head, path id and the review time. All are canonical and SHA-256'd.
++#[test]
++fn what_gets_signed() {
++    let g = Graph::from_json(
++        &std::fs::read_to_string(
++            FsPath::new(env!("CARGO_MANIFEST_DIR"))
++                .join("../../examples/path-03-signed-pr.path.json"),
++        )
++        .unwrap(),
++    )
++    .unwrap();
++    let path = g.single_path().unwrap();
++
++    // meta never reaches the step input
++    let mut stripped = path.steps[0].clone();
++    stripped.meta = None;
++    assert_eq!(
++        step_author_input(&path.steps[0]),
++        step_author_input(&stripped)
++    );
++    assert!(!step_author_input(&path.steps[0]).contains("\"meta\""));
++
++    // path input: path identity + ordered step ids, nothing from steps' content
++    let input: Value = serde_json::from_str(&path_author_input(path)).unwrap();
++    assert_eq!(
++        input.as_object().unwrap().keys().collect::<Vec<_>>(),
++        ["path", "step_ids"]
++    );
++    let ids: Vec<&str> = path.steps.iter().map(|s| s.step.id.as_str()).collect();
++    assert_eq!(input["step_ids"], json!(ids));
++    assert_eq!(input["path"]["id"], json!(path.path.id));
++    let mut reordered = path.clone();
++    reordered.steps.reverse();
++    assert_ne!(
++        path_author_input(path),
++        path_author_input(&reordered),
++        "order is signed"
++    );
++
++    assert_eq!(
++        path_reviewer_input("pr-42", "step-004", "2026-01-29T16:00:00Z"),
++        r#"{"head":"step-004","path_id":"pr-42","reviewed_at":"2026-01-29T16:00:00Z"}"#
++    );
++    // SHA-256, hex of the RFC example
++    let hex: String = digest("abc").iter().map(|b| format!("{b:02x}")).collect();
++    assert_eq!(
++        hex,
++        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
++    );
++}
++
++/// jsonl.rs: "signatures computed over canonical JSON remain valid across
++/// conversions". Every signable input of every example path is identical
++/// after a write-then-read JSONL round trip.
++#[test]
++fn signed_inputs_survive_jsonl_round_trip() {
++    let mut n = 0;
++    for (stem, canonical) in example_graphs() {
++        let a = canonical.single_path().unwrap();
++        let g = Graph::from_jsonl_str(&canonical.to_jsonl_string().unwrap()).unwrap();
++        assert_signed_inputs_equal(&stem, a, g.single_path().unwrap()).unwrap();
++        n += 1;
++    }
++    assert!(n >= 4, "examples checked: {n}");
++}
++
++/// The committed `examples/*.path.jsonl` should be the same documents as their
++/// `.path.json` twins, or a signature over one won't verify against the other.
++/// `path-02-local-session` is not: its JSONL `PathOpen` has no `base.ref`
++/// (`def789abc123456` in the .json). Pinned so fixing the fixture flips this.
++#[test]
++fn committed_jsonl_examples_match_their_json() {
++    const KNOWN_DIFFERENT: &[&str] = &["path-02-local-session"];
++    let ex = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
++    for (stem, canonical) in example_graphs() {
++        let stream = ex.join(format!("{stem}.path.jsonl"));
++        if !stream.exists() {
++            continue;
++        }
++        let g = Graph::from_jsonl_str(&std::fs::read_to_string(&stream).unwrap()).unwrap();
++        let same = assert_signed_inputs_equal(
++            &stem,
++            canonical.single_path().unwrap(),
++            g.single_path().unwrap(),
++        );
++        assert_eq!(
++            same.is_ok(),
++            !KNOWN_DIFFERENT.contains(&stem.as_str()),
++            "{stem}: {same:?}"
++        );
++    }
++}
++
++fn example_graphs() -> Vec<(String, Graph)> {
++    let ex = FsPath::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
++    let mut out = Vec::new();
++    for entry in std::fs::read_dir(&ex).unwrap() {
++        let p = entry.unwrap().path();
++        let name = p.file_name().unwrap().to_string_lossy().to_string();
++        let Some(stem) = name.strip_suffix(".path.json") else {
++            continue;
++        };
++        let g = Graph::from_json(&std::fs::read_to_string(&p).unwrap()).unwrap();
++        if g.single_path().is_some() {
++            out.push((stem.to_string(), g));
++        }
++    }
++    out.sort_by(|a, b| a.0.cmp(&b.0));
++    out
++}
++
++fn assert_signed_inputs_equal(
++    stem: &str,
++    a: &toolpath::v1::Path,
++    b: &toolpath::v1::Path,
++) -> Result<(), String> {
++    if path_author_input(a) != path_author_input(b) {
++        return Err(format!(
++            "{stem}: path input\n {}\n {}",
++            path_author_input(a),
++            path_author_input(b)
++        ));
++    }
++    if a.steps.len() != b.steps.len() {
++        return Err(format!("{stem}: step count"));
++    }
++    for (x, y) in a.steps.iter().zip(&b.steps) {
++        if step_author_input(x) != step_author_input(y) {
++            return Err(format!("{stem}: step {}", x.step.id));
++        }
++    }
++    Ok(())
++}
++
++/// Property checks over generated values: output re-parses to an equal value,
++/// is idempotent, has no whitespace outside strings, and has every object's
++/// keys in UTF-16 order.
++#[test]
++fn properties_over_generated_values() {
++    let mut rng = XorShift(0x9e3779b97f4a7c15);
++    for _ in 0..2000 {
++        let v = gen_value(&mut rng, 4);
++        let out = jcs(&v);
++        let back: Value = serde_json::from_str(&out).unwrap();
++        assert_eq!(normalize(&back), normalize(&v), "re-parses equal: {out}");
++        assert_eq!(jcs(&back), out, "idempotent");
++        assert!(no_whitespace_outside_strings(&out), "whitespace in {out}");
++        assert_eq!(out, oracle(&v), "key order and structure");
++    }
++}
++
++/// An independent writer for structure and key order: objects with keys in
++/// UTF-16 code-unit order, no whitespace; scalars as `serde_json` writes them
++/// (numbers come from `jcs`, proven separately above).
++fn oracle(v: &Value) -> String {
++    match v {
++        Value::Number(_) => jcs(v),
++        Value::Array(a) => format!("[{}]", a.iter().map(oracle).collect::<Vec<_>>().join(",")),
++        Value::Object(m) => {
++            let mut keys: Vec<&String> = m.keys().collect();
++            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
++            let body: Vec<String> = keys
++                .into_iter()
++                .map(|k| format!("{}:{}", serde_json::to_string(k).unwrap(), oracle(&m[k])))
++                .collect();
++            format!("{{{}}}", body.join(","))
++        }
++        x => serde_json::to_string(x).unwrap(),
++    }
++}
++
++fn no_whitespace_outside_strings(s: &str) -> bool {
++    let mut in_str = false;
++    let mut esc = false;
++    for c in s.chars() {
++        if in_str {
++            if esc {
++                esc = false;
++            } else if c == '\\' {
++                esc = true;
++            } else if c == '"' {
++                in_str = false;
++            }
++        } else if c == '"' {
++            in_str = true;
++        } else if c.is_whitespace() {
++            return false;
++        }
++    }
++    true
++}
++
++/// Numbers compare by value: `1.0` and `1` are the same JSON number.
++fn normalize(v: &Value) -> Value {
++    match v {
++        Value::Number(n) => json!(n.as_f64().unwrap()),
++        Value::Array(a) => Value::Array(a.iter().map(normalize).collect()),
++        Value::Object(m) => {
++            Value::Object(m.iter().map(|(k, x)| (k.clone(), normalize(x))).collect())
++        }
++        x => x.clone(),
++    }
++}
++
++struct XorShift(u64);
++impl XorShift {
++    fn next(&mut self) -> u64 {
++        let mut x = self.0;
++        x ^= x << 13;
++        x ^= x >> 7;
++        x ^= x << 17;
++        self.0 = x;
++        x
++    }
++    fn below(&mut self, n: u64) -> u64 {
++        self.next() % n
++    }
++}
++
++fn gen_string(r: &mut XorShift) -> String {
++    const POOL: &[char] = &[
++        'a',
++        'Z',
++        '0',
++        ' ',
++        '"',
++        '\\',
++        '/',
++        '\n',
++        '\t',
++        '\u{0}',
++        '\u{1f}',
++        '\u{7f}',
++        'é',
++        '€',
++        '\u{E000}',
++        '\u{FB33}',
++        '😂',
++        '\u{1F600}',
++        'ö',
++    ];
++    (0..r.below(6))
++        .map(|_| POOL[r.below(POOL.len() as u64) as usize])
++        .collect()
++}
++
++fn gen_number(r: &mut XorShift) -> Value {
++    match r.below(4) {
++        0 => json!(r.below(1_000_000) as i64 - 500_000),
++        1 => json!((r.next() >> 11) as f64 / (1u64 << 30) as f64),
++        2 => json!(f64::from_bits(r.next() & 0x7fef_ffff_ffff_ffff)),
++        _ => json!(10f64.powi(r.below(60) as i32 - 30)),
++    }
++}
++
++fn gen_value(r: &mut XorShift, depth: u32) -> Value {
++    let pick = if depth == 0 { r.below(4) } else { r.below(6) };
++    match pick {
++        0 => Value::Null,
++        1 => Value::Bool(r.below(2) == 1),
++        2 => gen_number(r),
++        3 => Value::String(gen_string(r)),
++        4 => Value::Array((0..r.below(4)).map(|_| gen_value(r, depth - 1)).collect()),
++        _ => Value::Object(
++            (0..r.below(5))
++                .map(|_| (gen_string(r), gen_value(r, depth - 1)))
++                .collect(),
++        ),
++    }
++}
+diff --git a/crates/toolpath/tests/signatures.rs b/crates/toolpath/tests/signatures.rs
+new file mode 100644
+index 00000000..14d57a48
+--- /dev/null
++++ b/crates/toolpath/tests/signatures.rs
+@@ -0,0 +1,302 @@
++//! RFC.md "Verification Algorithm", proven with Ed25519 `ssh` keys made in the
++//! test from fixed seeds (never a real key).
++
++use std::collections::HashMap;
++
++use serde_json::json;
++use ssh_key::private::Ed25519Keypair;
++use ssh_key::{HashAlg, LineEnding, PrivateKey, PublicKey};
++use toolpath::v1::sign::{
++    SSHSIG_NAMESPACE, VerifyError, digest, path_author_input, path_reviewer_input,
++    step_author_input, verify_path_signatures, verify_step_signature,
++};
++use toolpath::v1::{Key, Path, Signature};
++
++fn keypair(seed: u8) -> PrivateKey {
++    PrivateKey::from(Ed25519Keypair::from_seed(&[seed; 32]))
++}
++
++fn fingerprint(k: &PrivateKey) -> String {
++    k.public_key().fingerprint(HashAlg::Sha256).to_string()
++}
++
++fn sign(k: &PrivateKey, canonical_input: &str) -> String {
++    k.sign(SSHSIG_NAMESPACE, HashAlg::Sha512, &digest(canonical_input))
++        .unwrap()
++        .to_pem(LineEnding::LF)
++        .unwrap()
++}
++
++fn sig(signer: &str, k: &PrivateKey, scope: &str, ts: Option<&str>, input: &str) -> Signature {
++    Signature {
++        signer: signer.into(),
++        key: format!("ssh:{}", fingerprint(k)),
++        scope: scope.into(),
++        sig: sign(k, input),
++        timestamp: ts.map(Into::into),
++    }
++}
++
++/// A two-step path whose actors carry the two test keys.
++fn path(alex: &PrivateKey, bob: &PrivateKey) -> Path {
++    serde_json::from_value(json!({
++        "path": { "id": "pr-42", "base": { "uri": "github:org/repo", "ref": "abc" }, "head": "step-002" },
++        "steps": [
++            { "step": { "id": "step-001", "actor": "human:alex", "timestamp": "2026-01-29T10:00:00Z" },
++              "change": { "src/main.rs": { "raw": "@@ -1,1 +1,1 @@\n-hello\n+world" } },
++              "meta": { "intent": "Fix greeting" } },
++            { "step": { "id": "step-002", "parents": ["step-001"], "actor": "human:alex", "timestamp": "2026-01-29T10:05:00Z" },
++              "change": { "src/main.rs": { "raw": "@@ -1,1 +1,1 @@\n-world\n+world!" } } }
++        ],
++        "meta": { "actors": {
++            "human:alex": { "keys": [{ "type": "ssh", "fingerprint": fingerprint(alex) }] },
++            "human:bob":  { "keys": [{ "type": "ssh", "fingerprint": fingerprint(bob) }] }
++        } }
++    }))
++    .unwrap()
++}
++
++/// The resolver a caller supplies: fingerprint → public key, from its own store.
++fn store(keys: &[&PrivateKey]) -> impl Fn(&Key) -> Option<PublicKey> {
++    let map: HashMap<String, PublicKey> = keys
++        .iter()
++        .map(|k| (fingerprint(k), k.public_key().clone()))
++        .collect();
++    move |key: &Key| map.get(&key.fingerprint).cloned()
++}
++
++/// Author and reviewer signatures added to a path's meta (and step 1's author signature).
++fn signed(alex: &PrivateKey, bob: &PrivateKey) -> Path {
++    let mut p = path(alex, bob);
++    let author = sig("human:alex", alex, "author", None, &path_author_input(&p));
++    let review_at = "2026-01-29T16:00:00Z";
++    let reviewer = sig(
++        "human:bob",
++        bob,
++        "reviewer",
++        Some(review_at),
++        &path_reviewer_input(&p.path.id, &p.path.head, review_at),
++    );
++    p.meta.as_mut().unwrap().signatures = vec![author, reviewer];
++    let step_sig = sig(
++        "human:alex",
++        alex,
++        "author",
++        None,
++        &step_author_input(&p.steps[0]),
++    );
++    p.steps[0].meta.as_mut().unwrap().signatures = vec![step_sig];
++    p
++}
++
++#[test]
++fn signed_step_and_path_verify() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let p = signed(&alex, &bob);
++    verify_step_signature(
++        &p.steps[0],
++        &p.steps[0].meta.as_ref().unwrap().signatures[0],
++        alex.public_key(),
++    )
++    .unwrap();
++    verify_path_signatures(&p, &["author", "reviewer"], true, &store(&[&alex, &bob])).unwrap();
++}
++
++#[test]
++fn step_meta_is_not_signed() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    p.steps[0].meta.as_mut().unwrap().intent = Some("changed after signing".into());
++    let s = p.steps[0].meta.as_ref().unwrap().signatures[0].clone();
++    verify_step_signature(&p.steps[0], &s, alex.public_key()).unwrap();
++}
++
++#[test]
++fn tampered_change_fails() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    let s = p.steps[0].meta.as_ref().unwrap().signatures[0].clone();
++    p.steps[0].change.get_mut("src/main.rs").unwrap().raw = Some("@@ tampered".into());
++    assert!(matches!(
++        verify_step_signature(&p.steps[0], &s, alex.public_key()),
++        Err(VerifyError::BadSignature(_))
++    ));
++}
++
++#[test]
++fn tampered_step_identity_fails() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    p.steps[0].step.actor = "agent:someone-else".into();
++    assert!(matches!(
++        verify_path_signatures(&p, &["author"], true, &store(&[&alex, &bob])),
++        Err(VerifyError::BadSignature(_))
++    ));
++}
++
++#[test]
++fn moved_head_fails_both_path_signatures() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    p.path.head = "step-001".into();
++    for scope in ["author", "reviewer"] {
++        assert!(
++            matches!(
++                verify_path_signatures(&p, &[scope], false, &store(&[&alex, &bob])),
++                Err(VerifyError::BadSignature(_))
++            ),
++            "{scope}"
++        );
++    }
++}
++
++#[test]
++fn reordered_steps_fail_the_author_signature() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    p.steps.reverse();
++    assert!(matches!(
++        verify_path_signatures(&p, &["author"], false, &store(&[&alex, &bob])),
++        Err(VerifyError::BadSignature(_))
++    ));
++}
++
++#[test]
++fn missing_required_scope_fails() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    p.meta
++        .as_mut()
++        .unwrap()
++        .signatures
++        .retain(|s| s.scope != "reviewer");
++    assert_eq!(
++        verify_path_signatures(&p, &["author", "reviewer"], false, &store(&[&alex, &bob])),
++        Err(VerifyError::MissingScope("reviewer".into()))
++    );
++}
++
++#[test]
++fn signer_not_in_actors_fails() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    p.meta
++        .as_mut()
++        .unwrap()
++        .actors
++        .as_mut()
++        .unwrap()
++        .remove("human:bob");
++    assert_eq!(
++        verify_path_signatures(&p, &["reviewer"], false, &store(&[&alex, &bob])),
++        Err(VerifyError::UnknownSigner("human:bob".into()))
++    );
++}
++
++#[test]
++fn wrong_scope_canonical_form_fails() {
++    // A reviewer signature made over the author canonical form does not verify as reviewer.
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    let wrong = sig(
++        "human:bob",
++        &bob,
++        "reviewer",
++        Some("2026-01-29T16:00:00Z"),
++        &path_author_input(&p),
++    );
++    p.meta
++        .as_mut()
++        .unwrap()
++        .signatures
++        .retain(|s| s.scope != "reviewer");
++    p.meta.as_mut().unwrap().signatures.push(wrong);
++    assert!(matches!(
++        verify_path_signatures(&p, &["reviewer"], false, &store(&[&alex, &bob])),
++        Err(VerifyError::BadSignature(_))
++    ));
++}
++
++#[test]
++fn wrong_key_and_resolver_lies_fail() {
++    let (alex, bob, mallory) = (keypair(1), keypair(2), keypair(3));
++    let p = signed(&alex, &bob);
++    // the signature does not verify under another key
++    let s = p.steps[0].meta.as_ref().unwrap().signatures[0].clone();
++    assert!(matches!(
++        verify_step_signature(&p.steps[0], &s, mallory.public_key()),
++        Err(VerifyError::BadSignature(_))
++    ));
++    // a resolver that hands back a different key is caught by the fingerprint check
++    let liar = |_: &Key| Some(mallory.public_key().clone());
++    assert!(matches!(
++        verify_path_signatures(&p, &["author"], false, &liar),
++        Err(VerifyError::FingerprintMismatch { .. })
++    ));
++    // no key at all
++    assert!(matches!(
++        verify_path_signatures(&p, &["author"], false, &|_: &Key| None),
++        Err(VerifyError::KeyUnavailable(_))
++    ));
++}
++
++#[test]
++fn reviewer_needs_its_timestamp() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    for s in &mut p.meta.as_mut().unwrap().signatures {
++        if s.scope == "reviewer" {
++            s.timestamp = None;
++        }
++    }
++    assert_eq!(
++        verify_path_signatures(&p, &["reviewer"], false, &store(&[&alex, &bob])),
++        Err(VerifyError::MissingTimestamp)
++    );
++}
++
++#[test]
++fn gpg_and_sigstore_are_not_verified() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    for (scope_key, ty) in [("gpg", "gpg"), ("sigstore", "sigstore")] {
++        let actors = p.meta.as_mut().unwrap().actors.as_mut().unwrap();
++        actors.get_mut("human:alex").unwrap().keys = vec![Key {
++            key_type: ty.into(),
++            fingerprint: "ABCD1234".into(),
++            href: None,
++        }];
++        let s = &mut p.meta.as_mut().unwrap().signatures[0];
++        s.key = format!("{scope_key}:ABCD1234");
++        assert_eq!(
++            verify_path_signatures(&p, &["author"], false, &store(&[&alex])),
++            Err(VerifyError::UnsupportedKeyType(ty.into()))
++        );
++    }
++}
++
++#[test]
++fn scopes_without_a_canonical_form_are_refused() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    let ci = sig("human:alex", &alex, "ci", None, &path_author_input(&p));
++    p.meta.as_mut().unwrap().signatures.push(ci);
++    assert_eq!(
++        verify_path_signatures(&p, &["ci"], false, &store(&[&alex])),
++        Err(VerifyError::UnsupportedScope("ci".into()))
++    );
++}
++
++#[test]
++fn tampered_step_signature_is_caught_with_verify_steps() {
++    let (alex, bob) = (keypair(1), keypair(2));
++    let mut p = signed(&alex, &bob);
++    // The path author signature covers step ids, not step contents; the step's
++    // own author signature is what catches a changed diff.
++    p.steps[0].change.get_mut("src/main.rs").unwrap().raw = Some("@@ tampered".into());
++    verify_path_signatures(&p, &["author", "reviewer"], false, &store(&[&alex, &bob])).unwrap();
++    assert!(matches!(
++        verify_path_signatures(&p, &["author", "reviewer"], true, &store(&[&alex, &bob])),
++        Err(VerifyError::BadSignature(_))
++    ));
++}
+diff --git a/examples/.qual b/examples/.qual
+new file mode 100644
+index 00000000..9dde1ec5
+--- /dev/null
++++ b/examples/.qual
+@@ -0,0 +1 @@
++{"metabox":"1","type":"annotation","subject":"examples/path-02-local-session.path.jsonl","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424863Z","id":"395652024dd8f573fed36856477cc3e71eba54eeb37f59e23de15e8aa320fa39","body":{"detail":"Pinned in crates/toolpath/tests/jcs.rs::committed_jsonl_examples_match_their_json (KNOWN_DIFFERENT); the other committed pairs match.","kind":"concern","span":{"start":{"line":1},"end":{"line":1},"content_hash":"6772ee5f1108fa5fe50282d5aac6e04580be9f648e6ca78273daeb61a6f41e41"},"suggested_fix":"Add \"ref\":\"def789abc123456\" to the PathOpen base and drop it from KNOWN_DIFFERENT.","summary":"This .path.jsonl is not the same document as its .path.json twin: PathOpen has no base.ref (def789abc123456), so a signature over one would not verify against the other","tags":["examples","jsonl","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/justfile b/justfile
+index 7361ce36..0f2ad87c 100644
+--- a/justfile
++++ b/justfile
+@@ -4,7 +4,7 @@ help:
+ 
+ # Run clippy lints across the workspace
+ clippy:
+-    cargo clippy --workspace --features path-cli/goldens -- -D warnings
++    cargo clippy --workspace --features path-cli/goldens,toolpath/verify -- -D warnings
+ 
+ # Format all code (Rust + site)
+ fmt:
+diff --git a/pr/29-signatures.md b/pr/29-signatures.md
+new file mode 100644
+index 00000000..38fdb6db
+--- /dev/null
++++ b/pr/29-signatures.md
+@@ -0,0 +1,66 @@
++# feat(toolpath): the RFC's signature algorithm, proven — JCS inputs, SHA-256 digests, ssh verification
++
++Status: planned (asked 2026-10-19 on the demo deck: "we can prove these") · Base: main
++
++## Why
++RFC.md's "Signature Algorithm" and "Verification Algorithm" sections were prose only: no toolpath crate
++canonicalized, digested or verified anything, and the examples' signatures were placeholders nobody checked.
++JCS appeared only in path-cli behind `resume-remote` (content-addressed session ids).
++
++## What changes
++- `toolpath` gets a `verify` feature (off by default): `v1::sign::{jcs, digest, step_author_input,
++  path_author_input, path_reviewer_input, verify_step_signature, verify_path_signatures, key_id}`.
++  JCS is written in the crate (RFC 8785; ECMAScript numbers via `ryu-js`, not serde_json_canonicalizer, which would turn on serde_json `float_roundtrip` for the whole build); digests are SHA-256; `ssh` keys verify Ed25519 SSHSIG
++  signatures in namespace `toolpath`; `gpg`/`sigstore` are refused as unsupported. Keys come from a caller
++  resolver (the document carries fingerprints, not key material); the resolved key's SHA256 fingerprint
++  must match.
++- `tests/jcs.rs`: the six RFC 8785 reference vectors (vendored, Apache-2.0, `tests/jcs-vectors/SOURCE.md`),
++  escape set, ES6 numbers, the RFC's canonicalization example byte for byte, what gets signed, signed inputs
++  surviving a `.path.jsonl` round trip, and 2000 generated values (re-parse equal, idempotent, no
++  whitespace, structure/key order equal to an independent writer).
++- `tests/signatures.rs`: 14 tests with keys made from fixed seeds — signed step and path verify; meta is
++  not signed; tampered change / step / head / order fail; missing scope, unknown signer, wrong scope's
++  canonical form, wrong key, lying resolver, missing reviewer timestamp, gpg/sigstore, unsupported scopes.
++- Gates (`scripts/quality_gates.sh`, `justfile`, `pr/cut.sh`, `pr/gate-piece.sh`) build with
++  `--features path-cli/goldens,toolpath/verify`, so these tests run on every gate.
++- Qualifier records on every rule and pseudo-code line of the section (RFC.md 395, 712–836), on
++  `jsonl.rs`'s round-trip claim, and on `examples/path-02-local-session.path.jsonl`.
++
++## For reviewers: serde_json `float_roundtrip`, workspace-wide
++This piece turns on serde_json's `float_roundtrip` in the workspace `Cargo.toml`, which **changes how every
++crate parses floats**. Without it serde_json's fast parser can land one ULP away from the nearest double, a
++silent precision change in real sessions: Claude Code's `"costUSD": 0.020428699999999998` was read back as
++`0.0204287`, and RFC 8785's own vector `333333333.33333329` canonicalized wrong. With it every number parses to
++the nearest double, which RFC 8785 (and so every signature) assumes. Three snapshots change for exactly that
++value (`ir@`, `document@`, `shed@claude-session`).
++
++## Findings
++- **RFC.md:719 is false** (blocker): RFC 8785 sorts keys by UTF-16 code units, not UTF-8 bytes. The
++  implementation follows RFC 8785, as its own reference vector `weird.json` requires.
++- A path author signature covers step ids, not step contents (concern on :759).
++- `meta.actors[*].keys` has no key material (concern on :823); witness/ci/release have no canonical form
++  (concern on :395); gpg and sigstore are not verified (concerns on :834, :836); the SSHSIG namespace is
++  unspecified (noted on :835).
++- `examples/path-02-local-session.path.jsonl` is not the same document as its `.path.json` (no `base.ref`).
++
++## Verification
++- `cargo test -p toolpath --features verify --test jcs --test signatures`: 9 + 14 pass.
++- `qualifier review`: the 20 new records fresh.
++- Full gates with `--features path-cli/goldens,toolpath/verify` (see the commit).
++
++## Paths
++```
++crates/toolpath/Cargo.toml
++crates/toolpath/src/lib.rs
++crates/toolpath/src/sign.rs
++crates/toolpath/src/.qual
++crates/toolpath/tests/jcs.rs
++crates/toolpath/tests/signatures.rs
++crates/toolpath/tests/jcs-vectors/
++Cargo.lock
++.qual
++examples/.qual
++scripts/quality_gates.sh
++justfile
++```
++(`pr/cut.sh` and `pr/gate-piece.sh` change on wip only.)
+diff --git a/pr/cut.sh b/pr/cut.sh
+index c15f0ca0..6340b192 100755
+--- a/pr/cut.sh
++++ b/pr/cut.sh
+@@ -101,9 +101,9 @@ if [ "${PR_GATES:-1}" != 0 ]; then
+     res=""
+     for g in "metadata:cargo metadata --format-version 1 --offline" \
+              "fmt:cargo fmt --all --check" \
+-             "clippy:cargo clippy --workspace --all-targets --features path-cli/goldens --offline -- -D warnings" \
+-             "test:env RUSTFLAGS=-D\ warnings cargo test --workspace --features path-cli/goldens --offline" \
+-             "doc:env RUSTDOCFLAGS=-D\ warnings cargo doc --workspace --features path-cli/goldens --no-deps --offline"; do
++             "clippy:cargo clippy --workspace --all-targets --features path-cli/goldens,toolpath/verify --offline -- -D warnings" \
++             "test:env RUSTFLAGS=-D\ warnings cargo test --workspace --features path-cli/goldens,toolpath/verify --offline" \
++             "doc:env RUSTDOCFLAGS=-D\ warnings cargo doc --workspace --features path-cli/goldens,toolpath/verify --no-deps --offline"; do
+       name=${g%%:*}; cmd=${g#*:}
+       if (cd "$gate_wt" && eval "$cmd" >"$gate_wt.$name.log" 2>&1); then res+=" $name=ok"; else res+=" $name=FAIL($gate_wt.$name.log)"; failed=1; fi
+     done
+diff --git a/pr/gate-piece.sh b/pr/gate-piece.sh
+index 5682074e..d66676c0 100755
+--- a/pr/gate-piece.sh
++++ b/pr/gate-piece.sh
+@@ -14,7 +14,7 @@ t0=$SECONDS
+ if cargo metadata --format-version 1 --offline >/dev/null 2>"$logdir/$n.meta.log"; then res+=" metadata=ok"; else res+=" metadata=FAIL"; fi
+ # fmt = the CI format gate: cargo fmt plus prettier over site/ (scripts/quality_gates.sh gate_format)
+ if cargo fmt --all --check >"$logdir/$n.fmt.log" 2>&1 && { [ ! -d site ] || (cd site && nix run nixpkgs#prettier -- --check --no-color '**/*.{md,css,json,js}' >>"$logdir/$n.fmt.log" 2>&1); }; then res+=" fmt=ok"; else res+=" fmt=FAIL"; fi
+-if cargo clippy --workspace --all-targets --features path-cli/goldens --offline -- -D warnings >"$logdir/$n.clippy.log" 2>&1; then res+=" clippy=ok"; else res+=" clippy=FAIL"; fi
+-if RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/goldens --offline >"$logdir/$n.test.log" 2>&1; then res+=" test=ok($(grep -c '^test result' "$logdir/$n.test.log")suites)"; else res+=" test=FAIL"; fi
+-if RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/goldens --no-deps --offline >"$logdir/$n.doc.log" 2>&1; then res+=" doc=ok"; else res+=" doc=FAIL"; fi
++if cargo clippy --workspace --all-targets --features path-cli/goldens,toolpath/verify --offline -- -D warnings >"$logdir/$n.clippy.log" 2>&1; then res+=" clippy=ok"; else res+=" clippy=FAIL"; fi
++if RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/goldens,toolpath/verify --offline >"$logdir/$n.test.log" 2>&1; then res+=" test=ok($(grep -c '^test result' "$logdir/$n.test.log")suites)"; else res+=" test=FAIL"; fi
++if RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/goldens,toolpath/verify --no-deps --offline >"$logdir/$n.doc.log" 2>&1; then res+=" doc=ok"; else res+=" doc=FAIL"; fi
+ echo "$bm ${c:0:8}$res ($((SECONDS-t0))s)"
+diff --git a/scripts/quality_gates.sh b/scripts/quality_gates.sh
+index 2dc121c5..8e00b373 100755
+--- a/scripts/quality_gates.sh
++++ b/scripts/quality_gates.sh
+@@ -70,17 +70,17 @@ gate_shellcheck() {
+ 
+ # shellcheck disable=SC2329
+ gate_clippy() {
+-    cargo clippy --workspace --features path-cli/goldens -- -D warnings 2>&1
++    cargo clippy --workspace --features path-cli/goldens,toolpath/verify -- -D warnings 2>&1
+ }
+ 
+ # shellcheck disable=SC2329
+ gate_test() {
+-    RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/goldens 2>&1
++    RUSTFLAGS="-D warnings" cargo test --workspace --features path-cli/goldens,toolpath/verify 2>&1
+ }
+ 
+ # shellcheck disable=SC2329
+ gate_doc() {
+-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/goldens --no-deps 2>&1
++    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features path-cli/goldens,toolpath/verify --no-deps 2>&1
+ }
+ 
+ # shellcheck disable=SC2329
+-- 
+2.55.0
+

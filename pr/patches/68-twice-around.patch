@@ -1,0 +1,2086 @@
+From d7be95d73bf839c1c34431539c03ae3476c07c9e Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 14:17:57 -0400
+Subject: [PATCH] test(goldens): the twice-around round trip, drift declared
+ (pr/68)
+
+---
+ .../fixtures/twice-around.json                |  28 ++++
+ .../twice_around@claude-compacted@codex.snap  |  15 ++
+ ...twice_around@claude-compacted@copilot.snap |  19 +++
+ ..._around@claude-compacted@cursor-agent.snap |  15 ++
+ .../twice_around@claude-compacted@cursor.snap |  15 ++
+ .../twice_around@claude-compacted@gemini.snap |  15 ++
+ ...wice_around@claude-compacted@opencode.snap |  15 ++
+ .../twice_around@claude-compacted@pi.snap     |  15 ++
+ .../twice_around@claude-session@codex.snap    |  21 +++
+ .../twice_around@claude-session@copilot.snap  |  19 +++
+ ...ce_around@claude-session@cursor-agent.snap |  15 ++
+ .../twice_around@claude-session@cursor.snap   |  15 ++
+ .../twice_around@claude-session@gemini.snap   |  15 ++
+ .../twice_around@claude-session@opencode.snap |  15 ++
+ .../twice_around@claude-session@pi.snap       |  15 ++
+ .../snapshots/twice_around@claude@codex.snap  |  21 +++
+ .../twice_around@claude@copilot.snap          |  19 +++
+ .../twice_around@claude@cursor-agent.snap     |  15 ++
+ .../snapshots/twice_around@claude@cursor.snap |  15 ++
+ .../snapshots/twice_around@claude@gemini.snap |  15 ++
+ .../twice_around@claude@opencode.snap         |  15 ++
+ .../snapshots/twice_around@claude@pi.snap     |  15 ++
+ .../snapshots/twice_around@codex@claude.snap  |  15 ++
+ .../snapshots/twice_around@codex@copilot.snap |  32 +++++
+ .../twice_around@codex@cursor-agent.snap      |  15 ++
+ .../snapshots/twice_around@codex@cursor.snap  |  15 ++
+ .../snapshots/twice_around@codex@gemini.snap  |  15 ++
+ .../twice_around@codex@opencode.snap          |  15 ++
+ .../snapshots/twice_around@codex@pi.snap      |  15 ++
+ .../twice_around@copilot@claude.snap          |  15 ++
+ .../snapshots/twice_around@copilot@codex.snap |  17 +++
+ .../twice_around@copilot@cursor-agent.snap    |  15 ++
+ .../twice_around@copilot@cursor.snap          |  15 ++
+ .../twice_around@copilot@gemini.snap          |  15 ++
+ .../twice_around@copilot@opencode.snap        |  15 ++
+ .../snapshots/twice_around@copilot@pi.snap    |  15 ++
+ .../snapshots/twice_around@cursor@claude.snap |  15 ++
+ .../snapshots/twice_around@cursor@codex.snap  |  26 ++++
+ .../twice_around@cursor@copilot.snap          |  19 +++
+ .../twice_around@cursor@cursor-agent.snap     |  15 ++
+ .../snapshots/twice_around@cursor@gemini.snap |  15 ++
+ .../twice_around@cursor@opencode.snap         |  15 ++
+ .../snapshots/twice_around@cursor@pi.snap     |  15 ++
+ .../snapshots/twice_around@gemini@claude.snap |  15 ++
+ .../snapshots/twice_around@gemini@codex.snap  |  17 +++
+ .../twice_around@gemini@copilot.snap          |  19 +++
+ .../twice_around@gemini@cursor-agent.snap     |  15 ++
+ .../snapshots/twice_around@gemini@cursor.snap |  15 ++
+ .../twice_around@gemini@opencode.snap         |  15 ++
+ .../snapshots/twice_around@gemini@pi.snap     |  15 ++
+ .../twice_around@opencode@claude.snap         |  15 ++
+ .../twice_around@opencode@codex.snap          |  17 +++
+ .../twice_around@opencode@copilot.snap        |  19 +++
+ .../twice_around@opencode@cursor-agent.snap   |  15 ++
+ .../twice_around@opencode@cursor.snap         |  15 ++
+ .../twice_around@opencode@gemini.snap         |  15 ++
+ .../snapshots/twice_around@opencode@pi.snap   |  15 ++
+ .../snapshots/twice_around@pi@claude.snap     |  15 ++
+ .../snapshots/twice_around@pi@codex.snap      |  18 +++
+ .../snapshots/twice_around@pi@copilot.snap    |  19 +++
+ .../twice_around@pi@cursor-agent.snap         |  15 ++
+ .../snapshots/twice_around@pi@cursor.snap     |  15 ++
+ .../snapshots/twice_around@pi@gemini.snap     |  15 ++
+ .../snapshots/twice_around@pi@opencode.snap   |  15 ++
+ crates/toolpath-goldens/src/keypaths.rs       |  36 +++++
+ crates/toolpath-goldens/src/losses.rs         |  38 ++++-
+ crates/toolpath-goldens/src/model.rs          |  32 +++++
+ crates/toolpath-goldens/src/pipeline.rs       |  31 +++-
+ crates/toolpath-goldens/src/schemas.rs        |  10 +-
+ crates/toolpath-goldens/tests/goldens.rs      |   1 +
+ crates/toolpath-goldens/tests/twice_around.rs | 132 ++++++++++++++++++
+ .../baseline/schemas/twice_around.schema.json |  65 +++++++++
+ pr/68-twice-around.md                         |  26 ++++
+ 73 files changed, 1416 insertions(+), 5 deletions(-)
+ create mode 100644 crates/toolpath-goldens/fixtures/twice-around.json
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-compacted@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-compacted@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-compacted@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-compacted@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-compacted@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-session@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-session@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-session@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-session@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude-session@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@claude@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@codex@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@codex@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@codex@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@codex@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@codex@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@codex@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@codex@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@copilot@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@copilot@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@copilot@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@copilot@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@copilot@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@copilot@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@copilot@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@cursor@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@cursor@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@cursor@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@cursor@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@cursor@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@cursor@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@cursor@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@gemini@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@gemini@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@gemini@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@gemini@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@gemini@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@gemini@opencode.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@gemini@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@opencode@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@opencode@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@opencode@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@opencode@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@opencode@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@opencode@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@opencode@pi.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@pi@claude.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@pi@codex.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@pi@copilot.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@pi@cursor-agent.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@pi@cursor.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@pi@gemini.snap
+ create mode 100644 crates/toolpath-goldens/snapshots/twice_around@pi@opencode.snap
+ create mode 100644 crates/toolpath-goldens/tests/twice_around.rs
+ create mode 100644 docs/baseline/schemas/twice_around.schema.json
+ create mode 100644 pr/68-twice-around.md
+
+diff --git a/crates/toolpath-goldens/fixtures/twice-around.json b/crates/toolpath-goldens/fixtures/twice-around.json
+new file mode 100644
+index 00000000..8ff2a079
+--- /dev/null
++++ b/crates/toolpath-goldens/fixtures/twice-around.json
+@@ -0,0 +1,28 @@
++[
++  {"target":"copilot","kind":"changed","path":"graph.id","why":"Copilot's projection mints a session id on every export (pipeline.rs settle/canonical), and the derived graph id embeds it, so it differs each pass by design."},
++  {"target":"copilot","kind":"changed","path":"paths[].path.id","why":"Embeds the session id Copilot's projection mints on every export; differs each pass by design."},
++  {"target":"copilot","kind":"changed","path":"paths[].meta.title","why":"The title is 'Copilot session: <minted id>'; follows the per-export minted session id."},
++  {"target":"copilot","kind":"changed","path":"paths[].steps[].step.id","why":"Copilot event ids are minted from a per-export sequence (event_uuid), so pass 1 ids are replaced on pass 2; the structure and order are unchanged."},
++  {"target":"copilot","kind":"changed","path":"paths[].steps[].step.parents[]","why":"Parent references point at the re-minted step ids."},
++  {"target":"copilot","kind":"changed","path":"paths[].steps[].step.actor","why":"Actor ids are derived from the step's role/model as Copilot records it; the first read maps the source's actor, the second the Copilot-shaped one."},
++  {"target":"copilot","kind":"changed","path":"paths[].steps[].step.timestamp","why":"Steps that Copilot has no timestamp for take the neighbouring event's time on the second read."},
++  {"target":"copilot","kind":"changed","path":"paths[].path.head","why":"Head is a step id; follows the re-minted ids."},
++  {"target":"copilot","kind":"changed","path":"paths[].meta.actors.<actor>.name","why":"Actor display name is derived from the re-minted actor id."},
++  {"target":"copilot","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.role","why":"The first read keeps the source role; Copilot has no developer/system role on read, so the second read reports the Copilot one.","defect":"copilot reader has no system.message case (types.rs:131): fix as pr/70."},
++  {"target":"copilot","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.type","why":"A system.message the writer emits is read back as a generic event, then re-typed on the next pass.","defect":"copilot reader has no system.message case (types.rs:131): fix as pr/70."},
++  {"target":"copilot","kind":"lost","path":"paths[].steps[].change.<artifact>.structural.content","why":"Developer text carried by system.message is dropped when the reader turns it into an event; pass 2 drops it entirely.","defect":"copilot reader drops system.message (types.rs:131): fix as pr/70."},
++  {"target":"copilot","kind":"lost","path":"paths[].steps[].change.<artifact>.structural.entry_type","why":"Lost with the system.message steps that carried it.","defect":"copilot reader drops system.message (types.rs:131): fix as pr/70."},
++  {"target":"copilot","kind":"lost","path":"paths[].steps[].change.<artifact>.structural.event_source_id","why":"Lost with the system.message steps that carried it.","defect":"copilot reader drops system.message (types.rs:131): fix as pr/70."},
++  {"target":"copilot","kind":"lost","path":"paths[].meta.actors.<actor>.provider","why":"The provider was on the actor of the dropped system.message step.","defect":"copilot reader drops system.message (types.rs:131): fix as pr/70."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.turn_id","why":"exec_command_end.turn_id is copied from the source id, then the reader renumbers turns to codex-turn-NNNN; settles after one pass (project.rs:679, provider.rs:328).","defect":"stabilise by writing codex-turn-NNNN ids at projection time."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].step.id","why":"The codex writer stamps a turn_context for a turn it writes nothing for, so ids shift to the next turn on the second read.","defect":"codex empty-turn turn_context (project.rs:160,169-199,483): fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].step.parents[]","why":"Parent references follow the shifted step ids.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].step.timestamp","why":"The shifted turn_context takes the next turn's timestamp.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].step.actor","why":"The shifted turn_context carries the next turn's actor.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.event_source_id","why":"Follows the shifted turn_context step.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.cwd","why":"Settings on the shifted turn_context move with it.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.entry_type","why":"Follows the shifted turn_context step.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.model","why":"Settings on the shifted turn_context move with it.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.model_provider","why":"Settings on the shifted turn_context move with it.","defect":"codex empty-turn turn_context: fix as pr/69."},
++  {"target":"codex","kind":"changed","path":"paths[].steps[].change.<artifact>.structural.type","why":"Follows the shifted turn_context step.","defect":"codex empty-turn turn_context: fix as pr/69."}
++]
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@codex.snap
+new file mode 100644
+index 00000000..e6945869
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@codex.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
++input_file: goldens/claude-compacted/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@copilot.snap
+new file mode 100644
+index 00000000..e32e7ccf
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@copilot.snap
+@@ -0,0 +1,19 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
++input_file: goldens/claude-compacted/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.title",
++    "paths[].path.id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor-agent.snap
+new file mode 100644
+index 00000000..e6945869
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
++input_file: goldens/claude-compacted/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor.snap
+new file mode 100644
+index 00000000..e6945869
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
++input_file: goldens/claude-compacted/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@gemini.snap
+new file mode 100644
+index 00000000..e6945869
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
++input_file: goldens/claude-compacted/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@opencode.snap
+new file mode 100644
+index 00000000..e6945869
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
++input_file: goldens/claude-compacted/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@pi.snap
+new file mode 100644
+index 00000000..e6945869
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-compacted@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: ce35c60cc9e0c62d0dc48c738d485fe7b85ac488d6e2e30ce395c911f3b42988
++input_file: goldens/claude-compacted/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-session@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-session@codex.snap
+new file mode 100644
+index 00000000..00ddb7c0
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-session@codex.snap
+@@ -0,0 +1,21 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
++input_file: goldens/claude-session/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "paths[].steps[].change.<artifact>.structural.event_source_id",
++    "paths[].steps[].change.<artifact>.structural.turn_id",
++    "paths[].steps[].step.id",
++    "paths[].steps[].step.parents[]",
++    "paths[].steps[].step.timestamp"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-session@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-session@copilot.snap
+new file mode 100644
+index 00000000..978dbb2a
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-session@copilot.snap
+@@ -0,0 +1,19 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
++input_file: goldens/claude-session/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.title",
++    "paths[].path.id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor-agent.snap
+new file mode 100644
+index 00000000..655c5a7d
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
++input_file: goldens/claude-session/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor.snap
+new file mode 100644
+index 00000000..655c5a7d
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-session@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
++input_file: goldens/claude-session/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-session@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-session@gemini.snap
+new file mode 100644
+index 00000000..655c5a7d
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-session@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
++input_file: goldens/claude-session/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-session@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-session@opencode.snap
+new file mode 100644
+index 00000000..655c5a7d
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-session@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
++input_file: goldens/claude-session/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude-session@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@claude-session@pi.snap
+new file mode 100644
+index 00000000..655c5a7d
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude-session@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
++input_file: goldens/claude-session/input.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@claude@codex.snap
+new file mode 100644
+index 00000000..90677c1f
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude@codex.snap
+@@ -0,0 +1,21 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
++input_file: test-fixtures/claude/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "paths[].steps[].change.<artifact>.structural.event_source_id",
++    "paths[].steps[].change.<artifact>.structural.turn_id",
++    "paths[].steps[].step.id",
++    "paths[].steps[].step.parents[]",
++    "paths[].steps[].step.timestamp"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@claude@copilot.snap
+new file mode 100644
+index 00000000..0cde00f8
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude@copilot.snap
+@@ -0,0 +1,19 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
++input_file: test-fixtures/claude/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.title",
++    "paths[].path.id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@claude@cursor-agent.snap
+new file mode 100644
+index 00000000..1940d719
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
++input_file: test-fixtures/claude/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@claude@cursor.snap
+new file mode 100644
+index 00000000..1940d719
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
++input_file: test-fixtures/claude/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@claude@gemini.snap
+new file mode 100644
+index 00000000..1940d719
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
++input_file: test-fixtures/claude/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@claude@opencode.snap
+new file mode 100644
+index 00000000..1940d719
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
++input_file: test-fixtures/claude/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@claude@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@claude@pi.snap
+new file mode 100644
+index 00000000..1940d719
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@claude@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_claude
++  agent: claude
++  input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
++input_file: test-fixtures/claude/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@codex@claude.snap b/crates/toolpath-goldens/snapshots/twice_around@codex@claude.snap
+new file mode 100644
+index 00000000..af640e22
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@codex@claude.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_codex
++  agent: codex
++  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
++input_file: test-fixtures/codex/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@codex@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@codex@copilot.snap
+new file mode 100644
+index 00000000..997be28f
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@codex@copilot.snap
+@@ -0,0 +1,32 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_codex
++  agent: codex
++  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
++input_file: test-fixtures/codex/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [
++    "paths[].meta.actors.<actor>.provider",
++    "paths[].steps[].change.<artifact>.structural.content",
++    "paths[].steps[].change.<artifact>.structural.entry_type",
++    "paths[].steps[].change.<artifact>.structural.event_source_id"
++  ],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.actors.<actor>.name",
++    "paths[].meta.title",
++    "paths[].path.head",
++    "paths[].path.id",
++    "paths[].steps[].change.<artifact>.structural.role",
++    "paths[].steps[].change.<artifact>.structural.type",
++    "paths[].steps[].step.actor",
++    "paths[].steps[].step.id",
++    "paths[].steps[].step.parents[]",
++    "paths[].steps[].step.timestamp"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@codex@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@codex@cursor-agent.snap
+new file mode 100644
+index 00000000..af640e22
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@codex@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_codex
++  agent: codex
++  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
++input_file: test-fixtures/codex/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@codex@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@codex@cursor.snap
+new file mode 100644
+index 00000000..af640e22
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@codex@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_codex
++  agent: codex
++  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
++input_file: test-fixtures/codex/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@codex@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@codex@gemini.snap
+new file mode 100644
+index 00000000..af640e22
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@codex@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_codex
++  agent: codex
++  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
++input_file: test-fixtures/codex/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@codex@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@codex@opencode.snap
+new file mode 100644
+index 00000000..af640e22
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@codex@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_codex
++  agent: codex
++  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
++input_file: test-fixtures/codex/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@codex@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@codex@pi.snap
+new file mode 100644
+index 00000000..af640e22
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@codex@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_codex
++  agent: codex
++  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
++input_file: test-fixtures/codex/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@copilot@claude.snap b/crates/toolpath-goldens/snapshots/twice_around@copilot@claude.snap
+new file mode 100644
+index 00000000..65099fa0
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@copilot@claude.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_copilot
++  agent: copilot
++  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
++input_file: test-fixtures/copilot/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@copilot@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@copilot@codex.snap
+new file mode 100644
+index 00000000..ca8e2455
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@copilot@codex.snap
+@@ -0,0 +1,17 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_copilot
++  agent: copilot
++  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
++input_file: test-fixtures/copilot/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "paths[].steps[].change.<artifact>.structural.turn_id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@copilot@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@copilot@cursor-agent.snap
+new file mode 100644
+index 00000000..65099fa0
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@copilot@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_copilot
++  agent: copilot
++  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
++input_file: test-fixtures/copilot/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@copilot@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@copilot@cursor.snap
+new file mode 100644
+index 00000000..65099fa0
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@copilot@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_copilot
++  agent: copilot
++  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
++input_file: test-fixtures/copilot/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@copilot@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@copilot@gemini.snap
+new file mode 100644
+index 00000000..65099fa0
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@copilot@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_copilot
++  agent: copilot
++  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
++input_file: test-fixtures/copilot/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@copilot@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@copilot@opencode.snap
+new file mode 100644
+index 00000000..65099fa0
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@copilot@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_copilot
++  agent: copilot
++  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
++input_file: test-fixtures/copilot/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@copilot@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@copilot@pi.snap
+new file mode 100644
+index 00000000..65099fa0
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@copilot@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_copilot
++  agent: copilot
++  input_sha256: 7f9f41b8322107cdc61d18a93e158a8ad46e460ac6311f4acd61b4fa6abdf69f
++input_file: test-fixtures/copilot/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@cursor@claude.snap b/crates/toolpath-goldens/snapshots/twice_around@cursor@claude.snap
+new file mode 100644
+index 00000000..5d60336e
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@cursor@claude.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_cursor
++  agent: cursor
++  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
++input_file: test-fixtures/cursor/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@cursor@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@cursor@codex.snap
+new file mode 100644
+index 00000000..0c0eab80
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@cursor@codex.snap
+@@ -0,0 +1,26 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_cursor
++  agent: cursor
++  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
++input_file: test-fixtures/cursor/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "paths[].steps[].change.<artifact>.structural.cwd",
++    "paths[].steps[].change.<artifact>.structural.entry_type",
++    "paths[].steps[].change.<artifact>.structural.event_source_id",
++    "paths[].steps[].change.<artifact>.structural.model",
++    "paths[].steps[].change.<artifact>.structural.turn_id",
++    "paths[].steps[].change.<artifact>.structural.type",
++    "paths[].steps[].step.actor",
++    "paths[].steps[].step.id",
++    "paths[].steps[].step.parents[]",
++    "paths[].steps[].step.timestamp"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@cursor@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@cursor@copilot.snap
+new file mode 100644
+index 00000000..f17f0c84
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@cursor@copilot.snap
+@@ -0,0 +1,19 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_cursor
++  agent: cursor
++  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
++input_file: test-fixtures/cursor/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.title",
++    "paths[].path.id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@cursor@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@cursor@cursor-agent.snap
+new file mode 100644
+index 00000000..5d60336e
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@cursor@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_cursor
++  agent: cursor
++  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
++input_file: test-fixtures/cursor/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@cursor@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@cursor@gemini.snap
+new file mode 100644
+index 00000000..5d60336e
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@cursor@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_cursor
++  agent: cursor
++  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
++input_file: test-fixtures/cursor/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@cursor@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@cursor@opencode.snap
+new file mode 100644
+index 00000000..5d60336e
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@cursor@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_cursor
++  agent: cursor
++  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
++input_file: test-fixtures/cursor/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@cursor@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@cursor@pi.snap
+new file mode 100644
+index 00000000..5d60336e
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@cursor@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_cursor
++  agent: cursor
++  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
++input_file: test-fixtures/cursor/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@gemini@claude.snap b/crates/toolpath-goldens/snapshots/twice_around@gemini@claude.snap
+new file mode 100644
+index 00000000..f7ca0318
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@gemini@claude.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_gemini
++  agent: gemini
++  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
++input_file: test-fixtures/gemini/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@gemini@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@gemini@codex.snap
+new file mode 100644
+index 00000000..00ae1fc1
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@gemini@codex.snap
+@@ -0,0 +1,17 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_gemini
++  agent: gemini
++  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
++input_file: test-fixtures/gemini/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "paths[].steps[].change.<artifact>.structural.turn_id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@gemini@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@gemini@copilot.snap
+new file mode 100644
+index 00000000..269595f3
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@gemini@copilot.snap
+@@ -0,0 +1,19 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_gemini
++  agent: gemini
++  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
++input_file: test-fixtures/gemini/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.title",
++    "paths[].path.id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@gemini@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@gemini@cursor-agent.snap
+new file mode 100644
+index 00000000..f7ca0318
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@gemini@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_gemini
++  agent: gemini
++  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
++input_file: test-fixtures/gemini/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@gemini@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@gemini@cursor.snap
+new file mode 100644
+index 00000000..f7ca0318
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@gemini@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_gemini
++  agent: gemini
++  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
++input_file: test-fixtures/gemini/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@gemini@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@gemini@opencode.snap
+new file mode 100644
+index 00000000..f7ca0318
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@gemini@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_gemini
++  agent: gemini
++  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
++input_file: test-fixtures/gemini/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@gemini@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@gemini@pi.snap
+new file mode 100644
+index 00000000..f7ca0318
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@gemini@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_gemini
++  agent: gemini
++  input_sha256: 505bcd3c1e7a619904c215d8caef7cbbd676bedceff6c5e987a3c44ece1913da
++input_file: test-fixtures/gemini/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@opencode@claude.snap b/crates/toolpath-goldens/snapshots/twice_around@opencode@claude.snap
+new file mode 100644
+index 00000000..ec7e28a6
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@opencode@claude.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_opencode
++  agent: opencode
++  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
++input_file: test-fixtures/opencode/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@opencode@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@opencode@codex.snap
+new file mode 100644
+index 00000000..97937a85
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@opencode@codex.snap
+@@ -0,0 +1,17 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_opencode
++  agent: opencode
++  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
++input_file: test-fixtures/opencode/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "paths[].steps[].change.<artifact>.structural.turn_id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@opencode@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@opencode@copilot.snap
+new file mode 100644
+index 00000000..586f007c
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@opencode@copilot.snap
+@@ -0,0 +1,19 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_opencode
++  agent: opencode
++  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
++input_file: test-fixtures/opencode/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.title",
++    "paths[].path.id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@opencode@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@opencode@cursor-agent.snap
+new file mode 100644
+index 00000000..ec7e28a6
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@opencode@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_opencode
++  agent: opencode
++  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
++input_file: test-fixtures/opencode/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@opencode@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@opencode@cursor.snap
+new file mode 100644
+index 00000000..ec7e28a6
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@opencode@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_opencode
++  agent: opencode
++  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
++input_file: test-fixtures/opencode/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@opencode@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@opencode@gemini.snap
+new file mode 100644
+index 00000000..ec7e28a6
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@opencode@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_opencode
++  agent: opencode
++  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
++input_file: test-fixtures/opencode/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@opencode@pi.snap b/crates/toolpath-goldens/snapshots/twice_around@opencode@pi.snap
+new file mode 100644
+index 00000000..ec7e28a6
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@opencode@pi.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_opencode
++  agent: opencode
++  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
++input_file: test-fixtures/opencode/convo.json
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@pi@claude.snap b/crates/toolpath-goldens/snapshots/twice_around@pi@claude.snap
+new file mode 100644
+index 00000000..9b119145
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@pi@claude.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_pi
++  agent: pi
++  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
++input_file: test-fixtures/pi/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@pi@codex.snap b/crates/toolpath-goldens/snapshots/twice_around@pi@codex.snap
+new file mode 100644
+index 00000000..9cfb525d
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@pi@codex.snap
+@@ -0,0 +1,18 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_pi
++  agent: pi
++  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
++input_file: test-fixtures/pi/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "paths[].steps[].change.<artifact>.structural.model_provider",
++    "paths[].steps[].change.<artifact>.structural.turn_id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@pi@copilot.snap b/crates/toolpath-goldens/snapshots/twice_around@pi@copilot.snap
+new file mode 100644
+index 00000000..b837da78
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@pi@copilot.snap
+@@ -0,0 +1,19 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_pi
++  agent: pi
++  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
++input_file: test-fixtures/pi/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": [
++    "graph.id",
++    "paths[].meta.title",
++    "paths[].path.id"
++  ]
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@pi@cursor-agent.snap b/crates/toolpath-goldens/snapshots/twice_around@pi@cursor-agent.snap
+new file mode 100644
+index 00000000..9b119145
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@pi@cursor-agent.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_pi
++  agent: pi
++  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
++input_file: test-fixtures/pi/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@pi@cursor.snap b/crates/toolpath-goldens/snapshots/twice_around@pi@cursor.snap
+new file mode 100644
+index 00000000..9b119145
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@pi@cursor.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_pi
++  agent: pi
++  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
++input_file: test-fixtures/pi/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@pi@gemini.snap b/crates/toolpath-goldens/snapshots/twice_around@pi@gemini.snap
+new file mode 100644
+index 00000000..9b119145
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@pi@gemini.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_pi
++  agent: pi
++  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
++input_file: test-fixtures/pi/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/snapshots/twice_around@pi@opencode.snap b/crates/toolpath-goldens/snapshots/twice_around@pi@opencode.snap
+new file mode 100644
+index 00000000..9b119145
+--- /dev/null
++++ b/crates/toolpath-goldens/snapshots/twice_around@pi@opencode.snap
+@@ -0,0 +1,15 @@
++---
++source: crates/toolpath-goldens/tests/goldens.rs
++expression: "stages.twice_around[agent]"
++info:
++  adapter: toolpath_pi
++  agent: pi
++  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
++input_file: test-fixtures/pi/convo.jsonl
++---
++{
++  "outcome": "compared",
++  "lost": [],
++  "gained": [],
++  "changed": []
++}
+diff --git a/crates/toolpath-goldens/src/keypaths.rs b/crates/toolpath-goldens/src/keypaths.rs
+index 22ed4662..d8fb3744 100644
+--- a/crates/toolpath-goldens/src/keypaths.rs
++++ b/crates/toolpath-goldens/src/keypaths.rs
+@@ -55,6 +55,42 @@ pub fn key_paths(doc: &Value) -> BTreeSet<KeyPath> {
+     out
+ }
+ 
++/// Every leaf's generalised path with the values found there, sorted, so two documents compare
++/// by what each path holds and not by where in an array it sat. Strings are taken as they are,
++/// other leaves as their JSON text.
++pub fn leaf_values(doc: &Value) -> BTreeMap<KeyPath, Vec<String>> {
++    fn walk(prefix: &str, v: &Value, out: &mut BTreeMap<KeyPath, Vec<String>>) {
++        match v {
++            Value::Object(m) => {
++                for (k, x) in m {
++                    let seg = if k.contains("://") {
++                        "<artifact>"
++                    } else if prefix.ends_with("actors") {
++                        "<actor>"
++                    } else {
++                        k.as_str()
++                    };
++                    walk(&format!("{prefix}.{seg}"), x, out);
++                }
++            }
++            Value::Array(a) => a.iter().for_each(|x| walk(&format!("{prefix}[]"), x, out)),
++            leaf => {
++                let s = match leaf {
++                    Value::String(s) => s.clone(),
++                    other => other.to_string(),
++                };
++                out.entry(KeyPath(prefix.trim_start_matches('.').to_string()))
++                    .or_default()
++                    .push(s);
++            }
++        }
++    }
++    let mut out = BTreeMap::new();
++    walk("", doc, &mut out);
++    out.values_mut().for_each(|v| v.sort());
++    out
++}
++
+ /// Leaf paths (arrays collapsed, keys kept) of every JSON value of a
+ /// transcript, each with the first example value seen. Lines that are not
+ /// JSON are skipped.
+diff --git a/crates/toolpath-goldens/src/losses.rs b/crates/toolpath-goldens/src/losses.rs
+index 475e2014..bafbf02b 100644
+--- a/crates/toolpath-goldens/src/losses.rs
++++ b/crates/toolpath-goldens/src/losses.rs
+@@ -3,8 +3,8 @@
+ 
+ use serde_json::Value;
+ 
+-use crate::keypaths::{counts, key_paths};
+-use crate::model::RoundTrip;
++use crate::keypaths::{counts, key_paths, leaf_values};
++use crate::model::{RoundTrip, TwiceAround};
+ 
+ /// Compare the document a projection was made from with the one its own
+ /// adapter derives from that projection. Key paths are compared as sets,
+@@ -19,6 +19,40 @@ pub fn compare(before: &Value, after: &Value) -> RoundTrip {
+     }
+ }
+ 
++/// Pass 2 of a twice-around round trip against pass 1: `first` is the document the target's
++/// adapter derives from the projection of the source document, `second` the one it derives from
++/// the projection of `first`. A stable conversion changes nothing between them.
++///
++/// * `lost` / `gained`: key paths present in only one of the two (compared as sets);
++/// * `changed`: key paths present in both whose values differ (compared as sorted lists, so a
++///   reordering is not a change; ids, timestamps, escaping and path spelling are).
++///
++/// Only paths are returned, never values: a value that changes on every pass (a minted id)
++/// would make the snapshot flap.
++pub fn compare_passes(first: &Value, second: &Value) -> TwiceAround {
++    let (v1, v2) = (leaf_values(first), leaf_values(second));
++    let lost = v1
++        .keys()
++        .filter(|k| !v2.contains_key(*k))
++        .cloned()
++        .collect();
++    let gained = v2
++        .keys()
++        .filter(|k| !v1.contains_key(*k))
++        .cloned()
++        .collect();
++    let changed = v1
++        .iter()
++        .filter(|(k, a)| v2.get(*k).is_some_and(|b| b != *a))
++        .map(|(k, _)| k.clone())
++        .collect();
++    TwiceAround::Compared {
++        lost,
++        gained,
++        changed,
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/crates/toolpath-goldens/src/model.rs b/crates/toolpath-goldens/src/model.rs
+index 08d48c34..9ab778fa 100644
+--- a/crates/toolpath-goldens/src/model.rs
++++ b/crates/toolpath-goldens/src/model.rs
+@@ -217,6 +217,10 @@ pub struct Stages {
+     /// of the document survived.
+     #[serde(serialize_with = "by_agent_name")]
+     pub round_trips: BTreeMap<Agent, RoundTrip>,
++    /// Each round trip's document projected to the same target a second time and read back:
++    /// what moved between pass 1 and pass 2 (the accumulating encoding error).
++    #[serde(serialize_with = "by_agent_name")]
++    pub twice_around: BTreeMap<Agent, TwiceAround>,
+     /// The validation `path p validate` runs, over the document and over
+     /// every projection derived again.
+     pub validate: Validate,
+@@ -310,6 +314,34 @@ pub enum RoundTrip {
+     Unreadable { error: String },
+ }
+ 
++/// A second pass through the same target: the document the adapter derived from the first
++/// projection, projected to the same target again, read back and derived. Compared to the first
++/// pass's document. A stable conversion changes nothing; anything listed here is encoding error
++/// that accumulates, and must be declared (`fixtures/twice-around.json`).
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
++#[serde(tag = "outcome", rename_all = "snake_case")]
++pub enum TwiceAround {
++    /// Both passes read; this is what moved between them.
++    Compared {
++        /// Key paths of pass 1's document absent after pass 2.
++        lost: Vec<KeyPath>,
++        /// Key paths present only after pass 2.
++        gained: Vec<KeyPath>,
++        /// Key paths in both whose values differ (ids, timestamps, escaping, path spelling).
++        changed: Vec<KeyPath>,
++    },
++    /// Pass 1 or pass 2 could not be read; there is nothing to compare.
++    Unreadable { error: String },
++}
++
++impl TwiceAround {
++    /// No drift between the passes.
++    pub fn is_stable(&self) -> bool {
++        matches!(self, Self::Compared { lost, gained, changed }
++            if lost.is_empty() && gained.is_empty() && changed.is_empty())
++    }
++}
++
+ /// What `path p validate` says of a document: the base schema and, for a
+ /// path naming a bundled kind, that kind's schema.
+ #[derive(Clone, Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index 2ff32e69..4dd775ad 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -24,8 +24,10 @@ use crate::canonical::{canonicalize, canonicalize_document};
+ use crate::contracts::{check_document, check_projection};
+ use crate::defects::{Evidence, known_defects};
+ use crate::keypaths::json_values;
+-use crate::losses::compare;
+-use crate::model::{Agent, RoundTrip, Set, Stage, StageError, Stages, Validate, Validation};
++use crate::losses::{compare, compare_passes};
++use crate::model::{
++    Agent, RoundTrip, Set, Stage, StageError, Stages, TwiceAround, Validate, Validation,
++};
+ use crate::shed::report;
+ use crate::validate::validate;
+ 
+@@ -67,9 +69,11 @@ pub fn run(set: &Set, scratch: &Path) -> Result<Stages, StageError> {
+         raw.insert(target, text);
+     }
+     let mut round_trips = BTreeMap::new();
++    let mut twice_around = BTreeMap::new();
+     let mut round_trip_validations = BTreeMap::new();
+     for (target, text) in &raw {
+         let (trip, again) = round_trip(&document, *target, text, scratch);
++        twice_around.insert(*target, second_pass(again.as_ref(), *target, scratch));
+         round_trips.insert(*target, trip);
+         round_trip_validations.insert(
+             *target,
+@@ -122,6 +126,7 @@ pub fn run(set: &Set, scratch: &Path) -> Result<Stages, StageError> {
+         document,
+         projections,
+         round_trips,
++        twice_around,
+         validate,
+         shed,
+         known_defects,
+@@ -549,6 +554,28 @@ pub fn writer_with_document(
+     Ok(round_trip(&document, target, &text, scratch))
+ }
+ 
++/// Stage `twice_around`: pass 1's derived document (`first`, what [`round_trip`] returned) is
++/// projected to the same target again, read back and derived; the result is compared to
++/// `first`. Nothing new should be lost, gained or changed by going round a second time.
++fn second_pass(first: Option<&Value>, target: Agent, scratch: &Path) -> TwiceAround {
++    let Some(first) = first else {
++        return TwiceAround::Unreadable {
++            error: "pass 1 was unreadable".to_owned(),
++        };
++    };
++    let second = single_path(&first.to_string())
++        .and_then(|path| project(&path, target))
++        .and_then(|text| {
++            read(target, text.as_bytes(), scratch)
++                .and_then(|c| c.derive(&text, scratch))
++                .and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()))
++        });
++    match second {
++        Ok(second) => compare_passes(first, &second),
++        Err(error) => TwiceAround::Unreadable { error },
++    }
++}
++
+ /// One JSON object per line, newline-terminated.
+ fn jsonl<T: Serialize>(items: &[T]) -> Result<String, String> {
+     let mut out = String::new();
+diff --git a/crates/toolpath-goldens/src/schemas.rs b/crates/toolpath-goldens/src/schemas.rs
+index 069a2272..bc8498fe 100644
+--- a/crates/toolpath-goldens/src/schemas.rs
++++ b/crates/toolpath-goldens/src/schemas.rs
+@@ -14,7 +14,7 @@
+ use schemars::schema_for;
+ use serde_json::{Value, json};
+ 
+-use crate::model::{KnownDefect, RoundTrip, Shed, Validate};
++use crate::model::{KnownDefect, RoundTrip, Shed, TwiceAround, Validate};
+ 
+ /// Where the schemas live, relative to the workspace root.
+ pub const DIR: &str = "docs/baseline/schemas";
+@@ -46,6 +46,14 @@ pub fn generated() -> Vec<(&'static str, Value)> {
+                 "What each stage sheds for one recording: transcript, document, every projection, and the same-format round trip field by field.",
+             ),
+         ),
++        (
++            "twice_around",
++            titled(
++                serde_json::to_value(schema_for!(TwiceAround)).expect("schema serialises"),
++                "twice_around snapshot",
++                "A round trip's derived document projected to the same harness a second time and read back: the key paths lost, gained or changed between pass 1 and pass 2. Anything listed is accumulating encoding error and must be declared.",
++            ),
++        ),
+         (
+             "validate",
+             titled(
+diff --git a/crates/toolpath-goldens/tests/goldens.rs b/crates/toolpath-goldens/tests/goldens.rs
+index 687fce09..ba4a8f80 100644
+--- a/crates/toolpath-goldens/tests/goldens.rs
++++ b/crates/toolpath-goldens/tests/goldens.rs
+@@ -195,6 +195,7 @@ fn check_set(input: &Path, real_home: &str, home: &Path) {
+             per_agent.bind(|| {
+                 insta::assert_snapshot!("projection", text);
+                 insta::assert_json_snapshot!("round_trip", stages.round_trips[agent]);
++                insta::assert_json_snapshot!("twice_around", stages.twice_around[agent]);
+             });
+         }
+         insta::assert_json_snapshot!("validate", stages.validate);
+diff --git a/crates/toolpath-goldens/tests/twice_around.rs b/crates/toolpath-goldens/tests/twice_around.rs
+new file mode 100644
+index 00000000..47fb9ca3
+--- /dev/null
++++ b/crates/toolpath-goldens/tests/twice_around.rs
+@@ -0,0 +1,132 @@
++//! The twice-around round trip: for every recording and target, the document the target's adapter
++//! derives from its projection is projected to the same target a second time and read back
++//! (`twice_around@<set>@<target>.snap`, pinned by tests/goldens.rs). A stable conversion changes
++//! nothing on the second pass. Anything that does change is encoding error that accumulates with
++//! every round, so each such key path must be declared, with its reason, in
++//! `fixtures/twice-around.json` (and a declaration nothing needs any more must go).
++//!
++//! This test reads the committed snapshots, so it needs no pipeline run: the snapshots say what
++//! drifts, the declarations say why, and the two must agree in both directions.
++
++use std::collections::BTreeSet;
++use std::path::PathBuf;
++
++use serde::Deserialize;
++use serde_json::Value;
++
++#[derive(Debug, Deserialize)]
++struct Declaration {
++    /// The target harness the second pass drifts toward (`codex`, `copilot`, ...).
++    target: String,
++    /// `lost`, `gained` or `changed`.
++    kind: String,
++    /// The generalised key path.
++    path: String,
++    /// Why this moves on the second pass.
++    why: String,
++    /// What would have to change for it to stop, when it is a defect rather than the format.
++    #[serde(default)]
++    defect: Option<String>,
++}
++
++fn dir(sub: &str) -> PathBuf {
++    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(sub)
++}
++
++fn declarations() -> Vec<Declaration> {
++    let path = dir("fixtures/twice-around.json");
++    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
++    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
++}
++
++/// `(target, kind, path)` for every drifting key path in the committed snapshots, and the number
++/// of snapshots read.
++fn measured() -> (BTreeSet<(String, String, String)>, usize) {
++    let mut out = BTreeSet::new();
++    let mut files = 0;
++    for entry in std::fs::read_dir(dir("snapshots")).expect("snapshots directory") {
++        let entry = entry.expect("entry");
++        let name = entry.file_name().to_string_lossy().into_owned();
++        let Some(rest) = name
++            .strip_prefix("twice_around@")
++            .and_then(|r| r.strip_suffix(".snap"))
++        else {
++            continue;
++        };
++        // twice_around@<set>@<target>.snap
++        let target = rest.rsplit('@').next().expect("a target").to_string();
++        let text = std::fs::read_to_string(entry.path()).expect("snapshot");
++        // insta: `---`, metadata, `---`, then the body.
++        let body = text.splitn(3, "---\n").nth(2).expect("snapshot body");
++        let v: Value = serde_json::from_str(body).unwrap_or_else(|e| panic!("{name}: {e}"));
++        files += 1;
++        if v["outcome"] != "compared" {
++            // an unreadable pass is its own finding: nothing is compared, so say so
++            panic!("{name}: the second pass could not be read: {}", v["error"]);
++        }
++        for kind in ["lost", "gained", "changed"] {
++            for p in v[kind].as_array().into_iter().flatten() {
++                out.insert((
++                    target.clone(),
++                    kind.to_string(),
++                    p.as_str().expect("a key path").to_string(),
++                ));
++            }
++        }
++    }
++    (out, files)
++}
++
++#[test]
++fn every_second_pass_drift_is_declared_with_a_reason() {
++    let declared: BTreeSet<(String, String, String)> = declarations()
++        .iter()
++        .map(|d| (d.target.clone(), d.kind.clone(), d.path.clone()))
++        .collect();
++    let (measured, files) = measured();
++    assert!(
++        files >= 63,
++        "expected one snapshot per recording and target, found {files}"
++    );
++    let undeclared: Vec<String> = measured
++        .difference(&declared)
++        .map(|(t, k, p)| format!("  -> {t}: {k} {p}"))
++        .collect();
++    assert!(
++        undeclared.is_empty(),
++        "the second pass moves these key paths and nothing declares why \
++         (fixtures/twice-around.json):\n{}",
++        undeclared.join("\n")
++    );
++    let stale: Vec<String> = declared
++        .difference(&measured)
++        .map(|(t, k, p)| format!("  -> {t}: {k} {p}"))
++        .collect();
++    assert!(
++        stale.is_empty(),
++        "fixtures/twice-around.json declares drift no snapshot shows any more; remove it:\n{}",
++        stale.join("\n")
++    );
++}
++
++#[test]
++fn every_declaration_gives_a_reason() {
++    for d in declarations() {
++        assert!(
++            d.why.trim().len() >= 20,
++            "{} {} {}: the reason is too short to be one",
++            d.target,
++            d.kind,
++            d.path
++        );
++        assert!(
++            ["lost", "gained", "changed"].contains(&d.kind.as_str()),
++            "{}: kind {:?}",
++            d.path,
++            d.kind
++        );
++        if let Some(defect) = &d.defect {
++            assert!(!defect.trim().is_empty(), "{}: an empty defect", d.path);
++        }
++    }
++}
+diff --git a/docs/baseline/schemas/twice_around.schema.json b/docs/baseline/schemas/twice_around.schema.json
+new file mode 100644
+index 00000000..8fed959c
+--- /dev/null
++++ b/docs/baseline/schemas/twice_around.schema.json
+@@ -0,0 +1,65 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "description": "A round trip's derived document projected to the same harness a second time and read back: the key paths lost, gained or changed between pass 1 and pass 2. Anything listed is accumulating encoding error and must be declared.",
++  "oneOf": [
++    {
++      "description": "Both passes read; this is what moved between them.",
++      "properties": {
++        "changed": {
++          "description": "Key paths in both whose values differ (ids, timestamps, escaping, path spelling).",
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "gained": {
++          "description": "Key paths present only after pass 2.",
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "lost": {
++          "description": "Key paths of pass 1's document absent after pass 2.",
++          "items": {
++            "type": "string"
++          },
++          "type": "array"
++        },
++        "outcome": {
++          "enum": [
++            "compared"
++          ],
++          "type": "string"
++        }
++      },
++      "required": [
++        "changed",
++        "gained",
++        "lost",
++        "outcome"
++      ],
++      "type": "object"
++    },
++    {
++      "description": "Pass 1 or pass 2 could not be read; there is nothing to compare.",
++      "properties": {
++        "error": {
++          "type": "string"
++        },
++        "outcome": {
++          "enum": [
++            "unreadable"
++          ],
++          "type": "string"
++        }
++      },
++      "required": [
++        "error",
++        "outcome"
++      ],
++      "type": "object"
++    }
++  ],
++  "title": "twice_around snapshot"
++}
+diff --git a/pr/68-twice-around.md b/pr/68-twice-around.md
+new file mode 100644
+index 00000000..3b3ce836
+--- /dev/null
++++ b/pr/68-twice-around.md
+@@ -0,0 +1,26 @@
++# test(goldens): the twice-around round trip, drift declared
++
++Status: draft · Base: pr/67 · Code + 63 `twice_around@<set>@<target>.snap` + `fixtures/twice-around.json`
++
++## Why
++Bobby: "the double round trip, the accumulating encoding error. Hopefully they don't exist but we should know."
++
++## What
++- Stage `twice_around`: for every recording x target, the document the target's adapter derived from pass 1 is projected to the
++  SAME target again, read back and derived; pass 2 is compared with pass 1 (`losses::compare_passes`): key paths lost, gained,
++  and `changed` (present in both, values differ as sorted lists). Paths only, never values, so a minted id cannot make a snapshot flap.
++- `tests/twice_around.rs` reads the committed snapshots and `fixtures/twice-around.json`: every drifting key path must be declared
++  with a reason (and optionally the defect that causes it), and a declaration no snapshot needs any more fails (both directions).
++- Schema `docs/baseline/schemas/twice_around.schema.json` generated from `TwiceAround`.
++
++## Result
++Drift is one-time, nothing accumulates (scratch-main-21 measured IR2 a fixed point for 63/63 on f308ab5). 15 of 63 snapshots drift,
++all into codex (11 key paths) or copilot (14): copilot's minted ids by design; codex's empty-turn turn_context (BUG, pr/69);
++copilot's dropped system.message (BUG, pr/70); codex turn_id renumbering (declared; stabilise by writing codex-turn-NNNN ids).
++pi's invoke_agent -> task rename is not seen here (it shows in an IR the pass does not compare); it folds into the delegation
++helper fix as Bobby said and is not done in this piece.
++
++## Open
++- `qualifier_anchors_on_this_crate_are_fresh` (toolpath-goldens) fails: annotations in this crate drifted because of added lines;
++  re-anchor with the qualifier, not by hand. Same remedy as pr/67's two.
++- `path d baseline capture --all` / baseline check not run (dev shell).
+-- 
+2.55.0
+

@@ -227,6 +227,7 @@ mod tests {
 
     fn make_turn(id: &str, role: Role, text: &str) -> Turn {
         Turn {
+            provider: None,
             id: id.into(),
             parent_id: None,
             group_id: None,
@@ -234,6 +235,7 @@ mod tests {
             timestamp: "2026-01-01T00:00:00Z".into(),
             text: text.into(),
             thinking: None,
+            thinking_signature: None,
             tool_uses: vec![],
             model: None,
             stop_reason: None,
@@ -406,6 +408,7 @@ mod tests {
             started_at: None,
             last_activity: None,
             items: vec![Item::Turn(Turn {
+                provider: None,
                 id: "t1".into(),
                 parent_id: None,
                 group_id: None,
@@ -413,6 +416,7 @@ mod tests {
                 timestamp: "2026-01-01T00:00:00Z".into(),
                 text: "reading file".into(),
                 thinking: None,
+                thinking_signature: None,
                 tool_uses: vec![
                     ToolInvocation {
                         id: "u1".into(),
@@ -480,6 +484,7 @@ mod tests {
             last_activity: None,
             items: vec![
                 Item::Turn(Turn {
+                    provider: None,
                     id: "t1".into(),
                     parent_id: None,
                     group_id: None,
@@ -487,6 +492,7 @@ mod tests {
                     timestamp: "2026-01-01T00:00:00Z".into(),
                     text: "turn 1".into(),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,
@@ -503,6 +509,7 @@ mod tests {
                     file_mutations: Vec::new(),
                 }),
                 Item::Turn(Turn {
+                    provider: None,
                     id: "t2".into(),
                     parent_id: Some("t1".into()),
                     group_id: None,
@@ -510,6 +517,7 @@ mod tests {
                     timestamp: "2026-01-01T00:00:01Z".into(),
                     text: "turn 2".into(),
                     thinking: None,
+                    thinking_signature: None,
                     tool_uses: vec![],
                     model: None,
                     stop_reason: None,

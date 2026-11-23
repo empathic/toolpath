@@ -1,0 +1,2070 @@
+diff --git a/crates/path-cli/src/.qual b/crates/path-cli/src/.qual
+index 7aaec62b..4e956905 100644
+--- a/crates/path-cli/src/.qual
++++ b/crates/path-cli/src/.qual
+@@ -7,3 +7,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:08:58.921198Z","id":"a53dc9f9170c756600bfc5ad8246f4f3980d5726b7ae8a537de189a8d62ee3bc","body":{"detail":"The claude driver scopes tools to Bash(ls); pi runs unconstrained too. Scope copilot and pi the same way, or record why not. From the practice review against Alex's rubric, 2026-10-14.","kind":"concern","span":{"start":{"line":2855},"end":{"line":2855},"content_hash":"a01ee23a651ad92094a0dfc2d846c5ecec998156df7aded5b33542f7ad81feda"},"summary":"capture-live runs copilot with --allow-all-tools while a real token is in the environment","supersedes":"d1aee1d04329a3a37277bae7d289d7b557c070bda84bbc5c16f68f51e38788cd","tags":["review","capture-live","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/lib.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:20:05.056355Z","id":"f0cca671d46dea7d1a74541f7dbdbc12abcab7da828d4bd474ab68d1c4c045e6","body":{"detail":"It is now behind the off-by-default develop feature (path d baseline; pr record develop-webmock-run), so the shipped binary does not include it. It still lives in the path-cli crate; moving it to a dev crate (crates/toolpath-goldens) is the remaining ask. Alex's ownership-boundary pattern (#340, #324).","kind":"concern","span":{"start":{"line":40},"end":{"line":40},"content_hash":"3b6f2e5a016cf9867124af8319012e075b5e54d661e871dd95def2b38d5b0eba"},"summary":"goldens machinery (3.8k lines) lives inside path-cli; the release binary no longer carries it","supersedes":"6a443c2893a9d332e9be4828a7bed4bc786993d740c2f15a634d22465f124ebf","tags":["review","placement","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/path-cli/src/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:35:14.264534Z","id":"8446a5e0bd7c15f8ac706a4b14ec61ede27202de4e6a0f342192c21967d10bb3","body":{"detail":"The claude driver scopes tools to Bash(ls); pi runs unconstrained too. Scope copilot and pi the same way, or record why not. From the practice review against Alex's rubric, 2026-10-14.","kind":"concern","span":{"start":{"line":2901},"end":{"line":2901},"content_hash":"a01ee23a651ad92094a0dfc2d846c5ecec998156df7aded5b33542f7ad81feda"},"summary":"capture-live runs copilot with --allow-all-tools while a real token is in the environment","supersedes":"a53dc9f9170c756600bfc5ad8246f4f3980d5726b7ae8a537de189a8d62ee3bc","tags":["review","capture-live","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"crates/path-cli/src/goldens.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-21T19:28:09.627267Z","id":"3e74946ca8bcd0c351379dec9baa831642739938975fd09cc8e3ef8032c94d96","body":{"detail":"The claude driver scopes tools to Bash(ls); pi runs unconstrained too. Scope copilot and pi the same way, or record why not. From the practice review against Alex's rubric, 2026-10-14. Re-anchored: lines moved (pr/98).","kind":"concern","span":{"start":{"line":2905},"end":{"line":2905},"content_hash":"a01ee23a651ad92094a0dfc2d846c5ecec998156df7aded5b33542f7ad81feda"},"summary":"capture-live runs copilot with --allow-all-tools while a real token is in the environment","supersedes":"8446a5e0bd7c15f8ac706a4b14ec61ede27202de4e6a0f342192c21967d10bb3","tags":["review","capture-live","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/crates/path-cli/src/goldens.rs b/crates/path-cli/src/goldens.rs
+index 388be878..49f67e57 100644
+--- a/crates/path-cli/src/goldens.rs
++++ b/crates/path-cli/src/goldens.rs
+@@ -2249,11 +2249,15 @@ impl Goldens {
+                     .iter()
+                     .map(|k| json!({ "path": k, "example": example_value(k, &before[*k]) }))
+                     .collect();
++                let gained_paths: Vec<Value> = gained
++                    .iter()
++                    .map(|k| json!({ "path": k, "example": example_value(k, &after[*k]) }))
++                    .collect();
+                 json!({
+                     "lines": back_text.lines().count(), "bytes": bytes.len(),
+                     "event_types_shed": by_type,
+                     "key_paths": { "source": before.len(), "after": after.len(), "lost": lost.len(), "gained": gained.len() },
+-                    "renamed": renamed, "dropped": dropped,
++                    "renamed": renamed, "dropped": dropped, "gained": gained_paths,
+                 })
+             }
+             Err(err) => json!({ "error": err }),
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap b/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
+index d490ed3d..c38bca3f 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
+@@ -117,6 +117,104 @@ input_file: goldens/claude-compacted/input.jsonl
+         "path": "isVisibleInTranscriptOnly",
+         "example": "true"
+       }
++    ],
++    "gained": [
++      {
++        "path": "isSidechain",
++        "example": "false"
++      },
++      {
++        "path": "message.usage.cache_creation",
++        "example": "null"
++      },
++      {
++        "path": "message.usage.cache_creation_input_tokens",
++        "example": "<withheld>"
++      },
++      {
++        "path": "message.usage.cache_read_input_tokens",
++        "example": "<withheld>"
++      },
++      {
++        "path": "message.usage.service_tier",
++        "example": "null"
++      },
++      {
++        "path": "permissionMode",
++        "example": "default"
++      },
++      {
++        "path": "sourceToolAssistantUUID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "toolUseResult.file.content",
++        "example": "pub fn login() { ... }"
++      },
++      {
++        "path": "toolUseResult.file.filePath",
++        "example": "src/auth.rs"
++      },
++      {
++        "path": "toolUseResult.file.numLines",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.file.startLine",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.file.totalLines",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.filePath",
++        "example": "src/auth.rs"
++      },
++      {
++        "path": "toolUseResult.newString",
++        "example": "pub fn login() { validate_session();"
++      },
++      {
++        "path": "toolUseResult.oldString",
++        "example": "pub fn login() {"
++      },
++      {
++        "path": "toolUseResult.originalFile",
++        "example": ""
++      },
++      {
++        "path": "toolUseResult.replaceAll",
++        "example": "false"
++      },
++      {
++        "path": "toolUseResult.structuredPatch[].lines[]",
++        "example": "-pub fn login() {"
++      },
++      {
++        "path": "toolUseResult.structuredPatch[].newLines",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.structuredPatch[].newStart",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.structuredPatch[].oldLines",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.structuredPatch[].oldStart",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.type",
++        "example": "text"
++      },
++      {
++        "path": "toolUseResult.userModified",
++        "example": "false"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-forced.snap b/crates/toolpath-goldens/snapshots/shed@claude-forced.snap
+index 2f736abf..812434c4 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-forced.snap
+@@ -357,6 +357,12 @@ input_file: test-fixtures/claude/convo-compacted.jsonl
+         "path": "toolUseResult.usage.speed",
+         "example": "standard"
+       }
++    ],
++    "gained": [
++      {
++        "path": "message.usage.cache_creation",
++        "example": "null"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-session.snap b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+index f4f9dac9..924f22b8 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+@@ -254,6 +254,12 @@ input_file: goldens/claude-session/input.jsonl
+         "path": "wireToolInputs.toolu_01GjqjxW9tnUh9qzsRWnoEWW.limit",
+         "example": "1"
+       }
++    ],
++    "gained": [
++      {
++        "path": "message.usage.cache_creation",
++        "example": "null"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude.snap b/crates/toolpath-goldens/snapshots/shed@claude.snap
+index 2f2c17a2..51944e13 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude.snap
+@@ -359,6 +359,48 @@ input_file: test-fixtures/claude/convo.jsonl
+         "path": "toolUseResult.usage.speed",
+         "example": "standard"
+       }
++    ],
++    "gained": [
++      {
++        "path": "message.usage.cache_creation",
++        "example": "null"
++      },
++      {
++        "path": "toolUseResult.file.content",
++        "example": "File does not exist. Note: your current …"
++      },
++      {
++        "path": "toolUseResult.file.filePath",
++        "example": "<withheld>"
++      },
++      {
++        "path": "toolUseResult.file.numLines",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.file.startLine",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.file.totalLines",
++        "example": "1"
++      },
++      {
++        "path": "toolUseResult.filePath",
++        "example": "<withheld>"
++      },
++      {
++        "path": "toolUseResult.filenames[]",
++        "example": "No files found"
++      },
++      {
++        "path": "toolUseResult.pattern",
++        "example": "note*"
++      },
++      {
++        "path": "toolUseResult.type",
++        "example": "update"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index 3276af5c..83dd8399 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -551,6 +551,40 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.workspace_roots[]",
+         "example": "<withheld>"
+       }
++    ],
++    "gained": [
++      {
++        "path": "payload.aggregated_output",
++        "example": "Chunk ID: 7ba390 Wall time: 0.0000 secon…"
++      },
++      {
++        "path": "payload.command[]",
++        "example": "bash"
++      },
++      {
++        "path": "payload.duration.nanos",
++        "example": "0"
++      },
++      {
++        "path": "payload.duration.secs",
++        "example": "0"
++      },
++      {
++        "path": "payload.exit_code",
++        "example": "0"
++      },
++      {
++        "path": "payload.formatted_output",
++        "example": ""
++      },
++      {
++        "path": "payload.parsed_cmd[].cmd",
++        "example": "ls -la"
++      },
++      {
++        "path": "payload.parsed_cmd[].type",
++        "example": "unknown"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index 51570f4e..598a3257 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -314,6 +314,56 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.truncation_policy.mode",
+         "example": "tokens"
+       }
++    ],
++    "gained": [
++      {
++        "path": "payload.aggregated_output",
++        "example": "Chunk ID: 7aa77b Wall time: 0.0000 secon…"
++      },
++      {
++        "path": "payload.command[]",
++        "example": "bash"
++      },
++      {
++        "path": "payload.duration.nanos",
++        "example": "0"
++      },
++      {
++        "path": "payload.duration.secs",
++        "example": "0"
++      },
++      {
++        "path": "payload.exit_code",
++        "example": "0"
++      },
++      {
++        "path": "payload.formatted_output",
++        "example": ""
++      },
++      {
++        "path": "payload.parsed_cmd[].cmd",
++        "example": "wc -w notes.md"
++      },
++      {
++        "path": "payload.parsed_cmd[].type",
++        "example": "unknown"
++      },
++      {
++        "path": "payload.rate_limits",
++        "example": "null"
++      },
++      {
++        "path": "payload.status",
++        "example": "completed"
++      },
++      {
++        "path": "payload.stderr",
++        "example": ""
++      },
++      {
++        "path": "payload.stdout",
++        "example": ""
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@copilot.snap b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+index b3fa748a..a298f41f 100644
+--- a/crates/toolpath-goldens/snapshots/shed@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+@@ -429,6 +429,32 @@ input_file: test-fixtures/copilot/convo.jsonl
+         "path": "data.transformedContent",
+         "example": "<current_datetime>2026-07-02T11:28:18.42…"
+       }
++    ],
++    "gained": [
++      {
++        "path": "data.cacheReadTokens",
++        "example": "<withheld>"
++      },
++      {
++        "path": "data.cacheWriteTokens",
++        "example": "<withheld>"
++      },
++      {
++        "path": "data.context.gitRoot",
++        "example": "/tmp/elicit-scratch"
++      },
++      {
++        "path": "data.id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "data.inputTokens",
++        "example": "<withheld>"
++      },
++      {
++        "path": "data.prompt",
++        "example": ""
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@cursor.snap b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+index 3f6bd60f..58449cb4 100644
+--- a/crates/toolpath-goldens/snapshots/shed@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+@@ -512,6 +512,136 @@ input_file: test-fixtures/cursor/convo.json
+         "path": "head.worktreeStartedReadOnly",
+         "example": "false"
+       }
++    ],
++    "gained": [
++      {
++        "path": "agent_blobs.01845e7b32ef177dbf81f854d179159a5a2edf43f57d1d46aa683de817718b55",
++        "example": "{\"content\":[{\"text\":\"Directory is empty.…"
++      },
++      {
++        "path": "agent_blobs.080b3dd5fc50b8577891fce95ae433b8b9bd948fcbe8f02d7f41fde1696432ac",
++        "example": "{\"content\":[{\"text\":\"Starting step 1: I'…"
++      },
++      {
++        "path": "agent_blobs.0e33d898d72dc8ed002384082d012c9dff6666d6ff08a8210cc19b255699bbe9",
++        "example": "{\"content\":[{\"args\":{\"cloudAgentEdit\":fa…"
++      },
++      {
++        "path": "agent_blobs.1447027c2a96036112ddec68ea562794218a67b57a16699dd69f8f543e4ae4cf",
++        "example": "{\"content\":[{\"text\":\"The read failed as …"
++      },
++      {
++        "path": "agent_blobs.2756e24455bec9e83d3855ccfc80ae424a06ac4e14078a8adb718457e45e3010",
++        "example": "{\"content\":[{\"args\":{\"command\":\"ls -la /…"
++      },
++      {
++        "path": "agent_blobs.27d0c5b33d4972f2efb6e26d9ad59c4eb8b6ac05b72e7bf91f609dc138ab6f11",
++        "example": "{\"content\":[{\"args\":{\"description\":\"Coun…"
++      },
++      {
++        "path": "agent_blobs.2b9726ff8da816df93200a9eca7d0b5a3f4f82bb1ee27b9db3390aa1740e3737",
++        "example": "{\"content\":[{\"text\":\"Step 3: reading `no…"
++      },
++      {
++        "path": "agent_blobs.2f5c940ad311f3f73542a77a1ebe7f8b60818755b80af309b2533d3ba8288e37",
++        "example": "<withheld>"
++      },
++      {
++        "path": "agent_blobs.39762eff912edf42ccae7a775a14a67e32aa972c36ff6d82d6d55b86b84157ea",
++        "example": "{\"content\":[{\"text\":\"**Step 1:** Listed …"
++      },
++      {
++        "path": "agent_blobs.3d0b7b77783e176d81bfbd5bf53e06f4e1254facbe636f78ccd94023f3f1e840",
++        "example": "{\"content\":[{\"text\":\"`count.sh` printed …"
++      },
++      {
++        "path": "agent_blobs.4a8ba49c10aa858b4be1ca2e1d02b816143f0aa8d029d1c77eb9f6488a472f65",
++        "example": "{\"content\":[{\"isError\":false,\"result\":\"e…"
++      },
++      {
++        "path": "agent_blobs.63fd6012d0c6598448a36dab4b81a5affa11c36ea881d9b55b783f1b827ca1e1",
++        "example": "{\"content\":[{\"text\":\"Step 6: searching f…"
++      },
++      {
++        "path": "agent_blobs.64eee39e6a11ac5b3c090d77112bcd3583426b510b011f33a523b09ac09ddf07",
++        "example": "<withheld>"
++      },
++      {
++        "path": "agent_blobs.69f6607c1a6272707c4380e6e0f990350d601508c66472d9fbc7f47bd490d726",
++        "example": "<withheld>"
++      },
++      {
++        "path": "agent_blobs.7d0c380fa143bee827336272b0c99cf79f313197120bf688d10e6841488d89de",
++        "example": "<withheld>"
++      },
++      {
++        "path": "agent_blobs.81f3f1c8d4ce885b834a9a6f1aa5d6c12899f05234088f28418cf01a325513d0",
++        "example": "{\"content\":[{\"isError\":false,\"result\":\"e…"
++      },
++      {
++        "path": "agent_blobs.8790c3094bf68a9aaceaa9e14de0b23b0790a65d56759d22443605f26c06dbaf",
++        "example": "{\"content\":[{\"text\":\"The user wants me t…"
++      },
++      {
++        "path": "agent_blobs.99a3fdeae6bcfc2b306dd84bbd316e341eb730737e99117e1d9e1aefed1f5641",
++        "example": "{\"content\":[{\"text\":\"You're going to wal…"
++      },
++      {
++        "path": "agent_blobs.9e47654422aed0ed3c56f44f5467f174b2d97de0c18398e132297f1c817a2e9c",
++        "example": "{\"content\":[{\"isError\":false,\"result\":\"e…"
++      },
++      {
++        "path": "agent_blobs.9f842b40b663515755b723e7291ea29f71f04e193bca7ab81ce73e2dd47745f7",
++        "example": "{\"content\":[{\"isError\":true,\"result\":\"to…"
++      },
++      {
++        "path": "agent_blobs.a8ea8e0865b646ce384e1d7eaa091156f749adeaae82002b60ff466cf5f48d10",
++        "example": "{\"content\":[{\"args\":{\"cloudAgentEdit\":fa…"
++      },
++      {
++        "path": "agent_blobs.ac8dc81a5b2360ac609f100a330766ae8c52e033b4fbbd048f9692eef49c1143",
++        "example": "{\"content\":[{\"isError\":false,\"result\":\"{…"
++      },
++      {
++        "path": "agent_blobs.af3a861acdc05a7407bad5c250ff174b2f184b8594fcebe149b09fc9f768ea7d",
++        "example": "{\"content\":[{\"args\":{\"cloudAgentEdit\":fa…"
++      },
++      {
++        "path": "agent_blobs.b68c99f0972550192820c7acccb8df36085658c9a8fe61653f2af0058e26a696",
++        "example": "<withheld>"
++      },
++      {
++        "path": "agent_blobs.bc06655f44f9c22f551ee1b93bf080c62e8831c923028c348b056bf67a0a355f",
++        "example": "{\"content\":[{\"text\":\"Step 5: using Glob …"
++      },
++      {
++        "path": "agent_blobs.d1f16229ebbad8de20c2c5ed5dc60e2f75364b29e41f82250488addc7eaebc99",
++        "example": "{\"content\":[{\"text\":\"Step 7: reading `do…"
++      },
++      {
++        "path": "agent_blobs.ec1d876d9a997b6f4c7f4f73fe33b7cc5f28ec8c5833081792292419fb57d01d",
++        "example": "{\"content\":[{\"args\":{\"command\":\"bash /Us…"
++      },
++      {
++        "path": "agent_blobs.f38bd542ae3d1bc975c33227b98155183eb53085a1677f79181fcbe904133543",
++        "example": "{\"content\":[{\"text\":\"Both lines are pres…"
++      },
++      {
++        "path": "agent_blobs.f75416d376659aeef9fd27f33d1e02e158ed40b3c1f7d5e6299bfea6967dcccd",
++        "example": "{\"content\":[{\"isError\":false,\"result\":\"t…"
++      },
++      {
++        "path": "agent_blobs.fbcb1b50aa6c7069e8181fe8525c6b4ff71dd28d29d410079dce607a31189451",
++        "example": "<withheld>"
++      },
++      {
++        "path": "agent_blobs.fed2b35a185f9296c86f5fef3a317bb0ff91e2dfbaab07cc8f1d3947b3703427",
++        "example": "<withheld>"
++      },
++      {
++        "path": "bubbles[].allThinkingBlocks[].text",
++        "example": "The user wants me to complete a series o…"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@gemini.snap b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+index 77ef925b..0efde440 100644
+--- a/crates/toolpath-goldens/snapshots/shed@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+@@ -456,6 +456,156 @@ input_file: test-fixtures/gemini/convo.jsonl
+         "path": "type",
+         "example": "user"
+       }
++    ],
++    "gained": [
++      {
++        "path": "directories[]",
++        "example": "/"
++      },
++      {
++        "path": "messages[].content",
++        "example": "I will begin by listing the files in the…"
++      },
++      {
++        "path": "messages[].content[].text",
++        "example": "You're going to walk through a small set…"
++      },
++      {
++        "path": "messages[].id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].model",
++        "example": "gemini-3-flash-preview"
++      },
++      {
++        "path": "messages[].thoughts[].description",
++        "example": "I am now focusing on executing the plann…"
++      },
++      {
++        "path": "messages[].thoughts[].subject",
++        "example": "Processing Next Steps"
++      },
++      {
++        "path": "messages[].thoughts[].timestamp",
++        "example": "null"
++      },
++      {
++        "path": "messages[].timestamp",
++        "example": "2026-05-07T18:28:02.234Z"
++      },
++      {
++        "path": "messages[].tokens.cached",
++        "example": "0"
++      },
++      {
++        "path": "messages[].tokens.input",
++        "example": "8702"
++      },
++      {
++        "path": "messages[].tokens.output",
++        "example": "36"
++      },
++      {
++        "path": "messages[].tokens.thoughts",
++        "example": "329"
++      },
++      {
++        "path": "messages[].toolCalls[].args.agent_name",
++        "example": "generalist"
++      },
++      {
++        "path": "messages[].toolCalls[].args.command",
++        "example": "bash count.sh"
++      },
++      {
++        "path": "messages[].toolCalls[].args.content",
++        "example": "scratch — feature elicitation this file …"
++      },
++      {
++        "path": "messages[].toolCalls[].args.context",
++        "example": "50"
++      },
++      {
++        "path": "messages[].toolCalls[].args.description",
++        "example": "Run the count.sh script"
++      },
++      {
++        "path": "messages[].toolCalls[].args.dir_path",
++        "example": "."
++      },
++      {
++        "path": "messages[].toolCalls[].args.file_path",
++        "example": "notes.md"
++      },
++      {
++        "path": "messages[].toolCalls[].args.instruction",
++        "example": "Change 'scratch' to 'fixture'"
++      },
++      {
++        "path": "messages[].toolCalls[].args.new_string",
++        "example": "fixture"
++      },
++      {
++        "path": "messages[].toolCalls[].args.old_string",
++        "example": "scratch"
++      },
++      {
++        "path": "messages[].toolCalls[].args.pattern",
++        "example": "note*"
++      },
++      {
++        "path": "messages[].toolCalls[].args.prompt",
++        "example": "Count the words in `notes.md` and report…"
++      },
++      {
++        "path": "messages[].toolCalls[].description",
++        "example": "notes.md"
++      },
++      {
++        "path": "messages[].toolCalls[].displayName",
++        "example": "ListDirectory"
++      },
++      {
++        "path": "messages[].toolCalls[].id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].toolCalls[].name",
++        "example": "list_directory"
++      },
++      {
++        "path": "messages[].toolCalls[].renderOutputAsMarkdown",
++        "example": "true"
++      },
++      {
++        "path": "messages[].toolCalls[].resultDisplay",
++        "example": "Directory listing for /private/var/folde…"
++      },
++      {
++        "path": "messages[].toolCalls[].result[].functionResponse.id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].toolCalls[].result[].functionResponse.name",
++        "example": "list_directory"
++      },
++      {
++        "path": "messages[].toolCalls[].result[].functionResponse.response.output",
++        "example": "Directory listing for /private/var/folde…"
++      },
++      {
++        "path": "messages[].toolCalls[].status",
++        "example": "success"
++      },
++      {
++        "path": "messages[].toolCalls[].timestamp",
++        "example": "2026-05-07T18:28:05.711Z"
++      },
++      {
++        "path": "messages[].type",
++        "example": "user"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+index f1494fa6..628bdd48 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode-forced.snap
+@@ -553,6 +553,292 @@ input_file: test-fixtures/opencode/convo-compacted.json
+         "path": "messages[].parts[].type",
+         "example": "text"
+       }
++    ],
++    "gained": [
++      {
++        "path": "directory",
++        "example": "<withheld>"
++      },
++      {
++        "path": "id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.agent",
++        "example": "build"
++      },
++      {
++        "path": "messages[].data.cost",
++        "example": "0.0"
++      },
++      {
++        "path": "messages[].data.finish",
++        "example": "tool-calls"
++      },
++      {
++        "path": "messages[].data.mode",
++        "example": "build"
++      },
++      {
++        "path": "messages[].data.model.modelID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.model.providerID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.modelID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.parentID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.path.cwd",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.path.root",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.providerID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.role",
++        "example": "user"
++      },
++      {
++        "path": "messages[].data.time.completed",
++        "example": "1781117205243"
++      },
++      {
++        "path": "messages[].data.time.created",
++        "example": "1781117205230"
++      },
++      {
++        "path": "messages[].data.tokens.cache.read",
++        "example": "0"
++      },
++      {
++        "path": "messages[].data.tokens.cache.write",
++        "example": "0"
++      },
++      {
++        "path": "messages[].data.tokens.input",
++        "example": "8596"
++      },
++      {
++        "path": "messages[].data.tokens.output",
++        "example": "218"
++      },
++      {
++        "path": "messages[].data.tokens.reasoning",
++        "example": "0"
++      },
++      {
++        "path": "messages[].data.tokens.total",
++        "example": "8814"
++      },
++      {
++        "path": "messages[].id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.callID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.cost",
++        "example": "0.0"
++      },
++      {
++        "path": "messages[].parts[].data.reason",
++        "example": "tool-calls"
++      },
++      {
++        "path": "messages[].parts[].data.state.error",
++        "example": "File not found: /private/var/folders/jk/…"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.command",
++        "example": "bash count.sh"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.content",
++        "example": "scratch — feature elicitation this file …"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.description",
++        "example": "Run count.sh script"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.filePath",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.newString",
++        "example": "fixture"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.oldString",
++        "example": "scratch"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.path",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.pattern",
++        "example": "note*"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.prompt",
++        "example": "Count the words in `notes.md` and report…"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.subagent_type",
++        "example": "general"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.workdir",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.diff",
++        "example": "Index: /private/var/folders/jk/4rycn96j1…"
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.exit",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.output",
++        "example": "1 2 3 4 5 "
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.truncated",
++        "example": "false"
++      },
++      {
++        "path": "messages[].parts[].data.state.output",
++        "example": "<path>/private/var/folders/jk/4rycn96j1r…"
++      },
++      {
++        "path": "messages[].parts[].data.state.status",
++        "example": "completed"
++      },
++      {
++        "path": "messages[].parts[].data.state.time.end",
++        "example": "1781117205243"
++      },
++      {
++        "path": "messages[].parts[].data.state.time.start",
++        "example": "1781117205243"
++      },
++      {
++        "path": "messages[].parts[].data.state.title",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.text",
++        "example": "\"You're going to walk through a small se…"
++      },
++      {
++        "path": "messages[].parts[].data.time.end",
++        "example": "1781117205243"
++      },
++      {
++        "path": "messages[].parts[].data.time.start",
++        "example": "1781117205243"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.cache.read",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.cache.write",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.input",
++        "example": "8596"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.output",
++        "example": "218"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.reasoning",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.total",
++        "example": "8814"
++      },
++      {
++        "path": "messages[].parts[].data.tool",
++        "example": "read"
++      },
++      {
++        "path": "messages[].parts[].data.type",
++        "example": "text"
++      },
++      {
++        "path": "messages[].parts[].message_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].session_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].time_created",
++        "example": "1781117205230"
++      },
++      {
++        "path": "messages[].parts[].time_updated",
++        "example": "1781117205230"
++      },
++      {
++        "path": "messages[].session_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].time_created",
++        "example": "1781117205230"
++      },
++      {
++        "path": "messages[].time_updated",
++        "example": "1781117205230"
++      },
++      {
++        "path": "project_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "slug",
++        "example": "<withheld>"
++      },
++      {
++        "path": "time_created",
++        "example": "1781117205230"
++      },
++      {
++        "path": "time_updated",
++        "example": "1781117241421"
++      },
++      {
++        "path": "title",
++        "example": "\"You're going to walk through a small se…"
++      },
++      {
++        "path": "version",
++        "example": "0.0.0-projected"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index c845d749..c24ca5ba 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -461,6 +461,292 @@ input_file: test-fixtures/opencode/convo.json
+         "path": "messages[].parts[].type",
+         "example": "text"
+       }
++    ],
++    "gained": [
++      {
++        "path": "directory",
++        "example": "<withheld>"
++      },
++      {
++        "path": "id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.agent",
++        "example": "build"
++      },
++      {
++        "path": "messages[].data.cost",
++        "example": "0.0"
++      },
++      {
++        "path": "messages[].data.finish",
++        "example": "tool-calls"
++      },
++      {
++        "path": "messages[].data.mode",
++        "example": "build"
++      },
++      {
++        "path": "messages[].data.model.modelID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.model.providerID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.modelID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.parentID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.path.cwd",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.path.root",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.providerID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].data.role",
++        "example": "user"
++      },
++      {
++        "path": "messages[].data.time.completed",
++        "example": "1778178631278"
++      },
++      {
++        "path": "messages[].data.time.created",
++        "example": "1778178631267"
++      },
++      {
++        "path": "messages[].data.tokens.cache.read",
++        "example": "0"
++      },
++      {
++        "path": "messages[].data.tokens.cache.write",
++        "example": "0"
++      },
++      {
++        "path": "messages[].data.tokens.input",
++        "example": "11294"
++      },
++      {
++        "path": "messages[].data.tokens.output",
++        "example": "185"
++      },
++      {
++        "path": "messages[].data.tokens.reasoning",
++        "example": "0"
++      },
++      {
++        "path": "messages[].data.tokens.total",
++        "example": "11479"
++      },
++      {
++        "path": "messages[].id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.callID",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.cost",
++        "example": "0.0"
++      },
++      {
++        "path": "messages[].parts[].data.reason",
++        "example": "tool-calls"
++      },
++      {
++        "path": "messages[].parts[].data.state.error",
++        "example": "File not found: /private/var/folders/jk/…"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.command",
++        "example": "bash count.sh"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.content",
++        "example": "scratch — feature elicitation this file …"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.description",
++        "example": "Run count.sh script"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.filePath",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.newString",
++        "example": "fixture"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.oldString",
++        "example": "scratch"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.path",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.pattern",
++        "example": "note*"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.prompt",
++        "example": "Count the words in `/private/var/folders…"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.subagent_type",
++        "example": "general"
++      },
++      {
++        "path": "messages[].parts[].data.state.input.workdir",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.diff",
++        "example": "Index: /private/var/folders/jk/4rycn96j1…"
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.exit",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.output",
++        "example": "1 2 3 4 5 "
++      },
++      {
++        "path": "messages[].parts[].data.state.metadata.truncated",
++        "example": "false"
++      },
++      {
++        "path": "messages[].parts[].data.state.output",
++        "example": "<path>/private/var/folders/jk/4rycn96j1r…"
++      },
++      {
++        "path": "messages[].parts[].data.state.status",
++        "example": "completed"
++      },
++      {
++        "path": "messages[].parts[].data.state.time.end",
++        "example": "1778178631278"
++      },
++      {
++        "path": "messages[].parts[].data.state.time.start",
++        "example": "1778178631278"
++      },
++      {
++        "path": "messages[].parts[].data.state.title",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].data.text",
++        "example": "\"You're going to walk through a small se…"
++      },
++      {
++        "path": "messages[].parts[].data.time.end",
++        "example": "1778178631278"
++      },
++      {
++        "path": "messages[].parts[].data.time.start",
++        "example": "1778178631278"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.cache.read",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.cache.write",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.input",
++        "example": "11294"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.output",
++        "example": "185"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.reasoning",
++        "example": "0"
++      },
++      {
++        "path": "messages[].parts[].data.tokens.total",
++        "example": "11479"
++      },
++      {
++        "path": "messages[].parts[].data.tool",
++        "example": "read"
++      },
++      {
++        "path": "messages[].parts[].data.type",
++        "example": "text"
++      },
++      {
++        "path": "messages[].parts[].message_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].session_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].parts[].time_created",
++        "example": "1778178631267"
++      },
++      {
++        "path": "messages[].parts[].time_updated",
++        "example": "1778178631267"
++      },
++      {
++        "path": "messages[].session_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "messages[].time_created",
++        "example": "1778178631267"
++      },
++      {
++        "path": "messages[].time_updated",
++        "example": "1778178631267"
++      },
++      {
++        "path": "project_id",
++        "example": "<withheld>"
++      },
++      {
++        "path": "slug",
++        "example": "<withheld>"
++      },
++      {
++        "path": "time_created",
++        "example": "1778178631267"
++      },
++      {
++        "path": "time_updated",
++        "example": "1778178667806"
++      },
++      {
++        "path": "title",
++        "example": "\"You're going to walk through a small se…"
++      },
++      {
++        "path": "version",
++        "example": "0.0.0-projected"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@pi-forced.snap b/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
+index 70f0b259..04df2fd1 100644
+--- a/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@pi-forced.snap
+@@ -159,6 +159,20 @@ input_file: test-fixtures/pi/convo-compacted.jsonl
+         "path": "tokensBefore",
+         "example": "<withheld>"
+       }
++    ],
++    "gained": [
++      {
++        "path": "message.content",
++        "example": "You're going to walk through a small set…"
++      },
++      {
++        "path": "message.customType",
++        "example": "system"
++      },
++      {
++        "path": "message.display",
++        "example": "true"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/snapshots/shed@pi.snap b/crates/toolpath-goldens/snapshots/shed@pi.snap
+index 5b6b5c6b..f1293454 100644
+--- a/crates/toolpath-goldens/snapshots/shed@pi.snap
++++ b/crates/toolpath-goldens/snapshots/shed@pi.snap
+@@ -150,6 +150,12 @@ input_file: test-fixtures/pi/convo.jsonl
+         "path": "thinkingLevel",
+         "example": "medium"
+       }
++    ],
++    "gained": [
++      {
++        "path": "message.content",
++        "example": "You're going to walk through a small set…"
++      }
+     ]
+   }
+ }
+diff --git a/crates/toolpath-goldens/src/model.rs b/crates/toolpath-goldens/src/model.rs
+index 9aa7d1cb..c81931e1 100644
+--- a/crates/toolpath-goldens/src/model.rs
++++ b/crates/toolpath-goldens/src/model.rs
+@@ -469,6 +469,9 @@ pub struct SameFormat {
+     pub key_paths: KeyPathTally,
+     pub renamed: Vec<Rename>,
+     pub dropped: Vec<Dropped>,
++    /// Paths the projection wrote that the transcript did not have (the same shape as `dropped`,
++    /// the example taken from the projection).
++    pub gained: Vec<Dropped>,
+ }
+ 
+ /// What is shed at each stage: transcript -> document -> projections, and
+diff --git a/crates/toolpath-goldens/src/shed.rs b/crates/toolpath-goldens/src/shed.rs
+index b6358a76..d63f0c8b 100644
+--- a/crates/toolpath-goldens/src/shed.rs
++++ b/crates/toolpath-goldens/src/shed.rs
+@@ -88,6 +88,13 @@ pub fn compare_same_format(source: &str, back: &str) -> SameFormat {
+                 example: example_value(k, &before[*k]),
+             })
+             .collect(),
++        gained: gained
++            .iter()
++            .map(|k| Dropped {
++                path: (*k).clone(),
++                example: example_value(k, &after[*k]),
++            })
++            .collect(),
+     }
+ }
+ 
+@@ -207,6 +214,15 @@ mod tests {
+         );
+         assert_eq!(s.key_paths.lost, 3);
+         assert_eq!(s.key_paths.gained, 1);
++        // the gained path is named, with one example, as a dropped one is
++        assert_eq!(
++            s.gained,
++            vec![Dropped {
++                path: "message.stopReason".into(),
++                example: "end".into()
++            }]
++        );
++        assert_eq!(s.gained.len(), s.key_paths.gained);
+     }
+ 
+     #[test]
+diff --git a/docs/baseline/schemas/shed.schema.json b/docs/baseline/schemas/shed.schema.json
+index 42e2c08b..305b0cff 100644
+--- a/docs/baseline/schemas/shed.schema.json
++++ b/docs/baseline/schemas/shed.schema.json
+@@ -144,6 +144,13 @@
+           "description": "Event types with fewer lines after than before.",
+           "type": "object"
+         },
++        "gained": {
++          "description": "Paths the projection wrote that the transcript did not have (the same shape as `dropped`, the example taken from the projection).",
++          "items": {
++            "$ref": "#/definitions/Dropped"
++          },
++          "type": "array"
++        },
+         "key_paths": {
+           "$ref": "#/definitions/KeyPathTally"
+         },
+@@ -163,6 +170,7 @@
+         "bytes",
+         "dropped",
+         "event_types_shed",
++        "gained",
+         "key_paths",
+         "lines",
+         "renamed"
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 8eaa4f5c..26437622 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -5,7 +5,7 @@
+         "cargo_lock_sha256": "22fdc28be9a6bd21f905dfa609ca4aa2bbe8e8b6ec7d3c4e2e6cf5307de70210",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "b20e2436f9599da1205da78001032404829a96495b1670373c528b24bfcde955",
++          "crates/path-cli/src/goldens.rs": "3f0b00f4958aab1595973326eb56154bcaad37b2da59cdcb58e51e6a82462c42",
+           "docs/GOLDENS.md": "f92e4dc81b1980170a4de9993afdd992cbf6ec78c9bec045ced3b321c3acd3a7",
+           "scripts/goldens.sh": "84a0be45f888d8e663207ccaf123a25ca7d16d785887e67c2cf0a530eedf3c4a"
+         },
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+         }
+       },
+       "project": null,
+@@ -66,7 +66,7 @@
+         "cargo_lock_sha256": "22fdc28be9a6bd21f905dfa609ca4aa2bbe8e8b6ec7d3c4e2e6cf5307de70210",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "b20e2436f9599da1205da78001032404829a96495b1670373c528b24bfcde955",
++          "crates/path-cli/src/goldens.rs": "3f0b00f4958aab1595973326eb56154bcaad37b2da59cdcb58e51e6a82462c42",
+           "docs/GOLDENS.md": "f92e4dc81b1980170a4de9993afdd992cbf6ec78c9bec045ced3b321c3acd3a7",
+           "scripts/goldens.sh": "84a0be45f888d8e663207ccaf123a25ca7d16d785887e67c2cf0a530eedf3c4a"
+         },
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+         }
+       },
+       "project": null,
+@@ -127,7 +127,7 @@
+         "cargo_lock_sha256": "22fdc28be9a6bd21f905dfa609ca4aa2bbe8e8b6ec7d3c4e2e6cf5307de70210",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "b20e2436f9599da1205da78001032404829a96495b1670373c528b24bfcde955",
++          "crates/path-cli/src/goldens.rs": "3f0b00f4958aab1595973326eb56154bcaad37b2da59cdcb58e51e6a82462c42",
+           "docs/GOLDENS.md": "f92e4dc81b1980170a4de9993afdd992cbf6ec78c9bec045ced3b321c3acd3a7",
+           "scripts/goldens.sh": "84a0be45f888d8e663207ccaf123a25ca7d16d785887e67c2cf0a530eedf3c4a"
+         },
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+         }
+       },
+       "project": null,
+@@ -201,7 +201,7 @@
+         "cargo_lock_sha256": "22fdc28be9a6bd21f905dfa609ca4aa2bbe8e8b6ec7d3c4e2e6cf5307de70210",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "b20e2436f9599da1205da78001032404829a96495b1670373c528b24bfcde955",
++          "crates/path-cli/src/goldens.rs": "3f0b00f4958aab1595973326eb56154bcaad37b2da59cdcb58e51e6a82462c42",
+           "docs/GOLDENS.md": "f92e4dc81b1980170a4de9993afdd992cbf6ec78c9bec045ced3b321c3acd3a7",
+           "scripts/goldens.sh": "84a0be45f888d8e663207ccaf123a25ca7d16d785887e67c2cf0a530eedf3c4a"
+         },
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+         }
+       },
+       "project": null,
+@@ -262,7 +262,7 @@
+         "cargo_lock_sha256": "22fdc28be9a6bd21f905dfa609ca4aa2bbe8e8b6ec7d3c4e2e6cf5307de70210",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "b20e2436f9599da1205da78001032404829a96495b1670373c528b24bfcde955",
++          "crates/path-cli/src/goldens.rs": "3f0b00f4958aab1595973326eb56154bcaad37b2da59cdcb58e51e6a82462c42",
+           "docs/GOLDENS.md": "f92e4dc81b1980170a4de9993afdd992cbf6ec78c9bec045ced3b321c3acd3a7",
+           "scripts/goldens.sh": "84a0be45f888d8e663207ccaf123a25ca7d16d785887e67c2cf0a530eedf3c4a"
+         },
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+         }
+       },
+       "project": null,
+@@ -323,7 +323,7 @@
+         "cargo_lock_sha256": "22fdc28be9a6bd21f905dfa609ca4aa2bbe8e8b6ec7d3c4e2e6cf5307de70210",
+         "flake_lock_sha256": "a46c2ad4faa32c693d282709e4ced2af7906d79c5ab0cfeec607eeed6e3d4859",
+         "harness": {
+-          "crates/path-cli/src/goldens.rs": "b20e2436f9599da1205da78001032404829a96495b1670373c528b24bfcde955",
++          "crates/path-cli/src/goldens.rs": "3f0b00f4958aab1595973326eb56154bcaad37b2da59cdcb58e51e6a82462c42",
+           "docs/GOLDENS.md": "f92e4dc81b1980170a4de9993afdd992cbf6ec78c9bec045ced3b321c3acd3a7",
+           "scripts/goldens.sh": "84a0be45f888d8e663207ccaf123a25ca7d16d785887e67c2cf0a530eedf3c4a"
+         },
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++          "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++          "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++    "toolpath_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "8d6212b4a3c4e31c3f3805674303eb408ecc4625cd280318b0ddca2621e11bfa",
++        "binary_sha256": "b2f1419966744ae4bfc20e783809a801b66b05ab3b84278604ecb3696056173b",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "d1e7d13ed8f51cc0181c8e3f7a18ccc36aaabc06"
++        "repo_rev": "d0e1fa84b47b088c097f2a9047e73f50765d1163"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+@@ -571,27 +571,27 @@
+   "shed": [
+     {
+       "file": "goldens/shed/claude-compacted.json",
+-      "sha256": "6df6764b892bcfdd8f35801383d725fa99f4673ec29d1fc2546811ec52b9ff39"
++      "sha256": "c071a41f049565658066c2bd6903b2292753302d5266d1dbdab8bf33d03bd592"
+     },
+     {
+       "file": "goldens/shed/claude-session.json",
+-      "sha256": "73616d7a60d20d6376929e1d144008c466edeaf1a34b6b0e9ea766780063693a"
++      "sha256": "e60a23a57226c1a0922352bc0426598d73c685b7be6359dd9230b04cd355e7fb"
+     },
+     {
+       "file": "goldens/shed/claude.json",
+-      "sha256": "5abc3031ffe39df2f1425f9b052f8628d3c5a6dd4b3295f981356798baf0c53d"
++      "sha256": "65ba307e1ec6e1ec04e7ba3bb4dc2dd96a3aaa0762cb6aef0fdb185b26d89b6a"
+     },
+     {
+       "file": "goldens/shed/codex.json",
+-      "sha256": "d784aad928975ccd88316b88a72a759c4bdd74e74e394532c64334e2c22cf3a6"
++      "sha256": "93b0f7126312f11d1038b6e08d07831e9245c0a15b1a6ccfb4cc52e3d5385546"
+     },
+     {
+       "file": "goldens/shed/copilot.json",
+-      "sha256": "471ae3cac46f291375d966cfed753089aa7a7bc2dc92ecf29e7b894253a8534f"
++      "sha256": "9c61041e71a3b712be85c0e4265ff2060020ad4798ab64050fff9488f52ebea7"
+     },
+     {
+       "file": "goldens/shed/pi.json",
+-      "sha256": "041f72a6e5d20199ce13e306d1c08f4e1155fed6fc42581100c91078266f9c0a"
++      "sha256": "d38df1c010045d55484e929cf81b7d8ad8e4df2a631f2c4a87483e705085f147"
+     }
+   ]
+ }
+diff --git a/goldens/shed/claude-compacted.json b/goldens/shed/claude-compacted.json
+index 25d90723..a27a9d59 100644
+--- a/goldens/shed/claude-compacted.json
++++ b/goldens/shed/claude-compacted.json
+@@ -63,6 +63,104 @@
+       }
+     ],
+     "event_types_shed": {},
++    "gained": [
++      {
++        "example": "false",
++        "path": "isSidechain"
++      },
++      {
++        "example": "null",
++        "path": "message.usage.cache_creation"
++      },
++      {
++        "example": "<withheld>",
++        "path": "message.usage.cache_creation_input_tokens"
++      },
++      {
++        "example": "<withheld>",
++        "path": "message.usage.cache_read_input_tokens"
++      },
++      {
++        "example": "null",
++        "path": "message.usage.service_tier"
++      },
++      {
++        "example": "default",
++        "path": "permissionMode"
++      },
++      {
++        "example": "<withheld>",
++        "path": "sourceToolAssistantUUID"
++      },
++      {
++        "example": "pub fn login() { ... }",
++        "path": "toolUseResult.file.content"
++      },
++      {
++        "example": "src/auth.rs",
++        "path": "toolUseResult.file.filePath"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.file.numLines"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.file.startLine"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.file.totalLines"
++      },
++      {
++        "example": "src/auth.rs",
++        "path": "toolUseResult.filePath"
++      },
++      {
++        "example": "pub fn login() { validate_session();",
++        "path": "toolUseResult.newString"
++      },
++      {
++        "example": "pub fn login() {",
++        "path": "toolUseResult.oldString"
++      },
++      {
++        "example": "",
++        "path": "toolUseResult.originalFile"
++      },
++      {
++        "example": "false",
++        "path": "toolUseResult.replaceAll"
++      },
++      {
++        "example": "-pub fn login() {",
++        "path": "toolUseResult.structuredPatch[].lines[]"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.structuredPatch[].newLines"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.structuredPatch[].newStart"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.structuredPatch[].oldLines"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.structuredPatch[].oldStart"
++      },
++      {
++        "example": "text",
++        "path": "toolUseResult.type"
++      },
++      {
++        "example": "false",
++        "path": "toolUseResult.userModified"
++      }
++    ],
+     "key_paths": {
+       "after": 50,
+       "gained": 24,
+diff --git a/goldens/shed/claude-session.json b/goldens/shed/claude-session.json
+index 0d1bda3c..97c5bad2 100644
+--- a/goldens/shed/claude-session.json
++++ b/goldens/shed/claude-session.json
+@@ -196,6 +196,12 @@
+       }
+     ],
+     "event_types_shed": {},
++    "gained": [
++      {
++        "example": "null",
++        "path": "message.usage.cache_creation"
++      }
++    ],
+     "key_paths": {
+       "after": 247,
+       "gained": 1,
+diff --git a/goldens/shed/claude.json b/goldens/shed/claude.json
+index 720de0cf..5403f541 100644
+--- a/goldens/shed/claude.json
++++ b/goldens/shed/claude.json
+@@ -302,6 +302,48 @@
+       }
+     ],
+     "event_types_shed": {},
++    "gained": [
++      {
++        "example": "null",
++        "path": "message.usage.cache_creation"
++      },
++      {
++        "example": "File does not exist. Note: your current …",
++        "path": "toolUseResult.file.content"
++      },
++      {
++        "example": "<withheld>",
++        "path": "toolUseResult.file.filePath"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.file.numLines"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.file.startLine"
++      },
++      {
++        "example": "1",
++        "path": "toolUseResult.file.totalLines"
++      },
++      {
++        "example": "<withheld>",
++        "path": "toolUseResult.filePath"
++      },
++      {
++        "example": "No files found",
++        "path": "toolUseResult.filenames[]"
++      },
++      {
++        "example": "note*",
++        "path": "toolUseResult.pattern"
++      },
++      {
++        "example": "update",
++        "path": "toolUseResult.type"
++      }
++    ],
+     "key_paths": {
+       "after": 73,
+       "gained": 10,
+diff --git a/goldens/shed/codex.json b/goldens/shed/codex.json
+index 085ba01f..a71a5ff0 100644
+--- a/goldens/shed/codex.json
++++ b/goldens/shed/codex.json
+@@ -252,6 +252,56 @@
+         "source": 2
+       }
+     },
++    "gained": [
++      {
++        "example": "Chunk ID: 7aa77b Wall time: 0.0000 secon…",
++        "path": "payload.aggregated_output"
++      },
++      {
++        "example": "bash",
++        "path": "payload.command[]"
++      },
++      {
++        "example": "0",
++        "path": "payload.duration.nanos"
++      },
++      {
++        "example": "0",
++        "path": "payload.duration.secs"
++      },
++      {
++        "example": "0",
++        "path": "payload.exit_code"
++      },
++      {
++        "example": "",
++        "path": "payload.formatted_output"
++      },
++      {
++        "example": "wc -w notes.md",
++        "path": "payload.parsed_cmd[].cmd"
++      },
++      {
++        "example": "unknown",
++        "path": "payload.parsed_cmd[].type"
++      },
++      {
++        "example": "null",
++        "path": "payload.rate_limits"
++      },
++      {
++        "example": "completed",
++        "path": "payload.status"
++      },
++      {
++        "example": "",
++        "path": "payload.stderr"
++      },
++      {
++        "example": "",
++        "path": "payload.stdout"
++      }
++    ],
+     "key_paths": {
+       "after": 62,
+       "gained": 12,
+diff --git a/goldens/shed/copilot.json b/goldens/shed/copilot.json
+index 76a8907c..38189785 100644
+--- a/goldens/shed/copilot.json
++++ b/goldens/shed/copilot.json
+@@ -366,6 +366,32 @@
+         "source": 1
+       }
+     },
++    "gained": [
++      {
++        "example": "<withheld>",
++        "path": "data.cacheReadTokens"
++      },
++      {
++        "example": "<withheld>",
++        "path": "data.cacheWriteTokens"
++      },
++      {
++        "example": "/",
++        "path": "data.context.gitRoot"
++      },
++      {
++        "example": "<withheld>",
++        "path": "data.id"
++      },
++      {
++        "example": "<withheld>",
++        "path": "data.inputTokens"
++      },
++      {
++        "example": "",
++        "path": "data.prompt"
++      }
++    ],
+     "key_paths": {
+       "after": 67,
+       "gained": 6,
+diff --git a/goldens/shed/pi.json b/goldens/shed/pi.json
+index 82ca82a7..2c987bc1 100644
+--- a/goldens/shed/pi.json
++++ b/goldens/shed/pi.json
+@@ -95,6 +95,12 @@
+         "source": 1
+       }
+     },
++    "gained": [
++      {
++        "example": "You're going to walk through a small set…",
++        "path": "message.content"
++      }
++    ],
+     "key_paths": {
+       "after": 36,
+       "gained": 1,

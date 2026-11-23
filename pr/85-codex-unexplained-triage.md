@@ -1,0 +1,30 @@
+# triage: the 585 unexplained lost paths, codex -> * first (no code)
+
+Status: analysis only · Base: pr/84 · Data: docs/baseline/unexplained.md at a6dc10b + pr/84 step 2b
+
+## What the codex numbers are
+codex -> {claude 34, cursor 36, copilot 32, gemini 32, opencode 32, pi 32} unexplained lost paths per pair. They are not 32 separate defects:
+the round trip keeps ALL the text (13,445 chars) and the one tool call, but 42 steps become 8 or 9. The other 33-34 steps are codex's own event
+steps (session_meta, turn_context, task_started/complete, token_count, exec_command_end...), and the lost paths are the fields of those steps.
+So the finding is one step-level loss, not 32 field losses: no target carries codex's event steps.
+
+## Fields, sorted by what the target format could hold (pi named because its types were checked)
+- **Holdable, so a writer bug if dropped** (the fix is a writer change, not a declaration):
+  - `model`, `model_provider`, `effort`, `collaboration_mode_kind`: pi has `model_change` / `thinking_level_change` entries
+    (toolpath-pi/src/types.rs:61,70) and its projector already emits them (project.rs:221), but only from pi-shaped extras, not from a codex turn_context.
+  - `cwd`: every target writes the resume directory (pr/73), so this is the session cwd carried correctly; the codex event step's own `cwd` is the
+    same value on a step that does not survive. Check, then declare.
+  - `timestamp`, `started_at`, `completed_at`, `duration_ms`, `time_to_first_token_ms`: timing of codex turns; pi/claude entries carry a timestamp.
+- **Envelope with no home in any other format** (declare as source bookkeeping, one reason): `cli_version`, `originator`, `forked_from_id`,
+  `agent_nickname`, `base_instructions.text`, `personality`, `memory_citation`, `realtime_active`, `current_date`, `approval_policy`,
+  `model_context_window`, `turn_id`, `event_data_type`, `entry_type`, `event_source_id`, `id`, `phase`, `summary`, `last_agent_message`.
+- **Needs a look** (could be content): `message`, `summary`, `last_agent_message` (agent text echoed on an event step; the text total is unchanged, so likely a duplicate of the assistant message).
+
+## Recommendation
+1. Declare the "no home" group once under codex in `fixtures/source-bookkeeping.json` (event-step fields), after Bobby confirms the step-level loss is acceptable
+   (it follows the default he took on pr/78 question 1).
+2. Make the writers carry model and effort changes from the IR: that is a design change (a turn's model into a pi `model_change`, etc.) and should be its own piece per target.
+3. Only then does codex -> * reach 0 unexplained and copilot -> * (8-20 per pair) become the next list.
+
+## Not run
+Read-only analysis of the generated tables and four source files; no code, no gates.

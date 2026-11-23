@@ -58,6 +58,18 @@ rather than erroring with `Session file is corrupted`.
 
 ## ✅ Verified (copilotVersion 1.0.67)
 
+> **Re-verified 2026-10-15, copilot CLI 1.0.61, toolpath `6aeff36`.** Four
+> projected sessions (from the claude-session, codex, pi and copilot
+> goldens) loaded in `copilot --resume` headless and in the TUI, and the
+> model answered from the projected history
+> (`<scratchpad>/review/resume-matrix-v3.md` §1). Two fixes were needed
+> first and the 1.0.67 run below predates them: `74f805f` (a failed tool
+> call keeps its `error.message`; `workspace.yaml` gets a datetime Copilot
+> accepts — before it, the 1.0.61 log said `Failed to load workspace …
+> created_at: Invalid datetime`) and `23f48da` (never project an errored
+> `tool_result` with empty content). Whether the projection still loads in
+> 1.0.67/1.0.68 after those fixes has not been rerun.
+
 A session projected by `CopilotProjector` — the real `~/.copilot` session
 `53a1f220…` imported to a Path and projected back — **loads and resumes cleanly
 in `copilot --resume`.** The seven requirements above were discovered and

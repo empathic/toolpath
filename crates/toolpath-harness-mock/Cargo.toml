@@ -1,0 +1,11 @@
+[package]
+name = "toolpath-harness-mock"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "What a harness's loader would send to the model when it resumes a session file, without the harness binary (dev/test only)"
+
+[dependencies]
+serde_json.workspace = true

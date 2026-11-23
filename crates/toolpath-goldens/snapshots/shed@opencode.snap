@@ -1,0 +1,183 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_opencode
+  agent: opencode
+  input_sha256: 955db799af5cd0bd0f2c4c37b9d3f62c95ec4baa94bd859cf74195f7310d6185
+input_file: test-fixtures/opencode/convo.json
+---
+{
+  "source": {
+    "lines": 1100,
+    "bytes": 39306,
+    "string_chars": 15962,
+    "by_type": {
+      "?": 1
+    }
+  },
+  "ir": {
+    "bytes": 16078,
+    "string_chars": 10145,
+    "steps": 12,
+    "text_chars": 2851,
+    "tool_uses": 10
+  },
+  "projections": {
+    "claude": {
+      "lines": 23,
+      "bytes": 22198,
+      "string_chars": 14337,
+      "by_type": {
+        "assistant": 11,
+        "permission-mode": 1,
+        "user": 11
+      }
+    },
+    "codex": {
+      "lines": 69,
+      "bytes": 23158,
+      "string_chars": 15710,
+      "by_type": {
+        "event_msg/agent_message": 1,
+        "event_msg/exec_command_end": 1,
+        "event_msg/token_count": 11,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 10,
+        "response_item/message": 12,
+        "response_item/reasoning": 11,
+        "session_meta": 1,
+        "turn_context": 11
+      }
+    },
+    "copilot": {
+      "lines": 57,
+      "bytes": 26983,
+      "string_chars": 18397,
+      "by_type": {
+        "assistant.message": 11,
+        "assistant.turn_end": 11,
+        "assistant.turn_start": 11,
+        "session.start": 1,
+        "subagent.completed": 1,
+        "subagent.started": 1,
+        "tool.execution_complete": 10,
+        "tool.execution_start": 10,
+        "user.message": 1
+      }
+    },
+    "cursor": {
+      "lines": 1433,
+      "bytes": 63451,
+      "string_chars": 23790,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 124,
+      "bytes": 24736,
+      "string_chars": 19989,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 537,
+      "bytes": 20386,
+      "string_chars": 9424,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 23,
+      "bytes": 16488,
+      "string_chars": 9842,
+      "by_type": {
+        "message": 22,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 1246,
+    "bytes": 44742,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 88,
+      "after": 72,
+      "lost": 16,
+      "gained": 0
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "messages[].parts[].data.state.metadata.count",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.description",
+        "example": "Run count.sh script"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.exists",
+        "example": "false"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.additions",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.deletions",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.file",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filediff.patch",
+        "example": "Index: /private/var/folders/jk/4rycn96j1…"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.filepath",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.matches",
+        "example": "1"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.model.modelID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.model.providerID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.preview",
+        "example": ".stderr.log"
+      },
+      {
+        "path": "messages[].parts[].data.state.metadata.sessionId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "summary_additions",
+        "example": "0"
+      },
+      {
+        "path": "summary_deletions",
+        "example": "0"
+      },
+      {
+        "path": "summary_files",
+        "example": "0"
+      }
+    ],
+    "gained": []
+  }
+}

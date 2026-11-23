@@ -1,0 +1,84 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path query
+Query the local cache: load every step into one JSON array and transform it with a jaq (jq) filter
+
+Usage: path query [OPTIONS] <FILTER>
+
+Arguments:
+  <FILTER>
+          jaq (jq) filter to run over the scoped step array (use `.` to emit the array unchanged)
+
+Options:
+      --source <SOURCE>
+          Select cached files by source prefix (claude/gemini/codex/opencode/cursor/pi/git/github)
+
+      --id <IDS>
+          Load a specific cached document by id (repeatable)
+
+      --input <INPUT>
+          Load an off-cache document (`-` for stdin; repeatable)
+
+      --project <PROJECT>
+          Keep only paths whose base resolves to this project directory
+
+      --project-under <PROJECT_UNDER>
+          Keep only sessions whose project directory (the path base) lies under this directory (subtree match; the session's recorded working directory, not the files it touched), and scope the implicit sync to it likewise
+
+      --kind <KIND>
+          Keep only paths whose meta.kind matches this selector (semver prefix, e.g. `agent-coding-session` or `…/v1.0`)
+
+  -c, --compact
+          Force compact (single-line) JSON output
+
+  -r, --raw
+          Output raw strings without JSON quotes/escaping (like `jq -r`). Applies only to string results; non-strings still print as JSON. Handy for piping a column of ids/paths into another command, or reading text/diff content. Composes with `-c`
+
+      --no-sync
+          Skip the automatic cache sync that runs before the query
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Each array element wraps a Toolpath step:
+
+  {
+    "cache_id": "claude-abc123",
+    "path": { "id": …, "base": …, "meta": { "kind": …, "source": … } },
+    "step":   { "id": …, "parents": [...], "actor": …, "timestamp": … },
+    "change": { "<artifact>": { "raw": …, "structural": … } },
+    "meta":   { … },
+    "dead_end": false
+  }
+
+The fields under `change[].structural` are defined by the path's kind;
+run `path kind <kind>` for the schema, or `path query --kind … '.[0]'` to
+read a sample. Identity is the triple (cache_id, path.id, step.id).
+
+A real cache mixes provider and tool versions, so a field's shape can vary
+(e.g. `tool_uses[]` is sometimes an object, sometimes a bare name string).
+Guard element access with `?` (`.name?`) and `// empty` so one odd value
+doesn't abort the run; sample with `'.[0]'` when unsure.
+
+Examples:
+  path query 'map(select(any(.. | strings; test("RefCell"))))'
+  path query 'map(select(any(.change | keys[]; endswith("cmd_resume.rs"))))'
+  path query --source claude 'map(select(any(.change[].structural.tool_uses[]?; .name? == "Bash" and .result.is_error? == true)))'
+  path query 'group_by(.path.meta.source) | map({source: .[0].path.meta.source, steps: length})'
+  path query -r '.[].cache_id' | sort -u            # raw ids, pipeable to xargs/grep
+  path query -r '.[0].change[].structural.text'     # read a turn's text, unescaped

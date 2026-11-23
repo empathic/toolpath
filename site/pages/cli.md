@@ -55,7 +55,7 @@ path
     project     # narrower file-shaped sibling of export
     incept      # file/stdin-shaped sibling of `export claude --project`
     track
-      init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF]
+      init      --file PATH --actor ACTOR [--title TEXT] [--base-uri URI] [--base-ref REF] [--base-branch NAME] [--id ID]
                 [--actor-def JSON] [--source TEXT] [--session-dir PATH]
       step      --session FILE --seq N --parent-seq N [--actor ACTOR] [--source JSON]
                 [--time ISO8601]

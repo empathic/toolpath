@@ -1,0 +1,789 @@
+From 61c923da684b15866bbbfe5c71cf83bc56676591 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 15:53:26 -0400
+Subject: [PATCH] docs(claims): say only what the goldens, the matrix test and
+ the 2026-10-15 resume runs prove
+
+The README support table gets a "Verified (2026-10-15)" column in place of
+feature notes. Claude Code, Codex CLI, Pi and Copilot CLI keep a resume
+check because an installed agent (claude 2.1.285, codex-cli 0.162.1, pi
+0.84.3, copilot CLI 1.0.61) answered from the projected history; Gemini CLI
+0.47.0 and opencode 1.18.18 only rendered the projection, and Cursor 3.24.12
+only opens the workspace with the composer listed, so their cells say that.
+Gemini's "reasoning tokens round-trip losslessly", Codex's "every file
+change", Pi's "branching trees", Claude's "rotated files merged" are scoped
+to the unit test or crate fixture that covers them; the opencode snapshot
+diff claim is marked implemented and untested (no test calls diff_trees);
+"copilot 1.0.67" becomes the version that resumed today, with the earlier
+run noted as predating the fixes it needed (74f805f, 23f48da); "in CI" is
+dropped because no workflow on main runs the tests.
+
+The site front page stops saying "any agent", "everything the last one
+knew", "the full session" and "resumes natively"; it lists the agents and
+versions that resumed, rendered, or opened. crates.json roles for codex,
+copilot, opencode, pi, gemini and cursor carry the same scoping, including
+the gemini 0.47 .jsonl and Cursor 3.24 header-table gaps the reader has.
+The copilot, cursor and gemini format notes get dated observations from
+the resume matrices. Evidence: review/claims-audit.md in the scratchpad.
+---
+ README.md                                     | 36 ++++++++++++-------
+ crates/toolpath-copilot/README.md             |  6 ++--
+ crates/toolpath-opencode/README.md            |  9 ++---
+ .../formats/copilot-cli/writing-compatible.md | 12 +++++++
+ docs/agents/formats/cursor.md                 | 15 ++++++++
+ docs/agents/formats/gemini.md                 | 16 +++++++++
+ site/_data/crates.json                        | 12 +++----
+ site/index.md                                 | 25 ++++++++-----
+ 8 files changed, 98 insertions(+), 33 deletions(-)
+
+diff --git a/README.md b/README.md
+index 419b3c2..32bcdd8 100644
+--- a/README.md
++++ b/README.md
+@@ -30,21 +30,32 @@ one format and writes them back. With everything in one format you can:
+ 
+ ## Supported harnesses
+ 
+-| Harness | Read | Write | Resume | Notes |
++| Harness | Read | Write | Resume | Verified (2026-10-15) |
+ |---|:-:|:-:|:-:|---|
+-| Claude Code | ✓ | ✓ | ✓ `claude -r` | Rotated session files merged into one chain; projected sessions load in Claude Code |
+-| Gemini CLI | ✓ | ✓ | ✓ `gemini --resume` | Sub-agent sessions folded in; reasoning tokens round-trip losslessly |
+-| Codex CLI | ✓ | ✓ | ✓ `codex resume` | Real unified diffs on every file change; per-step token attribution |
+-| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` | Preview; projected sessions verified to resume in copilot 1.0.67 |
+-| opencode | ✓ | ✓ | ✓ `opencode --session` | File diffs recovered from opencode's git snapshots |
+-| Cursor (IDE) | ✓ | ✓ | ✓ opens workspace | Projected composers render in Cursor.app's chat sidebar |
+-| Pi | ✓ | ✓ | ✓ `pi --session` | Branching session trees preserved as DAGs |
++| Claude Code | ✓ | ✓ | ✓ `claude -r` | Goldens for read and write. Resume: claude 2.1.285 answered from a projected session's history. Rotated session files are merged into one chain (unit-tested; no captured multi-file chain yet). |
++| Codex CLI | ✓ | ✓ | ✓ `codex resume` | Goldens for read and write, including per-step token attribution. Resume: codex-cli 0.162.1 answered from the projected history. `patch_apply_end` diffs are kept verbatim (crate fixture; the codex golden has no file change). |
++| Pi | ✓ | ✓ | ✓ `pi --session` | Goldens for read and write. Resume: pi 0.84.3 answered from the projected history. In-file `id`/`parentId` trees are read as DAGs (unit-tested; the captured sessions are linear). |
++| Copilot CLI | ✓ | ✓ | ✓ `copilot --resume` | Preview. Goldens for read and write. Resume: copilot CLI 1.0.61 answered from the projected history. |
++| Gemini CLI | ✓ | ✓ | `gemini --resume` | Crate tests, no golden yet. Reads the `.json` chat files of gemini-cli ≤ 0.46; 0.47 writes `.jsonl`, which the reader does not see yet. Resume: gemini-cli 0.47.0 rendered the projected history; no model turn was run. Sub-agent chat files are folded in (unit-tested); reasoning-token counts survive a round trip (crate test). |
++| opencode | ✓ | ✓ | `opencode --session` | Crate tests, no golden yet. Reads `opencode-stable.db` (1.18) and the older `opencode.db`. Resume: opencode 1.18.18 opened the projected session in its TUI; no model turn was run. Snapshot-repo file diffs are implemented but not exercised by any test. |
++| Cursor (IDE) | ✓ | ✓ | opens workspace | Crate tests, no golden yet. Reads the ≤ 3.6 header layout; Cursor 3.24 keeps headers in a table the reader does not read yet. A projected composer is adopted and listed by title in Cursor.app 3.24.12; the transcript body was not opened. |
+ 
+ Read means `path p import`, `path p list`, and `path show`. Write means
+ `path p export`. Resume means `path resume`, which projects the session
+ into the harness's on-disk layout and execs its resume command. Any
+-readable session can be projected into any writable harness; a
+-cross-harness conformance matrix in CI exercises the pairs.
++readable session can be projected into any writable harness.
++
++How the column is verified: `crates/toolpath-goldens` pins read, write
++and round trip for the claude, codex, copilot and pi sets against each
++of those four as a target; `cargo test -p path-cli --test
++cross_harness_matrix` round-trips every pair of the seven harnesses
++in-process on captured fixtures (it launches no agent and runs under
++`just ci`; the repository has no test workflow on GitHub Actions); the
++resume verdicts come from projecting the goldens and asking each
++installed agent to quote the first message back. Round trips are not
++lossless: the goldens' `shed` and `round_trip` snapshots list what each
++harness drops (reasoning bullets, tool-call argument bodies, session
++metadata).
+ 
+ ## Beyond sessions
+ 
+@@ -53,8 +64,9 @@ how artifacts change across the development lifecycle, so the session
+ that wrote a change, the pull request that reviewed it, and the release
+ that shipped it can share one graph. `path p import git` derives paths
+ from commit history and `path p import github` from GitHub pull
+-requests, review threads, CI runs and comments included; `path p merge`
+-combines documents into a single `Graph`.
++requests, review threads, CI runs and comments included (both are
++unit-tested; neither has a golden yet); `path p merge` combines
++documents into a single `Graph`.
+ 
+ ## Install
+ 
+diff --git a/crates/toolpath-copilot/README.md b/crates/toolpath-copilot/README.md
+index cd872cb..6e5ac35 100644
+--- a/crates/toolpath-copilot/README.md
++++ b/crates/toolpath-copilot/README.md
+@@ -62,8 +62,10 @@ content — a `raw` unified-diff perspective.
+ - **Both directions.** Forward (`path p import/list/show copilot`, `path share`)
+   and reverse via `CopilotProjector` (`path p export copilot`, `path resume`).
+   Resume writes `~/.copilot/session-state/<id>/` + a `session-store.db`
+-  `sessions` row (only ever a fresh id). ✅ **Verified against copilotVersion
+-  1.0.67**: a projected session loads and resumes in the real `copilot --resume`.
++  `sessions` row (only ever a fresh id). ✅ **Verified against copilot CLI
++  1.0.61 on 2026-10-15**: four projected sessions loaded in the real
++  `copilot --resume` and the model answered from their history (an earlier
++  run at 1.0.67 predates the fixes that made this hold).
+   The loader's writer requirements (UUID ids, offset ISO timestamps, `turnId`,
+   `messageId`, …) are documented in
+   [writing-compatible.md](../../docs/agents/formats/copilot-cli/writing-compatible.md).
+diff --git a/crates/toolpath-opencode/README.md b/crates/toolpath-opencode/README.md
+index 58adc9f..356adf5 100644
+--- a/crates/toolpath-opencode/README.md
++++ b/crates/toolpath-opencode/README.md
+@@ -9,9 +9,9 @@ database under `~/.local/share/opencode/` — `opencode-stable.db` for
+ current releases, `opencode.db` for older ones (the rule is in
+ `src/paths.rs`). This crate reads that database directly (read-only)
+ and maps it to Toolpath
+-documents, so every opencode-assisted change has a traceable origin
+-with real unified diffs reconstructed from the sibling snapshot
+-git repositories.
++documents. When the sibling snapshot git repository is on disk it can
++attach real unified diffs to file changes; no fixture exercises that
++path yet.
+ 
+ ## Overview
+ 
+@@ -28,7 +28,8 @@ git repositories.
+   matching snapshot git repo is still on disk, file changes per
+   turn surface as sibling artifacts with a real `git diff` as the
+   `raw` perspective — no diff reconstruction from tool output
+-  required.
++  required. This path is implemented but not covered by a test or
++  golden (the captured fixture has no snapshot repo).
+ 
+ ## Mapping
+ 
+diff --git a/docs/agents/formats/copilot-cli/writing-compatible.md b/docs/agents/formats/copilot-cli/writing-compatible.md
+index 3b9768a..4238212 100644
+--- a/docs/agents/formats/copilot-cli/writing-compatible.md
++++ b/docs/agents/formats/copilot-cli/writing-compatible.md
+@@ -58,6 +58,18 @@ rather than erroring with `Session file is corrupted`.
+ 
+ ## ✅ Verified (copilotVersion 1.0.67)
+ 
++> **Re-verified 2026-10-15, copilot CLI 1.0.61, toolpath `6aeff36`.** Four
++> projected sessions (from the claude-session, codex, pi and copilot
++> goldens) loaded in `copilot --resume` headless and in the TUI, and the
++> model answered from the projected history
++> (`<scratchpad>/review/resume-matrix-v3.md` §1). Two fixes were needed
++> first and the 1.0.67 run below predates them: `74f805f` (a failed tool
++> call keeps its `error.message`; `workspace.yaml` gets a datetime Copilot
++> accepts — before it, the 1.0.61 log said `Failed to load workspace …
++> created_at: Invalid datetime`) and `23f48da` (never project an errored
++> `tool_result` with empty content). Whether the projection still loads in
++> 1.0.67/1.0.68 after those fixes has not been rerun.
++
+ A session projected by `CopilotProjector` — the real `~/.copilot` session
+ `53a1f220…` imported to a Path and projected back — **loads and resumes cleanly
+ in `copilot --resume`.** The seven requirements above were discovered and
+diff --git a/docs/agents/formats/cursor.md b/docs/agents/formats/cursor.md
+index 20d1212..66a94c0 100644
+--- a/docs/agents/formats/cursor.md
++++ b/docs/agents/formats/cursor.md
+@@ -10,6 +10,21 @@ and every claim here is empirical.
+ Date: **2026-06-01**. Revisit when the Cursor minor version bumps or a
+ `_v` field on any object increments.
+ 
++> **Observed 2026-10-15 on Cursor.app 3.24.12 (not yet folded into the
++> sections below).** `composerData._v` is now 18 (16 here). Composer
++> headers live in a `composerHeaders` table (`composerId, workspaceId,
++> createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt,
++> subagentTypeName, value`) with `cursorDiskKV.composer.composerHeaders.migratedToTable = 1`;
++> `ItemTable.composer.composerHeaders` is a legacy key that Cursor
++> re-migrates at launch and then deletes. `toolpath-cursor` still reads
++> and writes the ItemTable key, so projection works (Cursor adopts the
++> head and lists the composer by title in its Agents window) but the
++> reader sees nothing on a 3.24 machine. `cursor <folder>` opens the
++> Agents window with the sidebar collapsed; the projected composer is in
++> the list, not on screen. Cursor computes its own workspaceStorage id and
++> leaves toolpath's `workspace.json`-only entry orphaned. Evidence:
++> `<scratchpad>/review/resume-matrix-v4-cursor.md`.
++
+ ## Storage roots
+ 
+ Cursor splits its data across two roots: an Anysphere-specific tree at
+diff --git a/docs/agents/formats/gemini.md b/docs/agents/formats/gemini.md
+index 3fa8cfc..ca73467 100644
+--- a/docs/agents/formats/gemini.md
++++ b/docs/agents/formats/gemini.md
+@@ -9,6 +9,22 @@ on disk plus cross-checking with Gemini's own internal documentation
+ publish a stable schema, so treat this as observed behaviour as of
+ **2026-04-24** — forward-compat guards matter.
+ 
++> **Observed 2026-10-15 on gemini-cli 0.47.0 (not yet folded into the
++> sections below).** Chat files are now JSONL: a header record
++> (`sessionId, projectHash, startTime, lastUpdated, kind, directories`),
++> one record per message, then `{"$set": …}` patch records; on resume the
++> CLI leaves a projected `.json` untouched and writes a `.jsonl` twin plus
++> a new `session-<now>-<short>.jsonl` per launch. `getMatchingSessionFiles`
++> accepts `-<short>.json` or `.jsonl`, but `crates/toolpath-gemini/src/paths.rs`
++> filters `extension == "json"`, so native 0.47 sessions are invisible to
++> `path p derive gemini`. `GEMINI_CLI_HOME` replaces `os.homedir()` (the
++> CLI appends `.gemini`). Slots: a `ProjectRegistry` (`projects.json`)
++> migrates `tmp/<sha256>` to `tmp/<slug>`; an existing hash slot is
++> adopted as the slug. `gemini --resume <id>` renders a projected session
++> before authentication. Evidence:
++> `<scratchpad>/review/resume-matrix-v4-gemini.md`; qualifier record in
++> `crates/toolpath-gemini/src/.qual`.
++
+ ## Storage root
+ 
+ ```
+diff --git a/site/_data/crates.json b/site/_data/crates.json
+index 3e77e9f..4983680 100644
+--- a/site/_data/crates.json
++++ b/site/_data/crates.json
+@@ -45,7 +45,7 @@
+     "description": "Derive from Gemini CLI conversation logs",
+     "docs": "https://docs.rs/toolpath-gemini",
+     "crate": "https://crates.io/crates/toolpath-gemini",
+-    "role": "Reads Gemini CLI conversation data from ~/.gemini/tmp/ and maps messages, tool calls, and sub-agent delegations to Toolpath documents. Sub-agent chat files are folded into the parent conversation as populated DelegatedWork."
++    "role": "Reads Gemini CLI conversation data from ~/.gemini/tmp/ and maps messages, tool calls, and sub-agent delegations to Toolpath documents. Sub-agent chat files are folded into the parent conversation as populated DelegatedWork (unit-tested on synthetic fixtures). Reads the `.json` chat files of gemini-cli up to 0.46; 0.47 writes `.jsonl`, which the reader does not see yet."
+   },
+   {
+     "name": "toolpath-codex",
+@@ -53,7 +53,7 @@
+     "description": "Derive from Codex CLI rollout files",
+     "docs": "https://docs.rs/toolpath-codex",
+     "crate": "https://crates.io/crates/toolpath-codex",
+-    "role": "Reads Codex CLI rollout JSONL from ~/.codex/sessions/ and maps session_meta, response_item, event_msg, and turn_context records to Toolpath documents. File changes from patch_apply_end preserve the real unified diff as the raw perspective. Sessions are global (date-bucketed), not project-keyed."
++    "role": "Reads Codex CLI rollout JSONL from ~/.codex/sessions/ and maps session_meta, response_item, event_msg, and turn_context records to Toolpath documents. File changes from patch_apply_end preserve the real unified diff as the raw perspective (crate fixture; the codex golden has no file change). Sessions are global (date-bucketed), not project-keyed."
+   },
+   {
+     "name": "toolpath-copilot",
+@@ -61,7 +61,7 @@
+     "description": "Derive from GitHub Copilot CLI session logs (preview)",
+     "docs": "https://docs.rs/toolpath-copilot",
+     "crate": "https://crates.io/crates/toolpath-copilot",
+-    "role": "Reads the GitHub Copilot CLI (@github/copilot) events.jsonl stream from ~/.copilot/session-state/<id>/ and maps its session/user/assistant/tool/subagent events to Toolpath documents. Preview: the events.jsonl schema is undocumented, so the parser is tolerant and the on-disk reference (docs/agents/formats/copilot-cli/) tags every claim with a confidence level pending first-hand samples."
++    "role": "Reads the GitHub Copilot CLI (@github/copilot) events.jsonl stream from ~/.copilot/session-state/<id>/ and maps its session/user/assistant/tool/subagent events to Toolpath documents. Preview: the events.jsonl schema is undocumented, so the parser is tolerant; the on-disk reference (docs/agents/formats/copilot-cli/) tags every claim with a confidence level and is grounded in sessions captured at copilotVersion 1.0.67. A projected session resumed in copilot CLI 1.0.61 on 2026-10-15."
+   },
+   {
+     "name": "toolpath-opencode",
+@@ -69,7 +69,7 @@
+     "description": "Derive from opencode SQLite databases",
+     "docs": "https://docs.rs/toolpath-opencode",
+     "crate": "https://crates.io/crates/toolpath-opencode",
+-    "role": "Reads opencode's `~/.local/share/opencode/opencode.db` SQLite database, implements `ConversationProvider`, and derives Toolpath `Path` documents. File diffs come from opencode's sibling bare git snapshot repositories via `git2` tree-to-tree comparisons; gitignored paths fall back to tool-input-derived structural changes. Respects opencode's project-id semantics (SHA of the repo's first root commit)."
++    "role": "Reads opencode's SQLite database under `~/.local/share/opencode/` (`opencode-stable.db` for 1.18 and later, `opencode.db` for older releases), implements `ConversationProvider`, and derives Toolpath `Path` documents. It can read file diffs from opencode's sibling bare git snapshot repositories via `git2` tree-to-tree comparisons when a snapshot repo is on disk, with gitignored paths falling back to tool-input-derived structural changes; no fixture exercises the snapshot path yet. Respects opencode's project-id semantics (SHA of the repo's first root commit)."
+   },
+   {
+     "name": "toolpath-pi",
+@@ -77,7 +77,7 @@
+     "description": "Derive Toolpath provenance documents from Pi (pi.dev) agent session logs",
+     "docs": "https://docs.rs/toolpath-pi",
+     "crate": "https://crates.io/crates/toolpath-pi",
+-    "role": "Reads Pi (pi.dev) coding-agent session JSONL from `~/.pi/agent/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Preserves Pi's in-file conversation tree (id/parentId) as a DAG and follows `parentSession` links across files."
++    "role": "Reads Pi (pi.dev) coding-agent session JSONL from `~/.pi/agent/sessions/`, implements `ConversationProvider`, and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Preserves Pi's in-file conversation tree (id/parentId) as a DAG and follows `parentSession` links across files (both unit-tested on synthetic sessions; the captured sessions are linear)."
+   },
+   {
+     "name": "toolpath-cursor",
+@@ -85,7 +85,7 @@
+     "description": "Derive Toolpath provenance documents from Cursor (IDE) composers",
+     "docs": "https://docs.rs/toolpath-cursor",
+     "crate": "https://crates.io/crates/toolpath-cursor",
+-    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) \u2014 composers, bubbles, content-addressed blobs \u2014 and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. Round-trips back to a loadable composer via `CursorProjector` with full TOOL_TABLE coverage."
++    "role": "Reads Cursor.app's bubble store (`state.vscdb` SQLite, `cursorDiskKV` table) \u2014 composers, bubbles, content-addressed blobs \u2014 and derives Toolpath `Path` documents via `toolpath-convo`'s shared `derive_path`. `CursorProjector` writes a composer back that Cursor.app 3.24 adopts and lists by title (whether its body renders is not yet verified), and every TOOL_TABLE id round-trips (unit-tested). The reader follows the Cursor 3.6 header layout; 3.24 keeps headers in a `composerHeaders` table it does not read yet."
+   },
+   {
+     "name": "toolpath-dot",
+diff --git a/site/index.md b/site/index.md
+index b30328c..94843f0 100644
+--- a/site/index.md
++++ b/site/index.md
+@@ -10,8 +10,8 @@ nav: home
+     <h1>The <span>Missing IR</span> for Agent Sessions</h1>
+     <p class="tagline">
+       Toolpath is an open, versioned format for coding-agent sessions.
+-      <strong>Parse any agent’s session in, project it out to any harness, and
+-      build your tools once for all of them.</strong>
++      <strong>Parse any supported agent’s session in, project it out to any
++      supported harness, and build your tools once for all of them.</strong>
+     </p>
+     <div class="hero-actions">
+       <a class="hero-cta" href="/format/">Read the spec</a>
+@@ -110,7 +110,8 @@ them.
+   harness expects. Any writable harness, not just the one the session
+   started in.
+ - **Resume.** A projection followed by a handoff: start in one agent,
+-  continue in another, with everything the last one knew.
++  continue in another, with the conversation and its tool calls. What a
++  harness cannot hold is dropped, and the goldens' shed reports say what.
+ 
+ <div class="scenarios">
+   <h2>Build it once</h2>
+@@ -127,8 +128,8 @@ them.
+     <div class="object-card">
+       <h3>Resume anywhere</h3>
+       <p><code>path resume --harness codex</code> moves a Claude Code
+-      session into Codex: the intent, the state, and the dead ends
+-      already ruled out.</p>
++      session into Codex: the conversation and its tool calls, so Codex
++      starts from what Claude Code was told and tried.</p>
+     </div>
+     <div class="object-card">
+       <h3>Archive and search</h3>
+@@ -183,10 +184,16 @@ them.
+   <li><a href="https://docs.rs/toolpath-cursor">Cursor IDE</a></li>
+ </ul>
+ 
+-Parsing captures the full session: prompts, tool calls, reasoning, file
+-changes, sub-agent work, token usage. Projecting writes a session the
+-harness accepts as its own, so it resumes natively. Where a harness’s
+-log doesn’t record something, the [format notes]({{ site.repo }}/tree/main/docs/agents/formats)
++Parsing captures the conversation: prompts, tool calls, reasoning, file
++changes, sub-agent work, token usage. Projecting writes a session in the
++harness’s own layout. On 2026-10-15, Claude Code 2.1.285, Codex CLI
++0.162.1, Pi 0.84.3 and Copilot CLI 1.0.61 resumed projected sessions and
++answered from their history; Gemini CLI 0.47.0 and opencode 1.18.18
++rendered them without a model turn; Cursor 3.24.12 opens the workspace
++with the composer listed. The
++[support table]({{ site.repo }}#supported-harnesses) says what each
++harness is verified against, and where a harness’s log doesn’t record
++something, the [format notes]({{ site.repo }}/tree/main/docs/agents/formats)
+ say so.
+ 
+ Git history and GitHub pull requests parse into the same schema, so a
+-- 
+2.55.0
+
+From 5f82a352a868f7e680841dab7b2368c2c6a67787 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 15:54:11 -0400
+Subject: [PATCH] docs(kinds): agent-coding-session v1.1.0 is the only version
+ producers write; v1.0.0 is read-only legacy
+
+The kinds index gains a Status column with one row per version: v1.1.0
+"current, the only version producers write"; v1.0.0 "read-only legacy,
+superseded 2026-06-17, not supported for writing, path p validate warns".
+The kind landing page, the v1.0.0 page (a Status entry in its header), the
+v1.1.0 page, the README's kind paragraph and the RFC's Document Kind
+section say the same thing in their own words. The RFC previously named
+v1.0.0 as the only defined kind, which has been false since 2026-06-17.
+The legacy constant's doc comment in toolpath::v1 states the rule and
+points at the test that enforces it.
+
+"Not supported for writing" is a rule for producers, not a change to the
+format: the URI stays immutable and documents carrying it stay valid, so
+readers keep accepting them and validation warns instead of rejecting.
+---
+ README.md                                       |  5 ++++-
+ RFC.md                                          | 13 ++++++++-----
+ crates/toolpath/src/types.rs                    | 12 +++++++++---
+ site/kinds/agent-coding-session/index.md        |  2 +-
+ site/kinds/agent-coding-session/v1.0.0/index.md |  2 ++
+ site/kinds/agent-coding-session/v1.1.0/index.md |  2 +-
+ site/kinds/index.md                             |  9 ++++++---
+ 7 files changed, 31 insertions(+), 14 deletions(-)
+
+diff --git a/README.md b/README.md
+index 32bcdd8..4ea1384 100644
+--- a/README.md
++++ b/README.md
+@@ -161,7 +161,10 @@ step-1 -- step-2 --+
+ A path can declare a **kind**, a versioned, immutable URI naming what
+ its steps mean. Agent sessions use
+ `https://toolpath.net/kinds/agent-coding-session/v1.1.0`; `path kind
+-agent-coding-session` prints the field reference. [RFC.md](RFC.md) is
++agent-coding-session` prints the field reference. The earlier
++`…/v1.0.0` is read-only legacy: no producer writes it, `path p
++validate` warns when a document carries it, and its page records the
++token-accounting erratum. [RFC.md](RFC.md) is
+ the full specification and
+ [schema/toolpath.schema.json](schema/toolpath.schema.json) is the JSON
+ Schema.
+diff --git a/RFC.md b/RFC.md
+index 376339b..7b7457b 100644
+--- a/RFC.md
++++ b/RFC.md
+@@ -300,11 +300,14 @@ Consumers that recognize the URI may rely on the structure that spec describes;
+ unrecognized URIs should be treated as a generic path. Kind URIs are
+ immutable, semver-versioned, and revisions ship at a new version URI.
+ 
+-Defined kinds are listed at <https://toolpath.net/kinds/>. The only one defined
+-so far is `https://toolpath.net/kinds/agent-coding-session/v1.0.0` — a path
+-recording an AI coding conversation, where each conversational-turn step
+-carries a `"conversation.append"` structural change with the turn's role,
+-text, and so on. See the linked spec for the full contract.
++Defined kinds are listed at <https://toolpath.net/kinds/>. The only kind defined
++so far is `agent-coding-session` — a path recording an AI coding conversation,
++where each conversational-turn step carries a `"conversation.append"`
++structural change with the turn's role, text, and so on. Its current URI is
++`https://toolpath.net/kinds/agent-coding-session/v1.1.0`, the only version
++producers write. `…/v1.0.0` is read-only legacy: still valid, still accepted by
++readers, not supported for writing, and carrying an erratum on token
++accounting that its page records. See the linked specs for the full contract.
+ 
+ #### Actor Definitions
+ 
+diff --git a/crates/toolpath/src/types.rs b/crates/toolpath/src/types.rs
+index 0c48036..fc3b15d 100644
+--- a/crates/toolpath/src/types.rs
++++ b/crates/toolpath/src/types.rs
+@@ -152,9 +152,15 @@ pub struct Base {
+ pub const PATH_KIND_AGENT_CODING_SESSION: &str =
+     "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
+ 
+-/// The previous version URI. Documents produced before the v1.1.0
+-/// accounting rule carry this kind; consumers summing their `token_usage`
+-/// per step must deduplicate repeated message-level usage themselves.
++/// The previous version URI: read-only legacy, not supported for writing.
++///
++/// Documents produced before the v1.1.0 accounting rule (2026-06-17) carry
++/// this kind. Readers accept it (the URI is immutable and such documents
++/// stay valid) and `path p validate` warns on it; no producer may emit it,
++/// which `crates/path-cli/tests/cross_harness_matrix.rs` asserts. Consumers
++/// summing a v1.0.0 path's `token_usage` per step must deduplicate repeated
++/// message-level usage themselves, per the erratum at
++/// <https://toolpath.net/kinds/agent-coding-session/v1.0.0>.
+ pub const PATH_KIND_AGENT_CODING_SESSION_V1_0_0: &str =
+     "https://toolpath.net/kinds/agent-coding-session/v1.0.0";
+ 
+diff --git a/site/kinds/agent-coding-session/index.md b/site/kinds/agent-coding-session/index.md
+index 5bf48e6..df9dd3a 100644
+--- a/site/kinds/agent-coding-session/index.md
++++ b/site/kinds/agent-coding-session/index.md
+@@ -13,4 +13,4 @@ Documents reference a specific version URI. They do not depend on this landing p
+ ## Versions
+ 
+ - [**v1.1.0**](/kinds/agent-coding-session/v1.1.0/): `https://toolpath.net/kinds/agent-coding-session/v1.1.0` _(current)_ — adds `group_id` and specifies message-level token accounting (a message's usage appears on exactly one step, so per-step sums equal session totals)
+-- [**v1.0.0**](/kinds/agent-coding-session/v1.0.0/): `https://toolpath.net/kinds/agent-coding-session/v1.0.0` — superseded; see its erratum on token accounting
++- [**v1.0.0**](/kinds/agent-coding-session/v1.0.0/): `https://toolpath.net/kinds/agent-coding-session/v1.0.0` — **read-only legacy**, superseded 2026-06-17. Not supported for writing: no producer emits it (every `toolpath-*` crate derives through `toolpath-convo`, which stamps v1.1.0, and a workspace test asserts it). Readers accept it; `path p validate` prints a warning naming its erratum on token accounting, and consumers summing `token_usage` over a v1.0.0 path must deduplicate as that erratum describes.
+diff --git a/site/kinds/agent-coding-session/v1.0.0/index.md b/site/kinds/agent-coding-session/v1.0.0/index.md
+index 89314a5..1b6a699 100644
+--- a/site/kinds/agent-coding-session/v1.0.0/index.md
++++ b/site/kinds/agent-coding-session/v1.0.0/index.md
+@@ -11,6 +11,8 @@ permalink: /kinds/agent-coding-session/v1.0.0/
+   <dd><code>https://toolpath.net/kinds/agent-coding-session/v1.0.0</code></dd>
+   <dt>Schema</dt>
+   <dd><a href="./schema.json"><code>schema.json</code></a></dd>
++  <dt>Status</dt>
++  <dd><strong>Read-only legacy.</strong> Superseded by <a href="/kinds/agent-coding-session/v1.1.0/">v1.1.0</a> on 2026-06-17. <strong>Not supported for writing:</strong> no toolpath producer emits this URI and new documents must not carry it. Readers accept it (the URI is immutable and these documents stay valid); <code>path p validate</code> prints a warning that points at the erratum below.</dd>
+ </dl>
+ 
+ A Toolpath path whose `meta.kind` is this URI records an AI coding conversation. It is an ordinary path with the extra structure described here. `head`-ancestry, dead ends, signatures, and `base` all behave as in the [base format](/format/).
+diff --git a/site/kinds/agent-coding-session/v1.1.0/index.md b/site/kinds/agent-coding-session/v1.1.0/index.md
+index f78e75f..eb6de3c 100644
+--- a/site/kinds/agent-coding-session/v1.1.0/index.md
++++ b/site/kinds/agent-coding-session/v1.1.0/index.md
+@@ -19,7 +19,7 @@ Every such path comes from one place: the shared `ConversationView → Path` der
+ 
+ Constraints apply by structural `type`, not by artifact key: a `change` entry is checked only when its `structural.type` is one named here, and extra properties never make a path invalid. [`schema.json`](./schema.json) encodes the rules; apply it alongside the base schema. The URI is immutable. Later revisions ship under a new version URI.
+ 
+-**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `group_id`, and group-level token accounting is now specified — see [Group accounting](#group-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule.
++**Changed from [v1.0.0](/kinds/agent-coding-session/v1.0.0/):** the turn payload gains an optional `group_id`, and group-level token accounting is now specified — see [Group accounting](#group-accounting). v1.1.0 documents are structurally valid v1.0.0 documents; the new version exists so consumers can rely on the accounting rule. v1.1.0 is the only version producers write; v1.0.0 is read-only legacy (readers accept it, `path p validate` warns, nothing emits it).
+ 
+ ## The turn payload
+ 
+diff --git a/site/kinds/index.md b/site/kinds/index.md
+index 91164e5..3d3442a 100644
+--- a/site/kinds/index.md
++++ b/site/kinds/index.md
+@@ -12,6 +12,9 @@ Kind URIs are immutable: revisions ship at a new version URI, and old URIs keep
+ 
+ ## Defined kinds
+ 
+-| Kind                                                   | Current URI                                              | Spec                                          |
+-| ------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------- |
+-| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.1.0` | [v1.1.0](/kinds/agent-coding-session/v1.1.0/) |
++| Kind                                                   | URI                                                      | Spec                                          | Status                                                                                          |
++| ------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
++| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.1.0` | [v1.1.0](/kinds/agent-coding-session/v1.1.0/) | **current** — the only version producers write                                                  |
++| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.0.0` | [v1.0.0](/kinds/agent-coding-session/v1.0.0/) | **read-only legacy** — superseded 2026-06-17; not supported for writing; `path p validate` warns |
++
++A superseded URI stays valid and keeps its meaning (that is the immutability rule above), so readers keep accepting it. "Not supported for writing" means no toolpath producer emits it and new documents must not carry it; the v1.0.0 page records the erratum that made the revision necessary.
+-- 
+2.55.0
+
+From 4a3d18c73343e1d392c73b72fef3bb2411fcd625 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:02:19 -0400
+Subject: [PATCH] path-cli: every producer writes kind v1.1.0 (test), and `p
+ validate` warns on a v1.0.0 document
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two tests in cross_harness_matrix.rs: `every_producer_writes_the_current_kind`
+derives each of the seven captured fixtures once through `derive_path` (the
+one place the kind is stamped, which every provider crate's wrapper calls)
+and asserts `meta.kind` is the current constant, which must end in v1.1.0;
+`no_source_spells_the_superseded_kind_outside_the_legacy_constant` scans
+every crate's `src/` for the v1.0.0 URI and allows it only in
+toolpath/src/types.rs, where the legacy constant lives. The one other
+spelling, a selector test in kinds.rs, now uses the constant.
+
+`path p validate` prints `warning: path <id> has kind <v1.0.0 URI> …` on
+stderr for each inline path carrying the legacy kind, naming the erratum and
+the current URI, and still exits 0 with `Valid:`. It warns rather than
+rejects because kind URIs are immutable and documents written against an
+old one stay valid by the format's own rule; the bundled v1.0.0 schema still
+validates them, and every document cached or uploaded before 2026-06-17
+carries that kind. Unit tests cover one warning per legacy path, none for
+the current kind or a kindless path, and that the legacy document still
+validates.
+---
+ crates/path-cli/src/cmd_validate.rs           | 92 ++++++++++++++++++-
+ crates/path-cli/src/kinds.rs                  |  4 +-
+ crates/path-cli/tests/cross_harness_matrix.rs | 89 +++++++++++++++++-
+ 3 files changed, 182 insertions(+), 3 deletions(-)
+
+diff --git a/crates/path-cli/src/cmd_validate.rs b/crates/path-cli/src/cmd_validate.rs
+index e024922..1840e00 100644
+--- a/crates/path-cli/src/cmd_validate.rs
++++ b/crates/path-cli/src/cmd_validate.rs
+@@ -1,6 +1,8 @@
+ use anyhow::{Context, Result};
+ use std::path::PathBuf;
+-use toolpath::v1::Graph;
++use toolpath::v1::{
++    Graph, PATH_KIND_AGENT_CODING_SESSION, PATH_KIND_AGENT_CODING_SESSION_V1_0_0, PathOrRef,
++};
+ 
+ use crate::io::{is_path_jsonl, read_document_auto};
+ use crate::schema;
+@@ -21,10 +23,43 @@ pub fn run(input: PathBuf) -> Result<()> {
+         schema::validate(&value).map_err(|e| anyhow::anyhow!("Invalid: {e}"))?;
+     }
+ 
++    for warning in legacy_kind_warnings(&doc) {
++        eprintln!("warning: {warning}");
++    }
+     println!("Valid: {}", describe(&doc));
+     Ok(())
+ }
+ 
++/// One line per path whose `meta.kind` is the superseded
++/// `agent-coding-session/v1.0.0`.
++///
++/// The document still validates: kind URIs are immutable and a document
++/// written against an old one stays valid, and the v1.0.0 schema is still
++/// bundled for it. But the version is read-only legacy — no producer writes
++/// it, and summing its per-step `token_usage` over-counts (the erratum on its
++/// page) — so a reader is told rather than left to find out from the totals.
++/// `$ref` entries are not followed; only inline paths are inspected.
++pub(crate) fn legacy_kind_warnings(doc: &Graph) -> Vec<String> {
++    doc.paths
++        .iter()
++        .filter_map(|entry| match entry {
++            PathOrRef::Path(path) => Some(path),
++            PathOrRef::Ref(_) => None,
++        })
++        .filter_map(|path| {
++            let kind = path.meta.as_ref()?.kind.as_deref()?;
++            (kind == PATH_KIND_AGENT_CODING_SESSION_V1_0_0).then(|| {
++                format!(
++                    "path {} has kind {kind}: a read-only legacy version, not supported for \
++                     writing; summing its per-step token_usage over-counts (see the erratum at \
++                     that URI). Current producers write {PATH_KIND_AGENT_CODING_SESSION}.",
++                    path.path.id
++                )
++            })
++        })
++        .collect()
++}
++
+ fn describe(doc: &Graph) -> String {
+     let path_count = doc.paths.len();
+     format!(
+@@ -106,4 +141,59 @@ mod tests {
+     fn run_nonexistent_file() {
+         assert!(run(PathBuf::from("/nonexistent/file.json")).is_err());
+     }
++
++    fn graph_with_kind(kind: Option<&str>) -> String {
++        let meta = match kind {
++            Some(k) => format!(r#","meta":{{"kind":"{k}"}}"#),
++            None => String::new(),
++        };
++        format!(
++            r#"{{"graph":{{"id":"g1"}},"paths":[{{"path":{{"id":"p-legacy","head":"s1"}}{meta},"steps":[{{"step":{{"id":"s1","actor":"human:alex","timestamp":"2026-01-01T00:00:00Z"}},"change":{{"src/main.rs":{{"raw":"@@ -1 +1 @@\n-a\n+b"}}}}}}]}}]}}"#
++        )
++    }
++
++    /// A v1.0.0 document is still valid (the URI is immutable), but the
++    /// reader is warned once per legacy path, by path id, naming the current
++    /// kind to write instead.
++    #[test]
++    fn legacy_kind_warns_once_per_path_and_still_validates() {
++        let json = graph_with_kind(Some(PATH_KIND_AGENT_CODING_SESSION_V1_0_0));
++        let doc: Graph = serde_json::from_str(&json).unwrap();
++        let warnings = legacy_kind_warnings(&doc);
++        assert_eq!(
++            warnings.len(),
++            1,
++            "one warning per legacy path: {warnings:?}"
++        );
++        assert!(
++            warnings[0].contains("p-legacy"),
++            "names the path: {}",
++            warnings[0]
++        );
++        assert!(
++            warnings[0].contains(PATH_KIND_AGENT_CODING_SESSION_V1_0_0),
++            "names the legacy kind: {}",
++            warnings[0]
++        );
++        assert!(
++            warnings[0].contains(PATH_KIND_AGENT_CODING_SESSION),
++            "names the current kind: {}",
++            warnings[0]
++        );
++
++        let f = write_temp(&json, ".json");
++        run(f.path().to_path_buf())
++            .expect("a v1.0.0 document validates; it is warned about, not rejected");
++    }
++
++    #[test]
++    fn current_kind_and_kindless_paths_draw_no_warning() {
++        for kind in [Some(PATH_KIND_AGENT_CODING_SESSION), None] {
++            let doc: Graph = serde_json::from_str(&graph_with_kind(kind)).unwrap();
++            assert!(
++                legacy_kind_warnings(&doc).is_empty(),
++                "no warning for kind {kind:?}"
++            );
++        }
++    }
+ }
+diff --git a/crates/path-cli/src/kinds.rs b/crates/path-cli/src/kinds.rs
+index d2c97c6..96c68b3 100644
+--- a/crates/path-cli/src/kinds.rs
++++ b/crates/path-cli/src/kinds.rs
+@@ -297,7 +297,9 @@ mod tests {
+ 
+     #[test]
+     fn full_uri_selector_matches_exactly() {
+-        let sel = parse_kind_selector("https://toolpath.net/kinds/agent-coding-session/v1.0.0");
++        // A full URI pins one version; the legacy constant is the one URI a
++        // reader still has reason to select exactly.
++        let sel = parse_kind_selector(toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0);
+         assert!(sel.matches("agent-coding-session", v(1, 0, 0)));
+         assert!(!sel.matches("agent-coding-session", v(1, 1, 0)));
+     }
+diff --git a/crates/path-cli/tests/cross_harness_matrix.rs b/crates/path-cli/tests/cross_harness_matrix.rs
+index 340ad17..94b02a7 100644
+--- a/crates/path-cli/tests/cross_harness_matrix.rs
++++ b/crates/path-cli/tests/cross_harness_matrix.rs
+@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
+ use std::path::{Path, PathBuf};
+ 
+ use serde_json::Value;
+-use toolpath::v1::Graph;
++use toolpath::v1::{Graph, PATH_KIND_AGENT_CODING_SESSION, PATH_KIND_AGENT_CODING_SESSION_V1_0_0};
+ use toolpath_convo::{
+     ConversationProjector, ConversationView, DeriveConfig, Role, Turn, derive_path,
+     extract_conversation,
+@@ -1105,6 +1105,93 @@ fn matrix_translation() {
+     run_matrix("matrix (real fixtures)", &sources);
+ }
+ 
++/// Every producer writes the current kind URI. One derivation per captured
++/// fixture, through `derive_path` — the one place the kind is stamped; every
++/// provider crate's own `derive_path` wrapper calls it — so a producer that
++/// stopped reaching it, or a constant that drifted, fails here by name.
++#[test]
++fn every_producer_writes_the_current_kind() {
++    assert!(
++        PATH_KIND_AGENT_CODING_SESSION.ends_with("/v1.1.0"),
++        "the current kind constant is {PATH_KIND_AGENT_CODING_SESSION}; v1.1.0 is the only version producers write"
++    );
++    for h in all_harnesses() {
++        let view = h.load_fixture().unwrap_or_else(|| {
++            panic!(
++                "{} fixture missing — run scripts/capture-elicit-fixtures.sh {}",
++                h.name(),
++                h.name()
++            )
++        });
++        let path = derive_path(&view, &DeriveConfig::default());
++        let kind = path.meta.as_ref().and_then(|m| m.kind.as_deref());
++        assert_eq!(
++            kind,
++            Some(PATH_KIND_AGENT_CODING_SESSION),
++            "{} fixture derived with kind {kind:?}",
++            h.name()
++        );
++    }
++}
++
++/// The superseded v1.0.0 URI is read-only legacy: it may be spelled where the
++/// legacy constant is defined and nowhere else under any crate's `src/`, so no
++/// producer, projector or default can grow its own copy of it.
++#[test]
++fn no_source_spells_the_superseded_kind_outside_the_legacy_constant() {
++    let crates_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
++        .join("..")
++        .canonicalize()
++        .expect("crates dir");
++    let mut sources = Vec::new();
++    for crate_dir in std::fs::read_dir(&crates_dir)
++        .expect("list crates")
++        .flatten()
++    {
++        let src = crate_dir.path().join("src");
++        if src.is_dir() {
++            collect_rust_sources(&src, &mut sources);
++        }
++    }
++    assert!(
++        !sources.is_empty(),
++        "no Rust sources found under {}",
++        crates_dir.display()
++    );
++
++    let allowed = crates_dir.join("toolpath/src/types.rs");
++    let offenders: Vec<String> = sources
++        .iter()
++        .filter(|file| **file != allowed)
++        .filter(|file| {
++            std::fs::read_to_string(file)
++                .map(|text| text.contains(PATH_KIND_AGENT_CODING_SESSION_V1_0_0))
++                .unwrap_or(false)
++        })
++        .map(|file| {
++            file.strip_prefix(&crates_dir)
++                .unwrap_or(file)
++                .display()
++                .to_string()
++        })
++        .collect();
++    assert!(
++        offenders.is_empty(),
++        "{PATH_KIND_AGENT_CODING_SESSION_V1_0_0} is spelled outside the legacy constant: {offenders:?}"
++    );
++}
++
++fn collect_rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
++    for entry in std::fs::read_dir(dir).expect("read src dir").flatten() {
++        let path = entry.path();
++        if path.is_dir() {
++            collect_rust_sources(&path, out);
++        } else if path.extension().is_some_and(|e| e == "rs") {
++            out.push(path);
++        }
++    }
++}
++
+ #[test]
+ fn matrix_schema_validation() {
+     // For each harness, project its real fixture, serialize the native
+-- 
+2.55.0
+
+From fd7161cfa10711ab2e39f3ce88b36b25f69c9eb3 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 22:33:57 -0400
+Subject: [PATCH] docs(site): kinds/index.md formatted the way the prettier
+ gate wants it
+
+---
+ site/kinds/index.md | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/site/kinds/index.md b/site/kinds/index.md
+index 3d3442ab..544b1be2 100644
+--- a/site/kinds/index.md
++++ b/site/kinds/index.md
+@@ -12,9 +12,9 @@ Kind URIs are immutable: revisions ship at a new version URI, and old URIs keep
+ 
+ ## Defined kinds
+ 
+-| Kind                                                   | URI                                                      | Spec                                          | Status                                                                                          |
+-| ------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+-| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.1.0` | [v1.1.0](/kinds/agent-coding-session/v1.1.0/) | **current** — the only version producers write                                                  |
++| Kind                                                   | URI                                                      | Spec                                          | Status                                                                                           |
++| ------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
++| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.1.0` | [v1.1.0](/kinds/agent-coding-session/v1.1.0/) | **current** — the only version producers write                                                   |
+ | [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.0.0` | [v1.0.0](/kinds/agent-coding-session/v1.0.0/) | **read-only legacy** — superseded 2026-06-17; not supported for writing; `path p validate` warns |
+ 
+ A superseded URI stays valid and keeps its meaning (that is the immutability rule above), so readers keep accepting it. "Not supported for writing" means no toolpath producer emits it and new documents must not carry it; the v1.0.0 page records the erratum that made the revision necessary.
+-- 
+2.55.0
+

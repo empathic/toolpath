@@ -1,0 +1,214 @@
+# The secret gate's rules and allowlist. Read by two things, so a pattern lives here once:
+#
+#   crates/toolpath-webmock/tests/no_secrets.rs   cargo test over the committed fixture surfaces;
+#                                                 the gate that always runs (CI on main has no
+#                                                 flake and no gitleaks)
+#   scripts/quality_gates.sh  (gate `secrets`)     `gitleaks dir` over the whole tree, when the
+#                                                 binary is on PATH (the wip flake's dev shell)
+#
+# The Rust test understands the subset used here: `[[rules]]` with `id`, `regex` and optional
+# `path`; `[[allowlists]]` and `[[rules.allowlists]]` with `regexes`, `paths`, `regexTarget`
+# (`match` or `line`; the default, `secret`, is the match for rules without a capture group) and
+# `condition` (`OR`, the default, or `AND`). Regexes are RE2 in both engines: no lookaround.
+#
+# Why these entries, in one line each, so the next false positive is added with its reason.
+
+title = "toolpath secret gate"
+
+[extend]
+# gitleaks' own rules (sk-ant-, AKIA, private keys, generic-api-key, …) stay on; the rules below
+# are the ones the Rust test runs and the ones gitleaks would miss or scope differently.
+useDefault = true
+
+# ── Credentials ──────────────────────────────────────────────────────────────
+
+[[rules]]
+id = "anthropic-key"
+description = "Anthropic API key or OAuth token"
+regex = '''sk-ant-[A-Za-z0-9_-]{8,}'''
+keywords = ["sk-ant-"]
+
+[[rules.allowlists]]
+description = "crates/path-cli/src/goldens.rs unit tests feed normalize_credential a three-letter placeholder"
+regexTarget = "match"
+regexes = ['''^sk-ant-(?:oat01|api03)-abc$''']
+
+[[rules]]
+id = "google-api-key"
+description = "Google API key (AIza…, 39 chars) — the Gemini key that reached two scratch cassettes had this shape"
+regex = '''AIza[0-9A-Za-z_-]{35}'''
+keywords = ["aiza"]
+
+[[rules]]
+id = "google-api-key-aq"
+description = "Google API key, newer shape (AQ. + 50 or more url-safe chars)"
+regex = '''\bAQ\.[A-Za-z0-9_-]{50,}'''
+keywords = ["aq."]
+
+[[rules]]
+id = "github-token"
+description = "GitHub token (gh[pousr]_…) or fine-grained PAT (github_pat_…)"
+regex = '''\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})'''
+keywords = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"]
+
+[[rules]]
+id = "openai-key"
+description = "OpenAI API key (sk- + 20 or more chars; sk-ant- is the Anthropic rule)"
+regex = '''\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9]{20,}[A-Za-z0-9_-]*'''
+keywords = ["sk-"]
+
+[[rules]]
+id = "slack-token"
+description = "Slack token"
+regex = '''xox[baprs]-[A-Za-z0-9-]{10,}'''
+keywords = ["xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-"]
+
+[[rules]]
+id = "aws-access-key-id"
+description = "AWS access key id"
+regex = '''\b(?:AKIA|ASIA)[0-9A-Z]{16}\b'''
+keywords = ["akia", "asia"]
+
+[[rules]]
+id = "private-key-block"
+description = "PEM private key block"
+regex = '''-----BEGIN (?:[A-Z]+ )?PRIVATE KEY(?: BLOCK)?-----'''
+keywords = ["private key"]
+
+[[rules]]
+id = "jwt"
+description = "JSON web token: three base64url segments, the first two starting with eyJ"
+regex = '''\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}'''
+keywords = ["eyj"]
+
+[[rules]]
+id = "bearer-token"
+description = "Bearer token of 30 or more chars (a placeholder like <redacted> or $TOKEN never matches)"
+regex = '''Bearer [A-Za-z0-9._~+/=-]{30,}'''
+keywords = ["bearer "]
+
+[[rules]]
+id = "credential-header-not-redacted"
+description = "A credential header in a cassette whose value is not the <redacted> placeholder (eight or more chars, not a semver range: package.json also has a \"cookie\")"
+regex = '''"(?i:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-goog-api-key|api-key|x-github-token)"\s*:\s*"[^<"^~0-9][^"]{7,}"'''
+keywords = ["authorization", "cookie", "x-api-key", "x-goog-api-key", "api-key", "x-github-token"]
+
+# ── Machine identity ─────────────────────────────────────────────────────────
+#
+# A fixture that names the recording machine ties a public artifact to a person and breaks the
+# strict request key (the webmock cassettes replaced the temp HOME by `<scratch>` for this reason).
+
+[[rules]]
+id = "machine-identity-claude-tmp"
+description = "Claude Code's per-user temp root on the recording machine"
+regex = '''/private/tmp/claude-501'''
+keywords = ["claude-501"]
+
+[[rules]]
+id = "machine-identity-encoded-home"
+description = "Claude Code's encoded project directory for the recording machine's home"
+regex = '''-Users-bobby-'''
+keywords = ["-users-bobby-"]
+
+[[rules]]
+id = "machine-identity-user-at"
+description = "The recording machine's user as a login or address"
+regex = '''\bbobby@'''
+keywords = ["bobby@"]
+
+[[rules.allowlists]]
+description = "crates/path-cli/src/goldens.rs: the email-detection unit test uses the address as the one that must be refused"
+regexTarget = "line"
+regexes = ['''emails\(".*bobby@empathic\.dev"\)''']
+
+[[rules]]
+id = "machine-identity-user-home"
+description = "A macOS home directory under /Users (scoped to the fixture surfaces; docs say /Users/you)"
+regex = '''/Users/[A-Za-z0-9_.-]+'''
+path = '''^(?:crates/toolpath-webmock/cassettes|crates/toolpath-goldens/snapshots|goldens|goldens-baseline|test-fixtures|crates/[^/]+/tests/fixtures)/'''
+keywords = ["/users/"]
+
+[[rules.allowlists]]
+description = "Home directories the committed inputs were recorded under, pinned by their sha256 in goldens/manifest.json and the insta snapshot headers; scrubbing them re-pins every set"
+regexTarget = "match"
+regexes = [
+  # The codex, cursor and gemini sessions in goldens/ and test-fixtures/ were recorded on Ben's
+  # machine; every snapshot and projection of them carries the cwd.
+  '''^/Users/ben$''',
+  # crates/toolpath-pi/tests/fixtures/basic_session.jsonl: an authored fixture, not a capture.
+  '''^/Users/alex$''',
+  # opencode's system prompt quotes `mkdir "/Users/name/My Documents"` as a shell-quoting example.
+  '''^/Users/name$''',
+]
+
+# ── Allowlist: documented false positives of gitleaks' default rules ─────────
+
+[[allowlists]]
+description = "Opaque identifiers in the committed fixtures that gitleaks' generic-api-key rule reads as keys"
+regexTarget = "match"
+regexes = [
+  # webmock cassettes: `key` and `loose_key` are the sha256 request keys (see crates/toolpath-webmock).
+  '''(?:loose_)?key\\?"\s*:\s*\\?"[0-9a-f]{64}''',
+  # copilot goldens: `apiCallId` is the Bedrock message id of the model call, not a credential.
+  '''apiCallId\\?"\s*:\s*\\?"msg_bdrk_[A-Za-z0-9]+''',
+  # codex cassettes: the ChatGPT plugin-list pagination cursor is base64 of
+  # {"scope":"GLOBAL","workspace_id":null,"creator_account_user_id":null,…}; no account in it.
+  '''(?:pageToken=|next_page_token\\?"\s*:\s*\\?")eyJzY29wZSI6IkdMT0JBTCI''',
+  # cassette provenance.json: `openapi_sha256` (and its per-version `_v1`, `_v2`, …) is the sha256 of
+  # the server's emitted OpenAPI spec.
+  '''openapi_sha256(?:_v[0-9]+)?\\?"\s*:\s*\\?"[0-9a-f]{64}''',
+  # pi cassette: `prompt_cache_key` is the session id.
+  '''prompt_cache_key\\?"\s*:\s*\\?"[0-9a-f-]{36}''',
+  # opencode session ids (`ses_` + 26 chars) are minted identifiers, not secrets.
+  '''\bses_[A-Za-z0-9]{26}\b''',
+  # test-fixtures/cursor/convo.json: Cursor's per-composer local-store keys
+  # (blobEncryptionKey, speculativeSummarizationEncryptionKey), on main since the fixture landed.
+  # They encrypt that one dead session's cached blobs. Documented, not scrubbed: the input sha is
+  # pinned in every cursor insta snapshot header. CONCERN: scrub and re-pin in a follow-up.
+  '''(?:blobEncryptionKey|speculativeSummarizationEncryptionKey)\\?"\s*:\s*\\?"[A-Za-z0-9+/=]{44}''',
+]
+
+[[allowlists]]
+description = "crates/toolpath-webmock/src/run.rs: replay mode hands the agent a made-up credential so it starts; the server never checks it"
+condition = "AND"
+paths = ['''^crates/toolpath-webmock/src/run\.rs$''']
+regexTarget = "match"
+regexes = [
+  # CLAUDE_CODE_OAUTH_TOKEN placeholder (pr/53)
+  '''^sk-ant-oat01-webmock-replay-no-such-token$''',
+  # COPILOT_GITHUB_TOKEN placeholder (pr/53)
+  '''^gho_webmockreplaynosuchtoken$''',
+]
+
+[[allowlists]]
+# pr/patches/*.patch are mbox exports of commits that each passed this gate on their own tree (wip
+# flattened 2026-10-21). Inside them the same placeholders and rule definitions sit at a different path,
+# so they are allowed here only by the exact lines already allowed at their source; anything else in a
+# patch still fails.
+description = "pr/patches: placeholders and rule definitions already allowed at their source paths"
+condition = "AND"
+paths = ['''^pr/patches/[^/]+\.patch$''']
+regexTarget = "line"
+regexes = [
+  '''sk-ant-oat01-webmock-replay-no-such-token''',
+  '''gho_webmockreplaynosuchtoken''',
+  '''claude-haiku-4-5-20251001''',
+  # rule definitions copied from this file's own history (the pre-push hook scans diff lines, so no anchor)
+  '''regex = \x27\x27\x27''',
+  '''regexes = \[\x27\x27\x27emails''',
+  '''keywords = \[''',
+  '''\(/Users/<name>, the Claude temp root, the encoded home, bobby@\)''',
+  '''carries '/Users/bobby' in old design docs''',
+  '''git grep -l -e 'bobby@empathic\.dev' -e '/Users/bobby' ''',
+]
+
+[[allowlists]]
+description = "Not sources: build output, installed packages, lockfiles"
+paths = [
+  '''^target/''',
+  '''(^|/)(?:Cargo\.lock|bun\.lock|package-lock\.json|pnpm-lock\.yaml|flake\.lock)$''',
+  '''^site/node_modules/''',
+  '''^site/_site/''',
+  '''^crates/toolpath-cli/target/''',
+  '''(^|/)\.git/''',
+]

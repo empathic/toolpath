@@ -1,0 +1,107 @@
+From 16f20cbbfdd8790009d4a345ae072b59e58a3390 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:51:13 -0400
+Subject: [PATCH] chore(pr): era-restore.sh derives the machine identity
+ instead of carrying it; pr/39
+
+The secrets gate failed on wip with three findings in pr/era-restore.sh (b5aa80e): the default S
+was a dead session's scratchpad path, and the scrub check spelled out the address and home it
+asserts are gone. S is now required, and the scrub needles come from the login (SCRUB_USER
+overrides it), matched as fixed strings. No allowlist entry.
+---
+ pr/39-era-restore-no-machine-identity.md | 38 ++++++++++++++++++++++++
+ pr/README.md                             |  3 +-
+ pr/era-restore.sh                        |  9 ++++--
+ 3 files changed, 46 insertions(+), 4 deletions(-)
+ create mode 100644 pr/39-era-restore-no-machine-identity.md
+
+diff --git a/pr/39-era-restore-no-machine-identity.md b/pr/39-era-restore-no-machine-identity.md
+new file mode 100644
+index 00000000..4f46feb2
+--- /dev/null
++++ b/pr/39-era-restore-no-machine-identity.md
+@@ -0,0 +1,38 @@
++# chore(pr): era-restore.sh derives the machine identity instead of carrying it
++
++Status: planned (2026-10-19: the secrets gate fails on wip) · Base: wip/bdelanghe · Scripts and docs under `pr/` only;
++independent of every other piece
++
++## Why
++The secrets gate (`scripts/quality_gates.sh secrets`, gitleaks with `.gitleaks.toml`) reported 3 findings, all in
++`pr/era-restore.sh` from b5aa80e:
++- line 21, `machine-identity-claude-tmp` and `machine-identity-encoded-home`: the default for `S` was the absolute
++  scratchpad path of the Claude Code session that wrote the script (Claude Code's per-user temp root, the encoded
++  project directory naming the home, then the session id).
++  That directory belonged to one dead session, so the default was wrong anywhere else.
++- line 88, `machine-identity-user-at`: the scrub check greps each piece for the recording machine's email address
++  and home directory so it can fail if they come back. Because the strings were written out literally, the script
++  that checks for the scrubbed strings contained them itself.
++
++None of these is a false positive (each names the machine and its user), so they are removed rather than allowlisted.
++
++## What changes
++- `pr/era-restore.sh`: `S=${S:?…}`, so the caller must set it (no default path); `SCRUB_USER=${SCRUB_USER:-$(id -un)}`,
++  and the scrub check greps for `"$SCRUB_USER@empathic.dev"` and `"/Users/$SCRUB_USER"` with `git grep -F` (fixed
++  strings; before, the `.` in the address matched any character). On the recording machine the needles are the same
++  as before. A comment that named the home directory now describes it without naming it.
++- `pr/README.md` (Repair tools): says `era-restore.sh` requires `S` and derives the scrubbed strings, and that
++  `gate-piece.sh` takes its paths as arguments.
++- `.gitleaks.toml`: unchanged (no allowlist entry).
++
++## Verification
++- `gitleaks dir . --config .gitleaks.toml --no-banner --redact` (8.30.1) from the repo root: 3 findings before,
++  `no leaks found` after.
++- `shellcheck pr/era-restore.sh` (0.11.0): clean.
++
++## Paths
++```
++pr/era-restore.sh
++pr/README.md
++pr/39-era-restore-no-machine-identity.md
++```
+diff --git a/pr/README.md b/pr/README.md
+index d4b0472b..a89b836f 100644
+--- a/pr/README.md
++++ b/pr/README.md
+@@ -167,7 +167,8 @@ The rules, from now on:
+ - `pr/gate-piece.sh <jj clone> <worktree> <pr/NN> <log dir>`: one piece on its own tree — metadata, fmt,
+   clippy `-D warnings`, `cargo test --workspace`, doc `-D warnings` — the gates `scripts/quality_gates.sh`
+   runs in CI. `cut.sh` runs the same per piece.
+-Both default their paths to the scratchpad they were written in; set `S` to run them elsewhere.
++`era-restore.sh` requires `S` (the scratch directory holding `rewrite/`) and derives the scrubbed
++strings from the login (`SCRUB_USER` overrides it); `gate-piece.sh` takes its paths as arguments.
+ 
+ ## Opening the PRs: `pr/open.sh`
+ 
+diff --git a/pr/era-restore.sh b/pr/era-restore.sh
+index 088c4bce..035b0ba1 100755
+--- a/pr/era-restore.sh
++++ b/pr/era-restore.sh
+@@ -18,7 +18,10 @@
+ # Inputs: owners.tsv (piece \t status \t path, from the current cut), the era map below.
+ # Rollback: `jj op restore <id>` with the id printed first.
+ set -euo pipefail
+-S=${S:-<scratchpad: machine path redacted>}
++S=${S:?set S to the scratch directory that holds rewrite/ (jj-tp, tp, owners.tsv)}
++# The scrubbed strings are the recording machine's address and home, derived here so the script
++# that asserts they are gone does not itself carry them (SCRUB_USER overrides the login).
++SCRUB_USER=${SCRUB_USER:-$(id -un)}
+ export PATH=$HOME/.rustup/toolchains/1.94.1-aarch64-apple-darwin/bin:$PATH
+ export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$S/rewrite/tp/target}
+ cd "$S/rewrite/jj-tp"
+@@ -82,10 +85,10 @@ for P in "${order[@]}"; do
+     echo "$P: $(jj diff -r "$P" --summary | wc -l | tr -d ' ') files in piece"
+   fi
+   c=$(jj log -r "$P" --no-graph -T commit_id)
+-  # only the files this piece changes against main: main itself carries '/Users/bobby' in old design docs
++  # only the files this piece changes against main: main itself carries the scrubbed home in old design docs
+   changed=$(jj diff -r "$P" --name-only | grep -v '^pr/' || true)
+   leaks=""
+-  [ -n "$changed" ] && leaks=$(printf '%s\n' "$changed" | xargs git grep -l -e 'bobby@empathic.dev' -e '/Users/bobby' "$c" -- 2>/dev/null | sed "s/^$c://" || true)
++  [ -n "$changed" ] && leaks=$(printf '%s\n' "$changed" | xargs git grep -l -F -e "$SCRUB_USER@empathic.dev" -e "/Users/$SCRUB_USER" "$c" -- 2>/dev/null | sed "s/^$c://" || true)
+   [ -z "$leaks" ] || { echo "$P: scrubbed strings reappeared in: $leaks"; exit 1; }
+ done
+ # The rustdoc fix made on wip (wip-stack-repair: #![allow(rustdoc::invalid_html_tags)] in
+-- 
+2.55.0
+

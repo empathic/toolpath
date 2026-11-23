@@ -1,0 +1,48 @@
+{
+ "agent": "copilot",
+ "recorded_at": "2026-10-15T19:38:50.486Z",
+ "key": "40b852ca5115752fac2a1bfc4a5e5230a4efa5e40c1ba973d875d5f4f336e641",
+ "loose_key": "9527803b5940a54cc4ead9790ea732e187fa5b7c9074fcc85bc3c3db86845600",
+ "model": "",
+ "request": {
+  "method": "DELETE",
+  "url": "/mcp/readonly",
+  "upstream": "https://api.githubcopilot.com",
+  "headers": {
+   "accept": "*/*",
+   "authorization": "<redacted>",
+   "mcp-protocol-version": "2025-11-25",
+   "mcp-session-id": "c195c503-97aa-4761-9ad1-2d9a0e446a15",
+   "user-agent": "copilot/1.0.61 (darwin v24.19.0) term/unknown",
+   "x-mcp-host": "copilot-cli",
+   "x-mcp-tools": "get_file_contents,search_code,get_copilot_space,list_copilot_spaces,web_search,search_users"
+  },
+  "body": "",
+  "body_encoding": "identity",
+  "normalized": ""
+ },
+ "response": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "Content-Type, Mcp-Session-Id, Mcp-Protocol-Version, Mcp-Method, Mcp-Name, Last-Event-ID, Authorization, X-MCP-Readonly, X-MCP-Toolsets, X-MCP-Tools, X-MCP-Exclude-Tools, X-MCP-Features, X-MCP-Lockdown, X-MCP-Insiders, Mcp-Param-owner, Mcp-Param-repo",
+   "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "Mcp-Session-Id, WWW-Authenticate",
+   "access-control-max-age": "86400",
+   "content-security-policy": "default-src 'none'; sandbox",
+   "date": "Thu, 15 Oct 2026 19:38:50 GMT",
+   "server": "github.com",
+   "strict-transport-security": "max-age=31536000",
+   "vary": "X-MCP-Features",
+   "x-copilot-service-request-id": "e409d4b0-3977-46e2-962b-517271d280d5",
+   "x-github-backend": "Kubernetes",
+   "x-github-edge-region": "iad",
+   "x-github-request-id": "D57F:2EE8DF:2DC6B3C:2FFF800:6AD12BCA"
+  },
+  "chunks": [],
+  "bytes": 0,
+  "duration_ms": 55,
+  "sse": false,
+  "text_preview": ""
+ }
+}

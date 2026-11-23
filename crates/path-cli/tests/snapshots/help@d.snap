@@ -1,0 +1,570 @@
+---
+source: crates/path-cli/tests/cli_surface.rs
+expression: body
+---
+===== path d
+Develop: goldens, record/replay and other tools for working on toolpath itself (built only with the `develop` feature)
+
+Usage: path d [OPTIONS] <COMMAND>
+
+Commands:
+  baseline  Capture, check and diff the baseline: every recording's snapshots, stage by stage
+  webmock   The record/replay server: `run <agent> record|replay …` or `serve` (its own options: `path d webmock -- --help`)
+  agents    The agent CLIs tests and replay run: fetched only as agents.lock names them, hash-verified, cached by hash, never on PATH
+  model     Regenerate the goldens object model, docs/model/model.json (its own options: `path d model -- --help`)
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d agents
+The agent CLIs tests and replay run: fetched only as agents.lock names them, hash-verified, cached by hash, never on PATH
+
+Usage: path d agents [OPTIONS] <COMMAND>
+
+Commands:
+  list   List what the lock names and whether each entry is cached
+  fetch  Download one agent's blob from the url in the lock, verify its sha256, keep it in the cache
+  path   Print the cache path of an already fetched agent (fails if it is not cached and valid)
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --lock <LOCK>
+          The lock file
+          
+          [default: agents.lock]
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d agents fetch
+Download one agent's blob from the url in the lock, verify its sha256, keep it in the cache
+
+Usage: path d agents fetch [OPTIONS] <AGENT>
+
+Arguments:
+  <AGENT>
+          
+
+Options:
+      --lock <LOCK>
+          The lock file
+          
+          [default: agents.lock]
+
+      --target <TARGET>
+          Rust-style target (default: this machine)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d agents list
+List what the lock names and whether each entry is cached
+
+Usage: path d agents list [OPTIONS]
+
+Options:
+      --lock <LOCK>
+          The lock file
+          
+          [default: agents.lock]
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d agents path
+Print the cache path of an already fetched agent (fails if it is not cached and valid)
+
+Usage: path d agents path [OPTIONS] <AGENT>
+
+Arguments:
+  <AGENT>
+          
+
+Options:
+      --lock <LOCK>
+          The lock file
+          
+          [default: agents.lock]
+
+      --target <TARGET>
+          
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline
+Capture, check and diff the baseline: every recording's snapshots, stage by stage
+
+Usage: path d baseline [OPTIONS] <COMMAND>
+
+Commands:
+  list            List the golden sets in the manifest
+  roundtrip       Round trips IR -> adapter -> IR for every set and adapter: key paths lost and gained, text and tool-use survival (check pins today's losses and gains; a new one of either fails)
+  shed            What information is shed when a transcript becomes a Toolpath document and is projected out: per stage events and bytes in/out, key paths lost, renames, dropped fields with one example
+  init            Capture the standard sets from the repo's own fixtures
+  capture         Capture a golden set from a fixture, hermetically, to every target; with --all re-capture every set in the manifest
+  check           Check the whole baseline: runs the tests that are the check (`cargo test -p toolpath-goldens`, then `cargo test -p path-cli --features develop --test goldens`), so this and `cargo test` cannot disagree; exit 1 on any failure. With a set name or a flag below, re-runs the manifest goldens in-process only (the same `Goldens::check` the path-cli test calls)
+  diff            Show how a fresh run differs from a set's goldens
+  capture-live    Capture one REAL headless session of an installed agent hermetically (credentials copied or forwarded into a temp HOME only), leak-check it, then capture it as a golden set
+  capture-claude  Alias for `capture-live claude`
+  provenance      Print the provenance of an installed agent binary: code signature and upstream match (needs network for the upstream check; no credentials)
+  help            Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline capture
+Capture a golden set from a fixture, hermetically, to every target; with --all re-capture every set in the manifest
+
+Usage: path d baseline capture [OPTIONS] [HARNESS] [FIXTURE]
+
+Arguments:
+  [HARNESS]
+          Source harness
+          
+          [possible values: codex, claude, copilot, pi]
+
+  [FIXTURE]
+          Fixture file (a session log in the harness's own format)
+
+Options:
+      --name <NAME>
+          Name of the golden set (default: the harness name)
+
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --project <PROJECT>
+          Project directory to place the session under (claude, pi; default: the fixture's cwd)
+
+      --all
+          Re-capture every set already in the manifest
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline capture-claude
+Alias for `capture-live claude`
+
+Usage: path d baseline capture-claude [OPTIONS]
+
+Options:
+      --bin <BIN>
+          Path to the agent executable (default: $<AGENT>_BIN, then PATH, then ~/.local/bin/<agent>)
+
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --name <NAME>
+          Golden set name (default: <agent>-session)
+
+      --model <MODEL>
+          Model to run (claude defaults to claude-haiku-4-5-20251001; others use their own default)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline capture-live
+Capture one REAL headless session of an installed agent hermetically (credentials copied or forwarded into a temp HOME only), leak-check it, then capture it as a golden set
+
+Usage: path d baseline capture-live [OPTIONS] <HARNESS>
+
+Arguments:
+  <HARNESS>
+          Possible values:
+          - claude
+          - codex
+          - pi
+          - copilot
+          - cursor:   Not supported: cursor-agent keeps its transcript in a protobuf store the adapter does not parse
+          - opencode: Not supported: opencode keeps its transcript in SQLite; a golden input must be a single file
+
+Options:
+      --bin <BIN>
+          Path to the agent executable (default: $<AGENT>_BIN, then PATH, then ~/.local/bin/<agent>)
+
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --name <NAME>
+          Golden set name (default: <agent>-session)
+
+      --model <MODEL>
+          Model to run (claude defaults to claude-haiku-4-5-20251001; others use their own default)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline check
+Check the whole baseline: runs the tests that are the check (`cargo test -p toolpath-goldens`, then `cargo test -p path-cli --features develop --test goldens`), so this and `cargo test` cannot disagree; exit 1 on any failure. With a set name or a flag below, re-runs the manifest goldens in-process only (the same `Goldens::check` the path-cli test calls)
+
+Usage: path d baseline check [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]
+          Check only this set, in-process (default: the whole baseline through `cargo test`)
+
+Options:
+      --allow-producer-drift
+          Report a moved producer (the running `path` binary, or repo code differing from the pin) as a warning row instead of a problem
+
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --no-qualifier
+          Skip `qualifier review` on purpose. Without this flag a missing `qualifier` binary ($TOOLPATH_GOLDENS_QUALIFIER, else `qualifier` on PATH) is a failure, not a skip
+
+      --in-process
+          Run the manifest goldens in-process instead of through `cargo test`
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline diff
+Show how a fresh run differs from a set's goldens
+
+Usage: path d baseline diff [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          
+
+Options:
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline init
+Capture the standard sets from the repo's own fixtures
+
+Usage: path d baseline init [OPTIONS]
+
+Options:
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline list
+List the golden sets in the manifest
+
+Usage: path d baseline list [OPTIONS]
+
+Options:
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline provenance
+Print the provenance of an installed agent binary: code signature and upstream match (needs network for the upstream check; no credentials)
+
+Usage: path d baseline provenance [OPTIONS] <HARNESS>
+
+Arguments:
+  <HARNESS>
+          Possible values:
+          - claude
+          - codex
+          - pi
+          - copilot
+          - cursor:   Not supported: cursor-agent keeps its transcript in a protobuf store the adapter does not parse
+          - opencode: Not supported: opencode keeps its transcript in SQLite; a golden input must be a single file
+
+Options:
+      --bin <BIN>
+          Path to the agent executable (default: $<AGENT>_BIN, then PATH, then ~/.local/bin/<agent>)
+
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline roundtrip
+Round trips IR -> adapter -> IR for every set and adapter: key paths lost and gained, text and tool-use survival (check pins today's losses and gains; a new one of either fails)
+
+Usage: path d baseline roundtrip [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]
+          Only this set (default: all)
+
+Options:
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d baseline shed
+What information is shed when a transcript becomes a Toolpath document and is projected out: per stage events and bytes in/out, key paths lost, renames, dropped fields with one example
+
+Usage: path d baseline shed [OPTIONS] [NAME]
+
+Arguments:
+  [NAME]
+          Only this set (default: all)
+
+Options:
+      --json
+          Write goldens/shed/<set>.json (listed in the manifest) instead of only printing
+
+      --root <ROOT>
+          Repository root holding `goldens/` (default: nearest ancestor of the cwd that has one)
+
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d model
+Regenerate the goldens object model, docs/model/model.json (its own options: `path d model -- --help`)
+
+Usage: path d model [OPTIONS] [ARGS]...
+
+Arguments:
+  [ARGS]...
+          Arguments for the `toolpath-model` binary
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')
+===== path d webmock
+The record/replay server: `run <agent> record|replay …` or `serve` (its own options: `path d webmock -- --help`)
+
+Usage: path d webmock [OPTIONS] [ARGS]...
+
+Arguments:
+  [ARGS]...
+          Arguments for the `webmock` binary (toolpath-webmock)
+
+Options:
+      --pretty
+          Pretty-print JSON output
+
+      --picker <PICKER>
+          Backend for the interactive fuzzy picker used by `share`, `resume`, and `p import <provider>`. `auto` (default) uses the embedded skim picker and falls back to external `fzf` only when skim isn't compiled in; a hint is printed if `fzf` is also on PATH. `fzf`/`skim` force one backend and error if it isn't available
+
+          Possible values:
+          - auto: Pick whichever backend is available; prefer the embedded skim picker and fall back to external `fzf` when skim isn't compiled in. When external `fzf` is also on `PATH`, a one-time hint is printed to stderr advising `--picker fzf` for users who want their fzf config / keybindings
+          - fzf:  Force the external `fzf` binary. Errors if it isn't on `PATH`
+          - skim: Force the embedded skim picker. Errors if path-cli was built with `--no-default-features`
+          
+          [default: auto]
+
+  -h, --help
+          Print help (see a summary with '-h')

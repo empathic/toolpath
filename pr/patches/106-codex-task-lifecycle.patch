@@ -1,0 +1,720 @@
+From acb928e3af8679e8dbf23fa02ddaa0babde8b649 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 10:58:51 -0400
+Subject: [PATCH] fix(codex): a codex -> codex round trip keeps the task
+ lifecycle (pr/104)
+
+---
+ crates/toolpath-codex/src/project.rs          |  54 ++++++++++
+ .../snapshots/shed@codex-forced.snap          |  44 +-------
+ .../snapshots/shed@codex.snap                 |  44 +-------
+ goldens/manifest.json                         | 100 +++++++++---------
+ goldens/shed/codex.json                       |  44 +-------
+ pr/104-codex-task-lifecycle.md                |  21 ++++
+ 6 files changed, 137 insertions(+), 170 deletions(-)
+ create mode 100644 pr/104-codex-task-lifecycle.md
+
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index d128325c..a43f7d79 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -263,6 +263,10 @@ fn codex_passthrough(view: &ConversationView) -> Vec<RolloutLine> {
+                     extra: HashMap::new(),
+                 });
+             }
++            if matches!(e.event_type.as_str(), "task_started" | "task_complete") {
++                // The task lifecycle: times, duration, time to first token, mode, context window.
++                return Some(event_msg_line(&e.timestamp, payload));
++            }
+             let kind = e.event_type.strip_prefix("response_item.")?;
+             Some(response_item_line(&e.timestamp, kind, payload))
+         })
+@@ -1172,6 +1176,56 @@ mod tests {
+         assert!(s.lines[0].payload.get("base_instructions").is_none());
+     }
+ 
++    /// The task lifecycle Codex wrote (`task_started` / `task_complete`: start and completion
++    /// times, duration, time to first token, the mode and context window) goes back.
++    #[test]
++    fn codex_task_lifecycle_events_are_written_back() {
++        let mut view = view_with(vec![assistant_turn("a1", "hello")]);
++        let mut push = |ts: &str, kind: &str, payload: Value| {
++            view.events.push(toolpath_convo::ConversationEvent {
++                id: format!("{kind}-{ts}"),
++                timestamp: ts.into(),
++                parent_id: None,
++                event_type: kind.into(),
++                data: payload
++                    .as_object()
++                    .unwrap()
++                    .iter()
++                    .map(|(k, v)| (k.clone(), v.clone()))
++                    .collect(),
++            });
++        };
++        push(
++            "2026-04-20T16:00:00.000Z",
++            "task_started",
++            json!({"type": "task_started", "turn_id": "t1", "started_at": 1,
++                   "model_context_window": 258400, "collaboration_mode_kind": "default"}),
++        );
++        push(
++            "2026-04-20T16:00:09.000Z",
++            "task_complete",
++            json!({"type": "task_complete", "turn_id": "t1", "completed_at": 9,
++                   "duration_ms": 8000, "time_to_first_token_ms": 120,
++                   "last_agent_message": "done"}),
++        );
++        let s = CodexProjector::default().project(&view).unwrap();
++        let started = s
++            .lines
++            .iter()
++            .find(|l| l.kind == "event_msg" && l.payload["type"] == "task_started")
++            .expect("task_started");
++        assert_eq!(started.payload["model_context_window"], 258400);
++        assert_eq!(started.payload["collaboration_mode_kind"], "default");
++        let done = s
++            .lines
++            .iter()
++            .find(|l| l.kind == "event_msg" && l.payload["type"] == "task_complete")
++            .expect("task_complete");
++        assert_eq!(done.payload["duration_ms"], 8000);
++        assert_eq!(done.payload["time_to_first_token_ms"], 120);
++        assert_eq!(done.payload["last_agent_message"], "done");
++    }
++
+     #[test]
+     fn other_harness_tool_search_items_are_not_copied() {
+         let mut view = tool_search_events(view_with(vec![assistant_turn("a1", "hello")]));
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+index 15f7f80e..ba458c92 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex-forced.snap
+@@ -111,21 +111,13 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     }
+   },
+   "same_format": {
+-    "lines": 93,
+-    "bytes": 90852,
++    "lines": 97,
++    "bytes": 92119,
+     "event_types_shed": {
+       "event_msg/context_compacted": {
+         "source": 1,
+         "after": 0
+       },
+-      "event_msg/task_complete": {
+-        "source": 2,
+-        "after": 0
+-      },
+-      "event_msg/task_started": {
+-        "source": 2,
+-        "after": 0
+-      },
+       "event_msg/token_count": {
+         "source": 16,
+         "after": 15
+@@ -137,8 +129,8 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+     },
+     "key_paths": {
+       "source": 152,
+-      "after": 122,
+-      "lost": 38,
++      "after": 129,
++      "lost": 31,
+       "gained": 8
+     },
+     "renamed": [],
+@@ -167,18 +159,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.changes./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.7HDqFK/codex/notes.md.unified_diff",
+         "example": "@@ -1,2 +1,2 @@ -scratch — feature elici…"
+       },
+-      {
+-        "path": "payload.collaboration_mode_kind",
+-        "example": "default"
+-      },
+-      {
+-        "path": "payload.completed_at",
+-        "example": "1781117035"
+-      },
+-      {
+-        "path": "payload.duration_ms",
+-        "example": "64403"
+-      },
+       {
+         "path": "payload.encrypted_content",
+         "example": "<withheld>"
+@@ -215,14 +195,6 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.info.total_token_usage.total_tokens",
+         "example": "<withheld>"
+       },
+-      {
+-        "path": "payload.last_agent_message",
+-        "example": "I listed the current directory, created …"
+-      },
+-      {
+-        "path": "payload.model_context_window",
+-        "example": "258400"
+-      },
+       {
+         "path": "payload.multi_agent_version",
+         "example": "v1"
+@@ -283,17 +255,9 @@ input_file: test-fixtures/codex/convo-compacted.jsonl
+         "path": "payload.realtime_active",
+         "example": "false"
+       },
+-      {
+-        "path": "payload.started_at",
+-        "example": "1781116970"
+-      },
+       {
+         "path": "payload.summary",
+         "example": "auto"
+-      },
+-      {
+-        "path": "payload.time_to_first_token_ms",
+-        "example": "<withheld>"
+       }
+     ],
+     "gained": [
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index f23f67a3..cffe14f4 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -102,21 +102,13 @@ input_file: test-fixtures/codex/convo.jsonl
+     }
+   },
+   "same_format": {
+-    "lines": 19,
+-    "bytes": 43814,
++    "lines": 22,
++    "bytes": 44553,
+     "event_types_shed": {
+       "event_msg/agent_message": {
+         "source": 13,
+         "after": 2
+       },
+-      "event_msg/task_complete": {
+-        "source": 1,
+-        "after": 0
+-      },
+-      "event_msg/task_started": {
+-        "source": 2,
+-        "after": 0
+-      },
+       "event_msg/token_count": {
+         "source": 13,
+         "after": 2
+@@ -132,8 +124,8 @@ input_file: test-fixtures/codex/convo.jsonl
+     },
+     "key_paths": {
+       "source": 94,
+-      "after": 65,
+-      "lost": 41,
++      "after": 72,
++      "lost": 34,
+       "gained": 12
+     },
+     "renamed": [],
+@@ -142,22 +134,10 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.agent_nickname",
+         "example": "Confucius"
+       },
+-      {
+-        "path": "payload.collaboration_mode_kind",
+-        "example": "default"
+-      },
+-      {
+-        "path": "payload.completed_at",
+-        "example": "1778178475"
+-      },
+       {
+         "path": "payload.content",
+         "example": "null"
+       },
+-      {
+-        "path": "payload.duration_ms",
+-        "example": "13024"
+-      },
+       {
+         "path": "payload.effort",
+         "example": "xhigh"
+@@ -206,14 +186,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.info.total_token_usage.total_tokens",
+         "example": "<withheld>"
+       },
+-      {
+-        "path": "payload.last_agent_message",
+-        "example": "`notes.md` contains 11 words."
+-      },
+-      {
+-        "path": "payload.model_context_window",
+-        "example": "258400"
+-      },
+       {
+         "path": "payload.rate_limits.credits",
+         "example": "null"
+@@ -282,18 +254,10 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.source.subagent.thread_spawn.parent_thread_id",
+         "example": "<withheld>"
+       },
+-      {
+-        "path": "payload.started_at",
+-        "example": "1778178417"
+-      },
+       {
+         "path": "payload.summary",
+         "example": "none"
+       },
+-      {
+-        "path": "payload.time_to_first_token_ms",
+-        "example": "<withheld>"
+-      },
+       {
+         "path": "payload.truncation_policy.limit",
+         "example": "10000"
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 6a4bc074..d711661d 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -27,10 +27,10 @@
+       "name": "claude",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+         }
+       },
+       "project": null,
+@@ -88,10 +88,10 @@
+       "name": "claude-compacted",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+         }
+       },
+       "project": null,
+@@ -162,10 +162,10 @@
+       "name": "claude-session",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+         }
+       },
+       "project": null,
+@@ -223,10 +223,10 @@
+       "name": "codex",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+         }
+       },
+       "project": null,
+@@ -284,10 +284,10 @@
+       "name": "copilot",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+         }
+       },
+       "project": null,
+@@ -345,10 +345,10 @@
+       "name": "pi",
+       "pins": {
+         "producer": {
+-          "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++          "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++          "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+         }
+       },
+       "project": null,
+@@ -383,187 +383,187 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++    "toolpath_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+   },
+   "known_defects": [],
+   "roundtrip": [
+     {
+       "file": "goldens/roundtrip/claude-codex.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "cf2db54b67b4b83c68fafcbcd877aabb090c2a7f5b5a38532fc641ffed285081"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-codex.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-copilot.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+     {
+       "file": "goldens/roundtrip/claude-compacted-pi.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-copilot.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "4c8cf9302d418f7c4cb0fb9a6c29f6dfed5e086909d87de12a6a818a470f5bcc"
+     },
+     {
+       "file": "goldens/roundtrip/claude-pi.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "f6e9222af46c3e81e06917fdfc1ac35a340bec3b2e7a21624cb6370c8b91d4c7"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-codex.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "5a04f1b1ecd04225a1335c3fcaa31fbcae94f8bbc4d8b11b23c3cfb14b0423ce"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-copilot.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "f8619031912f15627cea527f08dfce3c9d59557bf42a11428e13c03ba8e2e85e"
+     },
+     {
+       "file": "goldens/roundtrip/claude-session-pi.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "5ae48c0b81528342bd9f05b6e06e8e10ae58c50080c6c9f0a10237b147979304"
+     },
+     {
+       "file": "goldens/roundtrip/codex-claude.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+     {
+       "file": "goldens/roundtrip/codex-copilot.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+     {
+       "file": "goldens/roundtrip/codex-pi.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-claude.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-codex.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "7ec09a61215141ebb004e3e70be22b352b026d469833c653a8c67823f1976b26"
+     },
+     {
+       "file": "goldens/roundtrip/copilot-pi.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "418652931cde88d205ff371a0e7b006285d23926f88d27f190276fc7459f9c08"
+     },
+     {
+       "file": "goldens/roundtrip/pi-claude.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+     {
+       "file": "goldens/roundtrip/pi-codex.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+     {
+       "file": "goldens/roundtrip/pi-copilot.json",
+       "producer": {
+-        "binary_sha256": "ca4e2a20667fa9888fc50829d937c7bbc0069203e995a42818df47ee73a44ab4",
++        "binary_sha256": "24659556232acd1e299b3612c66d68193a61b421b6c64e9aba46b9feef8f851a",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "803a015b85d98a4fdf6a98ec16680d077fed2bc9"
++        "repo_rev": "ff34bc5e5764297000f58bc62fc951acf439239c"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+@@ -583,7 +583,7 @@
+     },
+     {
+       "file": "goldens/shed/codex.json",
+-      "sha256": "86ac1298060ca763aca0e5ee14351536b7988d231cc33eae08b4d8f133496f07"
++      "sha256": "7d5ea92c0f8091f111830e770e0ef1290a973f3ec76e24ebf2776b9984f6b475"
+     },
+     {
+       "file": "goldens/shed/copilot.json",
+diff --git a/goldens/shed/codex.json b/goldens/shed/codex.json
+index 7efc210d..d850fb89 100644
+--- a/goldens/shed/codex.json
++++ b/goldens/shed/codex.json
+@@ -47,28 +47,16 @@
+     }
+   ],
+   "same_format": {
+-    "bytes": 43586,
++    "bytes": 44325,
+     "dropped": [
+       {
+         "example": "Confucius",
+         "path": "payload.agent_nickname"
+       },
+-      {
+-        "example": "default",
+-        "path": "payload.collaboration_mode_kind"
+-      },
+-      {
+-        "example": "1778178475",
+-        "path": "payload.completed_at"
+-      },
+       {
+         "example": "null",
+         "path": "payload.content"
+       },
+-      {
+-        "example": "13024",
+-        "path": "payload.duration_ms"
+-      },
+       {
+         "example": "xhigh",
+         "path": "payload.effort"
+@@ -117,14 +105,6 @@
+         "example": "<withheld>",
+         "path": "payload.info.total_token_usage.total_tokens"
+       },
+-      {
+-        "example": "`notes.md` contains 11 words.",
+-        "path": "payload.last_agent_message"
+-      },
+-      {
+-        "example": "258400",
+-        "path": "payload.model_context_window"
+-      },
+       {
+         "example": "null",
+         "path": "payload.rate_limits.credits"
+@@ -193,18 +173,10 @@
+         "example": "<withheld>",
+         "path": "payload.source.subagent.thread_spawn.parent_thread_id"
+       },
+-      {
+-        "example": "1778178417",
+-        "path": "payload.started_at"
+-      },
+       {
+         "example": "none",
+         "path": "payload.summary"
+       },
+-      {
+-        "example": "<withheld>",
+-        "path": "payload.time_to_first_token_ms"
+-      },
+       {
+         "example": "10000",
+         "path": "payload.truncation_policy.limit"
+@@ -219,14 +191,6 @@
+         "after": 2,
+         "source": 13
+       },
+-      "event_msg/task_complete": {
+-        "after": 0,
+-        "source": 1
+-      },
+-      "event_msg/task_started": {
+-        "after": 0,
+-        "source": 2
+-      },
+       "event_msg/token_count": {
+         "after": 2,
+         "source": 13
+@@ -291,12 +255,12 @@
+       }
+     ],
+     "key_paths": {
+-      "after": 65,
++      "after": 72,
+       "gained": 12,
+-      "lost": 41,
++      "lost": 34,
+       "source": 94
+     },
+-    "lines": 19,
++    "lines": 22,
+     "renamed": []
+   },
+   "set": "codex",
+diff --git a/pr/104-codex-task-lifecycle.md b/pr/104-codex-task-lifecycle.md
+new file mode 100644
+index 00000000..800410bd
+--- /dev/null
++++ b/pr/104-codex-task-lifecycle.md
+@@ -0,0 +1,21 @@
++# fix(codex): a codex -> codex round trip keeps the task lifecycle (task_started / task_complete)
++
++Status: draft · Base: pr/103 · Source: pr/99 recommendation 1, group 4 (first part); controller-core's order
++
++## Why
++After pr/103 codex-forced still lost 38 paths on codex -> codex. Part of group 4 is the task lifecycle Codex writes as `event_msg` `task_started` and `task_complete`:
++`started_at`, `completed_at`, `duration_ms`, `time_to_first_token_ms`, `collaboration_mode_kind`, `model_context_window`, `last_agent_message`. The reader keeps both as events; the writer wrote neither. Codex holds them: a writer bug.
++
++## What changes
++`codex_passthrough` (toolpath-codex/src/project.rs) also returns the `task_started` / `task_complete` events as `event_msg` lines, payload verbatim, same placement rule as pr/100, Codex-recorded views only.
++
++## Verification (sandbox, cargo 1.97.1, offline)
++- Test first: `codex_task_lifecycle_events_are_written_back` failed (no task_started line), passes. The existing negative tests (other harnesses get nothing) still pass; goldens twice-around and contract checks pass with the new lines in the output.
++- shed@codex-forced: lost 38 -> 31 key paths; shed@codex and goldens/shed/codex.json the same; no cross-agent snapshot or table changed.
++- toolpath-codex, toolpath-goldens, toolpath, toolpath-convo, path-cli --lib (463 pass, 14 known port-bind failures), path-cli --features develop --test goldens, fmt, clippy -D warnings (nix clippy 1.97.1), qualifier 238/0.
++- NOT run: path-cli integration tests, pinned 1.94, gitleaks, nix, live codex resume.
++
++## What is left of group 4 (31 paths) and why it is a separate piece
++- `token_count` lines: the writer synthesizes them from the steps' usage, so the original's `rate_limits.*`, `info.last_token_usage.*`, `info.model_context_window` and `total_tokens`/`reasoning_output_tokens` need enriching the synthesized line (aligning the source's duplicated counts with the written ones), not a passthrough: a passthrough would double the usage the reader differences.
++- `exec_command_end` / `patch_apply_end`: synthesized too (partial); `aggregated_output`, `formatted_output`, `parsed_cmd[]`, `duration`, `exit_code`, `command[]`, `changes.<path>...` need enriching the same way.
++- `encrypted_content` (reasoning), `namespace`, `multi_agent_version`, `realtime_active`, `summary`: each needs a look at where it is read.
+-- 
+2.55.0
+

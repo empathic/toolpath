@@ -1,0 +1,101 @@
+From c65a6b67228e225817e5937ef4465c6198dac225 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 22:23:48 -0400
+Subject: [PATCH] fix(convo): extract_conversation sums per-turn token
+ breakdowns into total_usage
+
+total_usage was rebuilt from the four counters only, so a Codex session's
+breakdowns (output.reasoning) were lost through derive_path ->
+extract_conversation even though every turn kept its own. Found by pathbase's
+goldens (codex: $.total_usage.breakdowns lost).
+---
+ crates/toolpath-convo/src/derive.rs  | 27 +++++++++++++++++++++++++++
+ crates/toolpath-convo/src/extract.rs |  8 ++++++++
+ 2 files changed, 35 insertions(+)
+
+diff --git a/crates/toolpath-convo/src/derive.rs b/crates/toolpath-convo/src/derive.rs
+index 1463b74..290166f 100644
+--- a/crates/toolpath-convo/src/derive.rs
++++ b/crates/toolpath-convo/src/derive.rs
+@@ -899,6 +899,33 @@ mod tests {
+         assert_eq!(usage.breakdowns["output"]["reasoning"], 450);
+     }
+ 
++    #[test]
++    fn test_total_usage_breakdowns_round_trip() {
++        use std::collections::BTreeMap;
++        // total_usage is recomputed from the turns on extract; their
++        // breakdowns must sum into it, not be dropped.
++        let usage = |out: u32, reasoning: u32| TokenUsage {
++            output_tokens: Some(out),
++            breakdowns: BTreeMap::from([(
++                "output".to_string(),
++                BTreeMap::from([("reasoning".to_string(), reasoning)]),
++            )]),
++            ..Default::default()
++        };
++        let mut t1 = base_turn("t1", Role::Assistant);
++        t1.token_usage = Some(usage(900, 450));
++        let mut t2 = base_turn("t2", Role::Assistant);
++        t2.token_usage = Some(usage(100, 25));
++        let view = view_with(vec![t1, t2]);
++
++        let path = derive_path(&view, &DeriveConfig::default());
++        let extracted = crate::extract::extract_conversation(&path);
++
++        let total = extracted.total_usage.expect("total_usage recomputed");
++        assert_eq!(total.output_tokens, Some(1000));
++        assert_eq!(total.breakdowns["output"]["reasoning"], 475);
++    }
++
+     #[test]
+     fn test_token_usage_empty_breakdowns_omitted_in_json() {
+         // skip_serializing_if guarantees no "breakdowns" key for the empty map,
+diff --git a/crates/toolpath-convo/src/extract.rs b/crates/toolpath-convo/src/extract.rs
+index c1d8380..2c17bf2 100644
+--- a/crates/toolpath-convo/src/extract.rs
++++ b/crates/toolpath-convo/src/extract.rs
+@@ -227,6 +227,14 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
+             total.output_tokens = add_opt(total.output_tokens, usage.output_tokens);
+             total.cache_read_tokens = add_opt(total.cache_read_tokens, usage.cache_read_tokens);
+             total.cache_write_tokens = add_opt(total.cache_write_tokens, usage.cache_write_tokens);
++            // Per-turn breakdowns sum to the session's, like the counters
++            // they decompose.
++            for (class, inner) in &usage.breakdowns {
++                let target = total.breakdowns.entry(class.clone()).or_default();
++                for (sub, n) in inner {
++                    *target.entry(sub.clone()).or_insert(0) += n;
++                }
++            }
+         }
+     }
+     if has_any_usage {
+-- 
+2.55.0
+
+From 33fef50478e04908d67893e9e7de386cb5d0fed0 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 23:48:18 -0400
+Subject: [PATCH] docs(convo): a session total's breakdowns are the per-turn
+ breakdowns summed class by class
+
+---
+ crates/toolpath-convo/src/lib.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/crates/toolpath-convo/src/lib.rs b/crates/toolpath-convo/src/lib.rs
+index 592103f..80bf24d 100644
+--- a/crates/toolpath-convo/src/lib.rs
++++ b/crates/toolpath-convo/src/lib.rs
+@@ -72,6 +72,8 @@ pub struct TokenUsage {
+     /// {"reasoning": 450} or {"text": 300, "image": 500}). INFORMATIONAL ONLY:
+     /// breakdowns are never summed into the total — the parent class already
+     /// counts these tokens. Invariant: Σ(inner) ≤ the parent class's value.
++    /// (A session total's breakdowns are the per-turn breakdowns added together,
++    /// class by class; that is a sum of breakdowns, not into the counters.)
+     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+     pub breakdowns: BTreeMap<String, BTreeMap<String, u32>>,
+ }
+-- 
+2.55.0
+

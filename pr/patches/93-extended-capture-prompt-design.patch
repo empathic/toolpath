@@ -1,0 +1,110 @@
+From 8bdf5553589eace1b7b179322d8514e11eed3284 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Wed, 21 Oct 2026 13:17:11 -0400
+Subject: [PATCH] docs(agents): extended capture prompt and its design record
+ (draft for review, pr/93)
+
+---
+ docs/agents/feature-elicit-extended.md        | 46 +++++++++++++++++++
+ .../agents/feature-elicit-extended.prompt.txt | 36 +++++++++++++++
+ 2 files changed, 82 insertions(+)
+ create mode 100644 docs/agents/feature-elicit-extended.md
+ create mode 100644 docs/agents/feature-elicit-extended.prompt.txt
+
+diff --git a/docs/agents/feature-elicit-extended.md b/docs/agents/feature-elicit-extended.md
+new file mode 100644
+index 00000000..95b755c6
+--- /dev/null
++++ b/docs/agents/feature-elicit-extended.md
+@@ -0,0 +1,46 @@
++# Extended elicitation prompt: design record (for Bobby's review; nothing is recorded or run)
++
++Status: DESIGN · 2026-10-21 · Draft prompt: `docs/agents/feature-elicit-extended.prompt.txt` · Ben's 10-step `feature-elicit.prompt.txt` is unchanged and stays the core recording.
++
++## What the core recording misses (and the turn that exercises it)
++| gap in the core recording | extended turn | what it should exercise |
++|---|---|---|
++| one user turn only | 1-10 are separate user turns on one session | multi-turn session shape, `parent` chains across turns, group ids per turn |
++| a follow-up that changes direction | 4 (revert the rename, keep README) | undo as new edits; file-change `before`/`after` chains on the same file (the file-change-detail unexplained cluster; Bobby's count is 125 paths, which I have not recomputed) |
++| an interrupted or retried turn | 5 (cancel after the first tool call, resend) | an aborted turn's partial tool call, dangling tool_use without a result, abort/retry events |
++| a mid-session model switch | 6 (model flag for this turn only) | the model setting that pi and Copilot lose on share: Copilot `session.model_change` events (Bobby's count is 21 Copilot model-setting paths, not recomputed), pi `model_change` entries; claude/codex per-turn `model` |
++| an image / attachment | 7 | image content parts, attachment events, what each reader keeps or drops |
++| a multi-file edit + one larger file | 2 (three files in one request) and 3 (400-line file) | several file-change artifacts in one step, large `after` bodies, truncation, the file-change detail clusters |
++| an MCP / extension tool call | 8 | namespaced tool names, tool categories for non-builtin tools, MCP events (Copilot `tools/list`) |
++| a required sub-agent step | 9 (required, not "if you have one") | delegations: the delegation helper (`as_delegation`), `invoke_agent`/`task` naming, sub-agent turns |
++| a long tail / compaction | NOT in this prompt | compaction is forced by Ben's #108 capture script per agent; this design reuses that forcing on top of the extended session rather than duplicating it |
++
++## How each agent can be driven headless (to be VERIFIED against the pinned versions before any run)
++Multi-turn needs one invocation per turn on the same session, or stdin for a persistent process. What the repo documents today (docs/agents/feature-elicit.md) is single-prompt only:
++`claude -p`, `codex exec`, `copilot -p` (isolated `COPILOT_HOME`), `gemini -p`, `pi -p`, `opencode run`; Cursor is manual and `cursor-agent` is separate. I did NOT verify the multi-turn
++and attachment flags below; they are my reading of each CLI's documented options and must be checked against the pinned binary (pinning.md) first.
++| agent | next turn on the same session (believed) | model for one turn (believed) | attachment (believed) | MCP | sub-agent |
++|---|---|---|---|---|---|
++| claude | `claude -p --continue` or `--resume <id>` | `--model` | `@path` in the prompt / image path | `--mcp-config` | `Task` (built in) |
++| codex | `codex exec resume <id>` | `-m` | `-i <image>` | `[mcp_servers]` in config | spawn_agent (feature flag?) |
++| copilot | `copilot --continue` / `--resume <id>` | `--model` | image path in prompt (unclear) | `--additional-mcp-config` | `task` agent type |
++| gemini | `gemini --resume <id|latest> -p` | `-m` | `@path` | `settings.json` mcpServers | `invoke_agent` (flag?) |
++| pi | `pi -c -p` (continue) | `--model` / `/model` | `@file` | extension, not MCP | none known |
++| opencode | `opencode run --continue` / `--session <id>` | `-m` | `-f <file>` | `opencode.json` mcp | `task` (subtask) |
++| cursor-agent | `cursor-agent --resume <chatId> -p` | `-m` | unclear | `mcp.json` | `task_v2` |
++A turn the agent cannot do headless is SKIPPED BY NAME in that agent's recording (the driver writes a `skipped: <turn> <reason>` line), never faked. The interrupt (turn 5) needs the driver to send
++SIGINT to the process after the first tool call and re-run the turn; agents that do not persist an aborted turn will show nothing, which is itself the finding.
++
++## Cost and safety (nothing is run until approved)
++- Order: gemini first (a click, as for the core capture), then the others one agent per CI job with its own key behind the API proxy (pinning.md), caps mandatory for codex and pi.
++- 10 turns is about 3-5x the core recording per agent; estimate before any run from the cassette sizes of the core capture, shown on Bobby's For-you page.
++- The image is a committed 16x16 PNG (`fixtures/pixel.png`, to be added); the MCP server is a 20-line local stdio echo, no network.
++- Each recording lands as `test-fixtures/<agent>/convo-extended.*` and becomes a baseline set `<agent>-extended`, the same way `convo-compacted.*` became `<agent>-forced`.
++
++## Open (Bobby)
++1. Approve the ten turns, or cut: the two with the lowest expected yield are 7 (attachment: few readers model images) and 8 (MCP: needs per-agent config).
++2. Compaction: stack #108's forcing on the extended session (one more recording per agent), or leave compaction on the core session only (default).
++3. Cursor: manual capture only, as today (default), or add `cursor-agent` once its multi-turn driver is verified.
++
++## Not run
++Design only: no recording, no live calls, no code, no gates.
+diff --git a/docs/agents/feature-elicit-extended.prompt.txt b/docs/agents/feature-elicit-extended.prompt.txt
+new file mode 100644
+index 00000000..ad3449ac
+--- /dev/null
++++ b/docs/agents/feature-elicit-extended.prompt.txt
+@@ -0,0 +1,36 @@
++DRAFT for review. Nothing is recorded from this until it is approved. The core recording (feature-elicit.prompt.txt, Ben's 10 steps) is unchanged and stays the core.
++
++This is a driver script's worth of prompts, not one prompt: a multi-turn session needs one invocation per TURN on the same session (--continue / --resume, or stdin). Each TURN below is a separate prompt sent to the same session, in an empty scratch directory. Stay inside the current working directory.
++
++TURN 1 (set up, several files)
++Create `app/`, `app/main.py`, `app/util.py` and `app/README.md`. main.py imports `greet` from util.py and prints `greet("world")`; util.py defines `greet(name)` returning "hello, " + name; README.md has two lines describing the app. Then run `python3 app/main.py` and report its output.
++
++TURN 2 (multi-file edit, one atomic request)
++Rename `greet` to `salute` everywhere it is used (definition and call), and update README.md to say so. Do all three edits, then run the app again.
++
++TURN 3 (larger file)
++Write `data/words.txt` with 400 lines, line N being the word "word" followed by N. Then count its lines with a shell command and report the count.
++
++TURN 4 (follow-up that changes direction)
++Actually, forget the rename: put `greet` back as it was in util.py and main.py, but keep README.md as it is now. Then tell me which files differ from how they were after turn 1.
++
++TURN 5 (interrupted or retried turn, only where the driver can do it)
++(driver: send this turn and cancel it after the first tool call, then send it again unchanged)
++List every file under the current directory with its size in bytes, largest first.
++
++TURN 6 (model switch; driver changes the model flag for this turn only)
++In one sentence, which file is the largest and how many bytes is it?
++
++TURN 7 (attachment, where the agent takes one)
++(driver attaches `fixtures/pixel.png`, a 16x16 solid-colour PNG)
++Describe in one sentence what the attached image is.
++
++TURN 8 (extension / MCP tool, where configured)
++(driver configures one local stdio MCP server exposing `echo(text)`)
++Call the `echo` tool with the text "extended-elicit" and report what it returned.
++
++TURN 9 (a required sub-agent step, where the agent has one)
++Dispatch a sub-agent with this exact instruction: "Count the words in app/README.md and reply with just the number." Report the number it returned. This step is required: do not do it yourself.
++
++TURN 10 (close)
++Summarise in 2-3 sentences what changed in this session. Stop without asking for further work.
+-- 
+2.55.0
+

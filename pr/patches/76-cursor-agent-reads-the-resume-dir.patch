@@ -1,0 +1,668 @@
+From 3d30b4d7263a4913ae01acbf194732a54af961ae Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 15:33:56 -0400
+Subject: [PATCH] fix(goldens): a cursor-agent store is read with the directory
+ it was resumed in (pr/76)
+
+---
+ .../fixtures/contract/cursor-agent.json       |  5 --
+ ...nd_trip@claude-compacted@cursor-agent.snap |  3 +-
+ ...ound_trip@claude-session@cursor-agent.snap |  3 +-
+ .../round_trip@claude@cursor-agent.snap       | 11 +---
+ .../round_trip@codex@cursor-agent.snap        |  3 +-
+ .../round_trip@copilot@cursor-agent.snap      | 14 +----
+ .../round_trip@cursor@cursor-agent.snap       | 30 +---------
+ .../round_trip@gemini@cursor-agent.snap       |  6 +-
+ .../round_trip@opencode@cursor-agent.snap     |  3 +-
+ .../snapshots/round_trip@pi@cursor-agent.snap |  3 +-
+ .../snapshots/writer@cursor-agent.snap        |  3 +-
+ crates/toolpath-goldens/src/.qual             |  1 +
+ crates/toolpath-goldens/src/pipeline.rs       | 27 ++++++++-
+ goldens/manifest.json                         | 60 +++++++++----------
+ pr/76-cursor-agent-reads-the-resume-dir.md    | 20 +++++++
+ 15 files changed, 94 insertions(+), 98 deletions(-)
+ create mode 100644 pr/76-cursor-agent-reads-the-resume-dir.md
+
+diff --git a/crates/toolpath-goldens/fixtures/contract/cursor-agent.json b/crates/toolpath-goldens/fixtures/contract/cursor-agent.json
+index 0f348eb7..b946241f 100644
+--- a/crates/toolpath-goldens/fixtures/contract/cursor-agent.json
++++ b/crates/toolpath-goldens/fixtures/contract/cursor-agent.json
+@@ -32,11 +32,6 @@
+       "path": "paths[].path.base.ref",
+       "why": "the store records no working directory, only its md5 in the chat directory's name"
+     },
+-    {
+-      "op": "drop",
+-      "path": "paths[].path.base.uri",
+-      "why": "the store records no working directory, only its md5 in the chat directory's name"
+-    },
+     {
+       "op": "drop",
+       "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor-agent.snap
+index dc2d9884..49642aa9 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor-agent.snap
+@@ -19,14 +19,13 @@ input_file: goldens/claude-compacted/input.jsonl
+     "steps": 6,
+     "text_chars": 317,
+     "tool_uses": 2,
+-    "key_paths": 29
++    "key_paths": 30
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.files_changed[]",
+     "paths[].path.base.branch",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor-agent.snap
+index 192a2e71..a9917ac4 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor-agent.snap
+@@ -19,14 +19,13 @@ input_file: goldens/claude-session/input.jsonl
+     "steps": 4,
+     "text_chars": 292,
+     "tool_uses": 2,
+-    "key_paths": 24
++    "key_paths": 25
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].path.base.branch",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap
+index b5372ec4..ed3f1556 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor-agent.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 34,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 43
++    "key_paths": 39
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+@@ -27,7 +27,6 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+     "paths[].path.base.branch",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+@@ -64,11 +63,5 @@ input_file: test-fixtures/claude/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.version",
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+-  "gained": [
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.tool_id",
+-    "paths[].steps[].change./var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.type"
+-  ]
++  "gained": []
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@codex@cursor-agent.snap
+index 997cf292..8d3357dd 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex@cursor-agent.snap
+@@ -19,13 +19,12 @@ input_file: test-fixtures/codex/convo.jsonl
+     "steps": 6,
+     "text_chars": 3077,
+     "tool_uses": 1,
+-    "key_paths": 24
++    "key_paths": 25
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.agent_nickname",
+     "paths[].steps[].change.<artifact>.structural.approval_policy",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap
+index e54b7a9d..96b8ce80 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor-agent.snap
+@@ -19,14 +19,13 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 12,
+     "text_chars": 4594,
+     "tool_uses": 11,
+-    "key_paths": 35
++    "key_paths": 36
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+@@ -46,14 +45,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "paths[].steps[].change.count.sh.structural.type",
+     "paths[].steps[].change.notes.md.raw",
+     "paths[].steps[].change.notes.md.structural.after",
+-    "paths[].steps[].change.notes.md.structural.operation",
+-    "paths[].steps[].change.notes.md.structural.tool",
+-    "paths[].steps[].change.notes.md.structural.tool_id",
+-    "paths[].steps[].change.notes.md.structural.type"
++    "paths[].steps[].change.notes.md.structural.operation"
+   ],
+-  "gained": [
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.tool_id",
+-    "paths[].steps[].change./tmp/elicit-scratch/notes.md.structural.type"
+-  ]
++  "gained": []
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+index 4c6777c2..aa147725 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@cursor-agent.snap
+@@ -19,43 +19,19 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 21,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 62
++    "key_paths": 63
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+-    "paths[].steps[].change.count.sh.raw",
+-    "paths[].steps[].change.count.sh.structural.after",
+     "paths[].steps[].change.count.sh.structural.before",
+     "paths[].steps[].change.count.sh.structural.operation",
+-    "paths[].steps[].change.count.sh.structural.tool",
+-    "paths[].steps[].change.count.sh.structural.tool_id",
+-    "paths[].steps[].change.count.sh.structural.type",
+-    "paths[].steps[].change.notes.md.raw",
+-    "paths[].steps[].change.notes.md.structural.after",
+-    "paths[].steps[].change.notes.md.structural.before",
+-    "paths[].steps[].change.notes.md.structural.operation",
+-    "paths[].steps[].change.notes.md.structural.tool",
+-    "paths[].steps[].change.notes.md.structural.tool_id",
+-    "paths[].steps[].change.notes.md.structural.type"
++    "paths[].steps[].change.notes.md.structural.operation"
+   ],
+-  "gained": [
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.after",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.tool_id",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.type",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.raw",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.after",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.before",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.tool_id",
+-    "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.type"
+-  ]
++  "gained": []
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
+index c753f665..3ee6852d 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor-agent.snap
+@@ -19,7 +19,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 33
++    "key_paths": 34
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+@@ -44,5 +44,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "paths[].steps[].change.notes.md.structural.tool_id",
+     "paths[].steps[].change.notes.md.structural.type"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].path.base.uri"
++  ]
+ }
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+index 6dd45783..b31c9421 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor-agent.snap
+@@ -19,14 +19,13 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 32
++    "key_paths": 33
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.files_changed[]",
+     "paths[].meta.producer.version",
+     "paths[].path.base.ref",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@pi@cursor-agent.snap b/crates/toolpath-goldens/snapshots/round_trip@pi@cursor-agent.snap
+index f46f05b8..246b727c 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@pi@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@pi@cursor-agent.snap
+@@ -19,13 +19,12 @@ input_file: test-fixtures/pi/convo.jsonl
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10,
+-    "key_paths": 32
++    "key_paths": 33
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+     "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.files_changed[]",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/writer@cursor-agent.snap b/crates/toolpath-goldens/snapshots/writer@cursor-agent.snap
+index bd1c0031..f609788c 100644
+--- a/crates/toolpath-goldens/snapshots/writer@cursor-agent.snap
++++ b/crates/toolpath-goldens/snapshots/writer@cursor-agent.snap
+@@ -14,7 +14,7 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 29
++    "key_paths": 30
+   },
+   "lost": [
+     "paths[].meta.actors.<actor>.model",
+@@ -23,7 +23,6 @@ expression: trip
+     "paths[].meta.vcs_remote",
+     "paths[].path.base.branch",
+     "paths[].path.base.ref",
+-    "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+diff --git a/crates/toolpath-goldens/src/.qual b/crates/toolpath-goldens/src/.qual
+index bae89784..e8fd16ae 100644
+--- a/crates/toolpath-goldens/src/.qual
++++ b/crates/toolpath-goldens/src/.qual
+@@ -39,3 +39,4 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:08:07.563120Z","id":"57a5a8b83e8ba133550059550f098b830d769c5fd0a785d0d0771d6fbb22a0c0","body":{"detail":"The other five agents' projections are byte-stable across runs and pinned raw. If copilot's export ever takes a fixed session id, or toolpath-cursor's `extra`/content_blobs maps become ordered (BTreeMap), drop the canonical form for that agent so the golden is the real bytes `p export -o` writes.","kind":"concern","span":{"start":{"line":144},"end":{"line":144},"content_hash":"4a694e0ca91a31337ac7971bff42f9e146dbc6c66fe755a12cff8566198c2a4b"},"summary":"Copilot's projection is pinned in canonical form (sorted keys, session id masked) because p export copilot mints a session id per run; Cursor's is pinned with keys sorted because its composer rows carry hash maps written in a different order per run","supersedes":"bae67ed2481f42d62209eeb476767341fac23b908bcd76209138ced8178e6ee8","tags":["goldens","determinism","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:08:07.628223Z","id":"dd6fa6f81587aad09aa3a348ba38b13c47fb63c43dfd2c699705b2e9a477282e","body":{"detail":"test-fixtures/opencode/convo.json is what `opencode export <id>` prints (camelCase, nested info); toolpath_opencode reads rows from opencode-stable.db and has no reader for this file. A `Session::from_export` in the adapter would remove all three copies, and `path p derive opencode` could then take the file.","kind":"concern","span":{"start":{"line":344},"end":{"line":344},"content_hash":"e1f0854ff123c1ce324417c98893618c5a16b9d4d7c747feadd81bba62cca511"},"summary":"The `opencode export` wrapper to Session translation is duplicated from path-cli/tests/cross_harness_matrix.rs and toolpath-opencode/tests/real_fixture_roundtrip.rs; the adapter should own it","supersedes":"47310d3f314a60bba43dc5aef995ddc6bdadb6ba48fa75d1ec1e0fb445c96fc8","tags":["goldens","opencode","duplication","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:08:07.697202Z","id":"58b5e6bdac807b3915e960cbc83cd1fcbace9a3b6871693dd81cebd56fca4f38","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":611},"end":{"line":611},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"f8cea86a68f25837bed5b2abb3c04d8608fdbbc2447a44beaf566abf8297654f","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-goldens/src/pipeline.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-20T19:28:45.937195Z","id":"c190e86e6fe971951c7af66c9e15c93a7fd7cb7e8c64746050856897f7f93e6e","body":{"detail":"Every one of the 42 (source, target) pairs across the seven agents is `compared` today; the Unreadable variant stays for a pair that genuinely cannot be re-read. The round trip also yields the re-derived document for validate@<set>.","kind":"concern","span":{"start":{"line":634},"end":{"line":634},"content_hash":"8e1832973f8749c6b919a6aedfc4ea89442e372b5ea88e505414008ed4cea0aa"},"summary":"A round trip that cannot read its own projection is a pinned outcome, not a failed stage; the hermetic tool recorded copilot->claude that way because its placement needed a top-level cwd, in-process the adapter reads it","supersedes":"58b5e6bdac807b3915e960cbc83cd1fcbace9a3b6871693dd81cebd56fca4f38","tags":["goldens","round-trip","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260","session:claude-code:a69c02ae-2421-41a9-88c7-35c5942b4c1f"]}}
+diff --git a/crates/toolpath-goldens/src/pipeline.rs b/crates/toolpath-goldens/src/pipeline.rs
+index 17c27c9b..5ccfca5a 100644
+--- a/crates/toolpath-goldens/src/pipeline.rs
++++ b/crates/toolpath-goldens/src/pipeline.rs
+@@ -440,6 +440,29 @@ fn resume_dir(path: &Document) -> String {
+         .to_owned()
+ }
+ 
++/// [`resume_dir`] for a document still in JSON form.
++fn value_cwd(document: &Value) -> String {
++    document
++        .pointer("/paths/0/path/base/uri")
++        .and_then(Value::as_str)
++        .and_then(|u| u.strip_prefix("file://"))
++        .filter(|d| d.starts_with('/'))
++        .unwrap_or(CALLER_CWD)
++        .to_owned()
++}
++
++/// [`read`], then tell a reader whose format keeps no working directory where the session was
++/// resumed. A cursor-agent store holds only md5(cwd) in its path, so a reader handed the bare
++/// store cannot make file keys relative; the caller, who chose the directory (`path resume -C`),
++/// says it. Other formats record their own and are read as they are.
++fn read_in(agent: Agent, input: &[u8], scratch: &Path, cwd: &str) -> Result<Conversation, String> {
++    let mut convo = read(agent, input, scratch)?;
++    if let Conversation::CursorAgent(v) = &mut convo {
++        v.base.get_or_insert_with(Default::default).working_dir = Some(cwd.to_owned());
++    }
++    Ok(convo)
++}
++
+ /// Stage `project`: the transcript `path p export <target> -i <doc> -o <file>`
+ /// writes for a document, byte for byte.
+ fn project(path: &Document, target: Agent) -> Result<String, String> {
+@@ -584,7 +607,7 @@ fn second_pass(first: Option<&Value>, target: Agent, scratch: &Path) -> TwiceAro
+     let second = single_path(&first.to_string())
+         .and_then(|path| project(&path, target))
+         .and_then(|text| {
+-            read(target, text.as_bytes(), scratch)
++            read_in(target, text.as_bytes(), scratch, &value_cwd(first))
+                 .and_then(|c| c.derive(&text, scratch))
+                 .and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()))
+         });
+@@ -614,7 +637,7 @@ fn round_trip(
+     projection: &str,
+     scratch: &Path,
+ ) -> (RoundTrip, Option<Value>) {
+-    let again = read(target, projection.as_bytes(), scratch)
++    let again = read_in(target, projection.as_bytes(), scratch, &value_cwd(document))
+         .and_then(|c| c.derive(projection, scratch))
+         .and_then(|json| serde_json::from_str::<Value>(&json).map_err(|e| e.to_string()));
+     match again {
+diff --git a/goldens/manifest.json b/goldens/manifest.json
+index 87d3ad08..8e5bfc82 100644
+--- a/goldens/manifest.json
++++ b/goldens/manifest.json
+@@ -18,7 +18,7 @@
+       },
+       "fixture": "test-fixtures/claude/convo.jsonl",
+       "harness": {
+-        "first_seen": "1f4bb25",
++        "first_seen": "1f4bb25a",
+         "name": "claude",
+         "version": "2.1.132",
+         "version_source": "declared in the input"
+@@ -30,7 +30,7 @@
+           "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++          "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+         }
+       },
+       "project": null,
+@@ -79,7 +79,7 @@
+       },
+       "fixture": "crates/toolpath-claude/tests/fixtures/compacted_session.jsonl",
+       "harness": {
+-        "first_seen": "1682861",
++        "first_seen": "16828619",
+         "name": "claude",
+         "version": "unknown",
+         "version_source": "none"
+@@ -91,7 +91,7 @@
+           "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++          "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+         }
+       },
+       "project": null,
+@@ -165,7 +165,7 @@
+           "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++          "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+         }
+       },
+       "project": null,
+@@ -214,7 +214,7 @@
+       },
+       "fixture": "test-fixtures/codex/convo.jsonl",
+       "harness": {
+-        "first_seen": "1f4bb25",
++        "first_seen": "1f4bb25a",
+         "name": "codex",
+         "version": "0.128.0",
+         "version_source": "declared in the input"
+@@ -226,7 +226,7 @@
+           "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++          "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+         }
+       },
+       "project": null,
+@@ -275,7 +275,7 @@
+       },
+       "fixture": "test-fixtures/copilot/convo.jsonl",
+       "harness": {
+-        "first_seen": "c8bdff0",
++        "first_seen": "c8bdff05",
+         "name": "copilot",
+         "version": "1.0.68",
+         "version_source": "declared in the input"
+@@ -287,7 +287,7 @@
+           "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++          "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+         }
+       },
+       "project": null,
+@@ -336,7 +336,7 @@
+       },
+       "fixture": "test-fixtures/pi/convo.jsonl",
+       "harness": {
+-        "first_seen": "1f4bb25",
++        "first_seen": "1f4bb25a",
+         "name": "pi",
+         "version": "unknown",
+         "version_source": "none"
+@@ -348,7 +348,7 @@
+           "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+           "dirty": true,
+           "nix_store_path": null,
+-          "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++          "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+         }
+       },
+       "project": null,
+@@ -383,7 +383,7 @@
+   "informational": {
+     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (built from a source tarball)",
+     "toolpath_dirty": true,
+-    "toolpath_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++    "toolpath_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+   },
+   "known_defects": [],
+   "roundtrip": [
+@@ -393,7 +393,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "b21fa597baaa807a0c62cc65ad5a1f4ea436c8d1199e75907969e3be02554f58"
+     },
+@@ -403,7 +403,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "47e740b8465b6f0685020ce55ebd26eb3acbd882b2798a0aed8026d66533716a"
+     },
+@@ -413,7 +413,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "82d7e5b509b366b7d4b5a0a7014ee14f2b58f9796b382fed9f3536d861154192"
+     },
+@@ -423,7 +423,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "20ce50f80d5d579112c8cfffabbb317fce4983f5f31377af297bb76bcb2a1af7"
+     },
+@@ -433,7 +433,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "0fff3f36b35c26d35ccefe33f900a5e93758c5547d69897b84cfe9149ebf4a22"
+     },
+@@ -443,7 +443,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "58d9fb02b01e163793079bf4f3252477bf0620900ac76b6b97f171aeedcdc954"
+     },
+@@ -453,7 +453,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "d5fee6928c95df428b1688f48949b4280b92022abe2e2254640e55dcb5f01273"
+     },
+@@ -463,7 +463,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "6116cbebdaad01b8f20fd906965550a0116b129b0ff22bb8e338aac5e3fd192d"
+     },
+@@ -473,7 +473,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "bc8ae191b9776da0470eefacb6dd084fc7eb733505b6dc1612aa582a3fca8eec"
+     },
+@@ -483,7 +483,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "7420efeb5db95e1c474820a232c4dfda672e4fa6f0e7b2fdb64f09aefa13a0d9"
+     },
+@@ -493,7 +493,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "2732bf8443486ec3f46dc9f61d236771dc0e3d585d7821938d2b12bd9406ecfa"
+     },
+@@ -503,7 +503,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "32d08ed07a98f3245fbdeb4965f8dfaced38026773132c813a328009a8ce1099"
+     },
+@@ -513,7 +513,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "353c3d8ddeb5f8daa01c900eb27110aca100b9e99e449e57583b34b4905a24ee"
+     },
+@@ -523,7 +523,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "8bbe90a94e312980ee3c0bb83b04006fcf336f8d9a7024399bf79a37bc6b1a96"
+     },
+@@ -533,7 +533,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "12a1042a37c183dcdd5e631d0ad6653b3f25d7fdc9ccc1d925ca99a4e3ca1281"
+     },
+@@ -543,7 +543,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "3a83dd986979d3e9d2d275cd5e623a5b0062b5bc35699d73994361b1c15f74b4"
+     },
+@@ -553,7 +553,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "fc045bf5d4438c54e18efa4f63bb047facc8e5f2b676a3b99b24b3d78d7f1c67"
+     },
+@@ -563,7 +563,7 @@
+         "binary_sha256": "a87082d36d72aa69c55eaebf009d329fb66011ef0116f58a5324aea7d8b5b0b8",
+         "dirty": true,
+         "nix_store_path": null,
+-        "repo_rev": "9e1adc3951b107d575d793be471f942f1c6dbdfe"
++        "repo_rev": "ac1bb3f5a51ac578ee147f65ff133815c955743b"
+       },
+       "sha256": "8c0181ce1a94c635b54d95e1b4992bdb069bf16cc93516412f7b365f73eea1df"
+     }
+diff --git a/pr/76-cursor-agent-reads-the-resume-dir.md b/pr/76-cursor-agent-reads-the-resume-dir.md
+new file mode 100644
+index 00000000..3b9a4ee0
+--- /dev/null
++++ b/pr/76-cursor-agent-reads-the-resume-dir.md
+@@ -0,0 +1,20 @@
++# fix(goldens): a cursor-agent store is read with the directory it was resumed in
++
++Status: draft · Base: c1e8cd9 (pr/63-75 landed) · Code (pipeline.rs `read_in`, `value_cwd`) + 11 snapshots + contract/cursor-agent.json
++
++## Why (plain words)
++claude -> cursor-agent -> back still gave `notes.md` once plus four `/var/folders/.../notes.md` keys. The store keeps no working
++directory (only md5(cwd) in the chat folder's name), so the reader had nothing to make file keys relative to. A user knows it:
++`path resume -C <project>` chose it. The baseline's read-back never said it.
++
++## What
++`read_in` sets the view's working_dir for a cursor-agent read, from the document being round-tripped (same `resume_dir` rule as pr/73),
++in round_trip and twice_around. The store format and reader are unchanged. The contract's declared loss of `path.base.uri` is removed
++(the writer plus a caller-supplied directory keeps it); the rest of the store's limits stay declared.
++
++## Result
++The double key is gone from claude -> cursor-agent (0 `/var/folders` keys in the snapshot). Note this is the caller's directory, not
++one read out of the store: a bare `cursor-agent` store read with no directory still has absolute keys, as before.
++
++## Not run
++Pinned 1.94, gitleaks, nix-develop recapture.
+-- 
+2.55.0
+

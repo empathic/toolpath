@@ -1,0 +1,323 @@
+From a5c46d3865613b2861ec4c4780606c28fab37992 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 20:06:12 -0400
+Subject: [PATCH] fix(codex): a Codex session projected back to Codex keeps its
+ turn settings (approval and sandbox policy, personality, collaboration mode);
+ shed@codex drops 11 fewer key paths
+
+---
+ crates/toolpath-codex/src/project.rs          | 126 +++++++++++++++++-
+ .../snapshots/shed@codex.snap                 |  50 +------
+ pr/57-codex-keeps-turn-settings.md            |  29 ++++
+ 3 files changed, 152 insertions(+), 53 deletions(-)
+ create mode 100644 pr/57-codex-keeps-turn-settings.md
+
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index a7e266df..c6bb1c6f 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -28,7 +28,7 @@ use toolpath_convo::{
+ 
+ use crate::types::{
+     ContentPart, CustomToolCall, CustomToolCallOutput, FunctionCall, FunctionCallOutput, Message,
+-    Reasoning, RolloutLine, SessionMeta, TurnContext,
++    Reasoning, RolloutLine, SandboxPolicy, SessionMeta, TurnContext,
+ };
+ 
+ // ── CodexProjector ───────────────────────────────────────────────────
+@@ -137,6 +137,8 @@ fn project_view(
+         .or_else(|| view.turns.first().map(|t| t.timestamp.clone()))
+         .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
+ 
++    let settings = TurnSettings::from_view(view);
++
+     let mut lines: Vec<RolloutLine> = Vec::new();
+ 
+     // Line 1: session_meta. Codex always writes this first.
+@@ -176,6 +178,7 @@ fn project_view(
+         &session_timestamp,
+         &cwd,
+         &model,
++        &settings,
+     ));
+     let mut current_group = Some(first_group);
+ 
+@@ -193,6 +196,7 @@ fn project_view(
+                     &turn.timestamp,
+                     &cwd,
+                     &model,
++                    &settings,
+                 ));
+                 current_group = Some(group);
+             }
+@@ -254,17 +258,60 @@ fn make_session_meta_line(
+     }
+ }
+ 
+-fn make_turn_context_line(turn_id: &str, timestamp: &str, cwd: &str, model: &str) -> RolloutLine {
++/// The settings a Codex session states on its `turn_context` lines, taken
++/// from the view's first `turn_context` event, so a Codex session projected
++/// back to Codex keeps them. Only for a view Codex recorded
++/// (`provider_id == "codex"`): no other harness has these settings, and
++/// what they lose is declared in the writer contract
++/// (`toolpath-goldens/fixtures/contract/codex.json`).
++#[derive(Default)]
++struct TurnSettings {
++    approval_policy: Option<String>,
++    sandbox_policy: Option<SandboxPolicy>,
++    personality: Option<String>,
++    collaboration_mode: Option<Value>,
++}
++
++impl TurnSettings {
++    fn from_view(view: &ConversationView) -> Self {
++        if view.provider_id.as_deref() != Some("codex") {
++            return Self::default();
++        }
++        let Some(event) = view.events.iter().find(|e| e.event_type == "turn_context") else {
++            return Self::default();
++        };
++        fn field<T: serde::de::DeserializeOwned>(
++            data: &HashMap<String, Value>,
++            key: &str,
++        ) -> Option<T> {
++            serde_json::from_value(data.get(key)?.clone()).ok()
++        }
++        Self {
++            approval_policy: field(&event.data, "approval_policy"),
++            sandbox_policy: field(&event.data, "sandbox_policy"),
++            personality: field(&event.data, "personality"),
++            collaboration_mode: field(&event.data, "collaboration_mode"),
++        }
++    }
++}
++
++fn make_turn_context_line(
++    turn_id: &str,
++    timestamp: &str,
++    cwd: &str,
++    model: &str,
++    settings: &TurnSettings,
++) -> RolloutLine {
+     let tc = TurnContext {
+         turn_id: turn_id.to_string(),
+         cwd: PathBuf::from(cwd),
+         current_date: None,
+         timezone: None,
+-        approval_policy: None,
+-        sandbox_policy: None,
++        approval_policy: settings.approval_policy.clone(),
++        sandbox_policy: settings.sandbox_policy.clone(),
+         model: Some(model.to_string()),
+-        personality: None,
+-        collaboration_mode: None,
++        personality: settings.personality.clone(),
++        collaboration_mode: settings.collaboration_mode.clone(),
+         extra: HashMap::new(),
+     };
+     RolloutLine {
+@@ -801,6 +848,73 @@ mod tests {
+         assert_eq!(line_kinds(&s), vec!["session_meta", "turn_context"]);
+     }
+ 
++    fn with_turn_context(mut view: ConversationView) -> ConversationView {
++        let payload = json!({
++            "turn_id": "t1",
++            "cwd": "/tmp/proj",
++            "approval_policy": "on-request",
++            "sandbox_policy": {"type": "workspace-write", "network_access": false},
++            "personality": "pragmatic",
++            "collaboration_mode": {"mode": "default", "settings": {"model": "gpt-5.4"}},
++        });
++        view.events.push(toolpath_convo::ConversationEvent {
++            id: "turn_context-1".into(),
++            timestamp: "2026-04-20T16:00:00.000Z".into(),
++            parent_id: None,
++            event_type: "turn_context".into(),
++            data: payload
++                .as_object()
++                .unwrap()
++                .iter()
++                .map(|(k, v)| (k.clone(), v.clone()))
++                .collect(),
++        });
++        view
++    }
++
++    fn turn_contexts(s: &crate::types::Session) -> Vec<&Value> {
++        s.lines
++            .iter()
++            .filter(|l| l.kind == "turn_context")
++            .map(|l| &l.payload)
++            .collect()
++    }
++
++    #[test]
++    fn codex_session_keeps_its_turn_settings() {
++        let view = with_turn_context(view_with(vec![
++            user_turn("u1", "hi"),
++            assistant_turn("a1", "hello"),
++        ]));
++        let s = CodexProjector::default().project(&view).unwrap();
++        let tcs = turn_contexts(&s);
++        assert!(!tcs.is_empty());
++        for tc in tcs {
++            assert_eq!(tc["approval_policy"], "on-request");
++            assert_eq!(tc["sandbox_policy"]["type"], "workspace-write");
++            assert_eq!(tc["sandbox_policy"]["network_access"], false);
++            assert_eq!(tc["personality"], "pragmatic");
++            assert_eq!(tc["collaboration_mode"]["mode"], "default");
++        }
++    }
++
++    #[test]
++    fn other_harness_settings_are_not_copied() {
++        let mut view = with_turn_context(view_with(vec![assistant_turn("a1", "hello")]));
++        view.provider_id = Some("claude".into());
++        let s = CodexProjector::default().project(&view).unwrap();
++        for tc in turn_contexts(&s) {
++            for key in [
++                "approval_policy",
++                "sandbox_policy",
++                "personality",
++                "collaboration_mode",
++            ] {
++                assert!(tc.get(key).is_none(), "{key} copied from a claude view");
++            }
++        }
++    }
++
+     #[test]
+     fn user_turn_becomes_user_role_message() {
+         let s = CodexProjector::default()
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index 7f8e3794..ccf22b0a 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -95,7 +95,7 @@ input_file: test-fixtures/codex/convo.jsonl
+   },
+   "same_format": {
+     "lines": 19,
+-    "bytes": 20136,
++    "bytes": 20488,
+     "event_types_shed": {
+       "event_msg/agent_message": {
+         "source": 13,
+@@ -124,8 +124,8 @@ input_file: test-fixtures/codex/convo.jsonl
+     },
+     "key_paths": {
+       "source": 94,
+-      "after": 37,
+-      "lost": 69,
++      "after": 48,
++      "lost": 58,
+       "gained": 12
+     },
+     "renamed": [],
+@@ -134,30 +134,10 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.agent_nickname",
+         "example": "Confucius"
+       },
+-      {
+-        "path": "payload.approval_policy",
+-        "example": "never"
+-      },
+       {
+         "path": "payload.base_instructions.text",
+         "example": "You are Codex, a coding agent based on G…"
+       },
+-      {
+-        "path": "payload.collaboration_mode.mode",
+-        "example": "default"
+-      },
+-      {
+-        "path": "payload.collaboration_mode.settings.developer_instructions",
+-        "example": "null"
+-      },
+-      {
+-        "path": "payload.collaboration_mode.settings.model",
+-        "example": "gpt-5.5"
+-      },
+-      {
+-        "path": "payload.collaboration_mode.settings.reasoning_effort",
+-        "example": "xhigh"
+-      },
+       {
+         "path": "payload.collaboration_mode_kind",
+         "example": "default"
+@@ -290,10 +270,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.permission_profile.type",
+         "example": "managed"
+       },
+-      {
+-        "path": "payload.personality",
+-        "example": "pragmatic"
+-      },
+       {
+         "path": "payload.rate_limits.credits",
+         "example": "null"
+@@ -342,26 +318,6 @@ input_file: test-fixtures/codex/convo.jsonl
+         "path": "payload.realtime_active",
+         "example": "false"
+       },
+-      {
+-        "path": "payload.sandbox_policy.exclude_slash_tmp",
+-        "example": "false"
+-      },
+-      {
+-        "path": "payload.sandbox_policy.exclude_tmpdir_env_var",
+-        "example": "false"
+-      },
+-      {
+-        "path": "payload.sandbox_policy.network_access",
+-        "example": "false"
+-      },
+-      {
+-        "path": "payload.sandbox_policy.type",
+-        "example": "workspace-write"
+-      },
+-      {
+-        "path": "payload.sandbox_policy.writable_roots[]",
+-        "example": "/Users/ben/.codex/memories"
+-      },
+       {
+         "path": "payload.source.subagent.thread_spawn.agent_nickname",
+         "example": "Confucius"
+diff --git a/pr/57-codex-keeps-turn-settings.md b/pr/57-codex-keeps-turn-settings.md
+new file mode 100644
+index 00000000..0913c17f
+--- /dev/null
++++ b/pr/57-codex-keeps-turn-settings.md
+@@ -0,0 +1,29 @@
++# fix(codex): a Codex session projected back to Codex keeps its turn settings
++
++Status: planned (ruling 2026-10-19, design consultant: "Codex keeps its own settings same-harness") · Base: the goldens stack once merged
++
++## Why
++The Codex writer wrote every `turn_context` line with `approval_policy`, `sandbox_policy`, `personality` and
++`collaboration_mode` empty, even when the session came from Codex and the document still had them (they survive derive
++as the `turn_context` event's data). `shed@codex` pinned all of them as dropped on the same-format round trip.
++
++## What changes
++- `crates/toolpath-codex/src/project.rs`: `TurnSettings::from_view` reads the four settings from the view's first
++  `turn_context` event, only when `view.provider_id == "codex"`; `make_turn_context_line` writes them on every
++  `turn_context` line. Another harness's view gets none: those settings mean nothing to Codex, and what a cross-harness
++  projection loses stays declared in the writer contract (`fixtures/contract/codex.json`, pr/54-writer-contracts).
++- Tests: `codex_session_keeps_its_turn_settings`, `other_harness_settings_are_not_copied`.
++
++## Snapshots
++- `shed@codex`: same-format `lost` 69 → 58, `after` 37 → 48; the 11 key paths no longer dropped are
++  `payload.approval_policy`, `payload.collaboration_mode.{mode, settings.developer_instructions, settings.model,
++  settings.reasoning_effort}`, `payload.personality`, `payload.sandbox_policy.{exclude_slash_tmp,
++  exclude_tmpdir_env_var, network_access, type, writable_roots[]}`; same-format bytes 20136 → 20488. Nothing else in it
++  changed. Its `projections.cursor` stats are left as pinned: the cursor snapshots are being re-recorded separately.
++- `goldens/shed/codex.json` not refreshed: fewer drops are info in `path d baseline check`, and refreshing it would also
++  take the new cursor stats.
++- No other snapshot changes (`writer@codex` derives from `fixtures/full-view.json`, which is not a Codex view).
++
++## Still dropped same-format (not in the ruling)
++`payload.file_system_sandbox_policy.*`, `payload.collaboration_mode_kind`, `payload.current_date`, `payload.timezone`
++and the other `turn_context` keys Codex added outside the typed `TurnContext` fields.
+-- 
+2.55.0
+

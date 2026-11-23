@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Validation": {
+      "description": "What `path p validate` says of a document: the base schema and, for a path naming a bundled kind, that kind's schema.",
+      "oneOf": [
+        {
+          "properties": {
+            "outcome": {
+              "enum": [
+                "valid"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Every violation, as `path p validate` prints it.",
+          "properties": {
+            "errors": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "outcome": {
+              "enum": [
+                "invalid"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "errors",
+            "outcome"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "There was no document to validate: the projection was unreadable.",
+          "properties": {
+            "outcome": {
+              "enum": [
+                "not_derived"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "outcome"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "description": "`path p validate` over one recording's document and over every projection derived again.",
+  "properties": {
+    "document": {
+      "$ref": "#/definitions/Validation"
+    },
+    "round_trips": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Validation"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "document",
+    "round_trips"
+  ],
+  "title": "validate snapshot",
+  "type": "object"
+}

@@ -1,0 +1,2134 @@
+From dfd4f3dbbfed148105d54418e31a2a91b7955654 Mon Sep 17 00:00:00 2001
+From: Robert DeLanghe <1240090+bdelanghe@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 17:21:03 -0400
+Subject: [PATCH] feat(convo,pi): who served the model rides the RFC's actor
+ slot; pi keeps its provider across a round trip
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Turn gains `provider: Option<String>` (who served `model`: anthropic,
+openai, ollama …). derive writes it to meta.actors["agent:<model>"].provider,
+the slot RFC.md and the kind spec already name for it; extract reads it
+back. Before, derive filled that slot with the harness name ("pi",
+"claude-code"), which duplicates meta.source and inverts the RFC's own
+example; extract ignores such legacy values.
+
+pi's reader now keeps each assistant message's provider and its writer
+prefers it over the "anthropic" default, so ollama/gemma4 comes back as
+ollama/gemma4 (test provider_survives_round_trip). The stale Turn.extra
+paragraphs in the pi and codex writer headers are replaced with what the
+code does (Turn has no extras; codex's encrypted reasoning and tool
+extras are not round-tripped).
+
+Snapshots: document@* lose the harness value under agent actors (pi
+gains "ollama"); ir@pi gains provider per turn; 32 cross-harness
+round_trip snapshots list meta.actors.<actor>.provider as lost — the key
+path now only exists on non-agent actors in the source.
+---
+ crates/path-cli/src/cmd_resume/tui/rows.rs    |  1 +
+ crates/toolpath-claude/src/project.rs         |  2 +
+ crates/toolpath-claude/src/provider.rs        |  3 +
+ crates/toolpath-codex/src/project.rs          | 25 +++----
+ crates/toolpath-codex/src/provider.rs         |  2 +
+ crates/toolpath-convo/src/derive.rs           | 25 ++++++-
+ crates/toolpath-convo/src/extract.rs          | 13 ++++
+ crates/toolpath-convo/src/lib.rs              | 13 ++++
+ crates/toolpath-convo/src/project.rs          |  4 ++
+ crates/toolpath-copilot/src/project.rs        |  4 ++
+ crates/toolpath-copilot/src/provider.rs       |  1 +
+ .../toolpath-cursor/examples/dump_fixture.rs  |  1 +
+ crates/toolpath-cursor/src/project.rs         |  2 +
+ crates/toolpath-cursor/src/provider.rs        |  2 +
+ .../tests/projection_roundtrip.rs             |  2 +
+ crates/toolpath-gemini/src/project.rs         |  2 +
+ crates/toolpath-gemini/src/provider.rs        |  1 +
+ .../snapshots/document@claude-compacted.snap  |  3 +-
+ .../snapshots/document@claude-session.snap    |  3 +-
+ .../snapshots/document@claude.snap            |  5 +-
+ .../snapshots/document@codex.snap             |  5 +-
+ .../snapshots/document@copilot.snap           |  3 +-
+ .../snapshots/document@cursor.snap            |  3 +-
+ .../snapshots/document@gemini.snap            |  3 +-
+ .../snapshots/document@opencode.snap          |  3 +-
+ .../snapshots/document@pi.snap                |  4 +-
+ crates/toolpath-goldens/snapshots/ir@pi.snap  | 13 +++-
+ .../round_trip@claude-compacted@copilot.snap  |  3 +-
+ .../round_trip@claude-compacted@cursor.snap   |  3 +-
+ .../round_trip@claude-compacted@gemini.snap   |  3 +-
+ .../round_trip@claude-compacted@opencode.snap |  3 +-
+ .../round_trip@claude-session@copilot.snap    |  3 +-
+ .../round_trip@claude-session@cursor.snap     |  3 +-
+ .../round_trip@claude-session@gemini.snap     |  3 +-
+ .../round_trip@claude-session@opencode.snap   |  3 +-
+ .../snapshots/round_trip@claude@copilot.snap  |  5 +-
+ .../snapshots/round_trip@claude@cursor.snap   |  3 +-
+ .../snapshots/round_trip@claude@gemini.snap   |  3 +-
+ .../snapshots/round_trip@claude@opencode.snap |  3 +-
+ .../snapshots/round_trip@codex@cursor.snap    |  3 +-
+ .../snapshots/round_trip@codex@opencode.snap  |  3 +-
+ .../snapshots/round_trip@copilot@cursor.snap  |  3 +-
+ .../snapshots/round_trip@copilot@gemini.snap  |  3 +-
+ .../round_trip@copilot@opencode.snap          |  3 +-
+ .../snapshots/round_trip@cursor@claude.snap   |  3 +-
+ .../snapshots/round_trip@cursor@codex.snap    |  3 +-
+ .../snapshots/round_trip@cursor@copilot.snap  |  4 +-
+ .../snapshots/round_trip@cursor@gemini.snap   |  4 +-
+ .../snapshots/round_trip@cursor@opencode.snap |  4 +-
+ .../snapshots/round_trip@cursor@pi.snap       |  3 +-
+ .../snapshots/round_trip@gemini@claude.snap   |  3 +-
+ .../snapshots/round_trip@gemini@codex.snap    |  3 +-
+ .../snapshots/round_trip@gemini@copilot.snap  |  4 +-
+ .../snapshots/round_trip@gemini@cursor.snap   |  4 +-
+ .../snapshots/round_trip@gemini@opencode.snap |  4 +-
+ .../snapshots/round_trip@gemini@pi.snap       |  3 +-
+ .../snapshots/round_trip@opencode@claude.snap |  3 +-
+ .../snapshots/round_trip@opencode@codex.snap  |  3 +-
+ .../round_trip@opencode@copilot.snap          |  4 +-
+ .../snapshots/round_trip@opencode@cursor.snap |  4 +-
+ .../snapshots/round_trip@opencode@gemini.snap |  4 +-
+ .../snapshots/round_trip@opencode@pi.snap     |  3 +-
+ .../snapshots/round_trip@pi@copilot.snap      |  5 +-
+ .../snapshots/round_trip@pi@cursor.snap       |  3 +-
+ .../snapshots/round_trip@pi@gemini.snap       |  3 +-
+ .../snapshots/round_trip@pi@opencode.snap     |  3 +-
+ .../snapshots/shed@claude-compacted.snap      |  4 +-
+ .../snapshots/shed@claude-session.snap        |  4 +-
+ .../snapshots/shed@claude.snap                |  4 +-
+ .../snapshots/shed@codex.snap                 |  4 +-
+ .../snapshots/shed@copilot.snap               |  4 +-
+ .../snapshots/shed@cursor.snap                |  4 +-
+ .../snapshots/shed@gemini.snap                |  4 +-
+ .../snapshots/shed@opencode.snap              |  4 +-
+ .../toolpath-goldens/snapshots/shed@pi.snap   |  6 +-
+ .../snapshots/writer@claude.snap              |  3 +-
+ .../snapshots/writer@codex.snap               |  3 +-
+ .../snapshots/writer@copilot.snap             |  4 +-
+ .../snapshots/writer@cursor.snap              |  4 +-
+ .../snapshots/writer@gemini.snap              |  4 +-
+ .../snapshots/writer@opencode.snap            |  4 +-
+ .../toolpath-goldens/snapshots/writer@pi.snap |  6 +-
+ crates/toolpath-opencode/src/project.rs       |  2 +
+ crates/toolpath-opencode/src/provider.rs      |  2 +
+ crates/toolpath-pi/src/.qual                  |  1 +
+ crates/toolpath-pi/src/project.rs             | 39 +++++------
+ crates/toolpath-pi/src/provider.rs            |  8 +++
+ .../tests/real_fixture_roundtrip.rs           | 65 +++++++++++++++++++
+ examples/.qual                                |  1 +
+ 89 files changed, 323 insertions(+), 139 deletions(-)
+
+diff --git a/crates/path-cli/src/cmd_resume/tui/rows.rs b/crates/path-cli/src/cmd_resume/tui/rows.rs
+index 0fd2d4be..04397cb3 100644
+--- a/crates/path-cli/src/cmd_resume/tui/rows.rs
++++ b/crates/path-cli/src/cmd_resume/tui/rows.rs
+@@ -113,6 +113,7 @@ mod tests {
+                 .iter()
+                 .enumerate()
+                 .map(|(n, (role, text, timestamp))| Turn {
++                    provider: None,
+                     id: format!("t{n}"),
+                     parent_id: n.checked_sub(1).map(|p| format!("t{p}")),
+                     group_id: None,
+diff --git a/crates/toolpath-claude/src/project.rs b/crates/toolpath-claude/src/project.rs
+index 793671eb..b5e8741d 100644
+--- a/crates/toolpath-claude/src/project.rs
++++ b/crates/toolpath-claude/src/project.rs
+@@ -1130,6 +1130,7 @@ mod tests {
+ 
+     fn user_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.to_string(),
+             parent_id: None,
+             group_id: None,
+@@ -1150,6 +1151,7 @@ mod tests {
+ 
+     fn assistant_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.to_string(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-claude/src/provider.rs b/crates/toolpath-claude/src/provider.rs
+index b6fab527..a666f34a 100644
+--- a/crates/toolpath-claude/src/provider.rs
++++ b/crates/toolpath-claude/src/provider.rs
+@@ -121,6 +121,7 @@ fn message_to_turn(entry: &ConversationEntry, msg: &Message) -> Turn {
+     let delegations = extract_delegations(&tool_uses);
+ 
+     Turn {
++        provider: None,
+         id: entry.uuid.clone(),
+         parent_id: entry.parent_uuid.clone(),
+         // The API message ID (`msg_…`). Claude Code writes one JSONL line
+@@ -855,6 +856,7 @@ mod tests {
+ 
+     fn message_turn_stub(id: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+@@ -1434,6 +1436,7 @@ mod tests {
+     fn test_merge_tool_results_by_id() {
+         // Verify that merge matches by tool_use_id, not position
+         let mut turns = vec![Turn {
++            provider: None,
+             id: "t1".into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-codex/src/project.rs b/crates/toolpath-codex/src/project.rs
+index c2c26b82..a96e2eb5 100644
+--- a/crates/toolpath-codex/src/project.rs
++++ b/crates/toolpath-codex/src/project.rs
+@@ -8,22 +8,15 @@
+ //! line, followed by a `turn_context`, then per-turn `response_item`
+ //! and `event_msg` lines).
+ //!
+-//! The projector consumes provider-specific data the forward path
+-//! stashed under `Turn.extra["codex"]`:
++//! [`Turn`] has no per-harness extras, so `codex_extras` always returns
++//! `None`: encrypted reasoning and per-`call_id` tool extras (exec exit
++//! codes, custom-call statuses, patch manifests) are not carried through
++//! the view and are not round-tripped. The code that would re-emit them
++//! stays in place behind that `None`.
+ //!
+-//! - `reasoning_encrypted`: opaque ciphertext blobs that round-trip
+-//!   verbatim as `Reasoning::encrypted_content`
+-//! - `tool_extras`: per-`call_id` extras (exec exit_codes, custom-call
+-//!   statuses, patch-change manifests, etc.) preserved on the matching
+-//!   `function_call_output` / `custom_tool_call_output` line
+-//!
+-//! For non-Codex sources, the projector synthesizes sensible defaults
+-//! (originator: `"codex-toolpath"`, source: `"cli"`, model_provider:
+-//! `"openai"`).
+-//!
+-//! Foreign-namespace extras (`Turn.extra["claude"]`,
+-//! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
+-//! Codex's protocol and would pollute the JSONL.
++//! For every source, the projector synthesizes defaults for fields the
++//! view does not carry (originator: `"codex-toolpath"`, source: `"cli"`,
++//! model_provider: `"openai"` unless the view names one).
+ 
+ use std::collections::HashMap;
+ use std::path::PathBuf;
+@@ -711,6 +704,7 @@ mod tests {
+ 
+     fn user_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+@@ -731,6 +725,7 @@ mod tests {
+ 
+     fn assistant_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-codex/src/provider.rs b/crates/toolpath-codex/src/provider.rs
+index 5b915ce2..e78a4ae3 100644
+--- a/crates/toolpath-codex/src/provider.rs
++++ b/crates/toolpath-codex/src/provider.rs
+@@ -814,6 +814,7 @@ fn message_to_turn(
+     });
+ 
+     Turn {
++        provider: None,
+         id: msg.id.clone().unwrap_or_default(),
+         parent_id: None,
+         group_id: None,
+@@ -842,6 +843,7 @@ fn synthetic_assistant_turn(
+     model: Option<&str>,
+ ) -> Turn {
+     Turn {
++        provider: None,
+         id: format!("synth-{}", timestamp),
+         parent_id: None,
+         group_id: None,
+diff --git a/crates/toolpath-convo/src/derive.rs b/crates/toolpath-convo/src/derive.rs
+index 2cab698e..f6007e23 100644
+--- a/crates/toolpath-convo/src/derive.rs
++++ b/crates/toolpath-convo/src/derive.rs
+@@ -576,13 +576,19 @@ fn record_actor(
+     provider: &str,
+     _view: &ConversationView,
+ ) {
+-    if actors.contains_key(actor) {
++    if let Some(existing) = actors.get_mut(actor) {
++        // A later turn may be the first to name the serving provider.
++        if existing.provider.is_none() && actor.starts_with("agent:") {
++            existing.provider = turn.provider.clone();
++        }
+         return;
+     }
+     let def = if let Some(rest) = actor.strip_prefix("agent:") {
++        // The RFC's slot for who served the model (`anthropic`, `ollama`, …).
++        // The harness is `meta.source`, so it is not repeated here.
+         ActorDefinition {
+             name: Some(rest.to_string()),
+-            provider: Some(provider.to_string()),
++            provider: turn.provider.clone(),
+             model: turn.model.clone(),
+             identities: vec![],
+             keys: vec![],
+@@ -763,6 +769,7 @@ mod tests {
+ 
+     fn base_turn(id: &str, role: Role) -> Turn {
+         Turn {
++            provider: None,
+             id: id.to_string(),
+             parent_id: None,
+             group_id: None,
+@@ -1566,18 +1573,30 @@ mod tests {
+         let u = base_turn("t1", Role::User);
+         let mut a = base_turn("t2", Role::Assistant);
+         a.model = Some("claude-opus-4-7".into());
++        a.provider = Some("anthropic".into());
+         let view = view_with(vec![u, a]);
+         let path = derive_path(&view, &DeriveConfig::default());
+         let actors = path.meta.unwrap().actors.unwrap();
+         assert!(actors.contains_key("human:user"));
+         assert!(actors.contains_key("agent:claude-opus-4-7"));
+         let agent = &actors["agent:claude-opus-4-7"];
+-        assert_eq!(agent.provider.as_deref(), Some("pi"));
++        // Who served the model (the turn's provider), not the harness
++        // (`pi` here), which is `meta.source`.
++        assert_eq!(agent.provider.as_deref(), Some("anthropic"));
+         assert_eq!(agent.model.as_deref(), Some("claude-opus-4-7"));
+         let human = &actors["human:user"];
+         assert_eq!(human.name.as_deref(), Some("user"));
+     }
+ 
++    #[test]
++    fn test_agent_actor_without_provider_names_none() {
++        let mut a = base_turn("t2", Role::Assistant);
++        a.model = Some("gemma4".into());
++        let path = derive_path(&view_with(vec![a]), &DeriveConfig::default());
++        let actors = path.meta.unwrap().actors.unwrap();
++        assert_eq!(actors["agent:gemma4"].provider, None);
++    }
++
+     #[test]
+     fn test_head_is_last_step_id() {
+         let turns = vec![
+diff --git a/crates/toolpath-convo/src/extract.rs b/crates/toolpath-convo/src/extract.rs
+index 2c17bf2c..4c2bb673 100644
+--- a/crates/toolpath-convo/src/extract.rs
++++ b/crates/toolpath-convo/src/extract.rs
+@@ -146,6 +146,18 @@ pub fn extract_conversation(path: &Path) -> ConversationView {
+                     }
+ 
+                     let mut turn = build_turn(step, &structural.extra);
++                    // Who served the model: the RFC's `meta.actors[actor].provider`.
++                    turn.provider = path
++                        .meta
++                        .as_ref()
++                        .and_then(|m| m.actors.as_ref())
++                        .and_then(|a| a.get(&step.step.actor))
++                        .and_then(|d| d.provider.clone())
++                        .filter(|_| step.step.actor.starts_with("agent:"))
++                        // Documents derived before this field existed put the
++                        // harness here (`pi`, `claude-code`); that is not a
++                        // model provider, so it is not read back as one.
++                        .filter(|p| Some(p.as_str()) != view.provider_id.as_deref());
+                     // Attach pre-collected file mutations to the turn.
+                     // `tool_id` on each mutation links back to the
+                     // specific `ToolInvocation` (when set by derive).
+@@ -333,6 +345,7 @@ fn build_turn(step: &Step, extra: &HashMap<String, serde_json::Value>) -> Turn {
+         thinking,
+         tool_uses,
+         model,
++        provider: None,
+         stop_reason,
+         token_usage,
+         attributed_token_usage,
+diff --git a/crates/toolpath-convo/src/lib.rs b/crates/toolpath-convo/src/lib.rs
+index 80bf24db..9d79a1a2 100644
+--- a/crates/toolpath-convo/src/lib.rs
++++ b/crates/toolpath-convo/src/lib.rs
+@@ -283,6 +283,14 @@ pub struct Turn {
+     /// Model identifier (e.g. "claude-opus-4-6", "gpt-4o").
+     pub model: Option<String>,
+ 
++    /// Who served `model` (e.g. "anthropic", "openai", "ollama"), when the
++    /// source records it. Derive writes it to the RFC's existing slot,
++    /// `meta.actors["agent:<model>"].provider`; extract reads it back.
++    /// Distinct from the harness (`meta.source`): pi can run `gemma4` on
++    /// `ollama`.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub provider: Option<String>,
++
+     /// Why the turn ended (e.g. "end_turn", "tool_use", "max_tokens").
+     pub stop_reason: Option<String>,
+ 
+@@ -594,6 +602,7 @@ mod tests {
+             last_activity: None,
+             turns: vec![
+                 Turn {
++                    provider: None,
+                     id: "t1".into(),
+                     parent_id: None,
+                     group_id: None,
+@@ -611,6 +620,7 @@ mod tests {
+                     file_mutations: Vec::new(),
+                 },
+                 Turn {
++                    provider: None,
+                     id: "t2".into(),
+                     parent_id: Some("t1".into()),
+                     group_id: None,
+@@ -643,6 +653,7 @@ mod tests {
+                     file_mutations: Vec::new(),
+                 },
+                 Turn {
++                    provider: None,
+                     id: "t3".into(),
+                     parent_id: Some("t2".into()),
+                     group_id: None,
+@@ -983,6 +994,7 @@ mod tests {
+     #[test]
+     fn test_turn_with_environment_and_delegations() {
+         let turn = Turn {
++            provider: None,
+             id: "t1".into(),
+             parent_id: None,
+             group_id: None,
+@@ -1177,6 +1189,7 @@ mod tests {
+     fn test_turn_is_content_empty() {
+         // Turn has no Default; build a whitespace-only base and clone it.
+         let base = Turn {
++            provider: None,
+             id: "t1".into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-convo/src/project.rs b/crates/toolpath-convo/src/project.rs
+index 3a0a0511..5dbdc6be 100644
+--- a/crates/toolpath-convo/src/project.rs
++++ b/crates/toolpath-convo/src/project.rs
+@@ -155,6 +155,7 @@ mod tests {
+ 
+     fn make_turn(id: &str, role: Role, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+@@ -337,6 +338,7 @@ mod tests {
+             last_activity: None,
+             events: vec![],
+             turns: vec![Turn {
++                provider: None,
+                 id: "t1".into(),
+                 parent_id: None,
+                 group_id: None,
+@@ -413,6 +415,7 @@ mod tests {
+             events: vec![],
+             turns: vec![
+                 Turn {
++                    provider: None,
+                     id: "t1".into(),
+                     parent_id: None,
+                     group_id: None,
+@@ -436,6 +439,7 @@ mod tests {
+                     file_mutations: Vec::new(),
+                 },
+                 Turn {
++                    provider: None,
+                     id: "t2".into(),
+                     parent_id: Some("t1".into()),
+                     group_id: None,
+diff --git a/crates/toolpath-copilot/src/project.rs b/crates/toolpath-copilot/src/project.rs
+index ffd8b654..d5f116aa 100644
+--- a/crates/toolpath-copilot/src/project.rs
++++ b/crates/toolpath-copilot/src/project.rs
+@@ -766,6 +766,7 @@ mod tests {
+             ..Default::default()
+         };
+         view.turns.push(Turn {
++            provider: None,
+             id: "a1".into(),
+             parent_id: None,
+             group_id: None,
+@@ -829,6 +830,7 @@ mod tests {
+                 ..Default::default()
+             };
+             v.turns.push(Turn {
++                provider: None,
+                 id: "a1".into(),
+                 parent_id: None,
+                 group_id: None,
+@@ -969,6 +971,7 @@ mod tests {
+             ..Default::default()
+         };
+         view.turns.push(Turn {
++            provider: None,
+             id: "a1".into(),
+             parent_id: None,
+             group_id: None,
+@@ -1036,6 +1039,7 @@ mod tests {
+             ..Default::default()
+         };
+         view.turns.push(Turn {
++            provider: None,
+             id: "a1".into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-copilot/src/provider.rs b/crates/toolpath-copilot/src/provider.rs
+index aa4f7bec..f1ebde38 100644
+--- a/crates/toolpath-copilot/src/provider.rs
++++ b/crates/toolpath-copilot/src/provider.rs
+@@ -406,6 +406,7 @@ pub fn to_view(session: &Session) -> ConversationView {
+ 
+ fn empty_turn(id: String, role: Role, timestamp: String) -> Turn {
+     Turn {
++        provider: None,
+         id,
+         parent_id: None,
+         group_id: None,
+diff --git a/crates/toolpath-cursor/examples/dump_fixture.rs b/crates/toolpath-cursor/examples/dump_fixture.rs
+index 6fc8ee73..40969f79 100644
+--- a/crates/toolpath-cursor/examples/dump_fixture.rs
++++ b/crates/toolpath-cursor/examples/dump_fixture.rs
+@@ -270,6 +270,7 @@ fn view_from_jsonl(
+             .collect();
+ 
+         turns.push(Turn {
++            provider: None,
+             id: turn_id.clone(),
+             parent_id: prev_id.clone(),
+             group_id: None,
+diff --git a/crates/toolpath-cursor/src/project.rs b/crates/toolpath-cursor/src/project.rs
+index 97934fba..50944643 100644
+--- a/crates/toolpath-cursor/src/project.rs
++++ b/crates/toolpath-cursor/src/project.rs
+@@ -910,6 +910,7 @@ mod tests {
+ 
+     fn user_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+@@ -934,6 +935,7 @@ mod tests {
+ 
+     fn assistant_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-cursor/src/provider.rs b/crates/toolpath-cursor/src/provider.rs
+index d1276f39..342396db 100644
+--- a/crates/toolpath-cursor/src/provider.rs
++++ b/crates/toolpath-cursor/src/provider.rs
+@@ -365,6 +365,7 @@ impl<'a> Builder<'a> {
+     fn user_turn(&self, bubble: &Bubble, parent: Option<&str>) -> Turn {
+         let environment = self.environment();
+         Turn {
++            provider: None,
+             id: bubble.bubble_id.clone(),
+             parent_id: parent.map(str::to_string),
+             group_id: None,
+@@ -456,6 +457,7 @@ impl<'a> Builder<'a> {
+             .or_else(|| self.session.data.default_model().map(str::to_string));
+ 
+         Turn {
++            provider: None,
+             id: bubble.bubble_id.clone(),
+             parent_id: parent.map(str::to_string),
+             group_id: None,
+diff --git a/crates/toolpath-cursor/tests/projection_roundtrip.rs b/crates/toolpath-cursor/tests/projection_roundtrip.rs
+index c4317a0a..c27af898 100644
+--- a/crates/toolpath-cursor/tests/projection_roundtrip.rs
++++ b/crates/toolpath-cursor/tests/projection_roundtrip.rs
+@@ -231,6 +231,7 @@ fn projector_accepts_foreign_view_shape() {
+         }),
+         turns: vec![
+             Turn {
++                provider: None,
+                 id: "uA".into(),
+                 parent_id: None,
+                 group_id: None,
+@@ -251,6 +252,7 @@ fn projector_accepts_foreign_view_shape() {
+                 file_mutations: vec![],
+             },
+             Turn {
++                provider: None,
+                 id: "aA".into(),
+                 parent_id: Some("uA".into()),
+                 group_id: None,
+diff --git a/crates/toolpath-gemini/src/project.rs b/crates/toolpath-gemini/src/project.rs
+index 5d487f3f..4a103573 100644
+--- a/crates/toolpath-gemini/src/project.rs
++++ b/crates/toolpath-gemini/src/project.rs
+@@ -597,6 +597,7 @@ mod tests {
+ 
+     fn user_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+@@ -617,6 +618,7 @@ mod tests {
+ 
+     fn assistant_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-gemini/src/provider.rs b/crates/toolpath-gemini/src/provider.rs
+index 4ce7b407..5ace87be 100644
+--- a/crates/toolpath-gemini/src/provider.rs
++++ b/crates/toolpath-gemini/src/provider.rs
+@@ -112,6 +112,7 @@ fn message_to_turn(msg: &GeminiMessage, working_dir: Option<&str>) -> Turn {
+     });
+ 
+     Turn {
++        provider: None,
+         id: msg.id.clone(),
+         parent_id: None,
+         group_id: None,
+diff --git a/crates/toolpath-goldens/snapshots/document@claude-compacted.snap b/crates/toolpath-goldens/snapshots/document@claude-compacted.snap
+index 7842e587..56a2d573 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude-compacted.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude-compacted.snap
+@@ -17,8 +17,7 @@ input_file: goldens/claude-compacted/input.jsonl
+         "actors": {
+           "agent:claude-opus-4-6": {
+             "model": "claude-opus-4-6",
+-            "name": "claude-opus-4-6",
+-            "provider": "claude-code"
++            "name": "claude-opus-4-6"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@claude-session.snap b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+index e06a0f0c..e8819a03 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude-session.snap
+@@ -17,8 +17,7 @@ input_file: goldens/claude-session/input.jsonl
+         "actors": {
+           "agent:claude-haiku-4-5-20251001": {
+             "model": "claude-haiku-4-5-20251001",
+-            "name": "claude-haiku-4-5-20251001",
+-            "provider": "claude-code"
++            "name": "claude-haiku-4-5-20251001"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@claude.snap b/crates/toolpath-goldens/snapshots/document@claude.snap
+index e6e7304a..7e2763fa 100644
+--- a/crates/toolpath-goldens/snapshots/document@claude.snap
++++ b/crates/toolpath-goldens/snapshots/document@claude.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_claude
+   agent: claude
+   input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
+-input_file: goldens/claude/input.jsonl
++input_file: test-fixtures/claude/convo.jsonl
+ ---
+ {
+   "graph": {
+@@ -17,8 +17,7 @@ input_file: goldens/claude/input.jsonl
+         "actors": {
+           "agent:claude-opus-4-7": {
+             "model": "claude-opus-4-7",
+-            "name": "claude-opus-4-7",
+-            "provider": "claude-code"
++            "name": "claude-opus-4-7"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@codex.snap b/crates/toolpath-goldens/snapshots/document@codex.snap
+index 9063c7b7..d59ee55d 100644
+--- a/crates/toolpath-goldens/snapshots/document@codex.snap
++++ b/crates/toolpath-goldens/snapshots/document@codex.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_codex
+   agent: codex
+   input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
+-input_file: goldens/codex/input.jsonl
++input_file: test-fixtures/codex/convo.jsonl
+ ---
+ {
+   "graph": {
+@@ -17,8 +17,7 @@ input_file: goldens/codex/input.jsonl
+         "actors": {
+           "agent:gpt-5.5": {
+             "model": "gpt-5.5",
+-            "name": "gpt-5.5",
+-            "provider": "codex"
++            "name": "gpt-5.5"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@copilot.snap b/crates/toolpath-goldens/snapshots/document@copilot.snap
+index 2c941bfb..4cc39871 100644
+--- a/crates/toolpath-goldens/snapshots/document@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/document@copilot.snap
+@@ -17,8 +17,7 @@ input_file: test-fixtures/copilot/convo.jsonl
+         "actors": {
+           "agent:claude-haiku-4.5": {
+             "model": "claude-haiku-4.5",
+-            "name": "claude-haiku-4.5",
+-            "provider": "copilot"
++            "name": "claude-haiku-4.5"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@cursor.snap b/crates/toolpath-goldens/snapshots/document@cursor.snap
+index c66d3a59..c5f48902 100644
+--- a/crates/toolpath-goldens/snapshots/document@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/document@cursor.snap
+@@ -17,8 +17,7 @@ input_file: test-fixtures/cursor/convo.json
+         "actors": {
+           "agent:default": {
+             "model": "default",
+-            "name": "default",
+-            "provider": "cursor"
++            "name": "default"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@gemini.snap b/crates/toolpath-goldens/snapshots/document@gemini.snap
+index 37078840..66ce1bc2 100644
+--- a/crates/toolpath-goldens/snapshots/document@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/document@gemini.snap
+@@ -17,8 +17,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+         "actors": {
+           "agent:gemini-3-flash-preview": {
+             "model": "gemini-3-flash-preview",
+-            "name": "gemini-3-flash-preview",
+-            "provider": "gemini-cli"
++            "name": "gemini-3-flash-preview"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@opencode.snap b/crates/toolpath-goldens/snapshots/document@opencode.snap
+index c03561df..91b267c0 100644
+--- a/crates/toolpath-goldens/snapshots/document@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/document@opencode.snap
+@@ -17,8 +17,7 @@ input_file: test-fixtures/opencode/convo.json
+         "actors": {
+           "agent:big-pickle": {
+             "model": "big-pickle",
+-            "name": "big-pickle",
+-            "provider": "opencode"
++            "name": "big-pickle"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/document@pi.snap b/crates/toolpath-goldens/snapshots/document@pi.snap
+index 50c5e6ff..d3e43ca7 100644
+--- a/crates/toolpath-goldens/snapshots/document@pi.snap
++++ b/crates/toolpath-goldens/snapshots/document@pi.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_pi
+   agent: pi
+   input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
+-input_file: goldens/pi/input.jsonl
++input_file: test-fixtures/pi/convo.jsonl
+ ---
+ {
+   "graph": {
+@@ -18,7 +18,7 @@ input_file: goldens/pi/input.jsonl
+           "agent:gemma4": {
+             "model": "gemma4",
+             "name": "gemma4",
+-            "provider": "pi"
++            "provider": "ollama"
+           },
+           "human:user": {
+             "name": "user"
+diff --git a/crates/toolpath-goldens/snapshots/ir@pi.snap b/crates/toolpath-goldens/snapshots/ir@pi.snap
+index 06ea79e8..34114a87 100644
+--- a/crates/toolpath-goldens/snapshots/ir@pi.snap
++++ b/crates/toolpath-goldens/snapshots/ir@pi.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_pi
+   agent: pi
+   input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
+-input_file: goldens/pi/input.jsonl
++input_file: test-fixtures/pi/convo.jsonl
+ ---
+ {
+   "id": "019e03b9-e360-7719-8359-7b45425da299",
+@@ -49,6 +49,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 2108,
+@@ -81,6 +82,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 2440,
+@@ -112,6 +114,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 2562,
+@@ -149,6 +152,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 2658,
+@@ -180,6 +184,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 2795,
+@@ -211,6 +216,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 2930,
+@@ -242,6 +248,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 3055,
+@@ -273,6 +280,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 3220,
+@@ -305,6 +313,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 3387,
+@@ -336,6 +345,7 @@ input_file: goldens/pi/input.jsonl
+         }
+       ],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "toolUse",
+       "token_usage": {
+         "input_tokens": 3578,
+@@ -354,6 +364,7 @@ input_file: goldens/pi/input.jsonl
+       "thinking": null,
+       "tool_uses": [],
+       "model": "gemma4",
++      "provider": "ollama",
+       "stop_reason": "stop",
+       "token_usage": {
+         "input_tokens": 3664,
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@copilot.snap
+index 1908ccac..cdfd7cd8 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@copilot.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-compacted/input.jsonl
+     "steps": 6,
+     "text_chars": 317,
+     "tool_uses": 2,
+-    "key_paths": 37
++    "key_paths": 36
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.logicalParentUuid",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor.snap
+index f035dcee..c2b59358 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@cursor.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-compacted/input.jsonl
+     "steps": 6,
+     "text_chars": 317,
+     "tool_uses": 2,
+-    "key_paths": 41
++    "key_paths": 40
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.branch",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@gemini.snap
+index c1a6e720..36432c7f 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@gemini.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-compacted/input.jsonl
+     "steps": 6,
+     "text_chars": 317,
+     "tool_uses": 2,
+-    "key_paths": 35
++    "key_paths": 34
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.branch",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@opencode.snap
+index 480afc10..b17b79aa 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-compacted@opencode.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-compacted/input.jsonl
+     "steps": 6,
+     "text_chars": 317,
+     "tool_uses": 2,
+-    "key_paths": 37
++    "key_paths": 36
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.branch",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.preTokens",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.compactMetadata.trigger",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-session@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-session@copilot.snap
+index fe6769d6..9624a53e 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-session@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-session@copilot.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-session/input.jsonl
+     "steps": 4,
+     "text_chars": 292,
+     "tool_uses": 2,
+-    "key_paths": 32
++    "key_paths": 31
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor.snap
+index 377c52c9..ab1f450a 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-session@cursor.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-session/input.jsonl
+     "steps": 6,
+     "text_chars": 292,
+     "tool_uses": 2,
+-    "key_paths": 30
++    "key_paths": 29
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.branch",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-session@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-session@gemini.snap
+index a4106575..97942a5c 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-session@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-session@gemini.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-session/input.jsonl
+     "steps": 6,
+     "text_chars": 292,
+     "tool_uses": 2,
+-    "key_paths": 31
++    "key_paths": 30
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].path.base.branch",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap
+index a667bac2..19d737bd 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude-session@opencode.snap
+@@ -19,9 +19,10 @@ input_file: goldens/claude-session/input.jsonl
+     "steps": 6,
+     "text_chars": 292,
+     "tool_uses": 2,
+-    "key_paths": 40
++    "key_paths": 39
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.branch",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap
+index 70ff951c..f596c5d1 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@copilot.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_claude
+   agent: claude
+   input_sha256: c932059d87d2d28731f544b831e58efdb3c187f8d283a2befe3fd9f8dd195644
+-input_file: goldens/claude/input.jsonl
++input_file: test-fixtures/claude/convo.jsonl
+ ---
+ {
+   "outcome": "compared",
+@@ -19,9 +19,10 @@ input_file: goldens/claude/input.jsonl
+     "steps": 34,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 64
++    "key_paths": 63
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedLines[]",
+     "paths[].steps[].change.<artifact>.structural.entry_extra.attachment.addedNames[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
+index 1d5a85dd..0cc1922d 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@cursor.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 51
++    "key_paths": 50
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.files_changed[]",
+     "paths[].path.base.branch",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap
+index d9601d1c..029d308e 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@gemini.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 62
++    "key_paths": 61
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].path.base.branch",
+     "paths[].steps[].change.<artifact>.structural.cwd",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+index 8418c246..763b16f2 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@claude@opencode.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/claude/convo.jsonl
+     "steps": 47,
+     "text_chars": 4563,
+     "tool_uses": 19,
+-    "key_paths": 61
++    "key_paths": 60
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.branch",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.raw",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/claude/notes.md.structural.after",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap
+index cd6386a3..b7f5ebc1 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex@cursor.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/codex/convo.jsonl
+     "steps": 6,
+     "text_chars": 3077,
+     "tool_uses": 1,
+-    "key_paths": 27
++    "key_paths": 26
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.agent_nickname",
+     "paths[].steps[].change.<artifact>.structural.approval_policy",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@codex@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@codex@opencode.snap
+index c79feac1..4225a3a3 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@codex@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@codex@opencode.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/codex/convo.jsonl
+     "steps": 6,
+     "text_chars": 3077,
+     "tool_uses": 1,
+-    "key_paths": 34
++    "key_paths": 33
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.agent_nickname",
+     "paths[].steps[].change.<artifact>.structural.approval_policy",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+index 53707cb7..4d3cc383 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@cursor.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 12,
+     "text_chars": 4594,
+     "tool_uses": 10,
+-    "key_paths": 56
++    "key_paths": 55
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.content",
+     "paths[].steps[].change.<artifact>.structural.contextTier",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap
+index 8dfcbd4f..648fdc48 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@gemini.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 12,
+     "text_chars": 4594,
+     "tool_uses": 11,
+-    "key_paths": 51
++    "key_paths": 50
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+     "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+index 10667fa4..32b5af3d 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@copilot@opencode.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/copilot/convo.jsonl
+     "steps": 12,
+     "text_chars": 4594,
+     "tool_uses": 11,
+-    "key_paths": 60
++    "key_paths": 59
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change./tmp/elicit-scratch/count.sh.raw",
+     "paths[].steps[].change./tmp/elicit-scratch/count.sh.structural.after",
+     "paths[].steps[].change./tmp/elicit-scratch/notes.md.raw",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+index 85511a0b..feee7c8d 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@claude.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "after": {
+     "steps": 22,
+@@ -42,6 +42,7 @@ input_file: test-fixtures/cursor/convo.json
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.requestedSandboxPolicy.type"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+index 49f839e2..9e54db04 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@codex.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "after": {
+     "steps": 56,
+@@ -28,6 +28,7 @@ input_file: test-fixtures/cursor/convo.json
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.aggregated_output",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+     "paths[].steps[].change.<artifact>.structural.cli_version",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+index 426d8c37..0cb51aa4 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@copilot.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "after": {
+     "steps": 21,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 65
++    "key_paths": 64
+   },
+   "lost": [
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.structural.before",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+index 3cf30be2..ec67ce7b 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@gemini.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "after": {
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "lost": [
+     "paths[].meta.producer.version",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+index dc16a877..36b850e3 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@opencode.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "after": {
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "lost": [
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/count.sh.raw",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+index 84a8eea0..f3c10140 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@cursor@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/cursor/convo.json
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10,
+-    "key_paths": 71
++    "key_paths": 70
+   },
+   "after": {
+     "steps": 22,
+@@ -29,6 +29,7 @@ input_file: test-fixtures/cursor/convo.json
+     "paths[].steps[].change./Users/ben/projects/temp/cursortest2/notes.md.structural.operation"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap
+index f072e2df..4525f439 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@claude.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 13,
+@@ -28,6 +28,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.instruction"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap
+index b552d029..6a78b460 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@codex.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 48,
+@@ -28,6 +28,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].meta.producer.version",
+     "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.aggregated_output",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap
+index df823653..682741ed 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@copilot.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 51
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
+index 2ac13f84..885a6417 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@cursor.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 54
++    "key_paths": 53
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
+index 83b6b88d..64317780 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@opencode.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 56
++    "key_paths": 55
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap
+index 16c1892c..826f01dd 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@gemini@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10,
+-    "key_paths": 52
++    "key_paths": 51
+   },
+   "after": {
+     "steps": 12,
+@@ -28,6 +28,7 @@ input_file: test-fixtures/gemini/convo.jsonl
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].path.base.uri",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+index 88e70273..58d94a08 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@claude.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 60
++    "key_paths": 59
+   },
+   "after": {
+     "steps": 13,
+@@ -40,6 +40,7 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.workdir"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.raw",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/count.sh.structural.after",
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode/notes.md.raw",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+index 8f94166d..de3498f1 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@codex.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 60
++    "key_paths": 59
+   },
+   "after": {
+     "steps": 38,
+@@ -44,6 +44,7 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.aggregated_output",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+index abb4d4f3..a2e3f6ef 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@copilot.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 60
++    "key_paths": 59
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 53
++    "key_paths": 52
+   },
+   "lost": [
+     "paths[].steps[].change./private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/opencode.structural.operation",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
+index 7d64c288..3e6c4ce0 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@cursor.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 60
++    "key_paths": 59
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 48
++    "key_paths": 47
+   },
+   "lost": [
+     "paths[].path.base.ref",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+index 8e521b2e..47a9ddf9 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@gemini.snap
+@@ -13,13 +13,13 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 60
++    "key_paths": 59
+   },
+   "after": {
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 43
++    "key_paths": 42
+   },
+   "lost": [
+     "paths[].meta.files_changed[]",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+index 3a9b9a12..b337d689 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@opencode@pi.snap
+@@ -13,7 +13,7 @@ input_file: test-fixtures/opencode/convo.json
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10,
+-    "key_paths": 60
++    "key_paths": 59
+   },
+   "after": {
+     "steps": 12,
+@@ -45,6 +45,7 @@ input_file: test-fixtures/opencode/convo.json
+     "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+     "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+     "paths[].steps[].change.<artifact>.structural.delegations[].result"
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@pi@copilot.snap b/crates/toolpath-goldens/snapshots/round_trip@pi@copilot.snap
+index eb3f90fe..ad40a96d 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@pi@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@pi@copilot.snap
+@@ -5,7 +5,7 @@ info:
+   adapter: toolpath_pi
+   agent: pi
+   input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
+-input_file: goldens/pi/input.jsonl
++input_file: test-fixtures/pi/convo.jsonl
+ ---
+ {
+   "outcome": "compared",
+@@ -19,9 +19,10 @@ input_file: goldens/pi/input.jsonl
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10,
+-    "key_paths": 45
++    "key_paths": 44
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@pi@cursor.snap b/crates/toolpath-goldens/snapshots/round_trip@pi@cursor.snap
+index 405464a9..933c1201 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@pi@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@pi@cursor.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/pi/convo.jsonl
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10,
+-    "key_paths": 49
++    "key_paths": 48
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.edits[].newText",
+     "paths[].steps[].change.<artifact>.structural.tool_uses[].input.edits[].oldText",
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@pi@gemini.snap b/crates/toolpath-goldens/snapshots/round_trip@pi@gemini.snap
+index 1d9bb7b8..896a7c0d 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@pi@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@pi@gemini.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/pi/convo.jsonl
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10,
+-    "key_paths": 45
++    "key_paths": 44
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.stop_reason",
+     "paths[].steps[].change.notes.md.structural.edits[].newText",
+     "paths[].steps[].change.notes.md.structural.edits[].oldText"
+diff --git a/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap b/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap
+index 60b757c8..9a404d10 100644
+--- a/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/round_trip@pi@opencode.snap
+@@ -19,9 +19,10 @@ input_file: test-fixtures/pi/convo.jsonl
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10,
+-    "key_paths": 48
++    "key_paths": 47
+   },
+   "lost": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.count.sh.raw",
+     "paths[].steps[].change.count.sh.structural.after",
+     "paths[].steps[].change.notes.md.raw",
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap b/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
+index 1f7c4a9a..e895b7fe 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-compacted.snap
+@@ -19,8 +19,8 @@ input_file: goldens/claude-compacted/input.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 3609,
+-    "string_chars": 1563,
++    "bytes": 3584,
++    "string_chars": 1552,
+     "steps": 7,
+     "text_chars": 317,
+     "tool_uses": 2
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude-session.snap b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+index a9b655e5..9b3651f8 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude-session.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude-session.snap
+@@ -23,8 +23,8 @@ input_file: goldens/claude-session/input.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 175868,
+-    "string_chars": 157989,
++    "bytes": 175843,
++    "string_chars": 157978,
+     "steps": 27,
+     "text_chars": 292,
+     "tool_uses": 2
+diff --git a/crates/toolpath-goldens/snapshots/shed@claude.snap b/crates/toolpath-goldens/snapshots/shed@claude.snap
+index 6b09da3d..cb7b2f09 100644
+--- a/crates/toolpath-goldens/snapshots/shed@claude.snap
++++ b/crates/toolpath-goldens/snapshots/shed@claude.snap
+@@ -22,8 +22,8 @@ input_file: test-fixtures/claude/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 58318,
+-    "string_chars": 36223,
++    "bytes": 58293,
++    "string_chars": 36212,
+     "steps": 61,
+     "text_chars": 4563,
+     "tool_uses": 19
+diff --git a/crates/toolpath-goldens/snapshots/shed@codex.snap b/crates/toolpath-goldens/snapshots/shed@codex.snap
+index ecbf7fe3..48cf4f7d 100644
+--- a/crates/toolpath-goldens/snapshots/shed@codex.snap
++++ b/crates/toolpath-goldens/snapshots/shed@codex.snap
+@@ -27,8 +27,8 @@ input_file: test-fixtures/codex/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 89938,
+-    "string_chars": 69898,
++    "bytes": 89919,
++    "string_chars": 69893,
+     "steps": 42,
+     "text_chars": 13445,
+     "tool_uses": 1
+diff --git a/crates/toolpath-goldens/snapshots/shed@copilot.snap b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+index 1175e8f8..0835316a 100644
+--- a/crates/toolpath-goldens/snapshots/shed@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/shed@copilot.snap
+@@ -28,8 +28,8 @@ input_file: test-fixtures/copilot/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 47942,
+-    "string_chars": 41738,
++    "bytes": 47921,
++    "string_chars": 41731,
+     "steps": 14,
+     "text_chars": 4594,
+     "tool_uses": 11
+diff --git a/crates/toolpath-goldens/snapshots/shed@cursor.snap b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+index 1588c1ad..458a6d9e 100644
+--- a/crates/toolpath-goldens/snapshots/shed@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/shed@cursor.snap
+@@ -17,8 +17,8 @@ input_file: test-fixtures/cursor/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 19184,
+-    "string_chars": 11873,
++    "bytes": 19164,
++    "string_chars": 11867,
+     "steps": 22,
+     "text_chars": 4150,
+     "tool_uses": 10
+diff --git a/crates/toolpath-goldens/snapshots/shed@gemini.snap b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+index 0b04e774..d9a289a3 100644
+--- a/crates/toolpath-goldens/snapshots/shed@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/shed@gemini.snap
+@@ -19,8 +19,8 @@ input_file: test-fixtures/gemini/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 14408,
+-    "string_chars": 9096,
++    "bytes": 14384,
++    "string_chars": 9086,
+     "steps": 12,
+     "text_chars": 3676,
+     "tool_uses": 10
+diff --git a/crates/toolpath-goldens/snapshots/shed@opencode.snap b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+index e4b09e95..7ed4f245 100644
+--- a/crates/toolpath-goldens/snapshots/shed@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/shed@opencode.snap
+@@ -17,8 +17,8 @@ input_file: test-fixtures/opencode/convo.json
+     }
+   },
+   "ir": {
+-    "bytes": 17279,
+-    "string_chars": 10311,
++    "bytes": 17257,
++    "string_chars": 10303,
+     "steps": 12,
+     "text_chars": 2851,
+     "tool_uses": 10
+diff --git a/crates/toolpath-goldens/snapshots/shed@pi.snap b/crates/toolpath-goldens/snapshots/shed@pi.snap
+index 8988f7e5..be97fc6d 100644
+--- a/crates/toolpath-goldens/snapshots/shed@pi.snap
++++ b/crates/toolpath-goldens/snapshots/shed@pi.snap
+@@ -20,8 +20,8 @@ input_file: test-fixtures/pi/convo.jsonl
+     }
+   },
+   "ir": {
+-    "bytes": 16360,
+-    "string_chars": 11243,
++    "bytes": 16364,
++    "string_chars": 11247,
+     "steps": 12,
+     "text_chars": 5296,
+     "tool_uses": 10
+@@ -95,7 +95,7 @@ input_file: test-fixtures/pi/convo.jsonl
+   },
+   "same_format": {
+     "lines": 23,
+-    "bytes": 17007,
++    "bytes": 16974,
+     "event_types_shed": {
+       "model_change": {
+         "source": 1,
+diff --git a/crates/toolpath-goldens/snapshots/writer@claude.snap b/crates/toolpath-goldens/snapshots/writer@claude.snap
+index 4b9fad34..893cd9b0 100644
+--- a/crates/toolpath-goldens/snapshots/writer@claude.snap
++++ b/crates/toolpath-goldens/snapshots/writer@claude.snap
+@@ -8,7 +8,7 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 63
++    "key_paths": 62
+   },
+   "after": {
+     "steps": 5,
+@@ -40,6 +40,7 @@ expression: trip
+     "paths[].steps[].change.notes.md.structural.before"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.entry_type",
+     "paths[].steps[].change.<artifact>.structural.event_source_id",
+     "paths[].steps[].change.<artifact>.structural.raw.permissionMode",
+diff --git a/crates/toolpath-goldens/snapshots/writer@codex.snap b/crates/toolpath-goldens/snapshots/writer@codex.snap
+index b4c8e050..ef5ef45f 100644
+--- a/crates/toolpath-goldens/snapshots/writer@codex.snap
++++ b/crates/toolpath-goldens/snapshots/writer@codex.snap
+@@ -8,7 +8,7 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 63
++    "key_paths": 62
+   },
+   "after": {
+     "steps": 16,
+@@ -42,6 +42,7 @@ expression: trip
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+   "gained": [
++    "paths[].meta.actors.<actor>.provider",
+     "paths[].steps[].change.<artifact>.structural.aggregated_output",
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.cache_read_tokens",
+     "paths[].steps[].change.<artifact>.structural.call_id",
+diff --git a/crates/toolpath-goldens/snapshots/writer@copilot.snap b/crates/toolpath-goldens/snapshots/writer@copilot.snap
+index 090e272c..910a5baa 100644
+--- a/crates/toolpath-goldens/snapshots/writer@copilot.snap
++++ b/crates/toolpath-goldens/snapshots/writer@copilot.snap
+@@ -8,13 +8,13 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 63
++    "key_paths": 62
+   },
+   "after": {
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 45
++    "key_paths": 44
+   },
+   "lost": [
+     "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+diff --git a/crates/toolpath-goldens/snapshots/writer@cursor.snap b/crates/toolpath-goldens/snapshots/writer@cursor.snap
+index 0fac9704..fc535c9f 100644
+--- a/crates/toolpath-goldens/snapshots/writer@cursor.snap
++++ b/crates/toolpath-goldens/snapshots/writer@cursor.snap
+@@ -8,13 +8,13 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 63
++    "key_paths": 62
+   },
+   "after": {
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 2,
+-    "key_paths": 41
++    "key_paths": 40
+   },
+   "lost": [
+     "paths[].meta.vcs_remote",
+diff --git a/crates/toolpath-goldens/snapshots/writer@gemini.snap b/crates/toolpath-goldens/snapshots/writer@gemini.snap
+index 71db3a76..6c948577 100644
+--- a/crates/toolpath-goldens/snapshots/writer@gemini.snap
++++ b/crates/toolpath-goldens/snapshots/writer@gemini.snap
+@@ -8,13 +8,13 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 63
++    "key_paths": 62
+   },
+   "after": {
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 39
++    "key_paths": 38
+   },
+   "lost": [
+     "paths[].meta.producer.version",
+diff --git a/crates/toolpath-goldens/snapshots/writer@opencode.snap b/crates/toolpath-goldens/snapshots/writer@opencode.snap
+index 38e66d29..9f331cfe 100644
+--- a/crates/toolpath-goldens/snapshots/writer@opencode.snap
++++ b/crates/toolpath-goldens/snapshots/writer@opencode.snap
+@@ -8,13 +8,13 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 63
++    "key_paths": 62
+   },
+   "after": {
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 44
++    "key_paths": 43
+   },
+   "lost": [
+     "paths[].meta.vcs_remote",
+diff --git a/crates/toolpath-goldens/snapshots/writer@pi.snap b/crates/toolpath-goldens/snapshots/writer@pi.snap
+index 4ee6b55f..e73a5376 100644
+--- a/crates/toolpath-goldens/snapshots/writer@pi.snap
++++ b/crates/toolpath-goldens/snapshots/writer@pi.snap
+@@ -8,7 +8,7 @@ expression: trip
+     "steps": 4,
+     "text_chars": 198,
+     "tool_uses": 3,
+-    "key_paths": 63
++    "key_paths": 62
+   },
+   "after": {
+     "steps": 4,
+@@ -43,5 +43,7 @@ expression: trip
+     "paths[].steps[].change.notes.md.structural.before",
+     "paths[].steps[].change.notes.md.structural.operation"
+   ],
+-  "gained": []
++  "gained": [
++    "paths[].meta.actors.<actor>.provider"
++  ]
+ }
+diff --git a/crates/toolpath-opencode/src/project.rs b/crates/toolpath-opencode/src/project.rs
+index 494ce8ae..fb3715de 100644
+--- a/crates/toolpath-opencode/src/project.rs
++++ b/crates/toolpath-opencode/src/project.rs
+@@ -797,6 +797,7 @@ mod tests {
+ 
+     fn user_turn(text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: "u1".into(),
+             parent_id: None,
+             group_id: None,
+@@ -817,6 +818,7 @@ mod tests {
+ 
+     fn assistant_turn(text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: "a1".into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-opencode/src/provider.rs b/crates/toolpath-opencode/src/provider.rs
+index 98555368..0d31aad4 100644
+--- a/crates/toolpath-opencode/src/provider.rs
++++ b/crates/toolpath-opencode/src/provider.rs
+@@ -284,6 +284,7 @@ impl<'a> Builder<'a> {
+         });
+ 
+         self.turns.push(Turn {
++            provider: None,
+             id: msg.id.clone(),
+             parent_id: None,
+             group_id: None,
+@@ -449,6 +450,7 @@ impl<'a> Builder<'a> {
+         let file_mutations = self.compute_turn_mutations(&snapshots, &tool_uses);
+ 
+         self.turns.push(Turn {
++            provider: None,
+             id: msg.id.clone(),
+             parent_id: if a.parent_id.is_empty() {
+                 None
+diff --git a/crates/toolpath-pi/src/.qual b/crates/toolpath-pi/src/.qual
+index 220632b8..10d587b5 100644
+--- a/crates/toolpath-pi/src/.qual
++++ b/crates/toolpath-pi/src/.qual
+@@ -1 +1,2 @@
+ {"metabox":"1","type":"annotation","subject":"crates/toolpath-pi/src/project.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-15T18:25:10.595405Z","id":"f898c8ff78d6aae891ab51f1738d724137110ca0ff8a9bc144850fc33a01f937","body":{"detail":"Round robin pi -> copilot -> claude -> codex -> pi: ollama/gemma4 returned as anthropic/gemma4. The provider never enters the IR (Turn.model carries the model name only); Turn.extra[pi][api] is the only carrier and no other projector writes it. Either carry the provider in the IR (ProducerInfo or Turn.model as provider/model) or derive it from the model name. review/roundrobin.md, 2026-10-15.","kind":"concern","span":{"start":{"line":65},"end":{"line":65},"content_hash":"929101e16bdc3a92042e488c2f997314d0e839bcc5f1356ff04773dca3037e0c"},"summary":"the pi projector defaults the provider to anthropic, so a local ollama model comes back as anthropic/<model> after a round trip","tags":["review","roundtrip","defect-candidate","session:claude-code:7c8ae6d3-afd1-4605-913b-9fd31e45468f"]}}
++{"metabox":"1","type":"annotation","subject":"crates/toolpath-pi/src/project.rs","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:48.673500Z","id":"dadfe259a8e5fd3e7beb517130bd601fa0409fab1577e5e90ebb35b5f3df457d","body":{"kind":"resolve","summary":"Fixed: the pi reader keeps each assistant message's provider on Turn.provider, derive writes it to meta.actors[agent:<model>].provider, and the writer prefers it over the anthropic default (test provider_survives_round_trip: ollama/gemma4 in and out).","supersedes":"f898c8ff78d6aae891ab51f1738d724137110ca0ff8a9bc144850fc33a01f937","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+diff --git a/crates/toolpath-pi/src/project.rs b/crates/toolpath-pi/src/project.rs
+index a4a3cb30..d25088b1 100644
+--- a/crates/toolpath-pi/src/project.rs
++++ b/crates/toolpath-pi/src/project.rs
+@@ -6,17 +6,12 @@
+ //! view, `PiProjector` serializes that view back into Pi's on-disk
+ //! shape (a [`SessionHeader`] plus a list of [`Entry`]).
+ //!
+-//! The projector consumes provider-specific data the forward path
+-//! stashed under `Turn.extra["pi"]` — `api`/`provider`, `stopReason`,
+-//! `toolCallId`, bash-execution metadata, custom-message markers, and
+-//! synthetic-turn structures (`compaction`, `branchSummary`, `custom`,
+-//! `customMessage`). For `ConversationView`s from non-Pi sources, the
+-//! projector synthesizes sensible defaults (api: "anthropic",
+-//! stop_reason: "stop", etc.).
+-//!
+-//! Foreign-namespace extras (`Turn.extra["claude"]`,
+-//! `Turn.extra["gemini"]`, …) are dropped — they have no meaning in
+-//! Pi's format and would pollute the JSONL.
++//! Each assistant entry's `provider` comes from [`Turn::provider`] (who
++//! served the model, e.g. `ollama`), so a pi session keeps it across a
++//! round trip. Where the view has none — and for every other Pi field
++//! the view does not carry (`api`, `stopReason`, …) — the projector
++//! writes a default (`provider`/`api`: "anthropic", stop_reason:
++//! "stop", …).
+ 
+ use std::collections::HashMap;
+ 
+@@ -61,11 +56,10 @@ pub struct PiProjector {
+     /// pulls it from the first turn's environment (or falls back to
+     /// `"/"` if absent).
+     pub cwd: Option<String>,
+-    /// Default `api` field for assistant turns when not present in
+-    /// `Turn.extra["pi"]["api"]`. Defaults to `"anthropic"`.
++    /// Default `api` field for assistant turns. Defaults to `"anthropic"`.
+     pub default_api: Option<String>,
+-    /// Default `provider` field for assistant turns when not present
+-    /// in `Turn.extra["pi"]["api"]`. Defaults to `"anthropic"`.
++    /// Default `provider` field for assistant turns whose
++    /// [`Turn::provider`] is `None`. Defaults to `"anthropic"`.
+     pub default_provider: Option<String>,
+ }
+ 
+@@ -414,10 +408,15 @@ fn emit_assistant(
+                 .clone()
+                 .unwrap_or_else(|| "anthropic".to_string())
+         });
+-    let provider = api_obj
+-        .and_then(|m| m.get("provider"))
+-        .and_then(Value::as_str)
+-        .map(str::to_string)
++    let provider = turn
++        .provider
++        .clone()
++        .or_else(|| {
++            api_obj
++                .and_then(|m| m.get("provider"))
++                .and_then(Value::as_str)
++                .map(str::to_string)
++        })
+         .unwrap_or_else(|| {
+             cfg.default_provider
+                 .clone()
+@@ -788,6 +787,7 @@ mod tests {
+ 
+     fn user_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+@@ -808,6 +808,7 @@ mod tests {
+ 
+     fn assistant_turn(id: &str, text: &str) -> Turn {
+         Turn {
++            provider: None,
+             id: id.into(),
+             parent_id: None,
+             group_id: None,
+diff --git a/crates/toolpath-pi/src/provider.rs b/crates/toolpath-pi/src/provider.rs
+index 1093429c..3920db54 100644
+--- a/crates/toolpath-pi/src/provider.rs
++++ b/crates/toolpath-pi/src/provider.rs
+@@ -296,6 +296,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
+ 
+             Entry::Compaction { base, summary, .. } => {
+                 turns.push(Turn {
++                    provider: None,
+                     id: base.id.clone(),
+                     parent_id: resolve_parent(&base.parent_id),
+                     group_id: None,
+@@ -316,6 +317,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
+ 
+             Entry::BranchSummary { base, summary, .. } => {
+                 turns.push(Turn {
++                    provider: None,
+                     id: base.id.clone(),
+                     parent_id: resolve_parent(&base.parent_id),
+                     group_id: None,
+@@ -336,6 +338,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
+ 
+             Entry::Custom { base, .. } => {
+                 turns.push(Turn {
++                    provider: None,
+                     id: base.id.clone(),
+                     parent_id: resolve_parent(&base.parent_id),
+                     group_id: None,
+@@ -361,6 +364,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
+                 ..
+             } => {
+                 turns.push(Turn {
++                    provider: None,
+                     id: base.id.clone(),
+                     parent_id: resolve_parent(&base.parent_id),
+                     group_id: None,
+@@ -384,6 +388,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
+                 let mut thinking = None;
+                 let mut tool_uses: Vec<ToolInvocation> = Vec::new();
+                 let mut model: Option<String> = None;
++                let mut provider: Option<String> = None;
+                 let mut stop_reason_s: Option<String> = None;
+                 let mut token_usage: Option<TokenUsage> = None;
+                 let mut delegations: Vec<DelegatedWork> = Vec::new();
+@@ -398,11 +403,13 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
+                     AgentMessage::Assistant {
+                         content,
+                         model: m,
++                        provider: p,
+                         usage,
+                         stop_reason,
+                         ..
+                     } => {
+                         role = Role::Assistant;
++                        provider = Some(p.clone()).filter(|p| !p.is_empty());
+                         text = extract_assistant_text(content);
+                         thinking = extract_assistant_thinking(content);
+                         model = Some(m.clone());
+@@ -510,6 +517,7 @@ pub fn session_to_view(session: &PiSession) -> ConversationView {
+                     thinking,
+                     tool_uses,
+                     model,
++                    provider,
+                     stop_reason: stop_reason_s,
+                     token_usage,
+                     attributed_token_usage: None,
+diff --git a/crates/toolpath-pi/tests/real_fixture_roundtrip.rs b/crates/toolpath-pi/tests/real_fixture_roundtrip.rs
+index e82c67ba..769e6bbc 100644
+--- a/crates/toolpath-pi/tests/real_fixture_roundtrip.rs
++++ b/crates/toolpath-pi/tests/real_fixture_roundtrip.rs
+@@ -236,3 +236,68 @@ fn projector_output_is_re_parseable_by_reader() {
+     std::fs::write(tmp.path(), lines.join("\n")).expect("write tempfile");
+     reader::read_session_from_file(tmp.path()).expect("re-read projected JSONL");
+ }
++
++/// Who served the model survives a round trip: a pi session run on
++/// `ollama` comes back as `ollama`, not the projector's `anthropic`
++/// default. The provider rides the RFC's slot,
++/// `meta.actors["agent:<model>"].provider`.
++#[test]
++fn provider_survives_round_trip() {
++    let src = std::fs::read_to_string(fixture_path()).expect("read pi fixture");
++    let mut rewritten = String::new();
++    for line in src.lines() {
++        let mut v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
++        if let Some(m) = v.get_mut("message")
++            && m.get("role").and_then(|r| r.as_str()) == Some("assistant")
++        {
++            m["provider"] = "ollama".into();
++            m["model"] = "gemma4".into();
++        }
++        rewritten.push_str(&serde_json::to_string(&v).unwrap());
++        rewritten.push('\n');
++    }
++    let dir = tempfile::tempdir().unwrap();
++    let file = dir.path().join("convo.jsonl");
++    std::fs::write(&file, rewritten).unwrap();
++
++    let session = reader::read_session_from_file(&file).expect("read rewritten session");
++    let view = session_to_view(&session);
++    let assistant: Vec<_> = view
++        .turns
++        .iter()
++        .filter(|t| matches!(t.role, Role::Assistant))
++        .collect();
++    assert!(!assistant.is_empty());
++    assert!(
++        assistant.iter().all(|t| t.provider.as_deref() == Some("ollama")),
++        "the pi reader keeps the provider"
++    );
++
++    let path = derive_path(&view, &DeriveConfig::default());
++    let def = path
++        .meta
++        .as_ref()
++        .and_then(|m| m.actors.as_ref())
++        .and_then(|a| a.get("agent:gemma4"))
++        .expect("agent:gemma4 actor");
++    assert_eq!(def.provider.as_deref(), Some("ollama"));
++
++    let after = ir_roundtrip(&view);
++    let projected = PiProjector::new().project(&after).expect("project to pi");
++    let mut seen = 0;
++    for entry in &projected.entries {
++        if let toolpath_pi::Entry::Message {
++            message:
++                toolpath_pi::AgentMessage::Assistant {
++                    provider, model, ..
++                },
++            ..
++        } = entry
++        {
++            assert_eq!(provider, "ollama");
++            assert_eq!(model, "gemma4");
++            seen += 1;
++        }
++    }
++    assert!(seen > 0, "projection has assistant entries");
++}
+diff --git a/examples/.qual b/examples/.qual
+index 7e014247..9a938f68 100644
+--- a/examples/.qual
++++ b/examples/.qual
+@@ -1,2 +1,3 @@
+ {"metabox":"1","type":"annotation","subject":"examples/path-02-local-session.path.jsonl","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T20:26:43.424863Z","id":"395652024dd8f573fed36856477cc3e71eba54eeb37f59e23de15e8aa320fa39","body":{"detail":"Pinned in crates/toolpath/tests/jcs.rs::committed_jsonl_examples_match_their_json (KNOWN_DIFFERENT); the other committed pairs match.","kind":"concern","span":{"start":{"line":1},"end":{"line":1},"content_hash":"6772ee5f1108fa5fe50282d5aac6e04580be9f648e6ca78273daeb61a6f41e41"},"suggested_fix":"Add \"ref\":\"def789abc123456\" to the PathOpen base and drop it from KNOWN_DIFFERENT.","summary":"This .path.jsonl is not the same document as its .path.json twin: PathOpen has no base.ref (def789abc123456), so a signature over one would not verify against the other","tags":["examples","jsonl","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+ {"metabox":"1","type":"annotation","subject":"examples/path-02-local-session.path.jsonl","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:08:22.668589Z","id":"77d91ee482650ae3c8da5be518d02fef17189abd75cfed2b6a91ae701917d6b0","body":{"kind":"resolve","summary":"Fixed by 8813140: the PathOpen base now carries ref def789abc123456; the pair matches (crates/toolpath/tests/jcs.rs::committed_jsonl_examples_match_their_json, KNOWN_DIFFERENT empty)","supersedes":"395652024dd8f573fed36856477cc3e71eba54eeb37f59e23de15e8aa320fa39","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
++{"metabox":"1","type":"annotation","subject":"examples/path-02-local-session.path.jsonl","issuer":"mailto:1240090+bdelanghe@users.noreply.github.com","issuer_type":"ai","created_at":"2026-10-19T21:17:48.724958Z","id":"6b6ec07404f7e7be6402585b627c3780a843919231254afa30763992526a6d31","body":{"kind":"resolve","summary":"Fixed by 8813140 (pr/29): the .path.jsonl now carries base.ref def789abc123456, and formats@examples pins the twins equal except for graph.id.","supersedes":"395652024dd8f573fed36856477cc3e71eba54eeb37f59e23de15e8aa320fa39","tags":["reason:fixed","session:claude-code:729d6bb8-59f0-4ddf-892e-603372433260"]}}
+-- 
+2.55.0
+
