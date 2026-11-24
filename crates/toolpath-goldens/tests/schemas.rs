@@ -137,9 +137,15 @@ fn recording_provenance_matches() {
     let dir = root().join("crates/toolpath-webmock/cassettes");
     let mut checked = 0;
     let mut failures = Vec::new();
+    let mut missing = Vec::new();
     for entry in fs::read_dir(&dir).unwrap() {
-        let p = entry.unwrap().path().join("provenance.json");
+        let harness = entry.unwrap().path();
+        if !harness.is_dir() {
+            continue;
+        }
+        let p = harness.join("provenance.json");
         if !p.exists() {
+            missing.push(harness.display().to_string());
             continue;
         }
         let instance: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
@@ -150,8 +156,16 @@ fn recording_provenance_matches() {
         checked += 1;
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // Every harness whose cassettes are in this checkout carries its provenance. Counted per directory present, not against a
+    // fixed seven: a slice of the stack carries only some harnesses' cassettes (pathbase's first).
     assert!(
-        checked >= 7,
-        "expected a provenance file per recorded harness, found {checked}"
+        missing.is_empty(),
+        "cassette directories without provenance.json: {}",
+        missing.join(", ")
+    );
+    assert!(
+        checked >= 1,
+        "no recorded harness found under {}",
+        dir.display()
     );
 }
