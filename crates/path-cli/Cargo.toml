@@ -23,6 +23,12 @@ path = "src/main.rs"
 name = "gen_synthetic_path"
 path = "src/bin/gen_synthetic_path.rs"
 
+# One test per golden set; under CI it runs `qualifier review` too, so it needs the pinned
+# qualifier binary the CI workflow installs.
+[[test]]
+name = "goldens"
+required-features = ["develop"]
+
 [dependencies]
 toolpath = { workspace = true }
 toolpath-git = { workspace = true }
