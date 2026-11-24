@@ -1993,4 +1993,107 @@ mod tests {
         assert!(!json_str.contains("\"requestId\""));
         assert!(!json_str.contains("\"gitBranch\""));
     }
+
+    #[test]
+    fn test_codex_golden_projects_only_claude_entry_types() {
+        // The codex golden's events (session_meta, token_count, agent_message, …)
+        // are codex's wire vocabulary; none may be written as a Claude entry.
+        let dir = tempfile::tempdir().unwrap();
+        let rollout = dir.path().join("rollout.jsonl");
+        std::fs::write(&rollout, toolpath_golden::golden("codex").input()).unwrap();
+        let session = toolpath_codex::RolloutReader::read_session(&rollout).unwrap();
+        let view = toolpath_codex::to_view(&session);
+        assert!(
+            view.events().any(|e| !is_claude_entry(e)),
+            "the codex golden should carry foreign events"
+        );
+
+        let convo = ClaudeProjector.project(&view).unwrap();
+
+        for entry in &convo.entries {
+            assert!(
+                CLAUDE_ENTRY_EVENT_TYPES.contains(&entry.entry_type.as_str()),
+                "foreign entry type written: {}",
+                entry.entry_type
+            );
+        }
+        // Text and tool calls ride on the turns and all survive.
+        let written_text: Vec<String> = convo
+            .entries
+            .iter()
+            .filter(|e| e.entry_type == "assistant")
+            .filter_map(|e| e.message.as_ref()?.content.as_ref())
+            .flat_map(|c| match c {
+                MessageContent::Parts(parts) => parts
+                    .iter()
+                    .filter_map(|p| match p {
+                        ContentPart::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                MessageContent::Text(t) => vec![t.clone()],
+            })
+            .collect();
+        for turn in view.turns().filter(|t| t.role == Role::Assistant) {
+            if !turn.text.is_empty() {
+                assert!(
+                    written_text.iter().any(|w| w == &turn.text),
+                    "assistant text lost: {}",
+                    turn.text
+                );
+            }
+        }
+        let tool_uses_in = view.turns().map(|t| t.tool_uses.len()).sum::<usize>();
+        let tool_uses_out = convo
+            .entries
+            .iter()
+            .filter_map(|e| match e.message.as_ref()?.content.as_ref()? {
+                MessageContent::Parts(parts) => Some(
+                    parts
+                        .iter()
+                        .filter(|p| matches!(p, ContentPart::ToolUse { .. }))
+                        .count(),
+                ),
+                MessageContent::Text(_) => None,
+            })
+            .sum::<usize>();
+        assert_eq!(tool_uses_in, tool_uses_out);
+        // Every parentUuid still names a written entry.
+        let uuids: std::collections::HashSet<&str> =
+            convo.entries.iter().map(|e| e.uuid.as_str()).collect();
+        for entry in &convo.entries {
+            if let Some(p) = &entry.parent_uuid {
+                assert!(uuids.contains(p.as_str()), "dangling parentUuid {p}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_child_of_dropped_foreign_event_relinks_to_written_ancestor() {
+        let mut view = make_view("s", vec![user_turn("u1", "hi")]);
+        let event = |id: &str, parent: &str, ty: &str| toolpath_convo::ConversationEvent {
+            id: id.into(),
+            timestamp: "2024-01-01T00:00:02Z".into(),
+            parent_id: Some(parent.into()),
+            event_type: ty.into(),
+            data: HashMap::new(),
+        };
+        view.items.extend(
+            [
+                event("tc1", "u1", "token_count"),
+                event("tc2", "tc1", "token_count"),
+                event("a1", "tc2", "attachment"),
+            ]
+            .into_iter()
+            .map(Item::Event),
+        );
+        let convo = ClaudeProjector.project(&view).unwrap();
+        let types: Vec<&str> = convo
+            .entries
+            .iter()
+            .map(|e| e.entry_type.as_str())
+            .collect();
+        assert_eq!(types, ["user", "attachment"]);
+        assert_eq!(convo.entries[1].parent_uuid.as_deref(), Some("u1"));
+    }
 }
