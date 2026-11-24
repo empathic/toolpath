@@ -1,0 +1,122 @@
+# The supported-agents list: the source of truth. `cargo xtask agents` renders SUPPORT.md from it
+# (just agents) and `cargo test -p xtask` fails when an entry disagrees with the repo (the crate,
+# the projector, the harness, the replay test, the format doc, agents.lock).
+# Update it in the same commit as any agent change.
+#
+# replay: "green" (a registered replay_<name> test passes against a pinned cassette), "pending",
+# or "none"; replay_why says why when it is not green.
+# pinned: a version present in agents.lock, or "none". live_check: free text; "not recorded"
+# means nobody has written down a live check for this agent yet.
+# listed_by: outside lists that name the agent as an engine (gh-aw ...). UNVERIFIED where marked.
+
+[[agent]]
+name = "copilot"
+vendor = "GitHub"
+crate = "toolpath-copilot"
+reader = true
+writer = true
+resume = true
+replay = "pending"
+replay_why = "cassettes are stale (6 requests miss: POST /v1/messages); needs a keyed re-record"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/copilot-cli"
+listed_by = ["gh-aw"] # UNVERIFIED, from memory
+
+[[agent]]
+name = "claude"
+vendor = "Anthropic"
+crate = "toolpath-claude"
+reader = true
+writer = true
+resume = true
+replay = "pending"
+replay_why = "cassettes are stale (11 requests miss: /v1/messages?beta=true); needs a keyed re-record"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/claude-code"
+listed_by = ["gh-aw"] # UNVERIFIED, from memory
+
+[[agent]]
+name = "codex"
+vendor = "OpenAI"
+crate = "toolpath-codex"
+reader = true
+writer = true
+resume = true
+replay = "pending"
+replay_why = "TLS half proven (webmock serve_tls); the codex wiring in run.rs is not done and needs a pinned codex from agents.lock"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/codex.md"
+listed_by = ["gh-aw"] # UNVERIFIED, from memory
+
+[[agent]]
+name = "gemini"
+vendor = "Google"
+crate = "toolpath-gemini"
+reader = true
+writer = true
+resume = true
+replay = "pending"
+replay_why = "replay_gemini is registered but skips: no gemini CLI is pinned"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/gemini.md"
+listed_by = []
+
+[[agent]]
+name = "pi"
+vendor = "pi-coding-agent (community)" # UNVERIFIED vendor name
+crate = "toolpath-pi"
+reader = true
+writer = true
+resume = true
+replay = "pending"
+replay_why = "cassette is stale (miss on /backend-api/codex/responses); needs a keyed re-record"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/pi.md"
+listed_by = []
+
+[[agent]]
+name = "opencode"
+vendor = "opencode (sst)" # UNVERIFIED vendor name
+crate = "toolpath-opencode"
+reader = true
+writer = true
+resume = true
+replay = "green"
+replay_why = "loose keys; the cell runs `opencode session list` once to create its db"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/opencode.md"
+listed_by = []
+
+[[agent]]
+name = "cursor"
+vendor = "Anysphere"
+crate = "toolpath-cursor"
+reader = true
+writer = true
+resume = true # also the `cursor-agent` harness (resume target only)
+replay = "pending"
+replay_why = "no cassette yet: needs a recording first"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/cursor.md"
+listed_by = []
+
+[[agent]]
+name = "agy"
+vendor = "Google (Antigravity)"
+crate = ""
+reader = false
+writer = false
+resume = false
+replay = "none"
+replay_why = "documented only: no crate; needs a sign-in sample from a machine we control"
+live_check = "not recorded"
+pinned = "none"
+format_doc = "docs/agents/formats/antigravity.md"
+listed_by = []
