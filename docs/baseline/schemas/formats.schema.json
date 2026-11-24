@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "formats snapshot",
+  "description": "Both file formats for one recording (formats@<set>): its document streamed to .path.jsonl and sealed back, compared with the .path.json. formats@examples lists each committed .path.jsonl example against its .path.json twin. Hand-written: the body is built with json! in tests/formats.rs.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["differing_key_paths", "jsonl_lines", "lines_by_tag", "sealed_equals_json"],
+      "additionalProperties": false,
+      "properties": {
+        "differing_key_paths": { "type": "array", "items": { "type": "string" } },
+        "jsonl_lines": { "type": "integer", "minimum": 1 },
+        "lines_by_tag": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "sealed_equals_json": { "type": "boolean" }
+      }
+    },
+    {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["differs_only_in", "example", "json_graph_id", "sealed_graph_id"],
+        "additionalProperties": false,
+        "properties": {
+          "differs_only_in": { "type": "array", "items": { "type": "string" } },
+          "example": { "type": "string", "pattern": "\\.path\\.jsonl$" },
+          "json_graph_id": { "type": "string" },
+          "sealed_graph_id": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

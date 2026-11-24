@@ -1,0 +1,10 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.known_defects
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: 578c79666bff7c4570fa919975859bc0ef1d564f24c5a0ffc928f8c25b1d4b15
+input_file: test-fixtures/claude/convo-compacted.jsonl
+---
+[]

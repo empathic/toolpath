@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "recording provenance",
+  "description": "crates/toolpath-webmock/cassettes/<harness>/provenance.json: where a recorded API exchange came from (which recording, which projection, which probe turn) and which files it covers. Hand-written: these files are written by hand when a recording is made.",
+  "type": "object",
+  "required": ["cassettes", "recorded_at", "recorded_with", "golden", "projection", "probe", "files"],
+  "properties": {
+    "cassettes": { "type": "string", "description": "The harness (or pathbase) the recording belongs to." },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "recorded_with": { "type": "string" },
+    "golden": {
+      "type": "object",
+      "description": "The recording the projection came from.",
+      "required": ["set", "input", "input_sha256"],
+      "properties": {
+        "set": { "type": "string" },
+        "input": { "type": "string" },
+        "input_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "session_id": { "type": "string" },
+        "same_bytes_as": { "type": "string" }
+      }
+    },
+    "projection": { "type": "object" },
+    "probe": { "type": "object" },
+    "files": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+  }
+}

@@ -6,7 +6,10 @@ Reference for the on-disk format produced by OpenAI's
 Compiled from:
 
 1. Direct inspection of real session files on this machine
-   (Codex CLI 0.118.0, session recorded 2026-04-20).
+   (Codex CLI 0.118.0, session recorded 2026-04-20). The baseline's
+   recording (`test-fixtures/codex/convo.jsonl`) is Codex CLI 0.128.0;
+   every field it carries, per record kind, is generated in
+   [observed/codex.md](observed/codex.md).
 2. The Rust definitions in `openai/codex` at
    `codex-rs/protocol/src/protocol.rs` and
    `codex-rs/protocol/src/models.rs`.

@@ -1,6 +1,6 @@
 # GitHub Copilot CLI on-disk format
 
-> **Reference revision:** 2026-07-02
+> **Reference revision:** 2026-10-19
 > **Tracks:** `@github/copilot` (the standalone agentic CLI, command `copilot`)
 > **Version anchors:** public preview 2025-09-25, GA 2026-02-25, npm `1.0.66`.
 > **First-hand grounding:** sessions captured at `copilotVersion` **1.0.67**
@@ -9,6 +9,10 @@
 > contract** ([file-fidelity.md](file-fidelity.md)) verified against the live
 > CLI at **1.0.67–1.0.68** via pty capture (see
 > [known-gaps-and-sourcing.md](known-gaps-and-sourcing.md#verification-methodology)).
+>
+> **Recording in the baseline:** `test-fixtures/copilot/convo.jsonl`,
+> `copilotVersion` 1.0.68; every field per event type, with shapes and
+> presence, is generated in [observed/copilot.md](../observed/copilot.md).
 >
 > When you change anything in this directory, bump the revision date here.
 

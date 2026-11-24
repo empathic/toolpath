@@ -1,0 +1,16 @@
+---
+source: crates/toolpath-goldens/tests/formats.rs
+expression: result
+---
+{
+  "differing_key_paths": [],
+  "jsonl_lines": 17,
+  "lines_by_tag": {
+    "ActorDef": 2,
+    "Head": 1,
+    "PathClose": 1,
+    "PathOpen": 1,
+    "Step": 12
+  },
+  "sealed_equals_json": true
+}

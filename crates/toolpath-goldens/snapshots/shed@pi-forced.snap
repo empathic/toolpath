@@ -1,0 +1,178 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_pi
+  agent: pi
+  input_sha256: 5d8b4c3d058fc57ab50967cb86e403d05d1c66f88174957543c81637cfc0d13d
+input_file: test-fixtures/pi/convo-compacted.jsonl
+---
+{
+  "source": {
+    "lines": 9,
+    "bytes": 11097,
+    "string_chars": 9327,
+    "by_type": {
+      "compaction": 2,
+      "message": 4,
+      "model_change": 1,
+      "session": 1,
+      "thinking_level_change": 1
+    }
+  },
+  "ir": {
+    "bytes": 11553,
+    "string_chars": 9798,
+    "steps": 6,
+    "text_chars": 4900,
+    "tool_uses": 0
+  },
+  "projections": {
+    "claude": {
+      "lines": 7,
+      "bytes": 11202,
+      "string_chars": 9739,
+      "by_type": {
+        "assistant": 2,
+        "permission-mode": 1,
+        "user": 4
+      }
+    },
+    "codex": {
+      "lines": 17,
+      "bytes": 14840,
+      "string_chars": 12870,
+      "by_type": {
+        "event_msg/agent_message": 2,
+        "event_msg/token_count": 2,
+        "event_msg/user_message": 2,
+        "response_item/message": 6,
+        "response_item/reasoning": 2,
+        "session_meta": 1,
+        "turn_context": 2
+      }
+    },
+    "copilot": {
+      "lines": 11,
+      "bytes": 11567,
+      "string_chars": 10213,
+      "by_type": {
+        "assistant.message": 2,
+        "assistant.turn_end": 2,
+        "assistant.turn_start": 2,
+        "session.start": 1,
+        "system.message": 2,
+        "user.message": 2
+      }
+    },
+    "cursor": {
+      "lines": 681,
+      "bytes": 43767,
+      "string_chars": 24533,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 58,
+      "bytes": 25670,
+      "string_chars": 23690,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 139,
+      "bytes": 11677,
+      "string_chars": 9060,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 275,
+      "bytes": 16927,
+      "string_chars": 10712,
+      "by_type": {
+        "?": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 7,
+    "bytes": 10646,
+    "event_types_shed": {
+      "compaction": {
+        "source": 2,
+        "after": 0
+      },
+      "model_change": {
+        "source": 1,
+        "after": 0
+      },
+      "thinking_level_change": {
+        "source": 1,
+        "after": 0
+      }
+    },
+    "key_paths": {
+      "source": 34,
+      "after": 28,
+      "lost": 9,
+      "gained": 3
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "firstKeptEntryId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "fromHook",
+        "example": "false"
+      },
+      {
+        "path": "message.content[].thinkingSignature",
+        "example": "<withheld>"
+      },
+      {
+        "path": "message.responseId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "modelId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "provider",
+        "example": "ollama"
+      },
+      {
+        "path": "summary",
+        "example": "## Goal (none)  ## Constraints & Prefere…"
+      },
+      {
+        "path": "thinkingLevel",
+        "example": "medium"
+      },
+      {
+        "path": "tokensBefore",
+        "example": "<withheld>"
+      }
+    ],
+    "gained": [
+      {
+        "path": "message.content",
+        "example": "You're going to walk through a small set…"
+      },
+      {
+        "path": "message.customType",
+        "example": "system"
+      },
+      {
+        "path": "message.display",
+        "example": "true"
+      }
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+---
+source: crates/toolpath-goldens/tests/transforms_schema.rs
+expression: result
+---
+{
+  "document": {
+    "kinds": [
+      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+    ],
+    "outcome": "valid"
+  },
+  "jsonl_sealed": {
+    "kinds": [
+      "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+    ],
+    "outcome": "valid"
+  },
+  "round_trips": {
+    "codex": {
+      "kinds": [
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+      ],
+      "outcome": "valid"
+    },
+    "copilot": {
+      "kinds": [
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+      ],
+      "outcome": "valid"
+    },
+    "cursor": {
+      "kinds": [
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+      ],
+      "outcome": "valid"
+    },
+    "cursor-agent": {
+      "kinds": [
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+      ],
+      "outcome": "valid"
+    },
+    "gemini": {
+      "kinds": [
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+      ],
+      "outcome": "valid"
+    },
+    "opencode": {
+      "kinds": [
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+      ],
+      "outcome": "valid"
+    },
+    "pi": {
+      "kinds": [
+        "https://toolpath.net/kinds/agent-coding-session/v1.1.0"
+      ],
+      "outcome": "valid"
+    }
+  }
+}

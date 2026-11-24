@@ -25,7 +25,9 @@ later than") unless the note says otherwise.
 
 This reference tracks Claude Code **2.1.x**. First-hand samples span
 client versions 2.1.37, 2.1.90, 2.1.110, and 2.1.112, plus a local
-store spanning 2.1.215 – 2.1.245. Reference revision: **2026-08-25**.
+store spanning 2.1.215 – 2.1.245, and the baseline's recordings at 2.1.132
+and 2.1.285 (fields generated in [observed/claude.md](../observed/claude.md)).
+Reference revision: **2026-10-19**.
 
 ---
 
