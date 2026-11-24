@@ -1,0 +1,647 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.shed
+info:
+  adapter: toolpath_cursor
+  agent: cursor
+  input_sha256: 98be1198e6199ca71574b5cdc9afc9ac8347929b0b2b1ffd4d08253591853f34
+input_file: test-fixtures/cursor/convo.json
+---
+{
+  "source": {
+    "lines": 2320,
+    "bytes": 84539,
+    "string_chars": 20740,
+    "by_type": {
+      "?": 1
+    }
+  },
+  "ir": {
+    "bytes": 20588,
+    "string_chars": 13296,
+    "steps": 22,
+    "text_chars": 4150,
+    "tool_uses": 10
+  },
+  "projections": {
+    "claude": {
+      "lines": 32,
+      "bytes": 22838,
+      "string_chars": 15837,
+      "by_type": {
+        "assistant": 21,
+        "permission-mode": 1,
+        "user": 10
+      }
+    },
+    "codex": {
+      "lines": 77,
+      "bytes": 27718,
+      "string_chars": 20046,
+      "by_type": {
+        "event_msg/agent_message": 10,
+        "event_msg/exec_command_end": 2,
+        "event_msg/user_message": 1,
+        "response_item/function_call": 10,
+        "response_item/function_call_output": 9,
+        "response_item/message": 22,
+        "response_item/reasoning": 1,
+        "session_meta": 1,
+        "turn_context": 21
+      }
+    },
+    "copilot": {
+      "lines": 86,
+      "bytes": 35562,
+      "string_chars": 23618,
+      "by_type": {
+        "assistant.message": 21,
+        "assistant.turn_end": 21,
+        "assistant.turn_start": 21,
+        "session.start": 1,
+        "subagent.completed": 1,
+        "subagent.started": 1,
+        "tool.execution_complete": 9,
+        "tool.execution_start": 10,
+        "user.message": 1
+      }
+    },
+    "cursor-agent": {
+      "lines": 148,
+      "bytes": 32169,
+      "string_chars": 26423,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "gemini": {
+      "lines": 525,
+      "bytes": 22302,
+      "string_chars": 11176,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "opencode": {
+      "lines": 1919,
+      "bytes": 63589,
+      "string_chars": 19474,
+      "by_type": {
+        "?": 1
+      }
+    },
+    "pi": {
+      "lines": 32,
+      "bytes": 22850,
+      "string_chars": 12540,
+      "by_type": {
+        "message": 31,
+        "session": 1
+      }
+    }
+  },
+  "same_format": {
+    "lines": 2590,
+    "bytes": 110639,
+    "event_types_shed": {},
+    "key_paths": {
+      "source": 174,
+      "after": 106,
+      "lost": 100,
+      "gained": 32
+    },
+    "renamed": [],
+    "dropped": [
+      {
+        "path": "bubbles[].checkpointId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].isPlanExecution",
+        "example": "false"
+      },
+      {
+        "path": "bubbles[].thinkingDurationMs",
+        "example": "4705"
+      },
+      {
+        "path": "bubbles[].thinkingStyle",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].tokenCount.inputTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].tokenCount.outputTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.isPruned",
+        "example": "true"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.outputMode",
+        "example": "content"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.path",
+        "example": "/Users/ben/projects/temp/cursortest2"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.pattern",
+        "example": "fixture"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.hasChanges",
+        "example": "true"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].content",
+        "example": ""
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].modifiedLineNumber",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].originalLineNumber",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.precomputedDiff.lines[].type",
+        "example": "removed"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.startedAtMs",
+        "example": "1780338811534"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.status",
+        "example": "success"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.subagentComposerId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.terminationReason",
+        "example": "completed"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.topFiles[].matchCount",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.topFiles[].uri",
+        "example": "./notes.md"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.totalFiles",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].toolFormerData.additionalData.totalMatches",
+        "example": "1"
+      },
+      {
+        "path": "bubbles[].turnDurationMs",
+        "example": "33803"
+      },
+      {
+        "path": "data.activeTabsShouldBeReactive",
+        "example": "true"
+      },
+      {
+        "path": "data.addedFiles",
+        "example": "0"
+      },
+      {
+        "path": "data.agentBackend",
+        "example": "cursor-agent"
+      },
+      {
+        "path": "data.applied",
+        "example": "false"
+      },
+      {
+        "path": "data.applyAgentBackendTypeRestrictions",
+        "example": "false"
+      },
+      {
+        "path": "data.blobEncryptionKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.browserChipManuallyDisabled",
+        "example": "false"
+      },
+      {
+        "path": "data.browserChipManuallyEnabled",
+        "example": "false"
+      },
+      {
+        "path": "data.contextUsagePercent",
+        "example": "7.471"
+      },
+      {
+        "path": "data.conversationCheckpointLastUpdatedAt",
+        "example": "1780338838991"
+      },
+      {
+        "path": "data.debugModeSuggestionUsed",
+        "example": "false"
+      },
+      {
+        "path": "data.filesChangedCount",
+        "example": "2"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].contentHeightHint",
+        "example": "754"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.isKeptFinalAiVisibleOutsideWorkedForGroup",
+        "example": "true"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.isToolGroupable",
+        "example": "true"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.thinkingDurationMs",
+        "example": "4705"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.toolCallId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.toolFormerTool",
+        "example": "15"
+      },
+      {
+        "path": "data.fullConversationHeadersOnly[].grouping.turnDurationMs",
+        "example": "33803"
+      },
+      {
+        "path": "data.gitHubPromptDismissed",
+        "example": "false"
+      },
+      {
+        "path": "data.hasChangedContext",
+        "example": "false"
+      },
+      {
+        "path": "data.hasUnreadMessages",
+        "example": "false"
+      },
+      {
+        "path": "data.isApplyingWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.isBestOfNParent",
+        "example": "false"
+      },
+      {
+        "path": "data.isBestOfNSubcomposer",
+        "example": "false"
+      },
+      {
+        "path": "data.isContinuationInProgress",
+        "example": "false"
+      },
+      {
+        "path": "data.isCreatingWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.isDraft",
+        "example": "false"
+      },
+      {
+        "path": "data.isFileListExpanded",
+        "example": "false"
+      },
+      {
+        "path": "data.isNAL",
+        "example": "true"
+      },
+      {
+        "path": "data.isProject",
+        "example": "false"
+      },
+      {
+        "path": "data.isQueueExpanded",
+        "example": "true"
+      },
+      {
+        "path": "data.isReadingLongFile",
+        "example": "false"
+      },
+      {
+        "path": "data.isSpec",
+        "example": "false"
+      },
+      {
+        "path": "data.isSpecSubagentDone",
+        "example": "false"
+      },
+      {
+        "path": "data.isUndoingWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.latestChatGenerationUUID",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.$mid",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.external",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.path",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.newlyCreatedFiles[].uri.scheme",
+        "example": "file"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/count.sh.contentKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/count.sh.firstEditBubbleId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/count.sh.isNewlyCreated",
+        "example": "true"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/notes.md.contentKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/notes.md.firstEditBubbleId",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.originalFileStates.file:///Users/ben/projects/temp/cursortest2/notes.md.isNewlyCreated",
+        "example": "true"
+      },
+      {
+        "path": "data.pendingCreateWorktree",
+        "example": "false"
+      },
+      {
+        "path": "data.planModeSuggestionUsed",
+        "example": "false"
+      },
+      {
+        "path": "data.promptTokenBreakdown.categories[].estimatedTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.promptTokenBreakdown.categories[].id",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.promptTokenBreakdown.categories[].label",
+        "example": "System prompt"
+      },
+      {
+        "path": "data.promptTokenBreakdown.maxTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.promptTokenBreakdown.totalUsedTokens",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.removedFiles",
+        "example": "0"
+      },
+      {
+        "path": "data.restrictAgentModeSwitching",
+        "example": "false"
+      },
+      {
+        "path": "data.richText",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.speculativeSummarizationEncryptionKey",
+        "example": "<withheld>"
+      },
+      {
+        "path": "data.stopHookLoopCount",
+        "example": "0"
+      },
+      {
+        "path": "data.subagentComposerIds[]",
+        "example": "64cc0e23-6dc6-46c4-a155-5b55fc9c30e9"
+      },
+      {
+        "path": "data.subtitle",
+        "example": "Edited count.sh, notes.md"
+      },
+      {
+        "path": "data.text",
+        "example": ""
+      },
+      {
+        "path": "data.totalLinesAdded",
+        "example": "10"
+      },
+      {
+        "path": "data.totalLinesRemoved",
+        "example": "0"
+      },
+      {
+        "path": "data.worktreeStartedReadOnly",
+        "example": "false"
+      },
+      {
+        "path": "head.contextUsagePercent",
+        "example": "7.471"
+      },
+      {
+        "path": "head.hasBlockingPendingActions",
+        "example": "false"
+      },
+      {
+        "path": "head.hasPendingPlan",
+        "example": "false"
+      },
+      {
+        "path": "head.isBestOfNSubcomposer",
+        "example": "false"
+      },
+      {
+        "path": "head.isProject",
+        "example": "false"
+      },
+      {
+        "path": "head.isSpec",
+        "example": "false"
+      },
+      {
+        "path": "head.isWorktree",
+        "example": "false"
+      },
+      {
+        "path": "head.subtitle",
+        "example": "Edited count.sh, notes.md"
+      },
+      {
+        "path": "head.totalLinesAdded",
+        "example": "10"
+      },
+      {
+        "path": "head.totalLinesRemoved",
+        "example": "0"
+      },
+      {
+        "path": "head.worktreeStartedReadOnly",
+        "example": "false"
+      }
+    ],
+    "gained": [
+      {
+        "path": "agent_blobs.01845e7b32ef177dbf81f854d179159a5a2edf43f57d1d46aa683de817718b55",
+        "example": "{\"content\":[{\"text\":\"Directory is empty.…"
+      },
+      {
+        "path": "agent_blobs.080b3dd5fc50b8577891fce95ae433b8b9bd948fcbe8f02d7f41fde1696432ac",
+        "example": "{\"content\":[{\"text\":\"Starting step 1: I'…"
+      },
+      {
+        "path": "agent_blobs.0e33d898d72dc8ed002384082d012c9dff6666d6ff08a8210cc19b255699bbe9",
+        "example": "{\"content\":[{\"args\":{\"cloudAgentEdit\":fa…"
+      },
+      {
+        "path": "agent_blobs.1447027c2a96036112ddec68ea562794218a67b57a16699dd69f8f543e4ae4cf",
+        "example": "{\"content\":[{\"text\":\"The read failed as …"
+      },
+      {
+        "path": "agent_blobs.2756e24455bec9e83d3855ccfc80ae424a06ac4e14078a8adb718457e45e3010",
+        "example": "{\"content\":[{\"args\":{\"command\":\"ls -la /…"
+      },
+      {
+        "path": "agent_blobs.27d0c5b33d4972f2efb6e26d9ad59c4eb8b6ac05b72e7bf91f609dc138ab6f11",
+        "example": "{\"content\":[{\"args\":{\"description\":\"Coun…"
+      },
+      {
+        "path": "agent_blobs.2b9726ff8da816df93200a9eca7d0b5a3f4f82bb1ee27b9db3390aa1740e3737",
+        "example": "{\"content\":[{\"text\":\"Step 3: reading `no…"
+      },
+      {
+        "path": "agent_blobs.2f5c940ad311f3f73542a77a1ebe7f8b60818755b80af309b2533d3ba8288e37",
+        "example": "<withheld>"
+      },
+      {
+        "path": "agent_blobs.39762eff912edf42ccae7a775a14a67e32aa972c36ff6d82d6d55b86b84157ea",
+        "example": "{\"content\":[{\"text\":\"**Step 1:** Listed …"
+      },
+      {
+        "path": "agent_blobs.3d0b7b77783e176d81bfbd5bf53e06f4e1254facbe636f78ccd94023f3f1e840",
+        "example": "{\"content\":[{\"text\":\"`count.sh` printed …"
+      },
+      {
+        "path": "agent_blobs.4a8ba49c10aa858b4be1ca2e1d02b816143f0aa8d029d1c77eb9f6488a472f65",
+        "example": "{\"content\":[{\"isError\":false,\"result\":\"e…"
+      },
+      {
+        "path": "agent_blobs.63fd6012d0c6598448a36dab4b81a5affa11c36ea881d9b55b783f1b827ca1e1",
+        "example": "{\"content\":[{\"text\":\"Step 6: searching f…"
+      },
+      {
+        "path": "agent_blobs.64eee39e6a11ac5b3c090d77112bcd3583426b510b011f33a523b09ac09ddf07",
+        "example": "<withheld>"
+      },
+      {
+        "path": "agent_blobs.69f6607c1a6272707c4380e6e0f990350d601508c66472d9fbc7f47bd490d726",
+        "example": "<withheld>"
+      },
+      {
+        "path": "agent_blobs.7d0c380fa143bee827336272b0c99cf79f313197120bf688d10e6841488d89de",
+        "example": "<withheld>"
+      },
+      {
+        "path": "agent_blobs.81f3f1c8d4ce885b834a9a6f1aa5d6c12899f05234088f28418cf01a325513d0",
+        "example": "{\"content\":[{\"isError\":false,\"result\":\"e…"
+      },
+      {
+        "path": "agent_blobs.8790c3094bf68a9aaceaa9e14de0b23b0790a65d56759d22443605f26c06dbaf",
+        "example": "{\"content\":[{\"text\":\"The user wants me t…"
+      },
+      {
+        "path": "agent_blobs.99a3fdeae6bcfc2b306dd84bbd316e341eb730737e99117e1d9e1aefed1f5641",
+        "example": "{\"content\":[{\"text\":\"You're going to wal…"
+      },
+      {
+        "path": "agent_blobs.9e47654422aed0ed3c56f44f5467f174b2d97de0c18398e132297f1c817a2e9c",
+        "example": "{\"content\":[{\"isError\":false,\"result\":\"e…"
+      },
+      {
+        "path": "agent_blobs.9f842b40b663515755b723e7291ea29f71f04e193bca7ab81ce73e2dd47745f7",
+        "example": "{\"content\":[{\"isError\":true,\"result\":\"to…"
+      },
+      {
+        "path": "agent_blobs.a8ea8e0865b646ce384e1d7eaa091156f749adeaae82002b60ff466cf5f48d10",
+        "example": "{\"content\":[{\"args\":{\"cloudAgentEdit\":fa…"
+      },
+      {
+        "path": "agent_blobs.ac8dc81a5b2360ac609f100a330766ae8c52e033b4fbbd048f9692eef49c1143",
+        "example": "{\"content\":[{\"isError\":false,\"result\":\"{…"
+      },
+      {
+        "path": "agent_blobs.af3a861acdc05a7407bad5c250ff174b2f184b8594fcebe149b09fc9f768ea7d",
+        "example": "{\"content\":[{\"args\":{\"cloudAgentEdit\":fa…"
+      },
+      {
+        "path": "agent_blobs.b68c99f0972550192820c7acccb8df36085658c9a8fe61653f2af0058e26a696",
+        "example": "<withheld>"
+      },
+      {
+        "path": "agent_blobs.bc06655f44f9c22f551ee1b93bf080c62e8831c923028c348b056bf67a0a355f",
+        "example": "{\"content\":[{\"text\":\"Step 5: using Glob …"
+      },
+      {
+        "path": "agent_blobs.d1f16229ebbad8de20c2c5ed5dc60e2f75364b29e41f82250488addc7eaebc99",
+        "example": "{\"content\":[{\"text\":\"Step 7: reading `do…"
+      },
+      {
+        "path": "agent_blobs.ec1d876d9a997b6f4c7f4f73fe33b7cc5f28ec8c5833081792292419fb57d01d",
+        "example": "{\"content\":[{\"args\":{\"command\":\"bash /Us…"
+      },
+      {
+        "path": "agent_blobs.f38bd542ae3d1bc975c33227b98155183eb53085a1677f79181fcbe904133543",
+        "example": "{\"content\":[{\"text\":\"Both lines are pres…"
+      },
+      {
+        "path": "agent_blobs.f75416d376659aeef9fd27f33d1e02e158ed40b3c1f7d5e6299bfea6967dcccd",
+        "example": "{\"content\":[{\"isError\":false,\"result\":\"t…"
+      },
+      {
+        "path": "agent_blobs.fbcb1b50aa6c7069e8181fe8525c6b4ff71dd28d29d410079dce607a31189451",
+        "example": "<withheld>"
+      },
+      {
+        "path": "agent_blobs.fed2b35a185f9296c86f5fef3a317bb0ff91e2dfbaab07cc8f1d3947b3703427",
+        "example": "<withheld>"
+      },
+      {
+        "path": "bubbles[].allThinkingBlocks[].text",
+        "example": "The user wants me to complete a series o…"
+      }
+    ]
+  }
+}

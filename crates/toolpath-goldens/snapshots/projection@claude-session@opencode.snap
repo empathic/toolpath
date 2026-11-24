@@ -1,0 +1,461 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_claude
+  agent: claude
+  input_sha256: a667edf0fc0d3ce00d0d96dcaf599dcba3cc5968e3a2bdf8676ba2a8a9e0529c
+input_file: goldens/claude-session/input.jsonl
+---
+{
+  "id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+  "project_id": "d2650b2d5c084349e90c43d17bcec874f0a1cece",
+  "slug": "run-the-shell-command-ls-exactly-with-no-arguments-or-fla",
+  "directory": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project",
+  "title": "Run the shell command `ls` exactly, with no arguments or flags, to list the file names in the current directory. Then re",
+  "version": "0.0.0-projected",
+  "time_created": 1791489144852,
+  "time_updated": 1791489149830,
+  "messages": [
+    {
+      "id": "msg_11d12f814001s6PdmRZ30WJA9q",
+      "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+      "time_created": 1791489144852,
+      "time_updated": 1791489144852,
+      "data": {
+        "role": "user",
+        "time": {
+          "created": 1791489144852
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "anthropic",
+          "modelID": "unknown"
+        },
+        "summary": {
+          "diffs": []
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_11d12f814002gVkrIi1uIsFxT2",
+          "message_id": "msg_11d12f814001s6PdmRZ30WJA9q",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489144852,
+          "time_updated": 1791489144852,
+          "data": {
+            "type": "text",
+            "text": "Run the shell command `ls` exactly, with no arguments or flags, to list the file names in the current directory. Then read the file notes.txt and tell me its first line."
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_11d1300590037bFItZpCMtbkCm",
+      "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+      "time_created": 1791489146969,
+      "time_updated": 1791489146969,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_11d12f814001s6PdmRZ30WJA9q",
+        "time": {
+          "created": 1791489146969,
+          "completed": 1791489146969
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4-5-20251001",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project",
+          "root": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "tool_use"
+      },
+      "parts": [
+        {
+          "id": "prt_11d1300590048wTjcLt43Z3iEK",
+          "message_id": "msg_11d1300590037bFItZpCMtbkCm",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489146969,
+          "time_updated": 1791489146969,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_11d1300590050bGwv6B4C1BDrR",
+          "message_id": "msg_11d1300590037bFItZpCMtbkCm",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489146969,
+          "time_updated": 1791489146969,
+          "data": {
+            "type": "step-finish",
+            "reason": "tool_use",
+            "cost": 0.0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_11d13009a006mbKP9czXVsRIHG",
+      "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+      "time_created": 1791489147034,
+      "time_updated": 1791489147034,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_11d1300590037bFItZpCMtbkCm",
+        "time": {
+          "created": 1791489147034,
+          "completed": 1791489147034
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4-5-20251001",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project",
+          "root": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "tool_use"
+      },
+      "parts": [
+        {
+          "id": "prt_11d13009a0072vQnUAMgWN0EL1",
+          "message_id": "msg_11d13009a006mbKP9czXVsRIHG",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489147034,
+          "time_updated": 1791489147034,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_11d13009a008vbVXfl3FZgI1Oy",
+          "message_id": "msg_11d13009a006mbKP9czXVsRIHG",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489147034,
+          "time_updated": 1791489147034,
+          "data": {
+            "type": "tool",
+            "tool": "bash",
+            "callID": "toolu_016Jcqs5U6qdvMJZjjrcRFvq",
+            "state": {
+              "status": "completed",
+              "input": {
+                "command": "ls",
+                "description": "List files in current directory"
+              },
+              "output": "notes.txt\nother.txt",
+              "title": "List files in current directory",
+              "metadata": {
+                "exit": 0,
+                "output": "notes.txt\nother.txt",
+                "truncated": false
+              },
+              "time": {
+                "start": 1791489147034,
+                "end": 1791489147034
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_11d13009a009rg63QjcP0MWuuw",
+          "message_id": "msg_11d13009a006mbKP9czXVsRIHG",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489147034,
+          "time_updated": 1791489147034,
+          "data": {
+            "type": "step-finish",
+            "reason": "tool_use",
+            "cost": 0.0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_11d1304c100aGyMwOBBbNJQIO0",
+      "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+      "time_created": 1791489148097,
+      "time_updated": 1791489148097,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_11d13009a006mbKP9czXVsRIHG",
+        "time": {
+          "created": 1791489148097,
+          "completed": 1791489148097
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4-5-20251001",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project",
+          "root": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 22457,
+          "input": 10,
+          "output": 245,
+          "reasoning": 0,
+          "cache": {
+            "read": 15045,
+            "write": 7157
+          }
+        },
+        "finish": "tool_use"
+      },
+      "parts": [
+        {
+          "id": "prt_11d1304c100bHmvndrG1Aq5C4b",
+          "message_id": "msg_11d1304c100aGyMwOBBbNJQIO0",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489148097,
+          "time_updated": 1791489148097,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_11d1304c100cfcFUGDN2iHeZ1j",
+          "message_id": "msg_11d1304c100aGyMwOBBbNJQIO0",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489148097,
+          "time_updated": 1791489148097,
+          "data": {
+            "type": "tool",
+            "tool": "read",
+            "callID": "toolu_01GjqjxW9tnUh9qzsRWnoEWW",
+            "state": {
+              "status": "completed",
+              "input": {
+                "filePath": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt",
+                "limit": 1
+              },
+              "output": "1\tfirst line of the notes",
+              "title": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project/notes.txt",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1791489148097,
+                "end": 1791489148097
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_11d1304c100dnaGFZ5H3N3fgK0",
+          "message_id": "msg_11d1304c100aGyMwOBBbNJQIO0",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489148097,
+          "time_updated": 1791489148097,
+          "data": {
+            "type": "step-finish",
+            "reason": "tool_use",
+            "cost": 0.0,
+            "tokens": {
+              "total": 22457,
+              "input": 10,
+              "output": 245,
+              "reasoning": 0,
+              "cache": {
+                "read": 15045,
+                "write": 7157
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_11d130a9100e0b9m1DuWEQR1R5",
+      "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+      "time_created": 1791489149585,
+      "time_updated": 1791489149585,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_11d1304c100aGyMwOBBbNJQIO0",
+        "time": {
+          "created": 1791489149585,
+          "completed": 1791489149585
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4-5-20251001",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project",
+          "root": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "end_turn"
+      },
+      "parts": [
+        {
+          "id": "prt_11d130a9100fSEcYs1aLqKxSKg",
+          "message_id": "msg_11d130a9100e0b9m1DuWEQR1R5",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489149585,
+          "time_updated": 1791489149585,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_11d130a91010nniwKFKlyx9hX3",
+          "message_id": "msg_11d130a9100e0b9m1DuWEQR1R5",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489149585,
+          "time_updated": 1791489149585,
+          "data": {
+            "type": "step-finish",
+            "reason": "end_turn",
+            "cost": 0.0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_11d130b86011l9c54PM5fK8IZF",
+      "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+      "time_created": 1791489149830,
+      "time_updated": 1791489149830,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_11d130a9100e0b9m1DuWEQR1R5",
+        "time": {
+          "created": 1791489149830,
+          "completed": 1791489149830
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "claude-haiku-4-5-20251001",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project",
+          "root": "/private/var/folders/0m/h9_56l392_l81y8j18t_9snc0000gn/T/.tmpCcpiO3/project"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 22653,
+          "input": 8,
+          "output": 87,
+          "reasoning": 0,
+          "cache": {
+            "read": 22202,
+            "write": 356
+          }
+        },
+        "finish": "end_turn"
+      },
+      "parts": [
+        {
+          "id": "prt_11d130b86012yyHhd41T2c3sZH",
+          "message_id": "msg_11d130b86011l9c54PM5fK8IZF",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489149830,
+          "time_updated": 1791489149830,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_11d130b86013GXqL2z1CPmIo3K",
+          "message_id": "msg_11d130b86011l9c54PM5fK8IZF",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489149830,
+          "time_updated": 1791489149830,
+          "data": {
+            "type": "text",
+            "text": "The directory contains two files: `notes.txt` and `other.txt`.\n\nThe first line of notes.txt is: **first line of the notes**",
+            "time": {
+              "start": 1791489149830,
+              "end": 1791489149830
+            }
+          }
+        },
+        {
+          "id": "prt_11d130b8601461TcFim4AVd1kL",
+          "message_id": "msg_11d130b86011l9c54PM5fK8IZF",
+          "session_id": "ses_ee2ed07ebffenBQ0Mfck1iVTdL",
+          "time_created": 1791489149830,
+          "time_updated": 1791489149830,
+          "data": {
+            "type": "step-finish",
+            "reason": "end_turn",
+            "cost": 0.0,
+            "tokens": {
+              "total": 22653,
+              "input": 8,
+              "output": 87,
+              "reasoning": 0,
+              "cache": {
+                "read": 22202,
+                "write": 356
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
