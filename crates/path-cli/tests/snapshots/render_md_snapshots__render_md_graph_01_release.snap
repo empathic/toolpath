@@ -2,115 +2,173 @@
 source: crates/path-cli/tests/render_md_snapshots.rs
 expression: "render_md(\"graph-01-release.json\")"
 ---
-# Parallel agent attempts: implement rate limiter
+# Three harnesses, one graph
 
 | Path | Steps | Actors | Head |
 |------|-------|--------|------|
-| Token bucket with lazy refill | 3 | `agent:claude-code` | `claude-3` |
-| Fixed window per key | 2 | `agent:gemini-cli` | `gemini-2` |
-| Sliding window via timestamp queue | 3 | `agent:codex-cli`, `tool:rustfmt` | `codex-3` |
+| Codex session: 019e03b2 | 42 | `agent:gpt-5.5`, `human:user`, `tool:codex` | `task_complete-2026-05-07T18:27:55.158Z` |
+| Gemini session: 9534b902 | 12 | `agent:gemini-3-flash-preview`, `human:user` | `0fc42771-3fa2-4a28-817f-811e0193cb21` |
+| pi session: 019e03b9 | 12 | `agent:gemma4`, `human:user` | `ce78e79b` |
 
 ---
 
-## Token bucket with lazy refill
+## Codex session: 019e03b2
 
-**Base:** `github:empathic/toolpath` @ `9f2c4ab` (`main`)
-**Head:** `claude-3`
-**Changes:** +35 −0 across 1 files
-**Steps:** 3 | **Artifacts:** 1 | **Dead ends:** 0
+**Base:** `file:///var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/codex`
+**Head:** `task_complete-2026-05-07T18:27:55.158Z`
+**Source:** `codex`
+**Steps:** 42 | **Artifacts:** 1 | **Dead ends:** 0
 
-### claude-1 — agent:claude-code
+**System:** <permissions instructions> Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `wri...
 
-**Timestamp:** 2026-04-25T09:00:00Z
+**User:** <environment_context>
+  <cwd>/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/codex</cwd>
+  <shell>bash</shell>
+  <current_date>2026-05-07</current_date>
+  <timezone>America/New_York</timezone>
+</environment_context>
 
-> Scaffold TokenBucket struct
+**User:** You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.
 
-- `src/limit/token_bucket.rs` (+12 -0)
+1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).
+2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:
+       scratch — feature elicitation
+       this file will be edited and searched.
+3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.
+4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word "scratch" to "fixture" in `notes.md`.
+5. Find every file in the current directory whose name starts with "note". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.
+6. Search the contents of files in the current directory for the word "fixture". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.
+7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.
+8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.
+9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: "Count the words in `notes.md` and report the number." Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.
+10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.
 
-### claude-2 — agent:claude-code
+**System:** <permissions instructions> Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `wri...
 
-**Timestamp:** 2026-04-25T09:04:00Z
-**Parents:** `claude-1`
+**User:** <environment_context>
+  <cwd>/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.nu6ZWB/codex</cwd>
+  <shell>bash</shell>
+  <current_date>2026-05-07</current_date>
+  <timezone>America/New_York</timezone>
+</environment_context>
 
-> Implement try_acquire and lazy refill
+**User:** Count the words in `notes.md` and report the number.
 
-- `src/limit/token_bucket.rs` (+14 -0)
+**Assistant:** I’ll read the local `notes.md` word count directly with `wc -w`, staying in the current directory.
 
-### claude-3 — agent:claude-code [head]
+*tools: exec_command (1)*
 
-**Timestamp:** 2026-04-25T09:08:00Z
-**Parents:** `claude-2`
-
-> Add drain/refill test
-
-- `src/limit/token_bucket.rs` (+9 -0)
-
----
-
-## Fixed window per key
-
-**Base:** `github:empathic/toolpath` @ `9f2c4ab` (`main`)
-**Head:** `gemini-2`
-**Changes:** +27 −0 across 1 files
-**Steps:** 2 | **Artifacts:** 1 | **Dead ends:** 0
-
-### gemini-1 — agent:gemini-cli
-
-**Timestamp:** 2026-04-25T09:01:00Z
-
-> Per-key fixed window with HashMap
-
-- `src/limit/fixed_window.rs` (+14 -0)
-
-### gemini-2 — agent:gemini-cli [head]
-
-**Timestamp:** 2026-04-25T09:06:00Z
-**Parents:** `gemini-1`
-
-> Implement check() with window reset
-
-- `src/limit/fixed_window.rs` (+13 -0)
+**Assistant:** `notes.md` contains 11 words.
 
 ---
 
-## Sliding window via timestamp queue
+## Gemini session: 9534b902
 
-**Base:** `github:empathic/toolpath` @ `9f2c4ab` (`main`)
-**Head:** `codex-3`
-**Changes:** +22 −1 across 1 files
-**Steps:** 3 | **Artifacts:** 1 | **Dead ends:** 0
+**Head:** `0fc42771-3fa2-4a28-817f-811e0193cb21`
+**Source:** `gemini-cli`
+**Changes:** +8 −1 across 2 files
+**Steps:** 12 | **Artifacts:** 3 | **Dead ends:** 0
 
-### codex-1 — agent:codex-cli
+**User:** You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.
 
-**Timestamp:** 2026-04-25T09:02:00Z
+1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).
+2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:
+       scratch — feature elicitation
+       this file will be edited and searched.
+3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.
+4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word "scratch" to "fixture" in `notes.md`.
+5. Find every file in the current directory whose name starts with "note". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.
+6. Search the contents of files in the current directory for the word "fixture". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.
+7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.
+8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.
+9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: "Count the words in `notes.md` and report the number." Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.
+10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.
 
-> Sliding window with VecDeque of timestamps
+**Assistant:** I will begin by listing the files in the current directory to establish the starting state.
 
-- `src/limit/sliding.rs` (+8 -0)
+*tools: list_directory (1)*
 
-### codex-2 — agent:codex-cli
+**Assistant:** I will create the `notes.md` file with the specified two lines of text.
 
-**Timestamp:** 2026-04-25T09:05:00Z
-**Parents:** `codex-1`
+*tools: write_file (1)*
 
-> try_acquire: evict expired, then admit
+**Assistant:** I will read the contents of `notes.md` to confirm it was written correctly.
 
-- `src/limit/sliding.rs` (+12 -0)
+*tools: read_file (1)*
 
-### codex-3 — tool:rustfmt [head]
+**Assistant:** I will replace the word "scratch" with "fixture" in the `notes.md` file.
 
-**Timestamp:** 2026-04-25T09:05:30Z
-**Parents:** `codex-2`
+*tools: replace (1)*
 
-> Auto-format
+**Assistant:** I will search for any files in the current directory whose names start with "note" using a glob pattern.
 
-- `src/limit/sliding.rs` (+2 -1)
+*tools: glob (1)*
+
+**Assistant:** I will search the contents of all files in the current directory for the string "fixture".
+
+*tools: grep_search (1)*
+
+**Assistant:** I will attempt to read a file that does not exist to demonstrate how the tool handles errors.
+
+*tools: read_file (1)*
+
+**Assistant:** I will create a shell script named `count.sh` that echoes the numbers 1 through 5 on separate lines, and then I will execute it.
+
+*tools: write_file (1)*
+
+**Assistant:** I will now execute the `count.sh` script and verify that it prints five lines of output.
+
+*tools: run_shell_command (1)*
+
+**Assistant:** I will delegate the task of counting the words in `notes.md` to a generalist sub-agent.
+
+*tools: invoke_agent (1)*
+
+**Assistant:** The sub-agent reported: "There are 11 words in `notes.md`."  I have completed the requested sequence of tasks, including file manipulation (listing, writing, reading, and editing), searching (glob and...
 
 ---
 
-## Actors
+## pi session: 019e03b9
 
-- **`agent:claude-code`** — Claude Code (anthropic, claude-sonnet-4-6)
-- **`agent:codex-cli`** — Codex CLI (openai, gpt-5-codex)
-- **`agent:gemini-cli`** — Gemini CLI (google, gemini-2.5-pro)
-- **`tool:rustfmt`** — rustfmt
+**Base:** `file:///private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi`
+**Head:** `ce78e79b`
+**Source:** `pi`
+**Changes:** +6 −0 across 2 files
+**Steps:** 12 | **Artifacts:** 3 | **Dead ends:** 0
+
+**User:** You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.
+
+1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).
+2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:
+       scratch — feature elicitation
+       this file will be edited and searched.
+3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.
+4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word "scratch" to "fixture" in `notes.md`.
+5. Find every file in the current directory whose name starts with "note". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.
+6. Search the contents of files in the current directory for the word "fixture". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.
+7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.
+8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.
+9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: "Count the words in `notes.md` and report the number." Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.
+10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work.
+
+**Assistant:** **Step 1: List the files in the current directory**  I will use the `bash` tool with the `ls` command to list the files in the current directory, as this is a standard and reliable way to fulfill this...
+
+*tools: bash (1), write (1)*
+
+**Assistant:** **Step 2: Write `notes.md`**  I used the `write` tool to create `notes.md` with the specified content.  Next for Step 3: Read `notes.md` using the dedicated `read` tool. <channel|>
+
+*tools: read (1), edit (1)*
+
+**Assistant:** **Step 3: Read `notes.md`**  I used the `read` tool to read `notes.md` and confirmed that both lines ("scratch — feature elicitation" and "this file will be edited and searched.") were present.  The c...
+
+*tools: read (1), bash (1)*
+
+**Assistant:** **Step 4: Edit `notes.md`**  I used the `edit` tool to change "scratch" to "fixture" in `notes.md`.  Then, I read the file again to confirm the change, which was successful.  **Step 5: Find files star...
+
+*tools: bash (1), read (1)*
+
+**Assistant:** **Step 6: Search contents for "fixture"**  I used the `bash grep` utility to perform a recursive search for "fixture". The search was successful, reporting the word in `./notes.md`.  **Step 7: Read a ...
+
+*tools: write (1), bash (1)*
+
+**Assistant:** **Step 8: Write and run `count.sh`**  I used the `write` tool to create `count.sh` with a shell loop, and then executed it using `bash count.sh`. The output confirmed that the script prints the number...

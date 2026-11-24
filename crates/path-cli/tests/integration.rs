@@ -292,10 +292,11 @@ fn query_dead_ends() {
         .arg("query")
         .arg("--input")
         .arg(examples_dir().join("path-01-pr.path.json"))
-        .arg("map(select(.dead_end))")
+        .arg("map(select(.dead_end) | .step.id)")
         .assert()
         .success()
-        .stdout(predicate::str::contains("step-002a"));
+        // The agent's abandoned regex attempt is the one dead end.
+        .stdout(predicate::str::diff("[\"step-002\"]\n"));
 }
 
 #[test]
