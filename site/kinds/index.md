@@ -12,6 +12,9 @@ Kind URIs are immutable: revisions ship at a new version URI, and old URIs keep 
 
 ## Defined kinds
 
-| Kind                                                   | Current URI                                              | Spec                                          |
-| ------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------- |
-| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.1.0` | [v1.1.0](/kinds/agent-coding-session/v1.1.0/) |
+| Kind                                                   | URI                                                      | Spec                                          | Status                                                                                           |
+| ------------------------------------------------------ | -------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.1.0` | [v1.1.0](/kinds/agent-coding-session/v1.1.0/) | **current** — the only version producers write                                                   |
+| [`agent-coding-session`](/kinds/agent-coding-session/) | `https://toolpath.net/kinds/agent-coding-session/v1.0.0` | [v1.0.0](/kinds/agent-coding-session/v1.0.0/) | **read-only legacy** — superseded 2026-06-17; not supported for writing; `path p validate` warns |
+
+A superseded URI stays valid and keeps its meaning (that is the immutability rule above), so readers keep accepting it. "Not supported for writing" means no toolpath producer emits it and new documents must not carry it; the v1.0.0 page records the erratum that made the revision necessary.

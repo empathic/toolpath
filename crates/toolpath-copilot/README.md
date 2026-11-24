@@ -62,8 +62,10 @@ content — a `raw` unified-diff perspective.
 - **Both directions.** Forward (`path p import/list/show copilot`, `path share`)
   and reverse via `CopilotProjector` (`path p export copilot`, `path resume`).
   Resume writes `~/.copilot/session-state/<id>/` + a `session-store.db`
-  `sessions` row (only ever a fresh id). ✅ **Verified against copilotVersion
-  1.0.67**: a projected session loads and resumes in the real `copilot --resume`.
+  `sessions` row (only ever a fresh id). ✅ **Verified against copilot CLI
+  1.0.61 on 2026-10-15**: four projected sessions loaded in the real
+  `copilot --resume` and the model answered from their history (an earlier
+  run at 1.0.67 predates the fixes that made this hold).
   The loader's writer requirements (UUID ids, offset ISO timestamps, `turnId`,
   `messageId`, …) are documented in
   [writing-compatible.md](../../docs/agents/formats/copilot-cli/writing-compatible.md).
@@ -73,8 +75,12 @@ content — a `raw` unified-diff perspective.
   full file content; edit-shaped calls without the full file yield a structural
   change only. Snapshot-based diff reconstruction is deferred.
 - **Token accounting** sums per-message `outputTokens` for the session output
-  total (falling back to `session.shutdown` when present); no per-turn
-  attribution, and no input-token total observed in an open session.
+  total. The session's input and cache totals exist only on
+  `session.shutdown`; every counter no message reports is taken from there and
+  put, verbatim, on the session's last assistant turn, so the turns (and the
+  derived document's steps) sum to the session total. That turn's input/cache
+  are the session's, not its own spend: Copilot records no per-message input.
+  No input-token total is observed in an open (not shut down) session.
 
 See the [known-gaps doc](../../docs/agents/formats/copilot-cli/known-gaps-and-sourcing.md)
 for the full list and the checklist to run once a real session is captured.
