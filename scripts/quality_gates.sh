@@ -38,6 +38,15 @@ fi
 _tmpdir=$(mktemp -d)
 trap 'rm -rf "${_tmpdir}"' EXIT
 
+# ── Features the cargo gates build ────────────────────────────────────────────
+#
+# The opt-in cargo features the cargo gates below build with (`--features
+# "${_features}"`), so feature-gated code is compiled and tested on every gate
+# rather than skipped. One assignment per feature, added with the code it gates.
+# path-cli/develop: `path d` and the goldens tests.
+
+_features=path-cli/develop
+
 # ── Gate definitions ──────────────────────────────────────────────────────────
 #
 # All `gate_*` functions are dispatched indirectly via "gate_${_name}" inside
@@ -75,12 +84,12 @@ gate_clippy() {
 
 # shellcheck disable=SC2329
 gate_test() {
-    RUSTFLAGS="-D warnings" cargo test --workspace 2>&1
+    RUSTFLAGS="-D warnings" cargo test --workspace --features "${_features}" 2>&1
 }
 
 # shellcheck disable=SC2329
 gate_doc() {
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps 2>&1
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --features "${_features}" --no-deps 2>&1
 }
 
 # shellcheck disable=SC2329
