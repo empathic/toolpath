@@ -7,7 +7,25 @@ on disk plus cross-checking with Gemini's own internal documentation
 (`cli/session-management.md`, `cli/checkpointing.md`,
 `cli/settings.md`, and the tool reference). The Gemini team does not
 publish a stable schema, so treat this as observed behaviour as of
-**2026-04-24** — forward-compat guards matter.
+**2026-04-24** — forward-compat guards matter. The baseline's recording
+(`test-fixtures/gemini/convo.jsonl`, a 0.47 record stream) does not
+record the version; every field per record kind is generated in
+[observed/gemini.md](observed/gemini.md).
+
+> **Observed 2026-10-15 on gemini-cli 0.47.0 (not yet folded into the
+> sections below).** Chat files are now JSONL: a header record
+> (`sessionId, projectHash, startTime, lastUpdated, kind, directories`),
+> one record per message, then `{"$set": …}` patch records; on resume the
+> CLI leaves a projected `.json` untouched and writes a `.jsonl` twin plus
+> a new `session-<now>-<short>.jsonl` per launch. `getMatchingSessionFiles`
+> accepts `-<short>.json` or `.jsonl`; toolpath-gemini reads both (see
+> "0.47 record stream" below). `GEMINI_CLI_HOME` replaces `os.homedir()` (the
+> CLI appends `.gemini`). Slots: a `ProjectRegistry` (`projects.json`)
+> migrates `tmp/<sha256>` to `tmp/<slug>`; an existing hash slot is
+> adopted as the slug. `gemini --resume <id>` renders a projected session
+> before authentication. Evidence:
+> `<scratchpad>/review/resume-matrix-v4-gemini.md`; qualifier record in
+> `crates/toolpath-gemini/src/.qual`.
 
 ## Storage root
 
@@ -118,8 +136,29 @@ paths — stem match first, then scan-and-match on inner `sessionId`.
 
 ## Chat file schema
 
-One JSON object per file (not JSONL). Serialized verbatim on every
-turn — Gemini rewrites the whole file rather than appending.
+Before 0.47: one JSON object per file (not JSONL), serialized verbatim
+on every turn — Gemini rewrites the whole file rather than appending.
+0.47 appends a record stream instead (next section); the fields below are
+the same in both.
+
+### 0.47 record stream (`session-*.jsonl`)
+
+One JSON record per line, replayed in order (gemini-cli's
+`loadConversationRecord`, `packages/core/src/services/chatRecordingService.ts`):
+
+- **metadata** — has `sessionId` and `projectHash` strings: merged into
+  the header; a `messages` array in it is upserted.
+- **message** — has a string `id`: upserted by id. A message is appended
+  again when its tool calls complete, and the later record replaces the
+  earlier one in its original position.
+- **`{"$set": {...}}`** — merged into the header (`lastUpdated` on every
+  turn); a `messages` array in it replaces every message so far.
+- **`{"$rewindTo": "<id>"}`** — drops that message and everything after
+  it (everything, when the id is unknown).
+
+A line that is not JSON is skipped. When a `.json` and a `.jsonl` share a
+stem (a projected session 0.47 resumed), the `.jsonl` is the live one.
+`toolpath_gemini::ConversationReader::read_chat_file` reads both shapes.
 
 ### Top level
 

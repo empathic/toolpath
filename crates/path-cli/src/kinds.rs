@@ -297,7 +297,9 @@ mod tests {
 
     #[test]
     fn full_uri_selector_matches_exactly() {
-        let sel = parse_kind_selector("https://toolpath.net/kinds/agent-coding-session/v1.0.0");
+        // A full URI pins one version; the legacy constant is the one URI a
+        // reader still has reason to select exactly.
+        let sel = parse_kind_selector(toolpath::v1::PATH_KIND_AGENT_CODING_SESSION_V1_0_0);
         assert!(sel.matches("agent-coding-session", v(1, 0, 0)));
         assert!(!sel.matches("agent-coding-session", v(1, 1, 0)));
     }

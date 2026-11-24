@@ -1,5 +1,29 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+/// Serialize a map with its keys in order. A `HashMap` writes them in a different order on every
+/// run, so the same document would otherwise serialize to different bytes each time (the upload
+/// body, the cache file, a diff); the ordered form is the same text every time.
+fn sorted_map<S, V>(map: &HashMap<String, V>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    V: serde::Serialize,
+{
+    use serde::Serialize;
+    map.iter().collect::<BTreeMap<_, _>>().serialize(s)
+}
+
+/// [`sorted_map`] for an optional map.
+fn sorted_opt_map<S, V>(map: &Option<HashMap<String, V>>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+    V: serde::Serialize,
+{
+    match map {
+        Some(m) => sorted_map(m, s),
+        None => s.serialize_none(),
+    }
+}
 
 // ============================================================================
 // Graph — the root of every Toolpath document
@@ -50,12 +74,16 @@ pub struct GraphMeta {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "sorted_opt_map"
+    )]
     pub actors: Option<HashMap<String, ActorDefinition>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<Signature>,
     /// Additional properties (schema: `additionalProperties: true`)
-    #[serde(flatten)]
+    #[serde(flatten, serialize_with = "sorted_map")]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -152,9 +180,15 @@ pub struct Base {
 pub const PATH_KIND_AGENT_CODING_SESSION: &str =
     "https://toolpath.net/kinds/agent-coding-session/v1.1.0";
 
-/// The previous version URI. Documents produced before the v1.1.0
-/// accounting rule carry this kind; consumers summing their `token_usage`
-/// per step must deduplicate repeated message-level usage themselves.
+/// The previous version URI: read-only legacy, not supported for writing.
+///
+/// Documents produced before the v1.1.0 accounting rule (2026-06-17) carry
+/// this kind. Readers accept it (the URI is immutable and such documents
+/// stay valid) and `path p validate` warns on it; no producer may emit it,
+/// which `crates/path-cli/tests/cross_harness_matrix.rs` asserts. Consumers
+/// summing a v1.0.0 path's `token_usage` per step must deduplicate repeated
+/// message-level usage themselves, per the erratum at
+/// <https://toolpath.net/kinds/agent-coding-session/v1.0.0>.
 pub const PATH_KIND_AGENT_CODING_SESSION_V1_0_0: &str =
     "https://toolpath.net/kinds/agent-coding-session/v1.0.0";
 
@@ -173,12 +207,16 @@ pub struct PathMeta {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "sorted_opt_map"
+    )]
     pub actors: Option<HashMap<String, ActorDefinition>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<Signature>,
     /// Additional properties (schema: `additionalProperties: true`)
-    #[serde(flatten)]
+    #[serde(flatten, serialize_with = "sorted_map")]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -225,6 +263,7 @@ pub struct PathMeta {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     pub step: StepIdentity,
+    #[serde(serialize_with = "sorted_map")]
     pub change: HashMap<String, ArtifactChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<StepMeta>,
@@ -273,7 +312,7 @@ pub struct ArtifactChange {
 pub struct StructuralChange {
     #[serde(rename = "type")]
     pub change_type: String,
-    #[serde(flatten)]
+    #[serde(flatten, serialize_with = "sorted_map")]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -288,12 +327,16 @@ pub struct StepMeta {
     pub source: Option<VcsSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "sorted_opt_map"
+    )]
     pub actors: Option<HashMap<String, ActorDefinition>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signatures: Vec<Signature>,
     /// Additional properties (schema: `additionalProperties: true`)
-    #[serde(flatten)]
+    #[serde(flatten, serialize_with = "sorted_map")]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -306,7 +349,7 @@ pub struct VcsSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_id: Option<String>,
     /// Additional properties (schema: `additionalProperties: true`)
-    #[serde(flatten)]
+    #[serde(flatten, serialize_with = "sorted_map")]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
