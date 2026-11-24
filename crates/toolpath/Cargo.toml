@@ -3,11 +3,33 @@ name = "toolpath"
 version = "0.7.1"
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 repository = "https://github.com/empathic/toolpath"
 description = "Types, builders, and query operations for Toolpath provenance documents"
 keywords = ["provenance", "toolpath", "audit", "traceability", "supply-chain"]
 categories = ["development-tools"]
+exclude = ["**/.qual"]
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+ryu-js = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+ssh-key = { version = "=0.7.0-rc.11", optional = true, default-features = false, features = ["alloc", "ed25519", "std"] }
+
+[features]
+# RFC.md "Signature Algorithm": the JCS canonical inputs, their SHA-256
+# digests, and verification of `ssh` signatures. Off by default; the quality
+# gates build with `--features toolpath/verify` so its tests always run there.
+verify = ["dep:ryu-js", "dep:sha2", "dep:ssh-key"]
+
+[dev-dependencies]
+ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["alloc", "ed25519", "std"] }
+
+[[test]]
+name = "jcs"
+required-features = ["verify"]
+
+[[test]]
+name = "signatures"
+required-features = ["verify"]
