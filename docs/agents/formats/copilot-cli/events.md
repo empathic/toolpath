@@ -126,7 +126,7 @@ note, all `[inferred]` pending a sample):
 | `subagent.started`/`completed` | `Turn.delegations` (`DelegatedWork`) |
 | `skill.invoked` | a `Delegation`-category `ToolInvocation`, or a `ConversationEvent` |
 | `hook.*`, `abort` | `ConversationView.events` |
-| `session.shutdown`, `session.compaction_complete` | `TokenUsage` (see token-accounting caveats in [known-gaps](known-gaps-and-sourcing.md)) |
+| `session.shutdown`, `session.compaction_complete` | `TokenUsage`: every counter no `assistant.message` reports (input, cache) goes, verbatim, on the last assistant turn's `token_usage`, so Σ turns = `total_usage` (see token-accounting caveats in [known-gaps](known-gaps-and-sourcing.md)) |
 
 The single biggest unknown for this mapping is **where tool result content and
 file edits live** — covered next in [file-fidelity.md](file-fidelity.md).

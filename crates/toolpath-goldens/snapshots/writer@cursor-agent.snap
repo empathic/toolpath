@@ -1,0 +1,57 @@
+---
+source: crates/toolpath-goldens/tests/writers.rs
+expression: trip
+---
+{
+  "outcome": "compared",
+  "before": {
+    "steps": 4,
+    "text_chars": 198,
+    "tool_uses": 3,
+    "key_paths": 65
+  },
+  "after": {
+    "steps": 4,
+    "text_chars": 198,
+    "tool_uses": 3,
+    "key_paths": 30
+  },
+  "lost": [
+    "paths[].meta.actors.<actor>.model",
+    "paths[].meta.files_changed[]",
+    "paths[].meta.producer.version",
+    "paths[].meta.vcs_remote",
+    "paths[].path.base.branch",
+    "paths[].path.base.ref",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+    "paths[].steps[].change.<artifact>.structural.delegations[].agent_id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].prompt",
+    "paths[].steps[].change.<artifact>.structural.delegations[].result",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].model",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].parent_id",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].role",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].stop_reason",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].text",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].thinking",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].timestamp",
+    "paths[].steps[].change.<artifact>.structural.delegations[].turns[].token_usage",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+    "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+    "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+    "paths[].steps[].change.<artifact>.structural.group_id",
+    "paths[].steps[].change.<artifact>.structural.stop_reason",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.provider",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256",
+    "paths[].steps[].change.<artifact>.structural.thinking_signature.value",
+    "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+    "paths[].steps[].change.<artifact>.structural.token_usage.cache_read_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.cache_write_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.input_tokens",
+    "paths[].steps[].change.<artifact>.structural.token_usage.output_tokens",
+    "paths[].steps[].change.notes.md.structural.before",
+    "paths[].steps[].change.notes.md.structural.operation"
+  ],
+  "gained": []
+}

@@ -1,0 +1,64 @@
+{
+  "writer": "copilot",
+  "ops": [
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.provider", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.text_sha256", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {"op": "drop", "path": "paths[].steps[].change.<artifact>.structural.thinking_signature.value", "why": "a thinking signature is only valid for the API that issued it (Anthropic's); only the claude writer returns it"},
+    {
+      "op": "rename",
+      "from": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_path",
+      "to": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.path"
+    },
+    {
+      "op": "rename",
+      "from": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.content",
+      "to": "paths[].steps[].change.<artifact>.structural.tool_uses[].input.file_text"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.input_tokens",
+      "why": "copilot reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.attributed_token_usage.output_tokens",
+      "why": "copilot reports usage per message, not per step"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_branch",
+      "why": "copilot records no VCS branch per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.vcs_revision",
+      "why": "copilot records no VCS revision per turn"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.environment.working_dir",
+      "why": "copilot's session carries no per-turn working directory",
+      "defect": "Copilot's session.start carries the cwd; the writer does not set it from the turn's environment"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.group_id",
+      "why": "an accounting grouping key the target format does not store"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.stop_reason",
+      "why": "copilot's format records no stop reason"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.<artifact>.structural.token_usage.breakdowns.output.reasoning",
+      "why": "copilot reports no reasoning-token breakdown"
+    },
+    {
+      "op": "drop",
+      "path": "paths[].steps[].change.notes.md.structural.before",
+      "why": "a write in copilot's format carries the new content only, not the prior file"
+    }
+  ]
+}

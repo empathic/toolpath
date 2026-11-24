@@ -1,0 +1,10 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: stages.known_defects
+info:
+  adapter: toolpath_codex
+  agent: codex
+  input_sha256: 472c76330f8204279fafd28ea6210bb6af551525f5d4897a33a047d8e7dc704c
+input_file: test-fixtures/codex/convo.jsonl
+---
+[]

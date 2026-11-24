@@ -1,0 +1,149 @@
+# How each harness validates the session it resumes
+
+Status: 2026-10-19. What each agent's loader does with a session file that is not exactly what it
+wrote: extra keys, missing keys, wrong types, unknown entry types, broken lines, broken parent
+links, and whether loading rewrites the file. A projection writes files these loaders read, so
+their tolerance is the contract our writers have to meet, and what `toolpath-harness-mock` has to
+model ([mock-harness.md](../../mock-harness.md)).
+
+Versions: Claude Code 2.1.285, codex-cli 0.162.1, pi 0.84.3, Copilot CLI 1.0.61, gemini-cli 0.47.0,
+opencode 1.18.18, Cursor 3.24.18 (the installed app; the goldens pin 3.24.12, which was not
+re-read).
+
+## Method
+
+- **Read the source** where it is open: codex (`codex-rs` at tag `rust-v0.162.1`), opencode
+  (`packages/opencode` at `v1.18.18`), pi and gemini-cli (the published, unminified `dist` in the
+  nix store). Citations are `file:line`.
+- **Read the bundle** where it is closed: Copilot CLI (`lib/github-copilot-cli/app.js`) and Cursor
+  (`Contents/Resources/app/out/vs/workbench/workbench.desktop.main.js`). Both are minified, so
+  citations are `line, byte offset` plus the minified identifier. Cursor was read only from the
+  bundle: no Cursor launch, nothing written to its `state.vscdb`.
+- **Mutate and observe** where neither is possible: Claude Code. One mutation per run of the
+  claude fixture (`test-fixtures/claude/convo.jsonl`, 80 lines), resumed with `claude -p … -r <id>`
+  in a temporary `HOME`, `ANTHROPIC_BASE_URL` pointed at a local logging server that records the
+  request body and answers 400. No model call is made; the logged `/v1/messages` body is what
+  Claude Code would have sent.
+
+## The table
+
+Each cell names its source: `S<n>` in [Sources](#sources), or `observed: <mutation>` for a Claude
+Code run.
+
+| harness | extra keys | missing keys | wrong types | unknown entry type | malformed line | order / parent links | file on load |
+|---|---|---|---|---|---|---|---|
+| **Claude Code** | accepted, and **not forwarded** to the API (observed: `zzExtraTop` on every line and `message.zzExtraMsg`: 41 messages sent, 0 occurrences of either key in the body) | `uuid` dropped on one line: no visible effect (observed: drop_uuid, 41 messages) | assistant `message.content = 12345`: sent as a **user** message with text `(no content)` (observed: wrong_type, 41 messages) | ignored (observed: a `zz_unknown_entry` line, 41 messages) | skipped silently, file kept (observed: a broken line mid-file, 41 messages, prefix unchanged) | `parentUuid` walk from the leaf; a missing link **ends the walk silently** (observed: drop_parent on the middle assistant, 41 → 22 messages) | appended, never rewritten; appended **even when the API call fails** (observed: baseline, 80 → 102 lines, 400 from the API) |
+| **codex** | ignored by serde except on permission types, which `deny_unknown_fields` (S1) | `timestamp` required per line, else the line is skipped (S2); other fields per serde defaults | the line fails to decode and is skipped and counted (S3) | top-level `type`: no catch-all, so the line is skipped (S4); `response_item` payload: kept as `Other` and ignored (S5) | skipped with a `warn!`, counted in `parse_errors` (S3) | file order; the first `session_meta` is the thread id; an unknown `history_mode` in it **fails the load** (S6); an empty file fails (S3) | appended (S7) |
+| **pi** | kept: entries are plain parsed JSON, "parsed without validation" (S8) | header needs `type: "session"` and a string `id`, else the whole file reads as empty (S9); `message.content` null → `[]` (S8) | not checked (S8) | ignored for model context; only message, custom_message, branch_summary, compaction feed it (S10) | skipped (S11) | `parentId` walk from the leaf (the last entry if no `leafId`); a missing parent **ends the walk silently** (S12) | **rewritten whole** when an older `version` migrates (S13); a non-empty file that yields no entries **throws** without touching the file (S13) |
+| **Copilot CLI** | **stripped**: events are `z.object` (zod's default strip), not `.strict()` or `.passthrough()` (S14) | **fails the load**: `Invalid event at line N` (S15) | **fails the load**, same error; one exemption: an `abort` event's bad `data.reason` is skipped (S15, S16) | an unknown `type` is skipped (zod `invalid_union_discriminator` is the one error the loader lets through) (S15) | **fails the load**: `JSON.parse` throws outside zod, so the skip rule does not apply (S15) | file order, not `parentId`; first event must be `session.start` (S17); `id` and `parentId` must be UUIDs, `timestamp` ISO 8601 with offset (S14) | appended (S18); `session.import_legacy` refuses to resume (S16) |
+| **gemini-cli** | kept: whole record objects are stored (S19) | a record is classified by duck-typed predicates; one that matches none is ignored (S19); without `sessionId` + `projectHash` the file falls back to the legacy single-JSON parser (S20) | not checked beyond the predicates (S19) | ignored (S19) | skipped silently (`catch {}`) (S19) | file order; same `id` replaces the earlier message; `$set.messages` replaces all; a `$rewindTo` whose id is not found **clears every message** (S19) | not rewritten; resume writes a new session file with the same `sessionId` (S21) |
+| **opencode** | kept: rows are `{...row.data, id, sessionID}` cast `as Info`, no runtime validation; the columns win over same-named keys in `data` (S22) | not checked (S22) | not checked (S22) | unknown part types are skipped when building model messages (S23) | n/a (SQLite rows; a bad JSON column fails in drizzle, not reviewed) | messages by `time_created, id`; parts by `id`; `parentID` is not walked (S24) | rows inserted; existing rows not rewritten on load (S22) |
+| **Cursor** | kept: bubbles are spread into new objects (S25) | a header whose bubble is missing is **dropped silently** (S26); an AI bubble without `text` throws in `l7i` (`e.text.replace`) and the composer fails to load (S25) | same as missing: anything that breaks `l7i` or a migration fails the composer load (S27) | headers that are neither HUMAN nor AI are not loaded as messages (S26) | a bubble that is not JSON throws (no `try` around `JSON.parse`) and the composer fails to load (S28); a broken `conversationState` is caught and flagged `hasCorruptedCheckpoints` (S28) | **`fullConversationHeadersOnly` decides order**; the initial load reads only the newest turn (`I$s = 1`, at most `kku = 12` AI bubbles) and the rest lazily (S26) | migrations by `_v` (18 steps) rewrite bubbles in place (S27); some reconciled bubbles are stored on load; a root with chunked headers is marked for rewrite (S29) |
+
+## What was surprising
+
+- **Claude Code and pi lose history silently on one bad parent link.** Dropping `parentUuid` from
+  one assistant line cut the request from 41 messages to 22, with no error and no warning; pi's
+  walk does the same (S12). This is the 2026-10-15 pi → claude bug, reproduced by a single-key
+  mutation in a file Claude Code wrote itself.
+- **Claude Code appends to the session file even when the model call fails.** A resume against a
+  server that only answers 400 still grew the file from 80 to 102 lines. A failed resume is not a
+  read-only operation.
+- **Claude Code turns a wrong-typed assistant message into a user message.** `content: 12345` on an
+  assistant entry was sent as role `user` with the text `(no content)`. No error; the model sees a
+  turn nobody wrote.
+- **Claude Code drops unknown keys before the API.** Extra keys on a line or inside `message` are
+  harmless: they never reach the model.
+- **Copilot is the only strict loader, and its strictness is lopsided.** A wrong type, a missing
+  required key or a single malformed line fails the whole resume; an unknown event type is skipped;
+  unknown keys are stripped. Every other harness skips a malformed line.
+- **gemini's `$rewindTo` to an unknown id wipes the conversation.** Not found → `messagesMap.clear()`.
+- **codex fails only on one field.** An unknown `history_mode` in the first `session_meta` stops
+  the load; every other undecodable line is skipped and counted.
+- **Cursor's headers, not its bubbles, are the conversation.** A bubble with no header is never
+  shown; a header with no bubble disappears. A projection that writes bubbles without headers
+  resumes empty.
+- **pi rewrites the whole file on resume** when the version is old: the only harness here that
+  rewrites a session it did not just create.
+
+## Rules for our writers and the mock harness
+
+What a projection must do so each loader reads all of it, and what `toolpath-harness-mock` must
+model so its `unreachable` list tells the truth:
+
+| harness | writer must | mock must |
+|---|---|---|
+| Claude Code | give every conversation entry a `parentUuid` that resolves to an earlier entry in the file; never write a non-array, non-string `message.content` | walk `parentUuid` from the leaf and report everything off the walk as `unreachable` (done); treat a bad `content` as user `(no content)` |
+| codex | write `timestamp` on every line; only top-level `type`s from `RolloutItemWire`; `session_meta` first, with a known `history_mode` or none | skip lines without `timestamp` or with an unknown top-level type, and report them |
+| pi | header first: `type: "session"`, string `id`, `version: 3` (an older version is rewritten under us); a `parentId` chain from the last entry back to the header | walk `parentId` from the last entry |
+| Copilot CLI | validate against Copilot's event schema before writing: UUID `id`/`parentId`, ISO 8601 `timestamp` with offset, `session.start` first, no malformed line anywhere | fail the whole resume on any schema error, as Copilot does; skip unknown event types |
+| gemini-cli | `sessionId` and `projectHash` on the metadata record; unique message `id`s; never a `$rewindTo` | replay records in order with replace-by-id |
+| opencode | the type is the only check: write exactly opencode's `Info`/`Part` shapes; `time_created` and ids in conversation order | order by `time_created, id`, not by `parentID` |
+| Cursor | a header for every bubble and a bubble for every header; AI bubbles with a string `text`; the current `_v` | load from headers; drop headers with no bubble as `unreachable` |
+
+## Sources
+
+Paths: codex under `codex-rs/` at `rust-v0.162.1`; opencode under
+`packages/opencode/src/session/` at `v1.18.18`; pi `lib/pi/dist/core/session-manager.js`
+(pi-coding-agent 0.84.3); gemini `share/gemini-cli/chunk-O5L2NYLH.js` (gemini-cli 0.47.0); Copilot
+`lib/github-copilot-cli/app.js` (1.0.61); Cursor `workbench.desktop.main.js` (3.24.18).
+
+- S1 codex `protocol/src/models.rs:100,184,748`, `protocol/src/request_permissions.rs:19`: the
+  only `deny_unknown_fields`.
+- S2 codex `rollout/src/lib.rs:52-74` `decode_rollout_line`: a line must be an object with
+  `timestamp`; `ordinal` optional.
+- S3 codex `rollout/src/recorder.rs:1105-1172` `load_rollout_items`: malformed JSON and decode
+  failures warn, count `parse_errors` and continue; empty file → `empty session file`; legacy
+  `ghost_snapshot` lines dropped.
+- S4 codex `history/src/rollout_payload.rs:32`: `#[serde(tag = "type")] enum RolloutItemWire`, no
+  `#[serde(other)]`.
+- S5 codex `protocol/src/models.rs:1012-1014,1256-1257`: `ResponseItem` with `#[serde(other)] Other`.
+- S6 codex `rollout/src/recorder.rs:1241` `reject_unknown_thread_history_mode`.
+- S7 codex appends to the absolute `threads.rollout_path` (resume matrix, 2026-10-15: the same file
+  grew 33 → 93 lines).
+- S8 pi `session-manager.js:169` ("Session files are parsed without validation").
+- S9 pi `session-manager.js:277-323` `loadEntriesFromFile`.
+- S10 pi `sessionEntryToContextMessages` (same file).
+- S11 pi `session-manager.js:91-105` `parseSessionEntries` ("Skip malformed lines").
+- S12 pi `session-manager.js:124-142` `buildSessionPath`.
+- S13 pi `session-manager.js:11` (`CURRENT_SESSION_VERSION = 3`), `31-83` (migrations, in place),
+  `615-636` (`_setSessionFile`: throw on non-empty unparseable file; `_rewriteFile()` after a
+  migration).
+- S14 Copilot `app.js` line 88 (byte 142492): `Et = Xf.create` (zod `object`, strip), strict is the
+  separate `eAo = Xf.strictCreate`; line 646 (byte 2210152): base event `lo = Et({id: uuid,
+  timestamp: datetime({offset}), parentId: uuid.nullable, …})`; byte 2304084:
+  `AYr = iM("type", [...])` (discriminated union).
+- S15 Copilot `app.js` line 103 (byte 177322): the `events.jsonl` loader; per line
+  `JSON.parse` then the schema parse; `catch` continues only for a zod `invalid_union_discriminator`
+  or `shouldSkipInvalidRecord`, else throws `Invalid event at line N`.
+- S16 Copilot `app.js` line 2389 (bytes 4550961, 4551182): `BLi` (refuses
+  `session.import_legacy`, then `AYr.parse`) and `FLi` (the `abort`/`data.reason` exemption).
+- S17 Copilot `app.js` line 2641 (byte 4971709): `fromEvents`: non-empty, first event
+  `session.start`, then every event in file order.
+- S18 Copilot `app.js` line 103 (byte 178053): `append` → `appendFile`; `truncate` (rewind) is the
+  only rewrite.
+- S19 gemini `chunk-O5L2NYLH.js:282296-282311` (`isRewindRecord`, `isPartialMetadataRecord`,
+  `isResumableMessageRecord`) and `282324` onward (`loadConversationRecord`).
+- S20 gemini `chunk-O5L2NYLH.js:282475`, `282955` (`parseLegacyRecordFallback`).
+- S21 observed in the 2026-10-15 resume matrix (`review/payload-to-session.md`): resume writes a
+  new two-line `session-*.jsonl` with the same `sessionId`.
+- S22 opencode `message-v2.ts:80-93` (`info`, `part`: spread and cast); `session.ts:59` (`fromRow`).
+- S23 opencode `message-v2.ts` `toModelMessages`: text 206/278, file 212, compaction 228,
+  subtask 234, step-start 286, tool 290, reasoning 362; nothing else.
+- S24 opencode `message-v2.ts:107,439,499` (`orderBy`).
+- S25 Cursor line 7328 (byte 14717659) `l7i`: strips leading newlines from AI `text`, revives
+  code-block URIs, spreads the rest.
+- S26 Cursor line 7330 (byte 14793628) `getInitialMessages`; line 7276 (byte 13863010)
+  `kku = 12, I$s = 1`.
+- S27 Cursor line 7325 (byte 14679435) `n_v` (load + migrations; any throw becomes
+  `error migrating composer instance data`); line 7326 (byte 14689890) `v3u`, the 18 migrations.
+- S28 Cursor line 7330 (byte 14791105) `retrieveMessagesBatchInternal`.
+- S29 Cursor line 7453 (byte 16174828) `readComposerRoot` (`needsRootRewrite`); `n_v`'s
+  `storeMessage` of reconciled `summarizationAborted` bubbles.
+
+## Not covered
+
+- Copilot's `workspace.yaml` parse (`G4` / `ont.parse`, a separate schema) and the
+  `session-store.db` index.
+- opencode's behaviour on a `data` column that is not valid JSON.
+- Empirical runs for codex and pi: their stances above are read from source, not observed.

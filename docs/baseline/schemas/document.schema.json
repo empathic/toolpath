@@ -1,0 +1,9 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "document snapshot",
+  "description": "One recording parsed and derived: a Toolpath document (a graph of paths of steps), path kind agent-coding-session v1.1.0. Its schema is the format's own: the base schema plus the kind schema, exactly what `path p validate` checks (toolpath_goldens::validate). This file only points at them.",
+  "allOf": [
+    { "$ref": "../../../schema/toolpath.schema.json" },
+    { "$ref": "../../../site/kinds/agent-coding-session/v1.1.0/schema.json" }
+  ]
+}

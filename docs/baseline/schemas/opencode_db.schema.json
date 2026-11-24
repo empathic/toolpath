@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "opencode_db snapshot",
+  "description": "The opencode recording stored in a real-schema opencode-stable.db and read through the adapter's own reader. Hand-written: the body is built with json! in tests/opencode_db.rs.",
+  "type": "object",
+  "required": ["ir_differs_from_export", "messages", "parts", "resolved_file"],
+  "additionalProperties": false,
+  "properties": {
+    "ir_differs_from_export": { "type": "object", "description": "Key paths where the database read differs from the export read; empty when identical." },
+    "messages": { "type": "integer", "minimum": 0 },
+    "parts": { "type": "integer", "minimum": 0 },
+    "resolved_file": { "type": "string" }
+  }
+}

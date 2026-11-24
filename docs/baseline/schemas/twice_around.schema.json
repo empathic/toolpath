@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "A round trip's derived document projected to the same harness a second time and read back: the key paths lost, gained or changed between pass 1 and pass 2. Anything listed is accumulating encoding error and must be declared.",
+  "oneOf": [
+    {
+      "description": "Both passes read; this is what moved between them.",
+      "properties": {
+        "changed": {
+          "description": "Key paths in both whose values differ (ids, timestamps, escaping, path spelling).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gained": {
+          "description": "Key paths present only after pass 2.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lost": {
+          "description": "Key paths of pass 1's document absent after pass 2.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outcome": {
+          "enum": [
+            "compared"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "changed",
+        "gained",
+        "lost",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Pass 1 or pass 2 could not be read; there is nothing to compare.",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "unreadable"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "outcome"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "twice_around snapshot"
+}

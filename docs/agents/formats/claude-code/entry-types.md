@@ -22,6 +22,7 @@ a large fraction of the file.
 | `agent-name`            | no             | no          | Agent name for the session. |
 | `mode`                  | no             | no          | Active mode. Only `"normal"` observed. |
 | `atis-latch`            | no             | no          | Opaque latch value. Purpose unknown. |
+| `cost-state`            | no             | no          | The session's running cost and usage per model. Seen in 2.1.285. |
 | `pr-link`               | no             | no          | Pull request linked to the session. |
 | `frame-link`            | no             | no          | Frame URL linked to a local file. |
 | `relocated`             | no             | no          | New working directory for the session. |
@@ -355,6 +356,17 @@ string, or a ~190-character string. Its purpose is unknown.
 ```json
 {"type": "atis-latch", "atis": "", "sessionId": "..."}
 ```
+
+### `cost-state`
+
+The session's running totals, written once near the end of the 2.1.285
+capture: `totalCostUSD`, `totalAPIDuration`, `totalAPIDurationWithoutRetries`,
+`totalDuration`, `totalToolDuration`, `totalLinesAdded`, `totalLinesRemoved`,
+`hasUnknownModelCost`, `startTime`, and `modelUsage` keyed by model id
+(`inputTokens`, `outputTokens`, `cacheReadInputTokens`,
+`cacheCreationInputTokens`, `thinkingTokens`, `webSearchRequests`, `costUSD`).
+Not a conversation entry; toolpath carries it as a session event.
+Field list from [observed/claude.md](../observed/claude.md).
 
 ### `pr-link`
 
