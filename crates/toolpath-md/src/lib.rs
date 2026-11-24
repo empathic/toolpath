@@ -52,6 +52,7 @@ impl Default for RenderOptions {
 ///         base: None,
 ///         head: "s1".into(),
 ///         graph_ref: None,
+///         parent: None,
 ///     },
 ///     steps: vec![step],
 ///     meta: None,
@@ -535,7 +536,21 @@ fn write_transcript_context(out: &mut String, path: &Path) {
             .unwrap_or_default();
         writeln!(out, "**Base:** `{}`{branch}", base.uri).unwrap();
     }
+    write_parent_line(out, path);
     writeln!(out).unwrap();
+}
+
+/// `**Parent:**` line for a path that descends from a step in another
+/// document: the document, then the path and step within it.
+fn write_parent_line(out: &mut String, path: &Path) {
+    if let Some(parent) = &path.path.parent {
+        writeln!(
+            out,
+            "**Parent:** `{}` path `{}` @ `{}`",
+            parent.uri, parent.path, parent.step
+        )
+        .unwrap();
+    }
 }
 
 /// The turn-by-turn transcript body, shared by the single-path and graph
@@ -979,6 +994,7 @@ fn write_path_context(out: &mut String, path: &Path) {
         }
         writeln!(out).unwrap();
     }
+    write_parent_line(out, path);
 
     // Only show Head if no source-specific identity line (it's noise for PRs)
     if ctx.identity_line.is_none() {
@@ -1259,6 +1275,11 @@ fn write_path_front_matter(out: &mut String, path: &Path) {
         if let Some(branch) = &base.branch {
             writeln!(out, "base_branch: {branch}").unwrap();
         }
+    }
+    if let Some(parent) = &path.path.parent {
+        writeln!(out, "parent: {}", parent.uri).unwrap();
+        writeln!(out, "parent_path: {}", parent.path).unwrap();
+        writeln!(out, "parent_step: {}", parent.step).unwrap();
     }
     writeln!(out, "steps: {}", path.steps.len()).unwrap();
     let actors = query::all_actors(&path.steps);
@@ -1576,8 +1597,8 @@ fn topo_sort<'a>(steps: &'a [Step]) -> Vec<&'a Step> {
 mod tests {
     use super::*;
     use toolpath::v1::{
-        Base, Graph, GraphIdentity, GraphMeta, Path, PathIdentity, PathMeta, PathOrRef, PathRef,
-        Ref, Step, StructuralChange,
+        Base, Graph, GraphIdentity, GraphMeta, Parent, Path, PathIdentity, PathMeta, PathOrRef,
+        PathRef, Ref, Step, StructuralChange,
     };
 
     fn make_step(id: &str, actor: &str, parents: &[&str]) -> Step {
@@ -1674,6 +1695,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc123")),
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2],
             meta: Some(PathMeta {
@@ -1704,6 +1726,7 @@ mod tests {
                 base: None,
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2, s2a, s3],
             meta: None,
@@ -1725,6 +1748,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -1743,6 +1767,44 @@ mod tests {
     }
 
     #[test]
+    fn test_render_path_with_parent() {
+        let mut path = Path::new("p2", Some(Base::vcs("github:org/repo", "abc123")), "s1")
+            .with_parent(Parent::new("file:///archive/p1.path.json", "p1", "s17"));
+        path.steps.push(make_step("s1", "agent:claude", &[]));
+        let md = render_path(&path, &RenderOptions::default());
+
+        assert!(
+            md.contains("**Parent:** `file:///archive/p1.path.json` path `p1` @ `s17`"),
+            "parent line missing:\n{md}"
+        );
+        let base_at = md.find("**Base:**").unwrap();
+        let parent_at = md.find("**Parent:**").unwrap();
+        assert!(base_at < parent_at, "parent follows base:\n{md}");
+
+        let opts = RenderOptions {
+            front_matter: true,
+            ..Default::default()
+        };
+        let md = render_path(&path, &opts);
+        assert!(md.contains("parent: file:///archive/p1.path.json\n"));
+        assert!(md.contains("parent_path: p1\n"));
+        assert!(md.contains("parent_step: s17\n"));
+    }
+
+    #[test]
+    fn test_render_path_without_parent_has_no_parent_line() {
+        let mut path = Path::new("p1", None, "s1");
+        path.steps.push(make_step("s1", "agent:claude", &[]));
+        let md = render_path(&path, &RenderOptions::default());
+        assert!(!md.contains("**Parent:**"));
+        let opts = RenderOptions {
+            front_matter: true,
+            ..Default::default()
+        };
+        assert!(!render_path(&path, &opts).contains("parent"));
+    }
+
+    #[test]
     fn test_render_path_stats_line() {
         let s1 = make_step("s1", "human:alex", &[]);
         let s2 = make_step("s2", "agent:claude", &["s1"]);
@@ -1752,6 +1814,7 @@ mod tests {
                 base: None,
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2],
             meta: None,
@@ -1772,6 +1835,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: Some(PathMeta {
@@ -1800,6 +1864,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc")),
                 head: "s2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2],
             meta: Some(PathMeta {
@@ -1815,6 +1880,7 @@ mod tests {
                 base: None,
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s3],
             meta: Some(PathMeta {
@@ -1868,6 +1934,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -1924,6 +1991,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -2085,6 +2153,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: Some(PathMeta {
@@ -2111,6 +2180,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -2137,6 +2207,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -2332,6 +2403,7 @@ mod tests {
                 base: None,
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2, s3],
             meta: None,
@@ -2355,6 +2427,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -2387,6 +2460,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: Some(PathMeta {
@@ -2416,6 +2490,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: None,
@@ -2537,6 +2612,7 @@ mod tests {
                 base: None,
                 head: "s3".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1, s2, s3],
             meta: None,
@@ -2571,6 +2647,7 @@ mod tests {
                 base: None,
                 head: "s1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![s1],
             meta: Some(PathMeta {
@@ -2698,6 +2775,7 @@ mod tests {
                 base: None,
                 head: "e1".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![user, asst, ev],
             meta: Some(PathMeta {
@@ -2715,6 +2793,17 @@ mod tests {
         let out = truncate_str(&s, 200);
         assert!(out.ends_with("..."));
         assert!(out.starts_with(&"a".repeat(198)));
+    }
+
+    #[test]
+    fn agent_coding_session_header_shows_parent() {
+        let mut path = agent_coding_session_path();
+        path.path.parent = Some(Parent::new("s3://bucket/p0.path.json", "p0", "s9"));
+        let md = render_path(&path, &RenderOptions::default());
+        assert!(
+            md.contains("**Parent:** `s3://bucket/p0.path.json` path `p0` @ `s9`"),
+            "parent line missing:\n{md}"
+        );
     }
 
     #[test]
@@ -2831,6 +2920,7 @@ mod tests {
                 base: None,
                 head: "a2".into(),
                 graph_ref: None,
+                parent: None,
             },
             steps: vec![user, work, reply],
             meta: Some(PathMeta {

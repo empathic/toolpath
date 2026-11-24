@@ -2,6 +2,37 @@
 
 All notable changes to the Toolpath workspace are documented here.
 
+## toolpath 0.8.0 — 2026-10-07
+
+- **`toolpath`** (0.8.0): `PathIdentity.parent` names the step in
+  another path that a path descends from: the document `uri` and the
+  parent `path` and `step` IDs, all required. Every root step of the
+  path has the parent step as its implicit parent. The path is a
+  continuation when `parent.step` is the parent path's head and a fork
+  when it is any other step; nothing is declared. `PathOpen` carries
+  it in JSONL. `Path::with_parent` and `Parent::new` build it. `base` keeps its
+  meaning as the project context the path runs against, the
+  `toolpath:<path-id>/<step-id>` form included; a path may carry both
+  `base` and `parent`. The core RFC states the first-parent rule:
+  `step.parents[0]` is the main line and further parents are branches
+  merging in. A new add-on RFC, `docs/RFC-lineage.md`, specifies
+  `path.parent`, continuations and forks, how the main line and each
+  branch are recovered, a delegated subagent as a branch inside its
+  parent path, and `parent` on the JSONL `PathOpen` line.
+  `PathIdentity` struct literals must initialise the new field.
+- **`toolpath-md`** (0.8.0): the path header, transcript header and
+  front matter print `path.parent` (document, path, step) after the
+  base, so a rendered continuation shows what it resumed from.
+- **`toolpath-dot`** (0.6.0): the path layout draws a `PARENT` node
+  into each root step the way it draws `BASE`.
+- Cascading minor bumps for the dependency on the new `toolpath 0.8`
+  major, with no behaviour change: `toolpath-git` 0.7.0 and
+  `toolpath-github` 0.7.0. `toolpath-convo` 0.12.0, `toolpath-claude`
+  0.14.0, `toolpath-gemini` 0.7.0, `toolpath-codex` 0.7.0,
+  `toolpath-copilot` 0.2.0, `toolpath-opencode` 0.6.0, `toolpath-cursor`
+  0.3.0 and `toolpath-pi` 0.7.0 have not been published yet and take the
+  `toolpath 0.8` requirement in those versions without a further bump.
+
 ## path-cli 0.32.0 — 2026-10-07
 
 - **`path-cli`** (0.32.0): path-cli records where each session's path

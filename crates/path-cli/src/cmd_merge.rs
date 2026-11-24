@@ -67,6 +67,7 @@ mod tests {
                 base: Some(Base::vcs("github:org/repo", "abc123")),
                 head,
                 graph_ref: None,
+                parent: None,
             },
             steps,
             meta: Some(PathMeta {

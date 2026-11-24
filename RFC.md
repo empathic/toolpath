@@ -69,8 +69,9 @@ Current approaches to tracking code changes have significant gaps:
 | **step**         | A single change to artifact(s)                      |
 | **path**         | Collection of steps with a base context             |
 | **graph**        | Collection of paths (release, project, etc.)        |
-| **base**         | The root context (repo, commit) a path branches from|
+| **base**         | The project context (repo, commit) a path runs against |
 | **head**         | The current tip of the active path                  |
+| **parent**       | The step in another path a path descends from       |
 | **dead end**     | Abandoned branch in the path tree                   |
 | **fork**         | Where paths diverge                                 |
 
@@ -139,7 +140,9 @@ This means:
 
 When referencing steps (e.g., in `parents` arrays or `path.head`), the reference
 is resolved within the containing path. Cross-path step references are not
-supported.
+supported; the one link between paths is
+[`path.parent`](docs/RFC-lineage.md#path-parent), which names a step in
+another document explicitly.
 
 ### Steps
 
@@ -167,7 +170,7 @@ A **path** collects steps and provides root context:
 
 | Key      | What it is                                          |
 | -------- | --------------------------------------------------- |
-| `path`   | Identity, base context, and head reference          |
+| `path`   | Identity, base context, parent, and head reference  |
 | `steps`  | Array of step objects                               |
 | `meta`   | Path-level metadata (title, kind, actors, signatures) |
 
@@ -420,6 +423,14 @@ step-1 ─ step-2b ─ step-3b ─┘
 The path tree preserves abandoned branches for later reflection. The `path.head`
 indicates which step is the current tip.
 
+#### First Parent
+
+`parents` is ordered. `parents[0]` is the main line; every further parent
+is a branch being merged in. Writers MUST order `parents` this way, and
+readers MUST NOT treat `parents` as a set. This is git's first-parent
+rule; the [Lineage RFC](docs/RFC-lineage.md#main-line-and-branches)
+specifies how the main line and each merged branch are recovered from it.
+
 ## Format Specification
 
 ### Step Object
@@ -587,16 +598,18 @@ A path collects steps and provides context. Paths live inside `Graph.paths`:
 ```
 
 The path provides:
-- **base**: Where this tree branches from (repo + ref + commit)
+- **base**: The project context the path runs against (repo + ref + commit)
 - **head**: Current tip of the active path
+- **parent**: The step in another path this path descends from, as `{uri, path, step}` (see the [Lineage RFC](docs/RFC-lineage.md#path-parent))
 - **steps**: All steps including dead ends (step-001a has no descendants)
 - **meta**: Path-level metadata including `kind` (see [Document Kind](#document-kind)), actors, and signatures
 
 ### Base Context
 
-The `path.base` object anchors the path to a specific state. The `uri`
-field identifies the origin (repository, filesystem, or another toolpath
-document). All other fields are optional.
+The `path.base` object anchors the path to its project context: the
+repository and commit, or other project state, the path runs against.
+The `uri` field identifies the origin (repository, filesystem, or a
+project tracked in Toolpath). All other fields are optional.
 
 | Field    | Description                                              |
 | -------- | -------------------------------------------------------- |
@@ -628,7 +641,9 @@ exists. Independent of `ref`: both, either, or neither may appear.
 
 #### Toolpath Base
 
-For paths branching from a step in another path (within the same graph):
+For a project whose artifacts are tracked in Toolpath rather than in a
+VCS, the project context is a step. A base whose `uri` is
+`toolpath:<path-id>/<step-id>` names it:
 
 ```json
 {
@@ -639,11 +654,12 @@ For paths branching from a step in another path (within the same graph):
 ```
 
 The `toolpath:` URI format is:
-- `toolpath:<path-id>/<step-id>` - branch from a specific step in a path
+- `toolpath:<path-id>/<step-id>` - the project state at a step in a path
 
-When using a toolpath URI, the `ref` field is omitted. This enables pure
-Toolpath documents without VCS backing, and allows branching from steps that
-occur between VCS commits.
+This is the Toolpath analogue of `github:org/repo` plus `ref`. When using
+a toolpath URI, the `ref` field is omitted. This enables pure Toolpath
+documents without VCS backing, and lets a path run against a project
+state that occurs between VCS commits.
 
 #### Local/Filesystem Base
 
