@@ -1,0 +1,1264 @@
+---
+source: crates/toolpath-goldens/tests/goldens.rs
+expression: text
+info:
+  adapter: toolpath_pi
+  agent: pi
+  input_sha256: 846199de368402dbc91c581a907f93cbd513e761552c45d15371f9810aff251c
+input_file: test-fixtures/pi/convo.jsonl
+---
+{
+  "id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+  "project_id": "93263300b7d810692490918149b5efbd78d8bbf7",
+  "slug": "you-re-going-to-walk-through-a-small-set-of-tasks-designed-t",
+  "directory": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+  "title": "You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the curre",
+  "version": "0.0.0-projected",
+  "time_created": 1778178974689,
+  "time_updated": 1778179016156,
+  "messages": [
+    {
+      "id": "msg_e03b9e3e1001Rr13sb9KBgaZG3",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778178974689,
+      "time_updated": 1778178974689,
+      "data": {
+        "role": "user",
+        "time": {
+          "created": 1778178974689
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "anthropic",
+          "modelID": "unknown"
+        },
+        "summary": {
+          "diffs": []
+        }
+      },
+      "parts": [
+        {
+          "id": "prt_e03b9e3e10022fAEbwwf2RT6kf",
+          "message_id": "msg_e03b9e3e1001Rr13sb9KBgaZG3",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178974689,
+          "time_updated": 1778178974689,
+          "data": {
+            "type": "text",
+            "text": "You're going to walk through a small set of tasks designed to exercise every common tool category. Stay inside the current working directory — do not touch anything outside it. Take the steps in order. Briefly think out loud before each tool call so the reasoning is captured. Tool-selection rule: if a step mentions a dedicated tool *and* that tool is available to you, use it; otherwise, use whatever shell-based equivalent you have (e.g. `ls`, `cat`, `sed`, `find`, `grep`). Don't skip steps because a dedicated tool is missing.\n\n1. List the files in the current directory (prefer a dedicated list/directory tool; `bash ls` is fine).\n2. Using a dedicated write/create-file tool if available (otherwise a shell heredoc), write `notes.md` with exactly these two lines:\n       scratch — feature elicitation\n       this file will be edited and searched.\n3. Read `notes.md` back using a dedicated read-file tool (preferred) or `bash cat`. Confirm both lines are present.\n4. Using a dedicated edit/replace/string-replace tool if available (otherwise `sed -i` or rewrite via the write tool), change the word \"scratch\" to \"fixture\" in `notes.md`.\n5. Find every file in the current directory whose name starts with \"note\". Prefer a dedicated glob/find-files tool; otherwise `bash find . -maxdepth 1 -name 'note*'`.\n6. Search the contents of files in the current directory for the word \"fixture\". Prefer a dedicated grep/content-search tool; otherwise `bash grep -r fixture .`. It should appear in `notes.md`.\n7. Read a file that does not exist: `does-not-exist.txt`. Use a read-file tool (or `cat does-not-exist.txt`) — the call MUST fail and the failure MUST be reported as a tool result, not silently swallowed. Acknowledge the error in one sentence and move on.\n8. Write a shell script `count.sh` that prints the numbers 1 through 5 on separate lines (one `echo` per line is fine). Run it with `bash count.sh` and confirm the output is exactly five lines.\n9. If you have a sub-agent / task-dispatch tool available (Claude `Task`, Gemini sub-agents, Codex sub-tasks, opencode subtask, etc.), dispatch a sub-agent with this exact instruction: \"Count the words in `notes.md` and report the number.\" Wait for the sub-agent's reply and quote its result in one sentence. If no such tool is available, skip this step and say so explicitly.\n10. Briefly summarize in 2–3 sentences what you did. Stop without asking for further work."
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba16a30033mxp1WuRZ0DJ0l",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778178987683,
+      "time_updated": 1778178987683,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03b9e3e1001Rr13sb9KBgaZG3",
+        "time": {
+          "created": 1778178987683,
+          "completed": 1778178987683
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 2424,
+          "input": 2108,
+          "output": 316,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba16a30040CwIHXJHFg0ohX",
+          "message_id": "msg_e03ba16a30033mxp1WuRZ0DJ0l",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178987683,
+          "time_updated": 1778178987683,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba16a30055EaiCCALiVXWew",
+          "message_id": "msg_e03ba16a30033mxp1WuRZ0DJ0l",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178987683,
+          "time_updated": 1778178987683,
+          "data": {
+            "type": "reasoning",
+            "text": "The user wants me to execute a sequence of 10 steps designed to exercise all available tool categories. I must stay within the current directory and use dedicated tools when they are preferred or available, falling back to shell commands otherwise.\n\nStep 1: List files. Use `read` or `bash ls`. `bash ls` is fine.\nStep 2: Create `notes.md`. Use a dedicated write tool (`write`).\nStep 3: Read `notes.md`. Use `read`.\nStep 4: Edit `notes.md`. Use a dedicated edit tool (`edit`).\nStep 5: Find files starting with \"note\". Use `bash find`.\nStep 6: Search contents for \"fixture\". Use `bash grep -r`.\nStep 7: Read a non-existent file. Use `read`. Expect failure report.\nStep 8: Create and run a script `count.sh`. Use `write` and `bash`.\nStep 9: Sub-agent dispatch. Check for dedicated sub-agent tool. If none, skip and report.\nStep 10: Summarize. Final response.\n\nLet's start with Step 1.",
+            "time": {
+              "start": 1778178987683,
+              "end": 1778178987683
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba16a3006uCIgFu3JWK1lkX",
+          "message_id": "msg_e03ba16a30033mxp1WuRZ0DJ0l",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178987683,
+          "time_updated": 1778178987683,
+          "data": {
+            "type": "text",
+            "text": "**Step 1: List the files in the current directory**\n\nI will use the `bash` tool with the `ls` command to list the files in the current directory, as this is a standard and reliable way to fulfill this request.\n\n",
+            "time": {
+              "start": 1778178987683,
+              "end": 1778178987683
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba16a3007YqQn57jdUIaYv1",
+          "message_id": "msg_e03ba16a30033mxp1WuRZ0DJ0l",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178987683,
+          "time_updated": 1778178987683,
+          "data": {
+            "type": "tool",
+            "tool": "bash",
+            "callID": "call_9g4skz92",
+            "state": {
+              "status": "completed",
+              "input": {
+                "command": "ls"
+              },
+              "output": "(no output)",
+              "title": "ls",
+              "metadata": {
+                "exit": 0,
+                "output": "(no output)",
+                "truncated": false
+              },
+              "time": {
+                "start": 1778178987683,
+                "end": 1778178987683
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba16a3008vIoGPq2XhCoWVR",
+          "message_id": "msg_e03ba16a30033mxp1WuRZ0DJ0l",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178987683,
+          "time_updated": 1778178987683,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 2424,
+              "input": 2108,
+              "output": 316,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba1fdb009HxNdXytw4oAFme",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778178990043,
+      "time_updated": 1778178990043,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba16a30033mxp1WuRZ0DJ0l",
+        "time": {
+          "created": 1778178990043,
+          "completed": 1778178990043
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 2541,
+          "input": 2440,
+          "output": 101,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba1fdb00aqQy7Ds0W8kam90",
+          "message_id": "msg_e03ba1fdb009HxNdXytw4oAFme",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178990043,
+          "time_updated": 1778178990043,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba1fdb00bhiKVhW0NY2WqHW",
+          "message_id": "msg_e03ba1fdb009HxNdXytw4oAFme",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178990043,
+          "time_updated": 1778178990043,
+          "data": {
+            "type": "reasoning",
+            "text": "Current directory listing was empty, which means no files were present before I started.\n\nNow for Step 2: Write `notes.md`.\nI must use the dedicated `write` tool.\nContent:\n```markdown\nscratch — feature elicitation\nthis file will be edited and searched.\n```",
+            "time": {
+              "start": 1778178990043,
+              "end": 1778178990043
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba1fdb00c10QUSaqPtTHFAu",
+          "message_id": "msg_e03ba1fdb009HxNdXytw4oAFme",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178990043,
+          "time_updated": 1778178990043,
+          "data": {
+            "type": "tool",
+            "tool": "write",
+            "callID": "call_d65wafia",
+            "state": {
+              "status": "completed",
+              "input": {
+                "content": "scratch — feature elicitation\nthis file will be edited and searched.",
+                "path": "notes.md"
+              },
+              "output": "Successfully wrote 68 bytes to notes.md",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1778178990043,
+                "end": 1778178990043
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba1fdb00dIsmZyyNcNccs3A",
+          "message_id": "msg_e03ba1fdb009HxNdXytw4oAFme",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178990043,
+          "time_updated": 1778178990043,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 2541,
+              "input": 2440,
+              "output": 101,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba265f00euzOp8F7KKOCxbW",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778178991711,
+      "time_updated": 1778178991711,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba1fdb009HxNdXytw4oAFme",
+        "time": {
+          "created": 1778178991711,
+          "completed": 1778178991711
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 2632,
+          "input": 2562,
+          "output": 70,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba265f00f2Yb4Axc30L5c9Y",
+          "message_id": "msg_e03ba265f00euzOp8F7KKOCxbW",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178991711,
+          "time_updated": 1778178991711,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba265f0104OLoF5Vq87fNQB",
+          "message_id": "msg_e03ba265f00euzOp8F7KKOCxbW",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178991711,
+          "time_updated": 1778178991711,
+          "data": {
+            "type": "text",
+            "text": "**Step 2: Write `notes.md`**\n\nI used the `write` tool to create `notes.md` with the specified content.\n\nNext for Step 3: Read `notes.md` using the dedicated `read` tool.\n<channel|>",
+            "time": {
+              "start": 1778178991711,
+              "end": 1778178991711
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba265f011o1MAoYaN5XJcLO",
+          "message_id": "msg_e03ba265f00euzOp8F7KKOCxbW",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178991711,
+          "time_updated": 1778178991711,
+          "data": {
+            "type": "tool",
+            "tool": "read",
+            "callID": "call_gy597kfg",
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "notes.md"
+              },
+              "output": "scratch — feature elicitation\nthis file will be edited and searched.",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1778178991711,
+                "end": 1778178991711
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba265f012p4asHYKCdlSbpy",
+          "message_id": "msg_e03ba265f00euzOp8F7KKOCxbW",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178991711,
+          "time_updated": 1778178991711,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 2632,
+              "input": 2562,
+              "output": 70,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba3094013oG8xPcO044zu0x",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778178994324,
+      "time_updated": 1778178994324,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba265f00euzOp8F7KKOCxbW",
+        "time": {
+          "created": 1778178994324,
+          "completed": 1778178994324
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 2772,
+          "input": 2658,
+          "output": 114,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba3094014fRb5YzR4ON2iZc",
+          "message_id": "msg_e03ba3094013oG8xPcO044zu0x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178994324,
+          "time_updated": 1778178994324,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba3094015l6extJma7W4uhx",
+          "message_id": "msg_e03ba3094013oG8xPcO044zu0x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178994324,
+          "time_updated": 1778178994324,
+          "data": {
+            "type": "reasoning",
+            "text": "The `read` tool call succeeded and confirmed the content of `notes.md`.\n\nNow for Step 4: Edit `notes.md`.\nI must change \"scratch\" to \"fixture\" using the dedicated `edit` tool.\nThe old text I am targeting is \"scratch\".\nThe new text is \"fixture\".",
+            "time": {
+              "start": 1778178994324,
+              "end": 1778178994324
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba30940165v0g9XDg40Z2Ar",
+          "message_id": "msg_e03ba3094013oG8xPcO044zu0x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178994324,
+          "time_updated": 1778178994324,
+          "data": {
+            "type": "tool",
+            "tool": "edit",
+            "callID": "call_46z15ns3",
+            "state": {
+              "status": "completed",
+              "input": {
+                "edits": [
+                  {
+                    "newText": "fixture — feature elicitation",
+                    "oldText": "scratch — feature elicitation"
+                  }
+                ],
+                "path": "notes.md"
+              },
+              "output": "Successfully replaced 1 block(s) in notes.md.",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1778178994324,
+                "end": 1778178994324
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba3094017G0I0T04r7OTHBu",
+          "message_id": "msg_e03ba3094013oG8xPcO044zu0x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178994324,
+          "time_updated": 1778178994324,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 2772,
+              "input": 2658,
+              "output": 114,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba3a1c018Eutnzo8DzFrdgN",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778178996764,
+      "time_updated": 1778178996764,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba3094013oG8xPcO044zu0x",
+        "time": {
+          "created": 1778178996764,
+          "completed": 1778178996764
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 2904,
+          "input": 2795,
+          "output": 109,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba3a1c019bfduQ9jJ35GkV1",
+          "message_id": "msg_e03ba3a1c018Eutnzo8DzFrdgN",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178996764,
+          "time_updated": 1778178996764,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba3a1c01aOe5BtH8EaRl1Vx",
+          "message_id": "msg_e03ba3a1c018Eutnzo8DzFrdgN",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178996764,
+          "time_updated": 1778178996764,
+          "data": {
+            "type": "text",
+            "text": "**Step 3: Read `notes.md`**\n\nI used the `read` tool to read `notes.md` and confirmed that both lines (\"scratch — feature elicitation\" and \"this file will be edited and searched.\") were present.\n\nThe content read was:\n```\nscratch — feature elicitation\nthis file will be edited and searched.\n```\n\nStep 4 is complete. The content should now reflect the change.\n<channel|>",
+            "time": {
+              "start": 1778178996764,
+              "end": 1778178996764
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba3a1c01bxSbnNeRwO5K89Z",
+          "message_id": "msg_e03ba3a1c018Eutnzo8DzFrdgN",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178996764,
+          "time_updated": 1778178996764,
+          "data": {
+            "type": "tool",
+            "tool": "read",
+            "callID": "call_om1qg6h7",
+            "state": {
+              "status": "completed",
+              "input": {
+                "path": "notes.md"
+              },
+              "output": "fixture — feature elicitation\nthis file will be edited and searched.",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1778178996764,
+                "end": 1778178996764
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba3a1c01cE966UgO3rBZVxY",
+          "message_id": "msg_e03ba3a1c018Eutnzo8DzFrdgN",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178996764,
+          "time_updated": 1778178996764,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 2904,
+              "input": 2795,
+              "output": 109,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba446501dEwwqiwimwF7AOk",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778178999397,
+      "time_updated": 1778178999397,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba3a1c018Eutnzo8DzFrdgN",
+        "time": {
+          "created": 1778178999397,
+          "completed": 1778178999397
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 3040,
+          "input": 2930,
+          "output": 110,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba446501ecli0ZUWGG3UqPu",
+          "message_id": "msg_e03ba446501dEwwqiwimwF7AOk",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178999397,
+          "time_updated": 1778178999397,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba446501fffLnHhBDNhWRbl",
+          "message_id": "msg_e03ba446501dEwwqiwimwF7AOk",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178999397,
+          "time_updated": 1778178999397,
+          "data": {
+            "type": "reasoning",
+            "text": "The `edit` tool successfully changed \"scratch\" to \"fixture\" in `notes.md`.\nThe read tool call confirmed this change:\n```\nfixture — feature elicitation\nthis file will be edited and searched.\n```\n\nNow for Step 5: Find files starting with \"note\".\nI must use `bash find . -maxdepth 1 -name 'note*'`.",
+            "time": {
+              "start": 1778178999397,
+              "end": 1778178999397
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba4465020t2b8Fht0deTVsf",
+          "message_id": "msg_e03ba446501dEwwqiwimwF7AOk",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178999397,
+          "time_updated": 1778178999397,
+          "data": {
+            "type": "tool",
+            "tool": "bash",
+            "callID": "call_c5grl5ss",
+            "state": {
+              "status": "completed",
+              "input": {
+                "command": "find . -maxdepth 1 -name 'note*'"
+              },
+              "output": "./notes.md\n",
+              "title": "find . -maxdepth 1 -name 'note*'",
+              "metadata": {
+                "exit": 0,
+                "output": "./notes.md\n",
+                "truncated": false
+              },
+              "time": {
+                "start": 1778178999397,
+                "end": 1778178999397
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba4465021n0aKoEFXilppVB",
+          "message_id": "msg_e03ba446501dEwwqiwimwF7AOk",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778178999397,
+          "time_updated": 1778178999397,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 3040,
+              "input": 2930,
+              "output": 110,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba509e02279kMVAU4tqGvSw",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778179002526,
+      "time_updated": 1778179002526,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba446501dEwwqiwimwF7AOk",
+        "time": {
+          "created": 1778179002526,
+          "completed": 1778179002526
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 3197,
+          "input": 3055,
+          "output": 142,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba509e023aUSR2NVICA69rO",
+          "message_id": "msg_e03ba509e02279kMVAU4tqGvSw",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179002526,
+          "time_updated": 1778179002526,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba509e024pdPLQOy5yvFzpf",
+          "message_id": "msg_e03ba509e02279kMVAU4tqGvSw",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179002526,
+          "time_updated": 1778179002526,
+          "data": {
+            "type": "text",
+            "text": "**Step 4: Edit `notes.md`**\n\nI used the `edit` tool to change \"scratch\" to \"fixture\" in `notes.md`.\n\nThen, I read the file again to confirm the change, which was successful.\n\n**Step 5: Find files starting with \"note\"**\n\nI used the `bash find` utility as requested to find files starting with \"note\" in the current directory, which successfully returned `./notes.md`.\n\nNext for Step 6: Search contents for \"fixture\".\nI must use `bash grep -r fixture .`.\n<channel|>",
+            "time": {
+              "start": 1778179002526,
+              "end": 1778179002526
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba509e025KWXJYUP7is33zi",
+          "message_id": "msg_e03ba509e02279kMVAU4tqGvSw",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179002526,
+          "time_updated": 1778179002526,
+          "data": {
+            "type": "tool",
+            "tool": "bash",
+            "callID": "call_lggsvzdw",
+            "state": {
+              "status": "completed",
+              "input": {
+                "command": "grep -r fixture ."
+              },
+              "output": "./notes.md:fixture — feature elicitation\n",
+              "title": "grep -r fixture .",
+              "metadata": {
+                "exit": 0,
+                "output": "./notes.md:fixture — feature elicitation\n",
+                "truncated": false
+              },
+              "time": {
+                "start": 1778179002526,
+                "end": 1778179002526
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba509e026U74JVQKwRFMggw",
+          "message_id": "msg_e03ba509e02279kMVAU4tqGvSw",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179002526,
+          "time_updated": 1778179002526,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 3197,
+              "input": 3055,
+              "output": 142,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba5950027zNu9y9lZ4lPdev",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778179004752,
+      "time_updated": 1778179004752,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba509e02279kMVAU4tqGvSw",
+        "time": {
+          "created": 1778179004752,
+          "completed": 1778179004752
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 3308,
+          "input": 3220,
+          "output": 88,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba59500284SyVr0x6cldhwf",
+          "message_id": "msg_e03ba5950027zNu9y9lZ4lPdev",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179004752,
+          "time_updated": 1778179004752,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba5950029M0TBOyrQpvWUyJ",
+          "message_id": "msg_e03ba5950027zNu9y9lZ4lPdev",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179004752,
+          "time_updated": 1778179004752,
+          "data": {
+            "type": "reasoning",
+            "text": "The `grep -r fixture .` command successfully located \"fixture\" inside `notes.md`.\n\nNow for Step 7: Read a non-existent file.\nI must use the `read` tool on `does-not-exist.txt` and expect failure, which I must report and acknowledge.",
+            "time": {
+              "start": 1778179004752,
+              "end": 1778179004752
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba595002a8oJa1FJ31X8mBO",
+          "message_id": "msg_e03ba5950027zNu9y9lZ4lPdev",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179004752,
+          "time_updated": 1778179004752,
+          "data": {
+            "type": "tool",
+            "tool": "read",
+            "callID": "call_9n9fxono",
+            "state": {
+              "status": "error",
+              "input": {
+                "path": "does-not-exist.txt"
+              },
+              "error": "ENOENT: no such file or directory, access '/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi/does-not-exist.txt'",
+              "time": {
+                "start": 1778179004752,
+                "end": 1778179004752
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba595002bviilu6z6b7ydWv",
+          "message_id": "msg_e03ba5950027zNu9y9lZ4lPdev",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179004752,
+          "time_updated": 1778179004752,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 3308,
+              "input": 3220,
+              "output": 88,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba682902c165HDc7ikQ7LlE",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778179008553,
+      "time_updated": 1778179008553,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba5950027zNu9y9lZ4lPdev",
+        "time": {
+          "created": 1778179008553,
+          "completed": 1778179008553
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 3556,
+          "input": 3387,
+          "output": 169,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba682902dKJfe09XSGP1vpd",
+          "message_id": "msg_e03ba682902c165HDc7ikQ7LlE",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179008553,
+          "time_updated": 1778179008553,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba682902eXsC4VeK6gXqDJM",
+          "message_id": "msg_e03ba682902c165HDc7ikQ7LlE",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179008553,
+          "time_updated": 1778179008553,
+          "data": {
+            "type": "text",
+            "text": "**Step 6: Search contents for \"fixture\"**\n\nI used the `bash grep` utility to perform a recursive search for \"fixture\". The search was successful, reporting the word in `./notes.md`.\n\n**Step 7: Read a file that does not exist**\n\nI used the `read` tool on `does-not-exist.txt`. The call failed as expected, reporting the `ENOENT` error, and I have acknowledged the error.\n\nFinally, Step 8: Write and run `count.sh`.\nI will first write the script, then execute it.\n<channel|>",
+            "time": {
+              "start": 1778179008553,
+              "end": 1778179008553
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba682902f71lJ4QLIKj44yW",
+          "message_id": "msg_e03ba682902c165HDc7ikQ7LlE",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179008553,
+          "time_updated": 1778179008553,
+          "data": {
+            "type": "tool",
+            "tool": "write",
+            "callID": "call_kf4t1rl1",
+            "state": {
+              "status": "completed",
+              "input": {
+                "content": "#!/bin/bash\nfor i in $(seq 1 5); do\n  echo $i\ndone",
+                "path": "count.sh"
+              },
+              "output": "Successfully wrote 50 bytes to count.sh",
+              "title": "",
+              "metadata": {
+                "diagnostics": {}
+              },
+              "time": {
+                "start": 1778179008553,
+                "end": 1778179008553
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba6829030cm7w5ciD8WEwzB",
+          "message_id": "msg_e03ba682902c165HDc7ikQ7LlE",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179008553,
+          "time_updated": 1778179008553,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 3556,
+              "input": 3387,
+              "output": 169,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba6f19031H56L0kgZax3L1x",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778179010329,
+      "time_updated": 1778179010329,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba682902c165HDc7ikQ7LlE",
+        "time": {
+          "created": 1778179010329,
+          "completed": 1778179010329
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 3644,
+          "input": 3578,
+          "output": 66,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "toolUse"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba6f19032Hd6c7K07L0xkrY",
+          "message_id": "msg_e03ba6f19031H56L0kgZax3L1x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179010329,
+          "time_updated": 1778179010329,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba6f19033vOulZOlyrfgI07",
+          "message_id": "msg_e03ba6f19031H56L0kgZax3L1x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179010329,
+          "time_updated": 1778179010329,
+          "data": {
+            "type": "reasoning",
+            "text": "The `write` tool successfully created `count.sh` containing a loop for printing 1 to 5.\n\nNow I must execute it using `bash count.sh` and confirm the output is exactly five lines.",
+            "time": {
+              "start": 1778179010329,
+              "end": 1778179010329
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba6f19034Voe56svKeULmWE",
+          "message_id": "msg_e03ba6f19031H56L0kgZax3L1x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179010329,
+          "time_updated": 1778179010329,
+          "data": {
+            "type": "tool",
+            "tool": "bash",
+            "callID": "call_bx5a4efd",
+            "state": {
+              "status": "completed",
+              "input": {
+                "command": "bash count.sh"
+              },
+              "output": "1\n2\n3\n4\n5\n",
+              "title": "bash count.sh",
+              "metadata": {
+                "exit": 0,
+                "output": "1\n2\n3\n4\n5\n",
+                "truncated": false
+              },
+              "time": {
+                "start": 1778179010329,
+                "end": 1778179010329
+              }
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba6f19035L8qTCXrQ0c03R7",
+          "message_id": "msg_e03ba6f19031H56L0kgZax3L1x",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179010329,
+          "time_updated": 1778179010329,
+          "data": {
+            "type": "step-finish",
+            "reason": "toolUse",
+            "cost": 0.0,
+            "tokens": {
+              "total": 3644,
+              "input": 3578,
+              "output": 66,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "msg_e03ba85dc036G1K6cR2CehnCxa",
+      "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+      "time_created": 1778179016156,
+      "time_updated": 1778179016156,
+      "data": {
+        "role": "assistant",
+        "parentID": "msg_e03ba6f19031H56L0kgZax3L1x",
+        "time": {
+          "created": 1778179016156,
+          "completed": 1778179016156
+        },
+        "agent": "build",
+        "mode": "build",
+        "modelID": "gemma4",
+        "providerID": "anthropic",
+        "path": {
+          "cwd": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi",
+          "root": "/private/var/folders/jk/4rycn96j1rdbj2mz275yv11m0000gn/T/toolpath-elicit.r26Bpf/pi"
+        },
+        "cost": 0.0,
+        "tokens": {
+          "total": 3934,
+          "input": 3664,
+          "output": 270,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "stop"
+      },
+      "parts": [
+        {
+          "id": "prt_e03ba85dc037y14tLo3DChxom0",
+          "message_id": "msg_e03ba85dc036G1K6cR2CehnCxa",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179016156,
+          "time_updated": 1778179016156,
+          "data": {
+            "type": "step-start"
+          }
+        },
+        {
+          "id": "prt_e03ba85dc038JOE2WpgfjCvNNl",
+          "message_id": "msg_e03ba85dc036G1K6cR2CehnCxa",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179016156,
+          "time_updated": 1778179016156,
+          "data": {
+            "type": "text",
+            "text": "**Step 8: Write and run `count.sh`**\n\nI used the `write` tool to create `count.sh` with a shell loop, and then executed it using `bash count.sh`. The output confirmed that the script prints the numbers 1 through 5 on separate lines, resulting in exactly five lines of output.\n\nStep 9: Sub-agent dispatch.\nI checked my available tools and found no dedicated sub-agent or task-dispatch tool. Therefore, I must skip this step and report it explicitly.\n\nStep 10: Summarize.\nI will now summarize the entire process.\n<channel|>**Step 9: Sub-agent dispatch**\n\nI do not have a dedicated sub-agent or task-dispatch tool available, so I must skip this step.\n\n**Step 10: Summary**\n\nI successfully completed a sequence of tasks designed to exercise various tool functionalities. I started by listing directory contents, creating and reading a markdown file (`notes.md`). I then practiced content modification using the `edit` tool, followed by searching the filesystem (`find`) and file contents (`grep`). I demonstrated graceful error handling by attempting to read a non-existent file. Finally, I created and ran a shell script to confirm sequential output, fulfilling all the outlined steps.",
+            "time": {
+              "start": 1778179016156,
+              "end": 1778179016156
+            }
+          }
+        },
+        {
+          "id": "prt_e03ba85dc039NQOi2N69Li4MSR",
+          "message_id": "msg_e03ba85dc036G1K6cR2CehnCxa",
+          "session_id": "ses_1fc461c1effegcBXtjjBVqL0Vt",
+          "time_created": 1778179016156,
+          "time_updated": 1778179016156,
+          "data": {
+            "type": "step-finish",
+            "reason": "stop",
+            "cost": 0.0,
+            "tokens": {
+              "total": 3934,
+              "input": 3664,
+              "output": 270,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
