@@ -1327,12 +1327,19 @@ mod tests {
             sha_hex(&serde_json::json!({"method": c.request.method, "path": path, "model": model, "last_user": parsed.as_ref().map(last_user_raw).unwrap_or_default()}).to_string())
         };
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cassettes");
-        let (mut same, mut rpc, mut reminders) = (0, 0, 0);
+        // Per agent directory: (JSON-RPC, reminders, same). The assertion at the end is per directory
+        // that exists, so a checkout that carries only some agents' cassettes (a slice of the stack
+        // that adds the rest later) checks exactly the ones it has.
+        let mut seen: std::collections::BTreeMap<String, (usize, usize, usize)> =
+            std::collections::BTreeMap::new();
         for agent in std::fs::read_dir(&root).unwrap() {
             let dir = agent.unwrap().path();
             if !dir.is_dir() {
                 continue;
             }
+            let tally = seen
+                .entry(dir.file_name().unwrap().to_str().unwrap().to_string())
+                .or_default();
             for f in std::fs::read_dir(&dir).unwrap() {
                 let p = f.unwrap().path();
                 let name = p.file_name().unwrap().to_str().unwrap().to_string();
@@ -1350,22 +1357,42 @@ mod tests {
                     .is_some_and(|v| last_user_text(&v) != last_user_raw(&v));
                 if is_rpc {
                     assert_ne!(now, before(&c), "{}", p.display());
-                    rpc += 1;
+                    tally.0 += 1;
                 } else if has_reminder {
                     assert_ne!(now, before(&c), "{}", p.display());
-                    reminders += 1;
+                    tally.1 += 1;
                 } else {
                     assert_eq!(now, before(&c), "{}", p.display());
-                    same += 1;
+                    tally.2 += 1;
                 }
             }
         }
-        // copilot: initialize, notifications/initialized, tools/list; codex: one ps/mcp initialize.
-        assert_eq!(rpc, 4, "JSON-RPC cassettes");
-        assert_eq!(
-            reminders, 2,
-            "cassettes whose last user text loses reminders or extra whitespace"
+        // (agent, (JSON-RPC, last user text loses reminders or extra whitespace, the others)).
+        // JSON-RPC: copilot's initialize, notifications/initialized and tools/list; codex's one
+        // ps/mcp initialize.
+        const EXPECTED: [(&str, (usize, usize, usize)); 7] = [
+            ("claude", (0, 1, 1)),
+            ("codex", (1, 0, 18)),
+            ("copilot", (3, 1, 4)),
+            ("gemini", (0, 0, 2)),
+            ("opencode", (0, 0, 1)),
+            ("pathbase", (0, 0, 6)),
+            ("pi", (0, 0, 1)),
+        ];
+        assert!(
+            seen.contains_key("pathbase"),
+            "the pathbase cassettes are in every checkout of this crate"
         );
-        assert_eq!(same, 33, "the other committed cassettes");
+        for (agent, tally) in &seen {
+            let want = EXPECTED
+                .iter()
+                .find(|(a, _)| a == agent)
+                .unwrap_or_else(|| panic!("cassettes/{agent}: add it to EXPECTED"))
+                .1;
+            assert_eq!(
+                *tally, want,
+                "cassettes/{agent}: (JSON-RPC, reminders, same)"
+            );
+        }
     }
 }
