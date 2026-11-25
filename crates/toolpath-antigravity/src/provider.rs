@@ -83,8 +83,22 @@ fn blank_turn(id: String, parent_id: Option<String>, role: Role) -> Turn {
         timestamp: String::new(),
         text: String::new(),
         thinking: None,
+        // Not populated: `ThinkingSignature` (#375) models Anthropic's
+        // signed-thinking scheme (a provider tag plus a verifiable
+        // sha256-of-text check). Agy's own signatures
+        // (`CortexStepPlannerResponse.thinking_signature`,
+        // `ChatToolCall.thought_signature`) are Gemini function-calling
+        // signatures over the *tool call*, not over `Turn.thinking` text —
+        // a different shape this field doesn't fit. They're carried
+        // instead on `ToolInvocation` extras where decoded; see
+        // `step_to_turn_pieces`.
+        thinking_signature: None,
         tool_uses: Vec::new(),
         model: None,
+        // Antigravity always serves a Google model (the closed
+        // `exa.codeium_common_pb.Model` enum); "google" is the provider
+        // family, distinct from the harness id ("antigravity").
+        provider: None,
         stop_reason: None,
         token_usage: None,
         attributed_token_usage: None,
@@ -174,6 +188,11 @@ pub fn to_view(convo: &Conversation) -> ConversationView {
                 }
                 None => u,
             });
+            // Every Antigravity generation is served by a Google model
+            // (the closed ModelUsageStats.model enum); we can set the
+            // provider family without being able to resolve the enum to
+            // a model name string.
+            turn.provider = Some("google".to_string());
         }
     }
     flush(&mut current, &mut items);
