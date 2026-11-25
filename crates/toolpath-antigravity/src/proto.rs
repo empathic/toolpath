@@ -193,6 +193,64 @@ pub fn timestamp(buf: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::from_timestamp(seconds, nanos)
 }
 
+// ── Writer ───────────────────────────────────────────────────────────
+//
+// The encoder side, for the projector. Mirrors `toolpath_cursor::proto`'s
+// `put_varint`/`put_bytes` exactly (same wire format, same shape) rather
+// than inventing a second scheme for the same problem — see
+// `crates/toolpath-cursor/src/proto.rs`.
+
+/// Append `n` as a base-128 varint.
+pub fn put_varint(out: &mut Vec<u8>, mut n: u64) {
+    loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        if n == 0 {
+            out.push(b);
+            return;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// Append field `field` as a varint (wire type 0).
+pub fn put_varint_field(out: &mut Vec<u8>, field: u32, value: u64) {
+    put_varint(out, u64::from(field) << 3);
+    put_varint(out, value);
+}
+
+/// Append field `field` as a length-delimited value (wire type 2): bytes,
+/// a string, or an embedded message's already-encoded bytes.
+pub fn put_bytes_field(out: &mut Vec<u8>, field: u32, data: &[u8]) {
+    put_varint(out, (u64::from(field) << 3) | 2);
+    put_varint(out, data.len() as u64);
+    out.extend_from_slice(data);
+}
+
+/// Append field `field` as a UTF-8 string (length-delimited).
+pub fn put_str_field(out: &mut Vec<u8>, field: u32, s: &str) {
+    put_bytes_field(out, field, s.as_bytes());
+}
+
+/// Build a length-delimited submessage's bytes as a standalone buffer
+/// (for nesting via `put_bytes_field`).
+pub fn message(build: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+    let mut buf = Vec::new();
+    build(&mut buf);
+    buf
+}
+
+/// Encode a `google.protobuf.Timestamp { seconds = 1; nanos = 2; }`.
+pub fn put_timestamp(ts: chrono::DateTime<chrono::Utc>) -> Vec<u8> {
+    message(|buf| {
+        put_varint_field(buf, 1, ts.timestamp() as u64);
+        let nanos = ts.timestamp_subsec_nanos();
+        if nanos != 0 {
+            put_varint_field(buf, 2, nanos as u64);
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +303,31 @@ mod tests {
             }
             out.push(byte | 0x80);
         }
+    }
+
+    #[test]
+    fn writer_round_trips_through_the_reader() {
+        let mut buf = Vec::new();
+        put_varint_field(&mut buf, 1, 42);
+        put_str_field(&mut buf, 2, "hi");
+        let nested = message(|b| put_str_field(b, 1, "inner"));
+        put_bytes_field(&mut buf, 3, &nested);
+
+        assert_eq!(first_u64(&buf, 1), Some(42));
+        assert_eq!(first_str(&buf, 2), Some("hi"));
+        assert_eq!(
+            first_message(&buf, 3).and_then(|m| first_str(m, 1)),
+            Some("inner")
+        );
+    }
+
+    #[test]
+    fn put_timestamp_round_trips() {
+        let ts = chrono::DateTime::from_timestamp(1_700_000_000, 123).unwrap();
+        let buf = put_timestamp(ts);
+        let decoded = timestamp(&buf).unwrap();
+        assert_eq!(decoded.timestamp(), 1_700_000_000);
+        assert_eq!(decoded.timestamp_subsec_nanos(), 123);
     }
 
     #[test]

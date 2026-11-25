@@ -4826,6 +4826,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5230,6 +5236,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5520,6 +5537,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "toolpath-agents"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "reqwest",
+ "serde",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "toolpath-antigravity"
 version = "0.1.0"
 dependencies = [
@@ -5531,6 +5563,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "toolpath",
+ "toolpath-claude",
  "toolpath-convo",
 ]
 
@@ -5576,6 +5609,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "similar",
  "thiserror 1.0.69",
  "toolpath",
@@ -5594,6 +5628,7 @@ dependencies = [
  "thiserror 1.0.69",
  "toolpath",
  "toolpath-convo",
+ "uuid",
 ]
 
 [[package]]
@@ -5602,6 +5637,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "md5",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5610,6 +5646,7 @@ dependencies = [
  "thiserror 1.0.69",
  "toolpath",
  "toolpath-convo",
+ "uuid",
 ]
 
 [[package]]
@@ -6098,6 +6135,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

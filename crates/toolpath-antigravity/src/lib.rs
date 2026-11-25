@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod paths;
+pub mod project;
 pub mod proto;
 pub mod provider;
 pub mod reader;
@@ -9,6 +10,7 @@ pub mod types;
 
 pub use error::{ConvoError, Result};
 pub use paths::PathResolver;
+pub use project::{AntigravityProjector, AntigravityStore, native_name};
 pub use provider::{to_view, tool_category};
 pub use reader::ConvoIO;
 pub use types::{Conversation, ConversationSummary, ModelUsage, Step, ToolCallRaw};

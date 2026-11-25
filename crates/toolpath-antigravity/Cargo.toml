@@ -21,3 +21,4 @@ rusqlite = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+toolpath-claude = { workspace = true }
