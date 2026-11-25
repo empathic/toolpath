@@ -103,6 +103,13 @@ pub(crate) struct HarnessBundle {
     /// after the first); consulted by cache sync only.
     pub(crate) claude_extra: Vec<toolpath_claude::ClaudeConvo>,
     pub(crate) gemini: Option<toolpath_gemini::GeminiConvo>,
+    /// Not yet exposed as a [`Harness`] variant (no `--harness
+    /// antigravity` / artifact-type wiring yet): Antigravity's flat,
+    /// no-per-project store doesn't fit the harness commands'
+    /// project-keyed model without more design. The provider lives here
+    /// so aggregation code can start using it once that lands.
+    #[allow(dead_code)]
+    pub(crate) antigravity: Option<toolpath_antigravity::AntigravityConvo>,
     pub(crate) codex: Option<toolpath_codex::CodexConvo>,
     pub(crate) copilot: Option<toolpath_copilot::CopilotConvo>,
     pub(crate) opencode: Option<toolpath_opencode::OpencodeConvo>,
@@ -119,6 +126,7 @@ impl HarnessBundle {
             claude: Some(toolpath_claude::ClaudeConvo::new()),
             claude_extra: Vec::new(),
             gemini: Some(toolpath_gemini::GeminiConvo::new()),
+            antigravity: Some(toolpath_antigravity::AntigravityConvo::new()),
             codex: Some(toolpath_codex::CodexConvo::new()),
             copilot: Some(toolpath_copilot::CopilotConvo::new()),
             opencode: Some(toolpath_opencode::OpencodeConvo::new()),
@@ -140,6 +148,19 @@ pub(crate) fn is_not_found_gemini(err: &toolpath_gemini::ConvoError) -> bool {
     matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
         || matches!(err, ConvoError::NoHomeDirectory)
         || matches!(err, ConvoError::GeminiDirectoryNotFound(_))
+}
+
+/// Unused until a `Harness::Antigravity` variant lands (see the
+/// `HarnessBundle::antigravity` field doc); kept alongside the other
+/// `is_not_found_*` helpers so that follow-up only has to wire call
+/// sites, not write this.
+#[allow(dead_code)]
+pub(crate) fn is_not_found_antigravity(err: &toolpath_antigravity::ConvoError) -> bool {
+    use toolpath_antigravity::ConvoError;
+    matches!(err, ConvoError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+        || matches!(err, ConvoError::NoHomeDirectory)
+        || matches!(err, ConvoError::AntigravityDirectoryNotFound(_))
+        || matches!(err, ConvoError::DatabaseNotFound(_))
 }
 
 pub(crate) fn is_not_found_pi(err: &toolpath_pi::PiError) -> bool {

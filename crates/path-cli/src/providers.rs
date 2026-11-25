@@ -65,6 +65,15 @@ pub(crate) fn gemini_convo(config: &Config) -> toolpath_gemini::GeminiConvo {
     toolpath_gemini::GeminiConvo::with_resolver(resolver)
 }
 
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn antigravity_convo(config: &Config) -> toolpath_antigravity::AntigravityConvo {
+    let mut resolver = toolpath_antigravity::PathResolver::new();
+    if let Some(home) = config.home_dir() {
+        resolver = resolver.with_home(home);
+    }
+    toolpath_antigravity::AntigravityConvo::with_resolver(resolver)
+}
+
 pub(crate) fn codex_convo(config: &Config) -> toolpath_codex::CodexConvo {
     let mut resolver = toolpath_codex::PathResolver::new();
     if let Some(home) = config.home_dir() {
@@ -134,6 +143,7 @@ pub(crate) fn harness_bundle(config: &Config) -> HarnessBundle {
         claude: Some(claude_convo(config)),
         claude_extra: claude_extra_convos(config),
         gemini: Some(gemini_convo(config)),
+        antigravity: Some(antigravity_convo(config)),
         codex: Some(codex_convo(config)),
         copilot: Some(copilot_convo(config)),
         opencode: Some(opencode_convo(config)),

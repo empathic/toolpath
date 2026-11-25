@@ -60,6 +60,7 @@ typed-path = { version = "0.12", optional = true }
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
 toolpath-claude = { workspace = true, features = ["watcher"] }
 toolpath-gemini = { workspace = true, features = ["watcher"] }
+toolpath-antigravity = { workspace = true }
 toolpath-codex = { workspace = true }
 toolpath-copilot = { workspace = true }
 toolpath-opencode = { workspace = true }
