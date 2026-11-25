@@ -304,28 +304,44 @@ message CortexStepCheckpoint { uint32 checkpoint_index = 1; string conversation_
 message CortexTrajectoryMetadata { repeated CortexWorkspaceMetadata workspaces = 1; google.protobuf.Timestamp created_at = 2; string parent_conversation_id = 5; string root_conversation_id = 6; repeated string workspace_uris = 7; string project_id = 18; int32 nesting_depth = 17; … }
 ```
 
-How this maps onto the IR (inferred from the schema; to be confirmed
-against a sample):
+How this maps onto the IR (observed against three real 1.4.8 samples —
+`test-fixtures/antigravity/SOURCE.md`; `toolpath-antigravity/src/
+reader.rs` cites every field number below against those exact bytes):
 
-- A **turn** is a `user_input` step followed by the steps up to the next
-  `user_input`. User text is `user_input.query` (plus `items` when the
-  prompt carried `@` scope items and `images`/`media` for attachments).
-- The **assistant message** is `planner_response.response`; reasoning is
-  `thinking` (or `raw_thinking`, with `thinking_redacted`); the model's
-  tool calls are `planner_response.tool_calls[]` (`ChatToolCall{id, name,
-  arguments_json}`).
-- A **tool result** is the *next* step whose `metadata.tool_call.id`
-  equals a `ChatToolCall.id` — results are separate steps, correlated by
-  call id, like Claude Code, unlike Gemini CLI's inline `result`. The
-  result body is step-type specific (`run_command.stdout/stderr/exit_code`,
-  `mcp_tool.result_string`, `view_file.content`, …).
-- **Token usage** is per model generation: `metadata.model_usage` on the
-  `planner_response` step. `output_tokens` vs `thinking_output_tokens` +
-  `response_output_tokens`: whether `output_tokens` already includes
-  thinking is **not known** (the Gemini CLI doc's `output + thoughts`
-  rule cannot be assumed). `cache_read_tokens` → `cache_read_tokens`,
-  `cache_write_tokens` → `cache_write_tokens`. Per-modality splits exist
-  (`*_tokens_details`), unlike Gemini CLI.
+- A **turn** is a `user_input`-carrying step (`Step.type` **14**,
+  observed — not the doc's Step-body field-number namespace; see the
+  note two paragraphs down) followed by the steps up to the next one.
+  User text is at `CortexStepUserInput` field **2** (`user_response`,
+  observed) — **not** `query` (field 1), which is empty in every 1.4.8
+  sample; fall back to `items[]` (field 3) when 2 is empty too.
+- The **assistant message** is `planner_response.response` (field 1,
+  confirmed exact). `planner_response` can appear on more than one
+  step within a single logical turn: one generation decides to call a
+  tool (response text often empty), a later one carries the final
+  answer. Reasoning is `thinking` (field 3) or `raw_thinking` (field
+  16) — not yet confirmed against a sample with visible thinking text.
+- **Tool call and result live on the *same* step**, confirmed in the
+  `tool` fixture (idx 2, `Step.type` **132**): `metadata.tool_call`
+  (field 4 of `CortexStepMetadata`) carries the call
+  (`id`/`name`/`arguments_json` = fields 1/2/3, all exact), and the
+  step's own top-level field **140** carries the result for a
+  `read_file` call specifically (`{1: {1: "Path", 2: <path>}, 2: {1:
+  <result text>}}`). This **contradicts the earlier inferred claim**
+  that results are a separate, call-id-correlated step "like Claude
+  Code" — that was never sample-grounded; the real shape is simpler.
+  Field 140 isn't in the binary-recovered descriptor table above, and
+  no other tool type's result shape has been observed yet.
+- **Token usage** is per model generation: `metadata.model_usage`
+  (field 9) on a `planner_response`-carrying step.
+  **`output_tokens` (field 3) already includes thinking** — confirmed
+  exactly: in every sample, `thinking_output_tokens` (field 9) +
+  `response_output_tokens` (field 10) sums to `output_tokens` (field
+  3) precisely (e.g. 70 + 33 = 103 in one generation step of the
+  `tool` fixture's dirty capture used to derive this mapping). No
+  folding is needed, unlike `toolpath-gemini`'s older-format quirk.
+  `cache_read_tokens`/`cache_write_tokens` (fields 5/4) and the
+  per-modality `*_tokens_details` splits are unconfirmed against a
+  sample that actually populates them.
 - **Model** is an enum (`exa.codeium_common_pb.Model`, closed vocabulary,
   not extracted here) plus `model_info`; a reader needs the enum's names
   to print a model string.
@@ -419,27 +435,69 @@ A conversation id is a UUID v4 (`a1b2c3d4-e5f6-7890-abcd-ef1234567890`,
 docs); it is both the file stem and `Conversation.conversation_id`
 (inferred). Whether `--conversation` accepts a prefix is unknown.
 
-## Round-trip gotchas for a projector (inferred)
+## Round-trip gotchas for a projector
 
-1. **Three places must agree**: the `conversations/<uuid>.db` (or `.pb`),
-   a `conversation_summaries` row, and `cache/last_conversations.json`
-   if `-c` should find it. The summary is a cache, so a missing row may
-   be tolerated — untested.
+Updated 2026-11-25 with how `toolpath_antigravity::project` actually
+handles each one — "inferred" tags removed where a real sample or the
+built projector settled the question; still open where it didn't.
+
+1. **Three places must agree**: the `conversations/<uuid>.db` (or
+   `.pb`), a `conversation_summaries` row, and
+   `cache/last_conversations.json` if `-c` should find it. The summary
+   is a cache, so a missing row may be tolerated — still untested.
+   **Handling: write all three, from one id.**
+   `AntigravityStore::write_to` creates the `.db` named by the
+   conversation id, inserts the matching `conversation_summaries` row,
+   and merges a `cache/last_conversations.json` entry keyed by the
+   caller's `cwd` — never clobbering other projects' entries. Tested
+   (`project::tests::write_to_keeps_three_stores_consistent`); not yet
+   checked against `agy -c` itself (needs the live check).
 2. **Schema-sensitive reader.** 1.2.2 fixed "deleted conversations being
    recreated as empty, schema-less SQLite database files"; a file whose
    `user_version` or tables do not match what `openOrCreateSQLiteStore`
    expects will be migrated or rejected by a closed binary we cannot
-   patch.
-3. **Closed enums.** `generator_model` / `ModelUsageStats.model` are
-   `exa.codeium_common_pb.Model` enum values; a projected session must
+   patch. **Handling: match the real schema byte-for-byte** (table and
+   column names, `PRAGMA user_version = 1`) — copied from the real
+   `.schema` dump in `SOURCE.md`, not reconstructed from the doc's
+   earlier inference. Whether a closed-binary migration path still
+   rejects it for some other reason is a live-check item.
+3. **Closed enums.** `ModelUsageStats.model` is an
+   `exa.codeium_common_pb.Model` enum value; a projected session must
    pick a value the binary knows, and the enum changes per release.
-4. **Signatures.** `planner_response.signature` / `thinking_signature`
-   and `ChatToolCall.thought_signature` are provider-issued; a projected
-   turn cannot forge them. Whether `agy` resends them on resume (and
-   fails on a missing one) is unknown.
-5. **Version drift.** `.pb` → `.db` happened within the 1.0.x line; the
-   `Step` message already has ~130 body fields; `loadAndMigrate` exists
-   for a reason. Pin the version a fixture was captured on.
+   **Handling: carry through when the source is agy's own, synthesize
+   otherwise — and say so.** `AntigravityProjector` writes
+   `SYNTHESIZED_MODEL_ENUM` (`1073`, observed on a real 1.4.8
+   `gemini-3.6-flash-low` run) for every generation step, including
+   agy→agy round trips (the source `Turn` doesn't carry the original
+   enum value through — see gotcha 5). A foreign source has no agy
+   enum value to carry through in the first place, so it gets the same
+   synthesized constant. Whether a stale or made-up value is silently
+   accepted, migrated, or rejected by the closed binary on load is an
+   explicit live-check item, not assumed either way.
+4. **Signatures.** `CortexStepPlannerResponse.thinking_signature` and
+   `ChatToolCall.thought_signature` are provider-issued; a projector
+   cannot forge them. **Handling: omit, never synthesize.** Neither
+   field is written by `AntigravityProjector` — there is no placeholder
+   value that would pass whatever validation the API does. Whether
+   `agy` resends/re-checks them on resume (and fails on a missing one,
+   versus tolerating it for injected history it didn't generate itself)
+   is unknown and is the single most load-bearing live-check question
+   for the tool-call-bearing fixture.
+5. **Version drift**, and a related gap this adapter's own writer
+   introduces: `.pb` → `.db` happened within the 1.0.x line; the `Step`
+   message already has ~130 body fields; `loadAndMigrate` exists for a
+   reason. Pin the version a fixture was captured on (1.4.8 here).
+   Separately: this crate's **reader never decodes the model enum,
+   message ids, or trajectory/cascade ids into anything the projector
+   can read back** (see `provider.rs`'s `thinking_signature` doc
+   comment on why they don't reach `Turn` at all) — so even a true
+   agy→agy round trip through this crate synthesizes those fields
+   fresh rather than carrying the original ones through. A future pass
+   that threads them through `ToolInvocation`/`Turn` more precisely
+   would shrink gotcha 3 and 4's synthesized surface, but needs a
+   lossless-extras mechanism this version of `toolpath_convo::Turn`
+   doesn't have (checked against #375 — no generic extras map exists
+   on `Turn`; see `project.rs`'s module doc).
 
 ## What a toolpath adapter costs (built 2026-11-25)
 
@@ -459,29 +517,47 @@ docs); it is both the file stem and `Conversation.conversation_id`
   (the call itself decodes for every tool), and `ModelUsageStats.model`
   stays a raw enum integer (no name table). See the crate's README for
   the full list.
-- **Project (IR → a session `agy` reopens)**: not built; still the hard,
-  brittle case the paragraph below predicted, now confirmed rather than
-  theorized. The two cheaper routes couldn't be tested: both the plain
-  `-p` path and `--conversation <uuid> -p` reach the same interactive
-  OAuth-URL-open before running a turn, and on the machine this was
-  tried from, that open launches a real, visible browser window with no
-  suppressing flag — so verifying *either* route (let alone the SDK's
-  `initial_trajectory` sanctioned-history path) needs an environment
-  where a URL-open is inert, which a Linux VM with a real API key
-  provides for generation but doesn't remove the open call itself to
-  test *before* generation. Untested, not ruled out: a reader willing to
-  run `agy` where `xdg-open`/`$BROWSER` resolution is itself a no-op
-  (not just where the GUI is absent) could still test (a) and (b) above
-  without a key at all. A second, independent blocker showed up once
-  the VM route was open: the AI Studio free-tier key used to capture
-  the fixtures above hit its daily quota (20 requests/day,
-  `gemini-3.6-flash`) partway through capture, so even a resume attempt
-  in the VM can't currently get past the same 429 a fresh turn would —
-  any write-path check needs either a quota reset (~10.5h out from
-  2026-11-25 16:30 ET) or a billing-enabled key. One mechanical
-  simplification worth recording for whoever tries it: conversation ids
-  are fixed-length UUIDs, so cloning a real `.db` under a new id is a
-  **textual find/replace** of the old UUID string for the new one
+- **Project (IR → a session `agy` reopens)**: built at the library
+  level (`toolpath_antigravity::project`), **not yet live-verified**.
+  Correction to the paragraph this replaces: the OAuth-URL-open is a
+  property of the *unauthenticated* host, not of `--conversation <uuid>
+  -p` itself — once `"modelProvider": "gemini"` plus a real
+  `GEMINI_API_KEY` is in place (as it was for the three captured
+  fixtures), every run went straight to the model with no browser
+  opened at all. So the write path's live-check is blocked by *auth*
+  availability, not by the OAuth flow:
+  - **Route 1 (render as the first `stream-json` user event)**: built
+    and offline-tested (`toolpath_antigravity::render`). Version-proof
+    by construction — every byte `agy` holds afterwards is one `agy`
+    wrote itself — but lossy (no replayable tool-call records).
+  - **Route 2 (SDK's `initial_trajectory`)**: assessed, not built.
+    `google/antigravity/proto/localharness.proto`'s `HarnessConfig`
+    does have `bytes initial_trajectory = 11` and a
+    `SessionContinuationMode` enum (`CREATE_OR_RESUME = 2`), but
+    neither is documented, neither has an example use, and nothing in
+    the SDK repo ties the bytes to `gemini_coder.Trajectory` (the
+    on-disk message) rather than `genai.Step` (the SDK's own, separate
+    schema) or something else entirely. The SDK's only *documented*
+    resume path is `AgentConfig.conversation_id` + `save_dir`
+    (SDK-managed storage), not injected bytes. Not pursued further —
+    "relying on an undocumented wire field of unknown schema" is a
+    worse bet than the store projector below.
+  - **The store projector** (`AntigravityProjector`,
+    `AntigravityStore`): built, unit- and round-trip-tested against all
+    three real fixtures plus a cross-harness Claude fixture (see the
+    crate's `tests/projection_roundtrip.rs`). Not yet checked against a
+    live `agy --conversation <uuid> -p "…"` — see the Pitfalls section
+    below for what's synthesized, what's omitted, and why.
+  - **Live-check status, both routes**: the AI Studio free-tier key
+    used to capture the fixtures above hit its daily quota (20
+    requests/day, `gemini-3.6-flash`) partway through capture, so no
+    live check — Route 1, the projector, or a cloned-store probe — can
+    run until the quota resets (~13:00 UTC on 2026-11-26, per the 429's
+    `retryDelay`) or a billing-enabled key is used.
+  - One mechanical simplification worth recording for whoever runs the
+    check: conversation ids are fixed-length UUIDs, so cloning a real
+    `.db` under a new id is a **textual find/replace** of the old UUID
+    string for the new one
   (same length ⇒ every protobuf length prefix that embeds it stays
   valid) — no re-encoding needed for that part. What still needs a live
   turn to check is whether `agy` accepts the result past that point. See

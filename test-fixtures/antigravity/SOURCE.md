@@ -121,13 +121,16 @@ files' own JSON envelope above):
   in all three fixtures) — read as `field2`, falling back to the
   `items[]` (field 3) text when 2 is empty.
 - `ModelUsageStats.{model,input_tokens,output_tokens,message_id} =
-  {1,2,3,7}` confirmed exactly against the JSON envelopes above (e.g.
-  the tool fixture's two generation steps report input 6838 + 7033 =
-  13715 and output 103 + 46 = 149 — wait, the committed envelope above
-  reads 13715/29; the two-generation split shown here is from an
-  earlier capture of the same shape with the bobby.guest paths, used
-  only to derive the mapping, never committed). **`output_tokens` (3)
-  already includes thinking** — `thinking_output_tokens` (field 9) and
+  {1,2,3,7}` confirmed exactly: a dirty, uncommitted capture of the
+  same shape (same prompts, `bobby.guest` paths — discarded after
+  deriving this mapping, never committed, per the leak-check rule
+  above) had two generation steps reporting input 6838 + 7033 = 13871
+  and output 103 + 46 = 149, matching that run's own JSON envelope
+  exactly; the *committed* `tool/` fixture is a separate, faster
+  capture of the same prompt (its envelope is `input_tokens: 13715,
+  output_tokens: 29` — see above), so the two numbers don't need to
+  match each other, only each capture's own envelope, which they do.
+  **`output_tokens` (3) already includes thinking** — `thinking_output_tokens` (field 9) and
   `response_output_tokens` (field 10) sum exactly to field 3 in every
   sample checked, so no folding is needed (unlike `toolpath-gemini`'s
   older-format quirk); field 9 is still recorded under
