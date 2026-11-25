@@ -6,6 +6,7 @@ pub mod project;
 pub mod proto;
 pub mod provider;
 pub mod reader;
+pub mod render;
 pub mod types;
 
 pub use error::{ConvoError, Result};
