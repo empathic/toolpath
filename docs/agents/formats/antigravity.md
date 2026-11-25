@@ -10,15 +10,26 @@ not JSON), a different id (conversation UUID, not `session-*` stem),
 flat rather than per project. Only the `~/.gemini` root is shared with
 `toolpath-gemini`; nothing in `gemini.md` applies to the records below.
 
-**Sourcing posture, 2026-10-15.** Not yet sample-grounded: no
-conversation has been written on a machine we control, because `agy`
-needs an interactive Google sign-in before it will run a turn. Every
-claim is tagged:
+**Sourcing posture, 2026-10-15, updated 2026-11-25.** Originally not
+sample-grounded (`agy` needs sign-in before it will run a turn, and on
+this Mac the OAuth step opens a real, visible Chrome window with no way
+to suppress it — so `agy` cannot run headlessly on the host at all).
+Unblocked 2026-11-25 by running `agy` 1.4.8 in a disposable Linux VM
+(`planar-lima`, never the host) with `"modelProvider": "gemini"` in
+`settings.json` plus an AI Studio `GEMINI_API_KEY` — no sign-in, no
+browser. Three real conversations were captured this way (plain text,
+one tool call, one leg of a `--conversation` resume) and are now the
+`toolpath-antigravity` adapter's test fixtures
+(`test-fixtures/antigravity/SOURCE.md` has the exact commands and
+provenance). Every claim below is still tagged:
 
-- **observed** — read from a real run of `agy` 1.1.13 (the nix-profile
-  build on this Mac) in a throwaway `HOME`, which creates the whole
-  directory tree, the summaries database and the headless JSON envelope
-  before it fails on auth;
+- **observed** — read from a real run of `agy` (1.1.13 for the
+  directory-tree/pre-auth claims below, 1.4.8 for everything confirmed
+  against the three captured conversations — field numbers for the
+  messages `toolpath-antigravity` reads are cited against those exact
+  samples in `crates/toolpath-antigravity/src/proto.rs` and
+  `test-fixtures/antigravity/SOURCE.md`, not asserted from this doc
+  alone);
 - **binary** — recovered from the `agy` 1.1.13 Mach-O: embedded
   protobuf `FileDescriptorProto`s (so the field names and numbers are
   exact), GORM struct tags, SQL fragments and log format strings;
@@ -29,8 +40,14 @@ claim is tagged:
 - **inferred** — our inference, stated as such.
 
 Upstream moves fast (1.0.0 → 1.3.6 between May and October 2026; nixpkgs
-carries 1.2.16; the profile here has 1.1.13). Re-verify on the version a
-reader will actually run.
+carries 1.2.16; the profile here has 1.1.13; the Linux build used to
+capture real samples was 1.4.8). Field numbers for the messages this
+doc and the adapter read were checked on both 1.1.13 (binary) and 1.4.8
+(real samples) wherever possible and matched exactly, with one
+confirmed drift: `CortexStepUserInput`'s populated text field is 2 in
+1.4.8, not the `query = 1` this doc's binary-recovered descriptor
+names (see the `## conversations/<uuid>.db` section below). Re-verify
+on the version a reader will actually run.
 
 ## Storage root
 
@@ -424,27 +441,52 @@ docs); it is both the file stem and `Conversation.conversation_id`
    `Step` message already has ~130 body fields; `loadAndMigrate` exists
    for a reason. Pin the version a fixture was captured on.
 
-## What a toolpath adapter would cost
+## What a toolpath adapter costs (built 2026-11-25)
 
-- **Derive (read → `ConversationView`)**: medium. `paths.rs` is trivial
-  (flat dir + summaries db + `last_conversations.json`); the reader is
-  `rusqlite` over `steps`/`gen_metadata` plus a `prost` decode of the
-  BLOBs against a hand-maintained `.proto` subset (the messages above);
-  `.pb` files decode the same `Conversation` message directly. The
-  schema here is recovered from a closed binary — the public
-  Apache-2.0 SDK (`google-antigravity/antigravity-sdk-python`,
-  `google/antigravity/proto/*.proto`) publishes a *different*, SDK-level
-  `genai.Step` schema, not the on-disk one. Needs one real sample before
-  any of the mapping above is more than inferred.
-- **Project (IR → a session `agy` reopens)**: hard, and brittle across
-  releases, for the five reasons above. Before attempting it, test the
-  two cheaper routes: (a) `agy -p --input-format stream-json` with the
-  transcript rendered into the first user event (no inception, lossy but
-  version-proof); (b) the SDK's `HarnessConfig.initial_trajectory`
-  (`bytes`, `localharness.proto`, Apache-2.0) with
-  `session_continuation_mode = CREATE_OR_RESUME` — if those bytes are a
-  `gemini_coder.Trajectory`, that is a *sanctioned* way to hand the
-  engine a history.
+- **Derive (read → `ConversationView`)**: built, as `toolpath-antigravity`
+  (`crates/toolpath-antigravity/`). `paths.rs` is exactly as trivial as
+  predicted (flat dir + summaries db + `last_conversations.json`); the
+  reader is `rusqlite` over `steps` plus a small **hand-written,
+  schema-free wire-format reader** (`src/proto.rs`) instead of a
+  generated `prost` client — the on-disk schema is reverse-engineered
+  from a closed binary and only partially known, so a hand-maintained
+  `.proto` would claim more precision than we have, and would need
+  re-pinning on every drift like the `CortexStepUserInput` one above.
+  Every field number the reader uses is cited against real 1.4.8 samples
+  in that file and in `test-fixtures/antigravity/SOURCE.md`. Known gaps:
+  no per-project filtering (workspace_uris' encoding is still
+  unconfirmed), tool *result* bodies are only decoded for `read_file`
+  (the call itself decodes for every tool), and `ModelUsageStats.model`
+  stays a raw enum integer (no name table). See the crate's README for
+  the full list.
+- **Project (IR → a session `agy` reopens)**: not built; still the hard,
+  brittle case the paragraph below predicted, now confirmed rather than
+  theorized. The two cheaper routes couldn't be tested: both the plain
+  `-p` path and `--conversation <uuid> -p` reach the same interactive
+  OAuth-URL-open before running a turn, and on the machine this was
+  tried from, that open launches a real, visible browser window with no
+  suppressing flag — so verifying *either* route (let alone the SDK's
+  `initial_trajectory` sanctioned-history path) needs an environment
+  where a URL-open is inert, which a Linux VM with a real API key
+  provides for generation but doesn't remove the open call itself to
+  test *before* generation. Untested, not ruled out: a reader willing to
+  run `agy` where `xdg-open`/`$BROWSER` resolution is itself a no-op
+  (not just where the GUI is absent) could still test (a) and (b) above
+  without a key at all. A second, independent blocker showed up once
+  the VM route was open: the AI Studio free-tier key used to capture
+  the fixtures above hit its daily quota (20 requests/day,
+  `gemini-3.6-flash`) partway through capture, so even a resume attempt
+  in the VM can't currently get past the same 429 a fresh turn would —
+  any write-path check needs either a quota reset (~10.5h out from
+  2026-11-25 16:30 ET) or a billing-enabled key. One mechanical
+  simplification worth recording for whoever tries it: conversation ids
+  are fixed-length UUIDs, so cloning a real `.db` under a new id is a
+  **textual find/replace** of the old UUID string for the new one
+  (same length ⇒ every protobuf length prefix that embeds it stays
+  valid) — no re-encoding needed for that part. What still needs a live
+  turn to check is whether `agy` accepts the result past that point. See
+  the toolpath PR description for the exact probes attempted and their
+  output.
 
 ## References
 

@@ -56,10 +56,14 @@ entry type or version.
   product Google moved individual Gemini CLI users to: a flat
   `~/.gemini/antigravity-cli/conversations/<uuid>.{db,pb}` store of
   protobuf trajectories (SQLite with protobuf BLOBs, or one serialized
-  message) plus a `conversation_summaries.db` index. **Not sample-grounded
-  yet** (sign-in required); every claim is tagged observed / binary /
-  docs / 3p / inferred. Not a Gemini CLI revision — nothing in
-  `gemini.md` applies.
+  message) plus a `conversation_summaries.db` index. Sample-grounded as
+  of 2026-11-25 (three real conversations captured headlessly, see the
+  doc's sourcing note and `test-fixtures/antigravity/SOURCE.md`); every
+  claim is still tagged observed / binary / docs / 3p / inferred. Not a
+  Gemini CLI revision — nothing in `gemini.md` applies. The derive-only
+  **`toolpath-antigravity`** crate reads this format; there is no
+  writer/projector yet (see the doc's "What a toolpath adapter costs"
+  section for why).
 - **[`opencode.md`](opencode.md)** — opencode's SQLite database
   (`~/.local/share/opencode/opencode.db`), its 12 typed message-part
   variants, and the sibling bare-git snapshot repo used for file diffs.
