@@ -21,3 +21,8 @@ site/wasm/
 
 # nix build output symlink
 result
+
+# SQLite WAL/SHM sidecars that opening the antigravity fixtures (even
+# read-only) regenerates locally; never part of what `agy` itself wrote.
+test-fixtures/antigravity/**/*.db-wal
+test-fixtures/antigravity/**/*.db-shm

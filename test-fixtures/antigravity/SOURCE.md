@@ -48,8 +48,12 @@ Real `agy` (Antigravity CLI) conversation stores, captured 2026-11-25.
 
 Each holds the one conversation's `<uuid>.db` (SQLite, `rusqlite`
 `SQLITE_OPEN_READ_ONLY`-safe) and that run's `conversation_summaries.db`
-(one-row index). No `.db-wal`/`.db-shm` sidecars — 1.4.8 checkpoints the
-WAL before exiting in print mode.
+(one-row index). As captured from `agy` there were no `.db-wal`/
+`.db-shm` sidecars (1.4.8 checkpoints the WAL before exiting in print
+mode) — but opening either database for reading, even read-only,
+regenerates an empty `.db-shm` locally (normal SQLite WAL-mode
+behavior, not something `agy` wrote); `.gitignore` excludes those so
+they never get committed again.
 
 - **`plain/752ac59f-6c6f-4fa0-8b63-0cb0b2466125.db`** — a plain-text
   turn, no tool calls. Final JSON envelope:
