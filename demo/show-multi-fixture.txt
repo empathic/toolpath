@@ -1,0 +1,10 @@
+conversation 299f4ce3-f4ee-404d-a950-d2a5bbeae09d
+provider:     antigravity
+tokens:       input=6785 output=14
+
+[user] My favorite color is teal. Remember that.
+
+[assistant] Got it! I'll remember that your favorite color is teal.
+
+[user] What is my favorite color? Reply with just the color word.
+

@@ -1,0 +1,8 @@
+conversation 752ac59f-6c6f-4fa0-8b63-0cb0b2466125
+provider:     antigravity
+tokens:       input=6787 output=3
+
+[user] Reply with exactly: hello world test
+
+[assistant] hello world test
+

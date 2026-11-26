@@ -1,0 +1,11 @@
+conversation aa79cad9-c443-4070-9c84-f6df6d3920b2
+provider:     antigravity
+tokens:       input=13715 output=29
+
+[user] Read the file notes.txt using your file tool, then reply with exactly the magic number you found.
+
+[assistant] 42
+    tool_call: read_file (Some(FileRead)) input={"Path":"/tmp/agy/tool/work/notes.txt"}
+    tool_result: Showing lines 1-1 of 1
+1: the magic number is 42
+
