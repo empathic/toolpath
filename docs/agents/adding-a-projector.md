@@ -483,6 +483,27 @@ is ready to ship. Anything short of all three and you're guessing.
     see `AntigravityStore::write_to` for a worked example (the `.db`,
     the summaries row, and a cwd-keyed last-used cache file, from one
     conversation id).
+12. **Auth must reach every step of a live check, including the
+    projected one.** A projector writes the session, not the harness's
+    own config. Antigravity picks API-key auth only when
+    `<HOME>/.gemini/antigravity-cli/settings.json` says
+    `{"modelProvider":"gemini"}` *and* `GEMINI_API_KEY` is set in that
+    process; a projected store copied into a fresh `HOME` has neither,
+    so `agy --conversation <id>` reports "authentication required" and
+    tries OAuth — which looks like a store-loading failure and isn't.
+    Every step that runs the harness needs its own config file and its
+    own copy of the credential (piped on stdin, never in argv or a
+    file), and the step that runs against *your* store is the one most
+    likely to miss it.
+13. **Provider retries spend your quota.** `agy` retries a 503 ("This
+    model is currently experiencing high demand") internally — the
+    error reads `API error (attempt 4)` — and on a free tier every
+    attempt counts against the daily request limit (AI Studio: 20
+    generate requests per day, per project, per model). One 503 storm
+    costs ~4 requests; retrying a whole run sheet three times on 503
+    can drain the day. Budget the live check in requests, retry one
+    step at a time, and stop on the first 429 — read its `retryDelay`
+    for the real reset time instead of assuming one.
 
 ## Concrete: Gemini reference
 
@@ -532,8 +553,19 @@ check:
   above (signatures, the closed enum, multi-store consistency) with
   what the projector actually does about each, not just what's hard
   about them
-- **Not done**: the `path p export antigravity` CLI variant (step 4)
-  and step 7's live end-to-end check — library-level work landed first
-  on purpose (see the task report this stack came from) rather than
-  wiring a CLI surface under time pressure; the gap is recorded, not
-  silently skipped.
+- Store layout a projected session must produce, under `<HOME>/.gemini/antigravity-cli/`:
+  `conversations/<uuid>.db` (the trajectory), `conversation_summaries.db`
+  (one row per conversation), `cache/last_conversations.json` (absolute
+  cwd → uuid, what `--continue` reads), plus — for a live check, not
+  written by the projector — `settings.json` with `modelProvider`
+  (pitfall 12). `crates/toolpath-antigravity/examples/project_claude.rs`
+  writes the first three from a Claude session.
+- `demo/13-15-utc-run-sheet.sh` — the step-7 live check, scripted end to
+  end against a real `agy` in a Linux VM (`STEPS=` to run one step,
+  `DRY_AGY=1` to do everything for the store step but the model call).
+- **Not done**: the `path p export antigravity` CLI variant (step 4),
+  and a passing step 7: on 2026-11-26 every live call hit a 503 and
+  then the free tier's daily 429 (pitfall 13), so no route has yet
+  reached the model. Library-level work landed first on purpose rather
+  than wiring a CLI surface under time pressure; the gaps are
+  recorded, not silently skipped.
